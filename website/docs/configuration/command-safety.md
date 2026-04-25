@@ -14,7 +14,7 @@ Each user message and the commands derived from it pass through these checks, in
 
 1. **Input rail** (NeMo Guardrails, per user message) -- catches prompt injection, role override, and social engineering in the latest human message before the agent starts. If it trips, the entire turn is aborted before any tool runs.
 2. **Org command policy** (Postgres-backed, per command) -- per-organization deny and allow lists of compiled regex rules, managed from the admin UI. Runs at the tool boundary. Denylist is evaluated first; if an allowlist is enabled, commands must match a rule in it to be allowed. This is where operators express org-specific policy ("no `kubectl delete` in prod", "only `systemctl` verbs on fleet X").
-3. **Static signature matcher** (free, ~5ms, per command) -- compiled regex rules modeled on EDR/SIEM signatures. Catches known-malicious patterns: LOLBins, credential access, reverse shells, crypto miners, defense evasion. Rules are tagged with MITRE ATT&CK technique IDs. Runs before the judge so matched commands are blocked without an LLM call.
+3. **Static signature matcher** (free, ~5ms, per command) -- compiled regex rules modeled on EDR/SIEM signatures, augmented at load time with a vendored subset of the [SigmaHQ community threat-detection rule corpus](https://github.com/SigmaHQ/sigma) (DRL-1.1 licensed). Catches known-malicious patterns: LOLBins, credential access, reverse shells, crypto miners, defense evasion. Rules are tagged with MITRE ATT&CK technique IDs. Runs before the judge so matched commands are blocked without an LLM call.
 4. **LLM safety judge** (~200-500ms, per command) -- a secondary LLM evaluates whether the command is inherently dangerous given the user's request context. Catches novel or context-dependent threats that static signatures cannot express. Adapted from [Meta's PurpleLlama](https://github.com/meta-llama/PurpleLlama) (MIT licensed).
 
 The judge **always fails closed**: if the LLM call times out, errors, or cannot resolve the user's context, the command is blocked. The input rail behaves the same way.
@@ -70,6 +70,7 @@ Typical choices:
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch for the input rail, signature matcher, and LLM judge. When enabled (default), all three run and every LLM check fails closed on error. Set to `false` to disable them. Does not affect the org command policy. |
 | `GUARDRAILS_LLM_MODEL` | _(provider-dependent)_ | Model used by the safety judge and input rail. When unset, defaults to `google/gemini-2.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`, otherwise falls back to `MAIN_MODEL`. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the SigmaHQ rule corpus on top of the hand-written signatures. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only the hand-written rules. |
 
 ## Block responses
 
