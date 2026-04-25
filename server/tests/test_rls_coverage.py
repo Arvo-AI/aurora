@@ -9,8 +9,6 @@ import re
 from pathlib import Path
 from typing import Set
 
-import pytest
-
 _DB_UTILS = Path(__file__).resolve().parent.parent / "utils" / "db" / "db_utils.py"
 
 # Tables with org_id that are intentionally excluded from RLS.
