@@ -197,17 +197,18 @@ def run_prediscovery(
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
         task_id = self.request.id
+        trigger_metadata = {"source": "prediscovery", "trigger": trigger, "task_id": task_id}
         session_id = create_background_chat_session(
             user_id=user_id,
             title=f"Infrastructure Pre-Discovery ({trigger})",
-            trigger_metadata={"source": "prediscovery", "trigger": trigger, "task_id": task_id},
+            trigger_metadata=trigger_metadata,
         )
 
         asyncio.run(_execute_background_chat(
             user_id=user_id,
             session_id=session_id,
             initial_message=prompt,
-            trigger_metadata={"source": "prediscovery", "trigger": trigger},
+            trigger_metadata=trigger_metadata,
             provider_preference=providers,
             mode="prediscovery",
         ))
