@@ -11,12 +11,15 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class GuardrailsConfig:
     enabled: bool
+    sigma_enabled: bool
     llm_model: str
 
 
 def _load() -> GuardrailsConfig:
+    on = os.getenv("GUARDRAILS_ENABLED", "true").lower() != "false"
     return GuardrailsConfig(
-        enabled=os.getenv("GUARDRAILS_ENABLED", "true").lower() != "false",
+        enabled=on,
+        sigma_enabled=on and os.getenv("GUARDRAILS_SIGMA_ENABLED", "true").lower() != "false",
         llm_model=os.getenv("GUARDRAILS_LLM_MODEL", ""),
     )
 

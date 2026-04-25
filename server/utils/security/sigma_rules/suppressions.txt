@@ -1,0 +1,9 @@
+# Sigma rule IDs to suppress (one UUID per line).
+#
+# Rules listed here are skipped during load_sigma_rules().
+# Use this for rules that cause false positives in the Aurora agent context.
+#
+# You can also suppress rules at runtime via the GUARDRAILS_SIGMA_SUPPRESS
+# env var (comma-separated UUIDs).
+#
+# Format: one Sigma rule UUID per line. Lines starting with # are comments.
