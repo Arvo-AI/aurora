@@ -370,11 +370,13 @@ def change_password(user_id):
                 
                 password_hash = result[0]
                 
+                from utils.auth.stateless_auth import get_org_id_from_request
+                _org = get_org_id_from_request() or ""
+
                 # Verify current password
                 if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
-                    from utils.auth.stateless_auth import get_org_id_from_request as _get_org_fail
                     record_audit_event(
-                        _get_org_fail() or "", user_id, "change_password_failed",
+                        _org, user_id, "change_password_failed",
                         "user", user_id, {"reason": "wrong_current_password"}, request,
                     )
                     return jsonify({"error": "Current password is incorrect"}), 401
@@ -389,8 +391,6 @@ def change_password(user_id):
                 
                 logging.info(f"Password changed for user: {user_id}")
 
-                from utils.auth.stateless_auth import get_org_id_from_request as _get_org
-                _org = _get_org() or ""
                 record_audit_event(_org, user_id, "change_password", "user", user_id, {}, request)
 
                 return jsonify({"message": "Password changed successfully"}), 200

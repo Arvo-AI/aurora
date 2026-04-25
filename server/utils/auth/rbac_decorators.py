@@ -25,12 +25,11 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 
-def _audit_auth_failure(user_id, org_id, action, detail):
+def _audit_auth_failure(user_id, org_id, action, detail) -> None:
     """Best-effort audit log for auth/RBAC failures."""
     try:
         from routes.audit_routes import record_audit_event
-        from flask import request as _req
-        record_audit_event(org_id or "", user_id or "", action, "auth", None, detail, _req)
+        record_audit_event(org_id or "", user_id or "", action, "auth", None, detail, request)
     except Exception:
         logger.debug("Could not record auth audit event", exc_info=True)
 
