@@ -43,7 +43,12 @@ If your environment genuinely cannot reach an LLM, set `GUARDRAILS_ENABLED=false
 
 ## Model selection
 
-The safety judge and input rail share the same provider abstraction as the rest of Aurora. By default they use `MAIN_MODEL`; set `GUARDRAILS_LLM_MODEL` to override. Format is identical to `MAIN_MODEL` and other model overrides (`provider/model`), and selection honors `LLM_PROVIDER_MODE` and the same API keys the main agent uses.
+The safety judge and input rail share the same provider abstraction as the rest of Aurora. Set `GUARDRAILS_LLM_MODEL` to control the model. Format is identical to `MAIN_MODEL` and other model overrides (`provider/model`), and selection honors `LLM_PROVIDER_MODE` and the same API keys the main agent uses.
+
+When `GUARDRAILS_LLM_MODEL` is unset, Aurora picks a default based on `LLM_PROVIDER_MODE`:
+
+- `openrouter` -> `google/gemini-2.5-flash-lite` (small and cheap, keeps per-message cost predictable).
+- Anything else -> `MAIN_MODEL` (the same model the chat agent uses).
 
 ```bash
 # Use a small, fast model (recommended, since the judge runs on every command)
@@ -56,17 +61,15 @@ Typical choices:
 |-------|-------|
 | `openai/gpt-4o-mini` | Good balance of speed and quality |
 | `anthropic/claude-haiku-4.5` | Strong reasoning at low cost |
-| `google/gemini-2.5-flash-lite` | Lowest cost |
+| `google/gemini-2.5-flash-lite` | Lowest cost (OpenRouter default) |
 | `ollama/llama3.1:8b` | Free, local (requires `OLLAMA_BASE_URL`) |
-
-If `GUARDRAILS_LLM_MODEL` is empty, `MAIN_MODEL` is used.
 
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch for the input rail, signature matcher, and LLM judge. When enabled (default), all three run and every LLM check fails closed on error. Set to `false` to disable them. Does not affect the org command policy. |
-| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_LLM_MODEL` | _(provider-dependent)_ | Model used by the safety judge and input rail. When unset, defaults to `google/gemini-2.5-flash-lite` under `LLM_PROVIDER_MODE=openrouter`, otherwise falls back to `MAIN_MODEL`. Same format and routing as `MAIN_MODEL`. |
 
 ## Block responses
 

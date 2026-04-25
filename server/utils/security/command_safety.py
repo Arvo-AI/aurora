@@ -29,6 +29,7 @@ import concurrent.futures
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -196,14 +197,26 @@ def _fail_verdict(detail: str) -> SafetyVerdict:
 def _create_safety_llm():
     """Build the structured-output LLM once and cache it.
 
-    Routes through create_chat_model() so the guardrails judge honors the same
-    provider/routing rules as the main agent. Falls back to MAIN_MODEL when
-    GUARDRAILS_LLM_MODEL is not set.
+    Model selection (first match wins):
+    1. ``GUARDRAILS_LLM_MODEL`` - explicit override from config.
+    2. ``google/gemini-2.5-flash-lite`` when ``LLM_PROVIDER_MODE=openrouter`` -
+       the safety judge runs on every user message, so the default points at
+       a small/cheap OpenRouter model to keep cost predictable. Operators
+       who prefer a stronger judge can override via GUARDRAILS_LLM_MODEL.
+    3. ``ModelConfig.MAIN_MODEL`` - fall back to whatever the chat agent uses.
     """
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
+
+    if config.llm_model:
+        model = config.llm_model
+    elif os.getenv("LLM_PROVIDER_MODE", "").lower() == "openrouter":
+        model = "google/gemini-2.5-flash-lite"
+    else:
+        model = ModelConfig.MAIN_MODEL
+
     base = create_chat_model(
-        config.llm_model or ModelConfig.MAIN_MODEL,
+        model,
         temperature=0.0,
         streaming=False,
     )
@@ -242,7 +255,6 @@ def _track_usage(user_id, session_id, messages, start, error_msg):
     if not user_id:
         return
     try:
-        import os
         from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
         LLMUsageTracker.track_llm_call(
             user_id=user_id,
