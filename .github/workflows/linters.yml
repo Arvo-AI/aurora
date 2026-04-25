@@ -32,6 +32,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # TODO: Install dependencies, run lint, type-check, unit tests, etc.
-      - name: Placeholder – run static analysis suite
-        run: echo "Running lint & tests… (to be implemented)"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: Run RBAC coverage test
+        run: cd server && python -m pytest tests/test_connector_rbac.py -v

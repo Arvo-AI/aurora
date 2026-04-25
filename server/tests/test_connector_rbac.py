@@ -43,16 +43,7 @@ RBAC_DECORATORS = {"require_permission", "require_auth_only"}
 
 # Known RBAC violations tracked for follow-up.  Each entry is
 # "relative/path.py:func_name".  Remove entries as they're fixed.
-KNOWN_VIOLATIONS: Set[str] = {
-    "routes/sharepoint/sharepoint_routes.py:connect",
-    "routes/sharepoint/sharepoint_routes.py:status",
-    "routes/sharepoint/sharepoint_routes.py:disconnect",
-    "routes/sharepoint/sharepoint_routes.py:search",
-    "routes/sharepoint/sharepoint_routes.py:fetch_page",
-    "routes/sharepoint/sharepoint_routes.py:fetch_document",
-    "routes/sharepoint/sharepoint_routes.py:create_page",
-    "routes/sharepoint/sharepoint_routes.py:list_sites",
-}
+KNOWN_VIOLATIONS: Set[str] = set()
 
 # Function names that are legitimately exempt from RBAC:
 #  - OAuth callbacks: called by provider redirects, auth is via state param
