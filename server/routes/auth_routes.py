@@ -306,18 +306,25 @@ def login():
                 # Verify password (runs regardless of whether user exists)
                 password_valid = bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
                 
-                if not user or not password_valid:
+                # Resolve audit identifiers before branching so the variable
+                # lookups don't create a measurable timing difference.
+                _audit_org = (user_org_id or "") if user else ""
+                _audit_uid = user_id if user else ""
+                _login_failed = not user or not password_valid
+
+                # Always perform one DB round-trip (audit INSERT) regardless of
+                # success/failure to preserve the timing-attack protection from
+                # _DUMMY_BCRYPT_HASH.
+                if _login_failed:
                     record_audit_event(
-                        user_org_id if user else "", user_id if user else "",
+                        _audit_org, _audit_uid,
                         "login_failed", "session", None,
                         {"email": email, "reason": "invalid_password" if user else "unknown_email"},
                         request,
                     )
                     return jsonify({"error": "Invalid credentials"}), 401
                 
-                logging.info(f"User logged in: {email}")
-
-                record_audit_event(user_org_id or "", user_id, "login", "session", user_id, {"email": email}, request)
+                record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)
 
                 return jsonify({
                     "id": user_id,

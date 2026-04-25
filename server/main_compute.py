@@ -271,7 +271,7 @@ def _audit_tenant_failure(user_id, org_id, action, reason, detail=None) -> None:
     """Best-effort audit log for tenant isolation failures."""
     try:
         from routes.audit_routes import record_audit_event
-        payload = detail if detail is not None else {"reason": reason}
+        payload = {"reason": reason, **(detail or {})}
         record_audit_event(org_id or "", user_id or "", action, "auth", None, payload, request)
     except Exception:
         logging.getLogger(__name__).debug(
@@ -308,7 +308,7 @@ def enforce_user_org_binding():
             sanitize(user_id), sanitize(claimed_org), sanitize(actual_org),
         )
         _audit_tenant_failure(user_id, actual_org, "tenant_mismatch", "org_id_mismatch",
-                              {"reason": "org_id_mismatch", "claimed_org": claimed_org, "actual_org": actual_org})
+                              {"claimed_org": claimed_org, "actual_org": actual_org})
         return jsonify({"error": "Forbidden - organization mismatch"}), 403
 
     return None
