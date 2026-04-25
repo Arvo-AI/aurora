@@ -104,6 +104,7 @@ x-common-env: &common-env
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
+  GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
 
   # Vertex AI (Google Cloud)

@@ -181,6 +181,9 @@ config:
   # the master switch; LLM checks fail closed. Adapted from Meta's PurpleLlama
   # (MIT licensed).
   GUARDRAILS_ENABLED: "true"
+  # Gate the vendored SigmaHQ rule corpus inside the signature matcher.
+  # Requires GUARDRAILS_ENABLED=true. Set to "false" to run only hand-written rules.
+  GUARDRAILS_SIGMA_ENABLED: "true"
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
 
