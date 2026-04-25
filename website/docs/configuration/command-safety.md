@@ -20,11 +20,13 @@ The judge **always fails closed**: if the LLM call times out, errors, or cannot 
 
 ## Enabling
 
+Guardrails are **enabled by default**. To explicitly disable them (not recommended):
+
 ```bash
-GUARDRAILS_ENABLED=true
+GUARDRAILS_ENABLED=false
 ```
 
-That's the only switch. When `true`, all three layers run. When `false`, none run.
+That's the only switch. When enabled (default), all three layers run. When `false`, none run.
 
 ## Model selection
 
@@ -50,7 +52,7 @@ If `GUARDRAILS_LLM_MODEL` is empty, `MAIN_MODEL` is used.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GUARDRAILS_ENABLED` | `false` | Master switch. When `true`, all three layers run and every LLM check fails closed on error. |
+| `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
 
 ## Block responses

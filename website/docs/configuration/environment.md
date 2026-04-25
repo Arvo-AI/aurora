@@ -266,7 +266,7 @@ Three-layer safety: input rail + signature matcher + LLM safety judge. See [Comm
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GUARDRAILS_ENABLED` | `false` | Master switch. When `true`, all three layers run and every LLM check fails closed on error. |
+| `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
 
 ## Cloud Providers
