@@ -160,6 +160,33 @@ def _extract_selections(detection: Dict[str, Any]) -> Dict[str, str]:
     return selections
 
 
+def _resolve_token(token: str, selections: Dict[str, str]) -> Optional[str]:
+    """Resolve a single condition token (name, '1 of X*', 'all of X*')."""
+    if token in selections:
+        return selections[token]
+
+    for quantifier, combiner in [("1 of ", _or_all), ("all of ", _and_all)]:
+        if token.startswith(quantifier):
+            prefix = token[len(quantifier):].replace("*", "").replace("_", "")
+            matched = [v for k, v in selections.items()
+                       if k.startswith(prefix) or k.replace("_", "").startswith(prefix)]
+            return combiner(matched) if matched else None
+
+    return None
+
+
+def _resolve_compound(cond_lower: str, selections: Dict[str, str]) -> Optional[str]:
+    """Resolve compound 'A and B' conditions by parsing each token."""
+    tokens = [t.strip() for t in cond_lower.split(" and ")]
+    parts = []
+    for token in tokens:
+        resolved = _resolve_token(token, selections)
+        if resolved is None:
+            return None
+        parts.append(resolved)
+    return _and_all(parts) if parts else None
+
+
 def _resolve_condition(cond_lower: str, selections: Dict[str, str]) -> Optional[str]:
     if cond_lower in ("selection", "all of selection*", "all of selection_*"):
         return _and_all(selections.values())
@@ -173,12 +200,7 @@ def _resolve_condition(cond_lower: str, selections: Dict[str, str]) -> Optional[
             return _and_all(sel_parts)
 
     if " and " in cond_lower and "not" not in cond_lower:
-        referenced = [k for k in selections if k in cond_lower.replace("_", " ").replace("*", "")]
-        if not referenced:
-            referenced = list(selections.keys())
-        parts = [selections[k] for k in referenced if k in selections]
-        if parts:
-            return _and_all(parts)
+        return _resolve_compound(cond_lower, selections)
 
     if len(selections) == 1:
         return next(iter(selections.values()))

@@ -13,6 +13,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class SignatureVerdict:
@@ -106,9 +108,8 @@ _r(r"\bchmod\s+(?:[2467][0-7]{3}\b|[ugo]*\+[st]\b)", T_ABUSE_ELEVATION, "privesc
 
 
 # --- SigmaHQ-sourced rules (loaded from vendored YAML at import time) ---
-logger = logging.getLogger(__name__)
 
-def _load_sigma():
+def _load_sigma() -> None:
     try:
         from utils.security.config import config
         if not config.sigma_enabled:

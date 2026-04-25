@@ -7,7 +7,7 @@ description: |
     Removal of audit rules can significantly impair detection of malicious activities on the affected system.
 references:
     - https://www.atomicredteam.io/atomic-red-team/atomics/T1562.012
-    - https://linux.die.net/man/8/auditct
+    - https://linux.die.net/man/8/auditctl
 author: Mohamed LAKRI
 date: 2025-10-17
 tags:
@@ -19,7 +19,7 @@ logsource:
 detection:
     selection:
         Image|endswith: '/auditctl'
-        CommandLine|re: '-D'
+        CommandLine|contains: ' -D'
     condition: selection
 falsepositives:
     - An administrator troubleshooting. Investigate all attempts.
