@@ -266,6 +266,15 @@ def verify_internal_api_secret():
 # Separate from _OPEN_PREFIXES: this only skips routes that carry identity headers before auth completes (login/register); webhook routes don't need listing here because they lack X-User-ID/X-Org-ID and the check below short-circuits on missing headers.
 _TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", _HEALTH_PATH)
 
+
+def _audit_tenant_failure(user_id, org_id, action, reason):
+    """Best-effort audit log for tenant isolation failures."""
+    try:
+        from routes.audit_routes import record_audit_event
+        record_audit_event(org_id or "", user_id or "", action, "auth", None, {"reason": reason}, request)
+    except Exception:
+        pass
+
 @app.before_request
 def enforce_user_org_binding():
     """Reject requests where X-Org-ID doesn't match the user's actual org."""
@@ -287,6 +296,7 @@ def enforce_user_org_binding():
     actual_org = resolve_org_id(user_id)
 
     if not actual_org:
+        _audit_tenant_failure(user_id, claimed_org, "auth_failed", "unknown_user")
         return jsonify({"error": "Unauthorized - unknown user"}), 401
 
     if actual_org != claimed_org:
@@ -294,6 +304,7 @@ def enforce_user_org_binding():
             "Tenant mismatch: user=%s claimed_org=%s actual_org=%s",
             sanitize(user_id), sanitize(claimed_org), sanitize(actual_org),
         )
+        _audit_tenant_failure(user_id, actual_org, "tenant_mismatch", "org_id_mismatch")
         return jsonify({"error": "Forbidden - organization mismatch"}), 403
 
     return None

@@ -307,6 +307,12 @@ def login():
                 password_valid = bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
                 
                 if not user or not password_valid:
+                    record_audit_event(
+                        user_org_id if user else "", user_id if user else "",
+                        "login_failed", "session", None,
+                        {"email": email, "reason": "invalid_password" if user else "unknown_email"},
+                        request,
+                    )
                     return jsonify({"error": "Invalid credentials"}), 401
                 
                 logging.info(f"User logged in: {email}")
@@ -366,6 +372,11 @@ def change_password(user_id):
                 
                 # Verify current password
                 if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
+                    from utils.auth.stateless_auth import get_org_id_from_request as _get_org_fail
+                    record_audit_event(
+                        _get_org_fail() or "", user_id, "change_password_failed",
+                        "user", user_id, {"reason": "wrong_current_password"}, request,
+                    )
                     return jsonify({"error": "Current password is incorrect"}), 401
                 
                 # Hash and update new password
