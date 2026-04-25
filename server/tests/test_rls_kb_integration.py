@@ -21,10 +21,7 @@ import pytest
 _ADMIN_PARAMS = {
     "dbname": os.getenv("POSTGRES_DB", "aurora_db"),
     "user": os.getenv("POSTGRES_USER", "aurora"),
-    "password": os.getenv(
-        "POSTGRES_PASSWORD",
-        "07017d104f177cd0b8e093f82d102338f455e70f7f22327d497eb999241e7197",
-    ),
+    "password": os.getenv("POSTGRES_PASSWORD", ""),
     "host": os.getenv("POSTGRES_HOST", "localhost"),
     "port": int(os.getenv("POSTGRES_PORT", "5432")),
 }
