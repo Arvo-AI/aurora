@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Radar, Check } from "lucide-react";
+import { Radar, Check, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuthHooks";
 
 export function DiscoverySettings() {
@@ -18,6 +18,7 @@ export function DiscoverySettings() {
   const [savingInterval, setSavingInterval] = useState(false);
   const [autoEnabled, setAutoEnabled] = useState<boolean>(true);
   const [savingEnabled, setSavingEnabled] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const { toast } = useToast();
   const { userId } = useAuth();
 
@@ -47,20 +48,23 @@ export function DiscoverySettings() {
       .catch(() => {});
   }, [userId]);
 
-  const cancelAndRefreshStatus = async () => {
+  const cancelAndRefreshStatus = async (): Promise<boolean> => {
     try {
       const cancelRes = await fetch("/api/prediscovery/cancel", { method: "POST", credentials: "include" });
       if (!cancelRes.ok) {
         console.error("Failed to cancel prediscovery:", cancelRes.status);
-        return;
+        return false;
       }
       const statusRes = await fetch("/api/prediscovery/status", { credentials: "include" });
-      if (!statusRes.ok) return;
-      const data = await statusRes.json();
-      setStatus(data.status || "never_run");
-      setLastRun(data.updated_at || data.started_at || null);
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        setStatus(data.status || "never_run");
+        setLastRun(data.updated_at || data.started_at || null);
+      }
+      return true;
     } catch (err) {
       console.error("Failed to cancel prediscovery:", err);
+      return false;
     }
   };
 
@@ -82,17 +86,43 @@ export function DiscoverySettings() {
         revert();
         return;
       }
-      if (!next) await cancelAndRefreshStatus();
-      toast({
-        title: next ? "Auto-discovery enabled" : "Auto-discovery disabled",
-        description: next
-          ? "Aurora will scan your infrastructure on the configured interval."
-          : "Scheduled scans paused and any running scan was cancelled.",
-      });
+      let cancelOk = true;
+      if (!next) cancelOk = await cancelAndRefreshStatus();
+      if (next) {
+        toast({
+          title: "Auto-discovery enabled",
+          description: "Aurora will scan your infrastructure on the configured interval.",
+        });
+      } else if (cancelOk) {
+        toast({
+          title: "Auto-discovery disabled",
+          description: "Scheduled scans paused and any running scan was cancelled.",
+        });
+      } else {
+        toast({
+          title: "Auto-discovery disabled",
+          description: "Scheduled scans paused, but cancelling the running scan failed.",
+          variant: "destructive",
+        });
+      }
     } catch {
       revert();
     } finally {
       setSavingEnabled(false);
+    }
+  };
+
+  const cancelRun = async () => {
+    setCancelling(true);
+    try {
+      const ok = await cancelAndRefreshStatus();
+      toast(
+        ok
+          ? { title: "Discovery cancelled", description: "The running scan has been stopped." }
+          : { title: "Failed to cancel", variant: "destructive" },
+      );
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -184,14 +214,17 @@ export function DiscoverySettings() {
             <h4 className="font-medium">Run Discovery</h4>
             <p className="text-sm text-muted-foreground">{formatStatus()}</p>
           </div>
-          <Button
-            variant="outline"
-            onClick={runDiscovery}
-            disabled={discovering || status === "in_progress"}
-          >
-            <Radar className={`h-4 w-4 mr-2 ${discovering || status === "in_progress" ? "animate-spin" : ""}`} />
-            {discovering || status === "in_progress" ? "Discovering..." : "Run Now"}
-          </Button>
+          {status === "in_progress" ? (
+            <Button variant="outline" onClick={cancelRun} disabled={cancelling}>
+              <X className="h-4 w-4 mr-2" />
+              {cancelling ? "Cancelling..." : "Cancel"}
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={runDiscovery} disabled={discovering}>
+              <Radar className={`h-4 w-4 mr-2 ${discovering ? "animate-spin" : ""}`} />
+              {discovering ? "Starting..." : "Run Now"}
+            </Button>
+          )}
         </div>
 
         <div className={`flex items-center justify-between p-4 border rounded-lg ${autoEnabled ? "" : "opacity-50"}`}>
