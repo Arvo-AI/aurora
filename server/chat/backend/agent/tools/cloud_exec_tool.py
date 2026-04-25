@@ -161,7 +161,8 @@ def check_cli_availability(cli_tool: str) -> bool:
             check_cmd,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            trusted=True
         )
         return result.returncode == 0
     except Exception:
@@ -171,7 +172,8 @@ def check_cli_availability(cli_tool: str) -> bool:
                 [cli_tool, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                trusted=True
             )
             return result.returncode == 0
         except Exception:
@@ -1911,7 +1913,8 @@ Security & Compliance
                     capture_output=True,
                     text=True,
                     timeout=30,
-                    env=isolated_env
+                    env=isolated_env,
+                    trusted=True
                 )
                 if auth_result.returncode != 0:
                     logger.error(f"Azure authentication failed: {auth_result.stderr}")
@@ -2356,7 +2359,8 @@ Security & Compliance
                             capture_output=True,
                             text=True,
                             timeout=effective_timeout,
-                            env=isolated_env
+                            env=isolated_env,
+                            trusted=True
                         )
                         if filtered_result.returncode == 0:
                             filtered_output = filtered_result.stdout.strip() or filtered_result.stderr

@@ -184,6 +184,7 @@ RUN useradd -m -u 1000 -s /bin/bash app && \
 COPY --chmod=0555 ./chat /app/chat/
 COPY --chmod=0555 ./config /app/config/
 COPY --chmod=0555 ./connectors /app/connectors/
+COPY --chmod=0555 ./guardrails /app/guardrails/
 COPY --chmod=0555 ./routes /app/routes/
 COPY --chmod=0555 ./services /app/services/
 COPY --chmod=0555 ./utils /app/utils/

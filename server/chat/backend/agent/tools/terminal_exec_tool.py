@@ -51,40 +51,6 @@ def _has_shell_metacharacters(command: str) -> bool:
     return any(pat in command for pat in patterns) or command.lstrip().startswith((">", "2>", ">>", "<"))
 
 
-def _contains_forbidden_elevation(command: str) -> bool:
-    """Block privilege escalation attempts such as sudo/pkexec.
-    
-    EXCEPTION: sudo is allowed INSIDE SSH commands (for remote VM execution).
-    e.g., 'ssh user@host "sudo apt update"' is allowed because sudo runs on the remote VM.
-    But 'sudo ssh user@host' is blocked because sudo runs locally.
-    Also blocked: 'ssh user@host "cmd" && sudo apt update' (chained local sudo after SSH)
-    
-    Handles mixed quote types: ssh 'user@host' "sudo apt" is correctly allowed.
-    """
-    lowered = command.lower()
-    elevation_pattern = r'(?<!\w)(sudo|pkexec|doas|su)\b'
-    
-    # Check if this is an SSH command
-    if lowered.strip().startswith('ssh '):
-        # For SSH commands, only allow sudo INSIDE quoted sections (remote commands)
-        # Strategy: Remove ALL quoted content, then check what remains (the local parts)
-        
-        # Remove all single-quoted and double-quoted sections
-        # This regex matches 'anything' or "anything" (non-greedy)
-        unquoted_parts = re.sub(r'"[^"]*"', '', lowered)  # Remove double-quoted
-        unquoted_parts = re.sub(r"'[^']*'", '', unquoted_parts)  # Remove single-quoted
-        
-        # Now check only the unquoted (local) parts for elevation commands
-        if re.search(elevation_pattern, unquoted_parts):
-            return True
-        
-        # No elevation in local parts - allowed (sudo inside quotes is OK)
-        return False
-    
-    # For non-SSH commands, block any elevation attempt
-    return re.search(elevation_pattern, lowered) is not None
-
-
 def _transform_ssh_jump_to_proxy(command: str) -> str:
     """
     Transform SSH -J commands to ProxyCommand for proper key propagation.
@@ -346,51 +312,8 @@ def terminal_exec(
                     logger.info(f"[ROUTE] Routing to iac_tool (state_{subcmd}): {command[:60]}")
                     return run_iac_tool(action=f'state_{subcmd}', directory=working_dir or "", user_id=user_id, session_id=session_id)
     
-    # Safety check for dangerous patterns
-    # Note: Most attacks (privilege escalation, container escape, network attacks)
-    # are already blocked by pod security context, network policies, and capabilities.
-    # These patterns provide defense-in-depth for resource exhaustion and workspace corruption.
-    dangerous_patterns = [
-        # Destructive filesystem operations
-        "rm -rf /",
-        "rm -rf /home/appuser",
-        "rm -rf ~",
-        "rm -rf .",
-        
-        # Resource exhaustion (disk fill)
-        "dd if=/dev/zero",
-        "dd if=/dev/urandom",
-        
-        # Fork bombs and infinite loops
-        ":(){ :|:& };:",
-        "while true",
-        "while :",
-        
-        # Crypto mining
-        "xmrig",
-        "cpuminer",
-        "minerd",
-        "stratum+tcp",
-    ]
-    
-    for pattern in dangerous_patterns:
-        if pattern in command:
-            logger.warning(f"Blocked dangerous command for user {user_id}: {command}")
-            return json.dumps({
-                "success": False,
-                "error": f"Command blocked for safety: contains dangerous pattern"
-            })
-
-
-    if _contains_forbidden_elevation(command):
-        logger.warning(f"Blocked privilege escalation attempt for user {user_id}: {command}")
-        return json.dumps({
-            "success": False,
-            "error": "Command blocked: privilege escalation is not permitted"
-        })
-    
     try:
-        logger.info(f"Executing terminal command for user {user_id}: {command[:100]}")
+        logger.info("Executing terminal command for user %s: %s", user_id, command[:100])
         
         sanitized_env = _build_sanitized_env()
         
@@ -425,13 +348,14 @@ def terminal_exec(
         
         if not success:
             logger.warning(
-                f"Terminal command failed (exit code {result.returncode}): {command[:100]}"
+                "Terminal command failed (exit code %s): %s",
+                result.returncode, command[:100]
             )
         
         return json.dumps(response, indent=2)
     
     except Exception as e:
-        logger.error(f"Error executing terminal command: {e}")
+        logger.error("Error executing terminal command: %s", e)
         return json.dumps({
             "success": False,
             "error": f"Command execution failed: {str(e)}",

@@ -62,6 +62,20 @@ def on_prem_kubectl(
             'provider': 'onprem_kubectl',
         })
 
+    from utils.security.command_safety import evaluate_command
+    decision = evaluate_command(full_command, tool="kubectl_onprem", user_id=user_id, session_id=session_id)
+    if decision.blocked:
+        code = 'SIGNATURE_MATCHED' if decision.layer == 'signature_match' else 'SAFETY_BLOCKED'
+        return json.dumps({
+            'success': False,
+            'error': f"Command blocked by safety guardrail: {decision.reason}",
+            'code': code,
+            'chat_output': f"$ {full_command}\nBlocked by safety guardrail: {decision.reason}",
+            'command': full_command,
+            'return_code': 1,
+            'provider': 'onprem_kubectl',
+        })
+
     # Call internal API on chatbot service
     try:
         chatbot_url = os.getenv('CHATBOT_INTERNAL_URL')

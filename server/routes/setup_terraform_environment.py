@@ -7,7 +7,6 @@ import os
 import tempfile
 import shutil
 from typing import Dict, Any, Optional, Tuple
-from routes.terraform.terraform_manager import TerraformManager
 from routes.terraform.terraform_generator import TerraformGenerator
 import logging
 from utils.log_sanitizer import sanitize
@@ -48,58 +47,9 @@ def write_terraform_files_from_zip(zip_path: str, workdir: str, cloud_provider: 
     main_tf = os.path.join(latest_dir, 'main.tf')
     if not os.path.isfile(main_tf):
         raise RuntimeError("main.tf not found after generation.")
-    # Optionally copy main.tf to workdir root for TerraformManager
+    # Optionally copy main.tf to workdir root
     shutil.copy2(main_tf, os.path.join(workdir, 'main.tf'))
     return os.path.join(workdir, 'main.tf')
-
-
-def init_terraform(workdir: str, authenticator=None) -> bool:
-    """Initialize Terraform in the given working directory.
-
-    .. deprecated::
-        Use ``iac_execution_core.run_terraform_command`` with
-        ``setup_terraform_environment_isolated`` instead for proper
-        credential isolation.
-    """
-    manager = TerraformManager(workdir, authenticator)
-    return manager.init()
-
-
-def plan_terraform(workdir: str, authenticator=None) -> Tuple[bool, str]:
-    """Run 'terraform plan' in the given working directory.
-
-    .. deprecated::
-        Use ``iac_execution_core.run_terraform_command`` with
-        ``setup_terraform_environment_isolated`` instead for proper
-        credential isolation.
-    """
-    manager = TerraformManager(workdir, authenticator)
-    return manager.plan()
-
-
-def apply_terraform(workdir: str, authenticator=None) -> Tuple[bool, str]:
-    """Run 'terraform apply' in the given working directory.
-
-    .. deprecated::
-        Use ``iac_execution_core.run_terraform_command`` with
-        ``setup_terraform_environment_isolated`` instead for proper
-        credential isolation.
-    """
-    manager = TerraformManager(workdir, authenticator)
-    return manager.apply()
-
-
-def write_tfvars(data: Dict[str, Any], workdir: str) -> str:
-    """
-    Write a terraform.tfvars file in the working directory using the provided data.
-    Returns the path to the tfvars file.
-    """
-    manager = TerraformManager(workdir)
-    tfvars_path = os.path.join(workdir, 'terraform.tfvars')
-    success = manager.generate_terraform_tfvars(data, tfvars_path)
-    if not success:
-        raise RuntimeError("Failed to generate terraform.tfvars file.")
-    return tfvars_path
 
 
 def setup_azure_terraform_environment_isolated(user_id: str):

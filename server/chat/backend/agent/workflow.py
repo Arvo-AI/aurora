@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
+from utils.security.audit_events import emit_block_event
 
 logger = logging.getLogger(__name__)
 
@@ -961,6 +962,25 @@ class Workflow:
         # in _last_state.messages belongs to this turn.
         history_prefix_len = len(input_state.messages) - new_turn_input_count
         self._history_prefix_len = history_prefix_len
+
+        # --- Input rail: check user message for prompt injection ---
+        from guardrails.input_rail import check_input
+        last_msg = input_state.messages[-1] if input_state.messages else None
+        if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
+            msg_text = _extract_text_from_content(last_msg.content)
+            rail_result = await check_input(msg_text)
+            if rail_result.blocked:
+                emit_block_event(
+                    user_id=getattr(input_state, "user_id", "") or "",
+                    session_id=getattr(input_state, "session_id", "") or "",
+                    layer="input_rail",
+                    tool="workflow",
+                    subject=msg_text,
+                    reason=rail_result.reason,
+                    latency_ms=rail_result.latency_ms,
+                )
+                yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
+                return
 
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")

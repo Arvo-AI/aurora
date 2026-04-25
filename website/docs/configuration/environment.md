@@ -260,6 +260,15 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 | `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-3-haiku`, `false` = `anthropic/claude-opus-4.5` |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
 
+### AI Safety Guardrails
+
+Three-layer safety: input rail + signature matcher + LLM safety judge. See [Command Safety](./command-safety.md) for details.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
+| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+
 ## Cloud Providers
 
 ### GCP (Google Cloud Platform)

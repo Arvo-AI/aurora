@@ -175,7 +175,15 @@ config:
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
-  
+
+  # --- AI Safety Guardrails ---
+  # Input rail + signature matcher + LLM safety judge. All three activate with
+  # the master switch; LLM checks fail closed. Adapted from Meta's PurpleLlama
+  # (MIT licensed).
+  GUARDRAILS_ENABLED: "true"
+  # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
+  GUARDRAILS_LLM_MODEL: ""
+
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
   AURORA_SETUP_CACHE_TTL: "3600"
