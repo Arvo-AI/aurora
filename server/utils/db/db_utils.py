@@ -1197,11 +1197,25 @@ def initialize_tables():
                 "user_manual_vms",
             ]
 
+            # Tables with org_id NOT in this list (intentional):
+            # - users: queried during login before org context is set; RLS would break auth
+            # - audit_log: written via record_audit_event() which passes org_id explicitly;
+            #   RLS would silently drop inserts when session org_id doesn't match or isn't set
+            # - org_invitations: queried during invite/join flows before org context is set
+            # - knowledge_base_documents, knowledge_base_memory: cleanup_stale_documents
+            #   Celery task runs cross-org sweeps with no user context; needs SECURITY
+            #   DEFINER function or BYPASSRLS role before RLS can be added
+            rls_tables.append("workspaces")
+            rls_tables.append("aurora_deployments")
+            rls_tables.append("cloud_feed_metadata")
+            rls_tables.append("cloud_ingestion_state")
+            rls_tables.append("newrelic_events")
+            rls_tables.append("pagerduty_events")
+
             # Add monitoring tables
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
-            rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
             rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
