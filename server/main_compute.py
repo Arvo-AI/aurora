@@ -299,7 +299,8 @@ def enforce_user_org_binding():
     actual_org = resolve_org_id(user_id)
 
     if not actual_org:
-        _audit_tenant_failure(user_id, claimed_org, "auth_failed", "unknown_user")
+        _audit_tenant_failure(user_id, None, "auth_failed", "unknown_user",
+                              {"claimed_org": claimed_org})
         return jsonify({"error": "Unauthorized - unknown user"}), 401
 
     if actual_org != claimed_org:
