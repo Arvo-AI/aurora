@@ -15,7 +15,6 @@ class GuardrailsConfig:
     llm_model: str
 
 
-_TRUTHY = {"true", "1", "yes", "on", "enabled"}
 _FALSY = {"false", "0", "no", "off", "disabled"}
 
 
