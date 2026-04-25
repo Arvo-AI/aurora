@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
 from psycopg2.extras import RealDictCursor
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_adapters import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ def create_token(user_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:create_token]")
             cursor.execute("""
                 INSERT INTO kubectl_agent_tokens (token, user_id, org_id, cluster_name, notes, expires_at, status)
                 VALUES (%s, %s, %s, %s, %s, %s, 'active')
@@ -49,7 +51,7 @@ def create_token(user_id):
             cursor.close()
         finally:
             conn.close()
-        logger.info(f"Created kubectl token for user {user_id}, cluster: {cluster_name}")
+        logger.info(f"Created kubectl token for user {sanitize(user_id)}, cluster: {sanitize(cluster_name)}")
         return jsonify({
             'success': True,
             'token': result['token'],
@@ -70,6 +72,7 @@ def list_tokens(user_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_tokens]")
             cursor.execute("""
                 SELECT id, cluster_name, cluster_id, created_at, last_connected_at, expires_at, status, notes,
                        CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
@@ -97,6 +100,7 @@ def list_connections(user_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_connections]")
             cursor.execute("UPDATE active_kubectl_connections SET status = 'stale' WHERE last_heartbeat < NOW() - INTERVAL '3 minutes'")
             cursor.execute("UPDATE active_kubectl_connections SET status = 'active' WHERE last_heartbeat >= NOW() - INTERVAL '3 minutes'")
             conn.commit()
@@ -124,6 +128,7 @@ def disconnect_cluster(user_id, cluster_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:disconnect_cluster]")
             cursor.execute("""
                 SELECT c.token, t.cluster_name FROM active_kubectl_connections c
                 JOIN kubectl_agent_tokens t ON c.token = t.token
@@ -147,7 +152,7 @@ def disconnect_cluster(user_id, cluster_id):
             cursor.close()
         finally:
             conn.close()
-        logger.info(f"Disconnected kubectl cluster {cluster_id} (revoked token) for user {user_id}")
+        logger.info(f"Disconnected kubectl cluster {sanitize(cluster_id)} (revoked token) for user {sanitize(user_id)}")
         
         # Return command to delete agent from cluster (Helm deployment)
         delete_command = "helm uninstall aurora-kubectl-agent -n <your-namespace>"

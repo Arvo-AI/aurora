@@ -7,7 +7,7 @@ from connectors.gcp_connector.auth.oauth import (
 from utils.auth.token_management import store_tokens_in_db
 from connectors.gcp_connector.gcp_post_auth_tasks import gcp_post_auth_setup_task
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.secrets.secret_cache import clear_secret_cache
 from time import time
@@ -79,6 +79,7 @@ def callback():
             
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[GCPAuth:callback]")
             cursor.execute(
                 "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
                 (user_id, org_id)
@@ -165,6 +166,7 @@ def force_disconnect_gcp(user_id):
     try:
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, log_prefix="[GCPAuth:force_disconnect_gcp]")
         
         cursor.execute(
             "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = 'gcp'",
@@ -224,7 +226,7 @@ def force_disconnect_gcp(user_id):
     return jsonify({"success": True, "message": "GCP disconnected successfully"}), 200
 
 
-@gcp_auth_bp.route("/api/gcp/service-account/connect", methods=["POST", "OPTIONS"])
+@gcp_auth_bp.route("/api/gcp/service-account/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect_service_account(user_id):
     """Connect a GCP service account by uploading its JSON key.

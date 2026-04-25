@@ -369,11 +369,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     if (!content) return content;
     
     // Filter out tool call delimiters with special Unicode characters
-    // Pattern matches: "Executing now:<｜tool▁calls▁begin｜><｜tool▁calls▁end｜>" and similar
-    const toolCallDelimiterRegex = /Executing now:[<｜▁]*tool[▁_\s]*calls?[▁_\s]*begin[｜>]*[<｜▁]*[｜>]*[<｜▁]*tool[▁_\s]*calls?[▁_\s]*end[｜>]*/gi;
-    
+    // Pattern matches: "Executing now:<｜tool▁calls▁begin｜><｜tool▁calls▁end｜>" and similar.
+    // Delimiter chars are merged into a single class and bounded to avoid super-linear backtracking.
+    const toolCallDelimiterRegex = /Executing now:[<｜▁>]{0,8}tool[▁_\s]{0,4}calls?[▁_\s]{0,4}begin[<｜▁>]{0,8}tool[▁_\s]{0,4}calls?[▁_\s]{0,4}end[<｜▁>]{0,8}/gi;
+
     // Also filter out standalone tool call delimiters
-    const standaloneDelimiterRegex = /[<｜▁]*tool[▁_\s]*calls?[▁_\s]*(begin|end)[｜>]*/gi;
+    const standaloneDelimiterRegex = /[<｜▁>]{0,8}tool[▁_\s]{0,4}calls?[▁_\s]{0,4}(begin|end)[<｜▁>]{0,8}/gi;
     
     let filtered = content.replace(toolCallDelimiterRegex, '');
     filtered = filtered.replace(standaloneDelimiterRegex, '');

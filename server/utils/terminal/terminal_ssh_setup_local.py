@@ -20,6 +20,8 @@ def ensure_local_ssh_keys(user_id: str) -> bool:
         ssh_keys = {}
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetupLocal:ensure_local_ssh_keys]")
             cursor.execute(
                 "SELECT provider FROM user_tokens WHERE user_id = %s AND provider LIKE %s",
                 (user_id, '%_ssh_%')

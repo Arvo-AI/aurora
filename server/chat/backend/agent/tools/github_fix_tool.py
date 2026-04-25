@@ -88,6 +88,7 @@ def _save_fix_suggestion(
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            # No RLS needed — incident_suggestions not RLS-protected
             cursor.execute(
                 """
                 INSERT INTO incident_suggestions

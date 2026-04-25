@@ -4,16 +4,18 @@ Replaces the previous authentication system.
 """
 import logging
 from routes.audit_routes import record_audit_event
+import hashlib
 import re
 import bcrypt
 from flask import Blueprint, request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_auth_only
-from utils.web.cors_utils import create_cors_response
 import os
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
+
+_DUMMY_BCRYPT_HASH = bcrypt.hashpw(os.urandom(16), bcrypt.gensalt()).decode('utf-8')
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
@@ -33,11 +35,11 @@ def add_cors_headers(response):
     origin = request.headers.get('Origin', FRONTEND_URL)
     response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Provider, X-Requested-With, X-User-ID, Authorization'
     return response
 
-@auth_bp.route('/register', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/register', methods=['POST'])
 def register():
     """Register a new organization with its first admin user.
 
@@ -46,9 +48,6 @@ def register():
     - Users within an existing org are created by an admin via
       /api/admin/users (invite-only).
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json()
         if not data:
@@ -79,6 +78,7 @@ def register():
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT id FROM users WHERE email = %s",
                     (email,)
@@ -159,15 +159,13 @@ def register():
         return jsonify({"error": "Registration failed"}), 500
 
 
-@auth_bp.route('/setup-org', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/setup-org', methods=['POST'])
 @require_auth_only
 def setup_org(user_id):
     """Create an organization for an authenticated user who doesn't have one.
 
     Body: { org_name }
     """
-    if request.method == 'OPTIONS':
-        return create_cors_response()
     try:
         data = request.get_json()
         if not data:
@@ -187,6 +185,7 @@ def setup_org(user_id):
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.org_id, o.name "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
@@ -269,12 +268,9 @@ def setup_org(user_id):
         return jsonify({"error": "Organization setup failed"}), 500
 
 
-@auth_bp.route('/login', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
     """Authenticate user with email and password."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json()
         if not data:
@@ -290,6 +286,7 @@ def login():
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
                     "COALESCE(u.must_change_password, FALSE) "
@@ -305,17 +302,34 @@ def login():
                     user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw = user
                 else:
                     # Dummy hash to maintain consistent timing
-                    password_hash = bcrypt.hashpw(b'dummy', bcrypt.gensalt()).decode('utf-8')
+                    password_hash = _DUMMY_BCRYPT_HASH
                 
                 # Verify password (runs regardless of whether user exists)
                 password_valid = bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
                 
-                if not user or not password_valid:
+                # Resolve audit identifiers before branching so the variable
+                # lookups don't create a measurable timing difference.
+                _audit_org = (user_org_id or "") if user else ""
+                _audit_uid = user_id if user else ""
+                _login_failed = not user or not password_valid
+
+                # Always perform one DB round-trip (audit INSERT) regardless of
+                # success/failure to preserve the timing-attack protection from
+                # _DUMMY_BCRYPT_HASH.
+                if _login_failed:
+                    _detail = {"reason": "invalid_password", "email": email} if user else {
+                        "reason": "unknown_email",
+                        "email_sha256": hashlib.sha256(email[:254].lower().encode()).hexdigest(),
+                    }
+                    record_audit_event(
+                        _audit_org, _audit_uid,
+                        "login_failed", "session", None,
+                        _detail,
+                        request,
+                    )
                     return jsonify({"error": "Invalid credentials"}), 401
                 
-                logging.info(f"User logged in: {email}")
-
-                record_audit_event(user_org_id or "", user_id, "login", "session", user_id, {"email": email}, request)
+                record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)
 
                 return jsonify({
                     "id": user_id,
@@ -334,12 +348,10 @@ def login():
         return jsonify({"error": "Login failed"}), 500
 
 
-@auth_bp.route('/change-password', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/change-password', methods=['POST'])
 @require_auth_only
 def change_password(user_id):
     """Change user password (requires authentication)."""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
     try:
         data = request.get_json()
         if not data:
@@ -358,6 +370,7 @@ def change_password(user_id):
         conn = connect_to_db_as_user()
         try:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT password_hash FROM users WHERE id = %s",
                     (user_id,)
@@ -369,8 +382,15 @@ def change_password(user_id):
                 
                 password_hash = result[0]
                 
+                from utils.auth.stateless_auth import resolve_org_id
+                org_id = resolve_org_id(user_id) or ""
+
                 # Verify current password
                 if not bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
+                    record_audit_event(
+                        org_id, user_id, "change_password_failed",
+                        "user", user_id, {"reason": "wrong_current_password"}, request,
+                    )
                     return jsonify({"error": "Current password is incorrect"}), 401
                 
                 # Hash and update new password
@@ -383,9 +403,7 @@ def change_password(user_id):
                 
                 logging.info(f"Password changed for user: {user_id}")
 
-                from utils.auth.stateless_auth import get_org_id_from_request as _get_org
-                _org = _get_org() or ""
-                record_audit_event(_org, user_id, "change_password", "user", user_id, {}, request)
+                record_audit_event(org_id, user_id, "change_password", "user", user_id, {}, request)
 
                 return jsonify({"message": "Password changed successfully"}), 200
         finally:
@@ -407,6 +425,7 @@ def get_current_user(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
                     "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
@@ -441,6 +460,7 @@ def get_admins(user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cursor:
+            # No RLS needed — users not RLS-protected
             cursor.execute(
                 "SELECT name, email FROM users WHERE role = 'admin' AND org_id = %s ORDER BY created_at",
                 (org_id,),

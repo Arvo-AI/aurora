@@ -18,17 +18,21 @@ import json
 import time
 import uuid
 import os
+import jwt as pyjwt
 from utils.kubectl.agent_ws_handler import handle_kubectl_agent
-import psycopg2
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import List, Optional
+from typing import Optional
+from urllib.parse import parse_qs
 
 # Load environment variables
 load_dotenv()
 
 from collections import defaultdict
 import asyncio
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage
 import websockets
 import logging
@@ -44,14 +48,13 @@ from chat.backend.agent.utils.immediate_save_handler import handle_immediate_sav
 from utils.db.connection_pool import db_pool
 from utils.billing.billing_cache import update_api_cost_cache_async, get_cached_api_cost
 from utils.billing.billing_utils import get_api_cost
-from utils.billing.billing_cache import is_cache_fresh
 from utils.terraform.terraform_cleanup import cleanup_terraform_directory
 from utils.cloud.infrastructure_confirmation import handle_websocket_confirmation_response
 from chat.backend.agent.tools.cloud_tools import register_websocket_connection, set_user_context
 from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
 from utils.internal.api_handler import handle_http_request
-from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user
+from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user, set_rls_context
 
 
 class RateLimiter:
@@ -75,13 +78,76 @@ class RateLimiter:
             return True
         return False
     
-class _NoopAsyncContextManager:
-    async def __aenter__(self):
-        return None
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
 
 rate_limiter = RateLimiter(rate=5, per=60)
+
+_INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_AURORA_ENV = os.getenv("AURORA_ENV", "production")
+
+if not _INTERNAL_API_SECRET:
+    if _AURORA_ENV == "dev":
+        logger.warning(
+            "INTERNAL_API_SECRET is not set (AURORA_ENV='dev'). "
+            "WebSocket token authentication is disabled — acceptable for local development only."
+        )
+    else:
+        raise RuntimeError(
+            "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+            "Refusing to start without authentication secrets in production." % _AURORA_ENV
+        )
+
+def _validate_ws_token(websocket) -> dict | None:
+    """Extract and validate a JWT from the WebSocket handshake query string.
+
+    Returns the decoded payload dict on success, or None if no token is present or validation fails.
+    """
+    if not _INTERNAL_API_SECRET:
+        return None
+
+    try:
+        raw_path = str(websocket.request.path)
+        if "?" not in raw_path:
+            return None
+
+        qs = parse_qs(raw_path.split("?", 1)[1])
+        token_list = qs.get("token")
+        if not token_list:
+            return None
+
+        token = token_list[0]
+        ws_key = _INTERNAL_API_SECRET + "aurora:ws-token-signing"
+        payload = pyjwt.decode(
+            token,
+            ws_key,
+            algorithms=["HS256"],
+            audience="chatbot-ws",
+            options={"require": ["exp", "aud"]},
+        )
+
+        jti = payload.get("jti")
+        if not jti:
+            logger.warning("WebSocket token missing required jti claim")
+            return None
+
+        from utils.cache.redis_client import get_redis_client
+        r = get_redis_client()
+        if not r:
+            logger.error("Redis unavailable for jti replay check, rejecting token jti=%s", jti)
+            return None
+        if not r.set(f"ws:jti:{jti}", "1", nx=True, ex=120):
+            logger.warning("WebSocket token replay detected: jti=%s", jti)
+            return None
+
+        return payload
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("WebSocket token expired")
+        return None
+    except pyjwt.InvalidTokenError as e:
+        logger.warning("WebSocket token invalid: %s", e)
+        return None
+    except Exception as e:
+        logger.warning("Unexpected error validating WS token: %s", e)
+        return None
 
 
 def _normalize_mode(mode: Optional[str]) -> str:
@@ -92,36 +158,70 @@ def _normalize_mode(mode: Optional[str]) -> str:
 
 # Deployment update listener removed
 
+async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
+    """Send an error frame and optionally close the WebSocket."""
+    await websocket.send(json.dumps({"type": "error", "data": {"text": text}}))
+    if close_reason:
+        await websocket.close(code=1008, reason=close_reason)
+
+
+def _warm_user_caches(user_id: str):
+    """Kick off background tasks that pre-warm per-user caches."""
+    _cost_warm_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+    _background_tasks.add(_cost_warm_task)
+    _cost_warm_task.add_done_callback(_background_tasks.discard)
+    logger.info(f"Started preemptive API cost cache update for user {user_id}")
+
+    try:
+        from chat.backend.agent.tools.mcp_preloader import preload_user_tools
+        preload_user_tools(user_id)
+        logger.info(f"Triggered MCP preload for user {user_id} on connection")
+    except Exception as e:
+        logger.debug(f"Failed to trigger MCP preload on connection: {e}")
+
+    try:
+        from chat.backend.agent.tools.mcp_preloader import update_user_activity
+        update_user_activity(user_id)
+        logger.debug(f"Updated MCP preloader activity for user {user_id}")
+    except Exception as e:
+        logger.debug(f"Failed to update MCP preloader activity: {e}")
+
+
 async def handle_init(data, websocket, current_user_id, deployment_listener_task):
-    """Handle connection initialization message and return updated state."""
+    """Handle connection initialization message and return updated state.
+
+    If the connection was already authenticated via a handshake token,
+    current_user_id is pre-set and we skip the DB validation step.
+    """
 
     user_id = data.get('user_id')
 
-    if user_id and current_user_id != user_id:
+    if user_id and current_user_id and current_user_id != user_id:
+        logger.warning(
+            f"WebSocket init rejected: token user {current_user_id!r} "
+            f"does not match init user_id {user_id!r}"
+        )
+        await _ws_reject(websocket, "Authentication failed: user identity mismatch.", close_reason="User identity mismatch")
+        return current_user_id, deployment_listener_task
+
+    if user_id and not current_user_id:
+        if _INTERNAL_API_SECRET:
+            logger.warning(
+                f"WebSocket init rejected: legacy auth attempted while INTERNAL_API_SECRET is configured (user_id={user_id!r})"
+            )
+            await _ws_reject(websocket, "Authentication failed: token-based auth required.", close_reason="Token-based auth required")
+            return current_user_id, deployment_listener_task
+
         if not validate_user_exists(user_id):
             logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
-            await websocket.send(json.dumps({
-                "type": "error",
-                "data": {"text": "Authentication failed: invalid user identity."}
-            }))
+            await _ws_reject(websocket, "Authentication failed: invalid user identity.")
             return current_user_id, deployment_listener_task
 
         logger.info(f"Initializing connection for user {user_id}")
         current_user_id = user_id
 
-        # Preemptively warm the API cost cache for this user
-        asyncio.create_task(update_api_cost_cache_async(user_id))
-        logger.info(f"Started preemptive API cost cache update for user {user_id}")
+        _warm_user_caches(user_id)
 
-        # Trigger MCP preloading for this user
-        try:
-            from chat.backend.agent.tools.mcp_preloader import preload_user_tools
-            preload_user_tools(user_id)
-            logger.info(f"Triggered MCP preload for user {user_id} on connection")
-        except Exception as e:
-            logger.debug(f"Failed to trigger MCP preload on connection: {e}")
-        
-        # Start deployment listener for this user
         if deployment_listener_task:
             deployment_listener_task.cancel()
             try:
@@ -129,16 +229,7 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
             except asyncio.CancelledError:
                 pass
 
-        # Deployment listener removed
         logger.info(f"Started deployment listener for user {user_id}")
-
-        # Update user activity for MCP preloader
-        try:
-            from chat.backend.agent.tools.mcp_preloader import update_user_activity
-            update_user_activity(user_id)
-            logger.debug(f"Updated MCP preloader activity for user {user_id}")
-        except Exception as e:
-            logger.debug(f"Failed to update MCP preloader activity: {e}")
 
     return current_user_id, deployment_listener_task
 def process_attachments_and_append_to_question(question, attachments):
@@ -282,6 +373,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                         if len(cleaned_text) > 20:  # Lower threshold
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
+                                    # No RLS needed — incident_thoughts not RLS-protected
                                     cursor.execute(
                                         "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
                                         "VALUES (%s, %s, %s, %s)",
@@ -328,6 +420,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Chatbot:StreamingSave]")
                     cursor.execute(
                         "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
                         (session_id,),
@@ -366,8 +459,18 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
 
-    def finalize_streaming_chat_message():
-        """Clear the _streaming flag from the last bot message in chat_sessions.messages."""
+    def finalize_streaming_chat_message(remove: bool = False):
+        """Finalize streaming bot messages in chat_sessions.messages.
+
+        When *remove=False* (mid-stream), clear the ``_streaming`` flag so the
+        message is "committed" for live polling while a new streaming message
+        starts.
+
+        When *remove=True* (end of workflow), delete all ``_streaming``-flagged
+        messages entirely.  The authoritative UI messages are written by
+        ``_append_new_turn_ui_messages`` after the workflow completes, so any
+        remaining streaming copies must be removed to avoid duplicates.
+        """
         if not is_background or not session_id or session_id == 'unknown':
             return
 
@@ -376,6 +479,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Chatbot:StreamingFinalize]")
                     cursor.execute(
                         "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
                         (session_id,),
@@ -389,10 +493,18 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                         messages = json.loads(messages)
 
                     modified = False
-                    for msg in messages:
-                        if msg.get("_streaming"):
-                            del msg["_streaming"]
-                            modified = True
+                    if remove:
+                        original_len = len(messages)
+                        messages = [
+                            msg for msg in messages
+                            if not msg.get("_streaming")
+                        ]
+                        modified = len(messages) < original_len
+                    else:
+                        for msg in messages:
+                            if msg.get("_streaming"):
+                                del msg["_streaming"]
+                                modified = True
 
                     if modified:
                         cursor.execute(
@@ -400,7 +512,10 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             (json.dumps(messages), datetime.now(), session_id),
                         )
                         conn.commit()
-                        logger.debug(f"[BackgroundChat] Finalized streaming flags for session {session_id}")
+                        logger.debug(
+                            f"[BackgroundChat] Finalized streaming messages for session {session_id} "
+                            f"(remove={remove})"
+                        )
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to finalize streaming chat message: {e}")
 
@@ -478,13 +593,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 # Save tokens incrementally to incident thoughts
                                 save_incident_thought(token_text, force=False)
                                 save_streaming_chat_message(token_text, force=False)
-                    
+
                     elif event_type == "values":
-                        # Final state update
-                        logger.debug(f"[STREAM DEBUG] Received values event")
-                        # Handle final state if needed
+                        # Stub: skip complete-state "values" events.
+                        # The real handler below would re-send content already streamed
+                        # via the "messages" event path, causing duplicates in the UI / DB.
+                        # Keep this branch first so the duplicate-send path is unreachable.
+                        logger.debug("[STREAM DEBUG] Received values event (skipped to avoid duplicate sends)")
                         continue
-                    
+
                     elif event_type == "messages":
                         try:
                             msg_chunk, _ = event_data
@@ -696,13 +813,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         # Force save any remaining accumulated thought
         save_incident_thought("", force=True)
 
-        # Finalize streaming: clear _streaming flags from chat messages
-        finalize_streaming_chat_message()
+        # Finalize streaming: remove temporary streaming messages before the
+        # authoritative UI messages are written by _append_new_turn_ui_messages
+        finalize_streaming_chat_message(remove=True)
         
         await send_end_status("completed")
         
     except asyncio.TimeoutError:
         logger.error(f"Workflow timeout after {workflow_timeout}s for session {session_id}")
+        finalize_streaming_chat_message(remove=True)
         if websocket_connected:
             timeout_msg = {
                 "type": "error",
@@ -715,6 +834,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
     except Exception as e:
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
+        finalize_streaming_chat_message(remove=True)
         if websocket_connected:
             error_msg = {
                 "type": "error",
@@ -730,7 +850,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         try:
             # Update API cost cache after workflow completion to capture new usage
             # This ensures that any LLM usage from this workflow is immediately reflected
-            asyncio.create_task(update_api_cost_cache_async(user_id))
+            _cost_update_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+            _background_tasks.add(_cost_update_task)
+            _cost_update_task.add_done_callback(_background_tasks.discard)
             logger.debug(f"Triggered post-request API cost update for user {user_id}")
 
             is_cached, total_cost = get_cached_api_cost(user_id)
@@ -767,9 +889,36 @@ async def handle_connection(websocket) -> None:
     client_id = id(websocket)
     logger.info(f"New client connected. ID: {client_id}")
 
+    # Validate JWT token from handshake query string
+    token_payload = _validate_ws_token(websocket)
+    token_user_id = None
+    if token_payload:
+        token_user_id = token_payload.get("userId")
+        logger.info(f"WebSocket authenticated via token: user={token_user_id}")
+
+        if not token_user_id:
+            logger.warning("WebSocket token missing required userId claim")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "data": {"text": "Authentication failed: invalid token."}
+            }))
+            await websocket.close(code=1008, reason="Invalid authentication token")
+            return
+
+        # Eagerly warm caches for token-authenticated users (tracked-task pattern)
+        _warm_user_caches(token_user_id)
+    elif _INTERNAL_API_SECRET:
+        logger.warning(f"WebSocket connection {client_id} has no valid token (INTERNAL_API_SECRET is set)")
+        await websocket.send(json.dumps({
+            "type": "error",
+            "data": {"text": "Authentication failed: missing or invalid token."}
+        }))
+        await websocket.close(code=1008, reason="Missing or invalid authentication token")
+        return
+
     weaviate_client = None
     deployment_listener_task = None
-    current_user_id = None
+    current_user_id = token_user_id
     session_id = None       # Initialize to avoid UnboundLocalError in exception handler
     session_tasks = {}      # Track running workflow asyncio.Tasks per session
 
@@ -988,8 +1137,21 @@ async def handle_connection(websocket) -> None:
             user_id = data.get('user_id')  # Extract user_id from the incoming data
             session_id = data.get('session_id')  # Extract session_id from the incoming data
 
-            # Server-side validation: reject unverified user_ids
-            if user_id and user_id != current_user_id:
+            # Server-side validation: token identity is authoritative when present.
+            if current_user_id:
+                if user_id and user_id != current_user_id:
+                    logger.warning(
+                        "Message rejected: token user %r does not match message user_id %r",
+                        current_user_id,
+                        user_id,
+                    )
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Authentication failed: user identity mismatch."}
+                    }))
+                    continue
+                user_id = current_user_id
+            elif user_id:
                 if not validate_user_exists(user_id):
                     logger.warning(f"Message rejected: unverified user_id {user_id!r}")
                     await websocket.send(json.dumps({
@@ -1009,6 +1171,7 @@ async def handle_connection(websocket) -> None:
                     from utils.db.connection_pool import db_pool
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cur:
+                            set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:RBAC]")
                             cur.execute(
                                 "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
                                 (session_id, org_id),

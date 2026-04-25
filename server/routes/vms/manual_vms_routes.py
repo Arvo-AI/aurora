@@ -5,8 +5,10 @@ from flask import Blueprint, jsonify, request
 from psycopg2 import sql
 
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import set_rls_context
 from utils.ssh.ssh_utils import (
     load_user_private_key_safe,
     parse_ssh_key_id,
@@ -69,8 +71,7 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
 def list_manual_vms(user_id):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")
             cur.execute(
                 """
                 SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
@@ -114,8 +115,7 @@ def create_manual_vm(user_id):
 
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:create]")
             # Unique constraint is on (user_id, ip_address, port)
             # If same IP+port already exists, update the name and config
             # Reset connection_verified on upsert since credentials may have changed
@@ -218,8 +218,7 @@ def update_manual_vm(user_id, vm_id: int):
 
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:update]")
             query = sql.SQL(
                 """
                 UPDATE user_manual_vms
@@ -244,8 +243,7 @@ def update_manual_vm(user_id, vm_id: int):
 def delete_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:delete]")
             cur.execute(
                 "DELETE FROM user_manual_vms WHERE id = %s AND user_id = %s RETURNING id;",
                 (vm_id, user_id),
@@ -282,8 +280,7 @@ def check_manual_vm_connection(user_id):
             return jsonify({"error": "vmId must be an integer"}), 400
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-load]")
                 cur.execute(
                     """
                     SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username
@@ -334,16 +331,16 @@ def check_manual_vm_connection(user_id):
             try:
                 with db_pool.get_user_connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+                        set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-verify]")
                         cur.execute(
                             "UPDATE user_manual_vms SET connection_verified = TRUE, updated_at = NOW() WHERE id = %s AND user_id = %s",
                             (vm_id, user_id),
                         )
                         conn.commit()
-                logger.info(f"Connection verified for VM {vm_id}, user {user_id}")
+                logger.info(f"Connection verified for VM {sanitize(vm_id)}, user {sanitize(user_id)}")
             except Exception as db_exc:
                 logger.error(
-                    f"Failed to update connection_verified for VM {vm_id}: {db_exc}"
+                    f"Failed to update connection_verified for VM {sanitize(vm_id)}: {db_exc}"
                 )
         return jsonify({"success": True, "connectedAs": connected_as})
     except Exception as exc:

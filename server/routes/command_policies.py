@@ -6,7 +6,7 @@ Prefix: /api/org
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -15,6 +15,7 @@ from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
     store_user_preference,
+    set_rls_context,
 )
 from utils.auth.command_policy import (
     evaluate_compound_command,
@@ -42,12 +43,9 @@ def _list_states(org_id: str) -> dict:
     }
 
 
-@command_policies_bp.route("/command-policies", methods=["GET", "OPTIONS"])
+@command_policies_bp.route("/command-policies", methods=["GET"])
 @require_auth_only
 def list_policies(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -55,6 +53,7 @@ def list_policies(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:list]")
             cur.execute(
                 "SELECT id, mode, pattern, description, priority, enabled, "
                 "created_at, updated_at, updated_by, source "
@@ -114,6 +113,7 @@ def create_policy(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:create]")
                 cur.execute(
                     "INSERT INTO org_command_policies "
                     "(org_id, mode, pattern, description, priority, updated_by) "
@@ -131,12 +131,9 @@ def create_policy(user_id):
     return jsonify({"id": new_id, "status": "created"}), 201
 
 
-@command_policies_bp.route("/command-policies/<int:rule_id>", methods=["PUT", "OPTIONS"])
+@command_policies_bp.route("/command-policies/<int:rule_id>", methods=["PUT"])
 @require_permission("admin", "access")
 def update_policy(user_id, rule_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -162,7 +159,7 @@ def update_policy(user_id, rule_id):
         return jsonify({"error": "No fields to update"}), 400
 
     updates.append("updated_at = %s")
-    params.append(datetime.utcnow())
+    params.append(datetime.now(timezone.utc))
     updates.append("updated_by = %s")
     params.append(user_id)
     params.extend([rule_id, org_id])
@@ -170,6 +167,7 @@ def update_policy(user_id, rule_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:update]")
             cur.execute(
                 f"UPDATE org_command_policies SET {', '.join(updates)} "
                 "WHERE id = %s AND org_id = %s",
@@ -194,6 +192,7 @@ def delete_policy(user_id, rule_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:delete]")
             cur.execute(
                 "DELETE FROM org_command_policies WHERE id = %s AND org_id = %s",
                 (rule_id, org_id),
@@ -207,12 +206,9 @@ def delete_policy(user_id, rule_id):
     return jsonify({"status": "deleted"})
 
 
-@command_policies_bp.route("/command-policies/test", methods=["POST", "OPTIONS"])
+@command_policies_bp.route("/command-policies/test", methods=["POST"])
 @require_auth_only
 def test_command(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -230,12 +226,9 @@ def test_command(user_id):
     })
 
 
-@command_policies_bp.route("/command-policy-toggle", methods=["PUT", "OPTIONS"])
+@command_policies_bp.route("/command-policy-toggle", methods=["PUT"])
 @require_permission("admin", "access")
 def toggle_list(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -259,6 +252,7 @@ def toggle_list(user_id):
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:toggle]")
                 cur.execute(
                     "SELECT COUNT(*) FROM org_command_policies "
                     "WHERE org_id = %s AND mode = %s",
@@ -286,12 +280,9 @@ def toggle_list(user_id):
 # Template library endpoints
 # ---------------------------------------------------------------------------
 
-@command_policies_bp.route("/command-policy-templates", methods=["GET", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates", methods=["GET"])
 @require_auth_only
 def list_templates(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     templates = get_policy_templates()
     result = []
     for tpl in templates:
@@ -307,12 +298,9 @@ def list_templates(user_id):
     return jsonify(result)
 
 
-@command_policies_bp.route("/command-policy-templates/apply", methods=["POST", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates/apply", methods=["POST"])
 @require_permission("admin", "access")
 def apply_template(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -337,6 +325,7 @@ def apply_template(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:apply_template]")
             cur.execute(
                 "DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'",
                 (org_id,),
@@ -359,12 +348,9 @@ def apply_template(user_id):
     return jsonify({"status": "applied", "template_id": template_id, **_list_states(org_id)})
 
 
-@command_policies_bp.route("/command-policy-templates/active", methods=["DELETE", "OPTIONS"])
+@command_policies_bp.route("/command-policy-templates/active", methods=["DELETE"])
 @require_permission("admin", "access")
 def clear_active_template(user_id):
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
@@ -379,6 +365,7 @@ def clear_active_template(user_id):
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:clear_template]")
             cur.execute("DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'", (org_id,))
             cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(None)))
         conn.commit()

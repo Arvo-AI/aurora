@@ -37,6 +37,13 @@ import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
+import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
+
+function sourceDisplayName(source: string): string {
+  const connector = connectorRegistry.get(source);
+  if (connector) return connector.name;
+  return source.charAt(0).toUpperCase() + source.slice(1);
+}
 
 interface IncidentCardProps {
   incident: Incident;
@@ -250,7 +257,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   // Recursively extract text content from React nodes for suggestion matching
   const extractTextFromNode = useCallback((node: React.ReactNode): string => {
     if (typeof node === 'string') return node;
-    if (Array.isArray(node)) return node.map(extractTextFromNode).join('');
+    if (Array.isArray(node)) return node.map((child) => extractTextFromNode(child)).join('');
     if (React.isValidElement(node) && node.props.children) {
       return extractTextFromNode(node.props.children);
     }
@@ -386,12 +393,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors"
                 >
-                  {alert.source.charAt(0).toUpperCase() + alert.source.slice(1)} Alert
+                  {sourceDisplayName(alert.source)} Alert
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                  {alert.source.charAt(0).toUpperCase() + alert.source.slice(1)} Alert
+                  {sourceDisplayName(alert.source)} Alert
                 </span>
               )}
             </div>

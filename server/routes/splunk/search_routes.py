@@ -3,16 +3,19 @@
 import logging
 import re
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from utils.web.cors_utils import create_cors_response
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 
 SPLUNK_TIMEOUT = 30
 SPLUNK_SEARCH_TIMEOUT = 120
+
+from utils.splunk_config import SPLUNK_SSL_VERIFY
 
 # Regex for valid Splunk SID: alphanumerics, underscores, hyphens, dots
 SID_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-]+$")
@@ -45,7 +48,7 @@ def _get_splunk_client_for_user(user_id: str) -> Optional[Dict[str, Any]]:
             return None
         return {"base_url": base_url, "api_token": api_token}
     except Exception as exc:
-        logger.error(f"[SPLUNK-SEARCH] Failed to get credentials for user {user_id}: {exc}")
+        logger.error(f"[SPLUNK-SEARCH] Failed to get credentials for user {sanitize(user_id)}: {sanitize(exc)}")
         return None
 
 
@@ -58,7 +61,7 @@ def _splunk_headers(api_token: str) -> Dict[str, str]:
     }
 
 
-@search_bp.route("/search", methods=["POST", "OPTIONS"])
+@search_bp.route("/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_sync(user_id):
     """Execute a synchronous SPL search (oneshot mode)."""
@@ -79,7 +82,7 @@ def search_sync(user_id):
     if not search_query.strip().startswith("|") and not search_query.strip().lower().startswith("search"):
         search_query = f"search {search_query}"
 
-    logger.info(f"[SPLUNK-SEARCH] User {user_id} executing sync search: {search_query[:100]}...")
+    logger.info(f"[SPLUNK-SEARCH] User {sanitize(user_id)} executing sync search: {sanitize(search_query)[:100]}...")
 
     try:
         # Use export endpoint with oneshot mode for streaming results
@@ -97,7 +100,7 @@ def search_sync(user_id):
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
             stream=False,
         )
 
@@ -113,7 +116,7 @@ def search_sync(user_id):
         # Limit response size to prevent memory issues
         MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10MB
         if len(response.text) > MAX_RESPONSE_SIZE:
-            logger.warning(f"[SPLUNK-SEARCH] Response too large ({len(response.text)} bytes) for user {user_id}, truncating")
+            logger.warning(f"[SPLUNK-SEARCH] Response too large ({len(response.text)} bytes) for user {sanitize(user_id)}, truncating")
             response_text = response.text[:MAX_RESPONSE_SIZE]
         else:
             response_text = response.text
@@ -139,14 +142,14 @@ def search_sync(user_id):
         })
 
     except requests.exceptions.Timeout:
-        logger.error(f"[SPLUNK-SEARCH] Search timeout for user {user_id}")
+        logger.error(f"[SPLUNK-SEARCH] Search timeout for user {sanitize(user_id)}")
         return jsonify({"error": "Search timed out. Try a narrower time range or simpler query."}), 504
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Search failed for user {user_id}: {exc}", exc_info=True)
+        logger.error(f"[SPLUNK-SEARCH] Search failed for user {sanitize(user_id)}: {sanitize(exc)}", exc_info=True)
         return jsonify({"error": "Search request failed"}), 502
 
 
-@search_bp.route("/search/jobs", methods=["POST", "OPTIONS"])
+@search_bp.route("/search/jobs", methods=["POST"])
 @require_permission("connectors", "read")
 def create_search_job(user_id):
     """Create an asynchronous search job."""
@@ -166,7 +169,7 @@ def create_search_job(user_id):
     if not search_query.strip().startswith("|") and not search_query.strip().lower().startswith("search"):
         search_query = f"search {search_query}"
 
-    logger.info(f"[SPLUNK-SEARCH] User {user_id} creating async job: {search_query[:100]}...")
+    logger.info(f"[SPLUNK-SEARCH] User {sanitize(user_id)} creating async job: {sanitize(search_query)[:100]}...")
 
     try:
         url = f"{creds['base_url']}/services/search/v2/jobs"
@@ -182,7 +185,7 @@ def create_search_job(user_id):
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -198,7 +201,7 @@ def create_search_job(user_id):
         sid = result.get("sid") or result.get("entry", [{}])[0].get("content", {}).get("sid")
 
         if not sid:
-            logger.error(f"[SPLUNK-SEARCH] Failed to extract SID from response for user {user_id}")
+            logger.error(f"[SPLUNK-SEARCH] Failed to extract SID from response for user {sanitize(user_id)}")
             return jsonify({"success": False, "error": "Failed to extract job ID from Splunk response"}), 500
 
         return jsonify({
@@ -208,11 +211,11 @@ def create_search_job(user_id):
         })
 
     except requests.exceptions.RequestException as exc:
-        logger.error(f"[SPLUNK-SEARCH] Job creation failed for user {user_id}: {exc}", exc_info=True)
+        logger.error(f"[SPLUNK-SEARCH] Job creation failed for user {sanitize(user_id)}: {sanitize(exc)}", exc_info=True)
         return jsonify({"error": "Failed to create search job"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>", methods=["GET", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_job_status(user_id, sid: str):
     """Get the status of a search job."""
@@ -226,7 +229,7 @@ def get_job_status(user_id, sid: str):
         return jsonify({"error": "Splunk not connected"}), 400
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}"
         headers = _splunk_headers(creds["api_token"])
         headers["Accept"] = "application/json"
 
@@ -235,7 +238,7 @@ def get_job_status(user_id, sid: str):
             headers=headers,
             params={"output_mode": "json"},
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:
@@ -265,7 +268,7 @@ def get_job_status(user_id, sid: str):
         return jsonify({"error": "Failed to get job status"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>/results", methods=["GET", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>/results", methods=["GET"])
 @require_permission("connectors", "read")
 def get_job_results(user_id, sid: str):
     """Get the results of a completed search job."""
@@ -282,7 +285,7 @@ def get_job_results(user_id, sid: str):
     count = request.args.get("count", 1000, type=int)
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}/results"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/results"
         headers = _splunk_headers(creds["api_token"])
         headers["Accept"] = "application/json"
 
@@ -295,7 +298,7 @@ def get_job_results(user_id, sid: str):
                 "count": count,
             },
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:
@@ -319,7 +322,7 @@ def get_job_results(user_id, sid: str):
         return jsonify({"error": "Failed to get search results"}), 502
 
 
-@search_bp.route("/search/jobs/<sid>", methods=["DELETE", "OPTIONS"])
+@search_bp.route("/search/jobs/<sid>", methods=["DELETE"])
 @require_permission("connectors", "write")
 def cancel_job(user_id, sid: str):
     """Cancel a running search job."""
@@ -333,13 +336,13 @@ def cancel_job(user_id, sid: str):
         return jsonify({"error": "Splunk not connected"}), 400
 
     try:
-        url = f"{creds['base_url']}/services/search/v2/jobs/{sid}/control"
+        url = f"{creds['base_url']}/services/search/v2/jobs/{quote(sid, safe='')}/control"
         response = requests.post(
             url,
             headers=_splunk_headers(creds["api_token"]),
             data={"action": "cancel"},
             timeout=SPLUNK_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 404:

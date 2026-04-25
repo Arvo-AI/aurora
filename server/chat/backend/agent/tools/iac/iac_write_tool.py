@@ -284,7 +284,7 @@ def _get_provider_preference_with_fallback(user_id: str | None = None):
     Returns:
         Provider preference from context or database, or None if not available
     """
-    from utils.cloud_utils import get_provider_preference
+    from utils.cloud.cloud_utils import get_provider_preference
     
     # First try context (set by agent at start of request)
     context_pref = get_provider_preference()
@@ -293,7 +293,7 @@ def _get_provider_preference_with_fallback(user_id: str | None = None):
     
     # Fallback to database if no context preference
     if not user_id:
-        from utils.cloud_utils import get_user_context
+        from utils.cloud.cloud_utils import get_user_context
         try:
             context = get_user_context()
             user_id = context.get('user_id') if isinstance(context, dict) else context

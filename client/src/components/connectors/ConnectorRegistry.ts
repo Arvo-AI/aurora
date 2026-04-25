@@ -148,6 +148,19 @@ class ConnectorRegistry {
     });
 
     this.register({
+        id: "incidentio",
+        name: "incident.io",
+        description: "Connect incident.io for real-time incident lifecycle tracking. Receive webhook events, investigate incidents with timeline data, and post RCA results back automatically.",
+        iconPath: "/incidentio.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Incident Management",
+        path: "/incident-io/auth",
+        storageKey: "isIncidentIoConnected",
+        alertsPath: "/incident-io/incidents",
+        alertsLabel: "View Incidents",
+      });
+
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
@@ -159,15 +172,15 @@ class ConnectorRegistry {
       });
 
     this.register({
-        id: "confluence",
-        name: "Confluence",
-        description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
-        iconPath: "/confluence.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/confluence/connect",
-        storageKey: "isConfluenceConnected",
-      });
+      id: "confluence",
+      name: "Confluence",
+      description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
+      iconPath: "/confluence.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/confluence/connect",
+      storageKey: "isConfluenceConnected",
+    });
 
     if (isJiraEnabled()) {
       this.register({

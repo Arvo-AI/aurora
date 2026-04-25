@@ -358,97 +358,59 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         # Ensure region is available to CLI/SDK
         isolated_env["AWS_DEFAULT_REGION"] = region
         
-        # Validate credentials by making a test call to AWS STS
+        # Validate credentials by making a test call to AWS STS.
+        # Use a botocore session with config/credentials files pointed at /dev/null
+        # so boto3 doesn't pick up stale profile state from disk.
         try:
-            # Temporarily set environment to prevent boto3 from looking for profiles
-            # We'll use a context manager approach for thread safety
-            import contextlib
+            import boto3
+            import botocore.session
+            from botocore.config import Config
             
-            @contextlib.contextmanager
-            def temporary_aws_env_override():
-                """Context manager to temporarily override AWS env vars for boto3."""
-                saved_vars = {}
-                vars_to_clear = ["AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CONFIG_FILE", 
-                                "AWS_SHARED_CREDENTIALS_FILE", "AWS_CREDENTIAL_FILE"]
-                
-                # Save and clear problematic environment variables
-                for var in vars_to_clear:
-                    if var in os.environ:
-                        saved_vars[var] = os.environ[var]
-                        del os.environ[var]
-                
-                # Set dummy AWS_CONFIG_FILE to prevent boto3 from searching for config
-                os.environ["AWS_CONFIG_FILE"] = "/dev/null"
-                os.environ["AWS_SHARED_CREDENTIALS_FILE"] = "/dev/null"
-                
-                try:
-                    yield
-                finally:
-                    # Restore original environment
-                    os.environ.pop("AWS_CONFIG_FILE", None)
-                    os.environ.pop("AWS_SHARED_CREDENTIALS_FILE", None)
-                    for var, value in saved_vars.items():
-                        os.environ[var] = value
+            sts_start = time.perf_counter()
             
-            # Use the context manager to ensure clean environment for boto3
-            with temporary_aws_env_override():
-                import boto3
-                from botocore.config import Config
-                
-                sts_start = time.perf_counter()
-                
-                # Create a config to avoid profile issues
-                config = Config(
-                    region_name=region,
-                    signature_version='v4',
-                    retries={'max_attempts': 3}
-                )
-                
-                # Use explicit credentials with boto3.client
-                sts_kwargs = {
-                    'service_name': 'sts',
-                    'aws_access_key_id': access_key_id,
-                    'aws_secret_access_key': secret_access_key,
-                    'region_name': region,
-                    'config': config,
-                    'use_ssl': True,
-                }
-                if session_token:
-                    sts_kwargs['aws_session_token'] = session_token
+            botocore_sess = botocore.session.Session()
+            botocore_sess.set_config_variable('config_file', '/dev/null')
+            botocore_sess.set_config_variable('credentials_file', '/dev/null')
+            
+            session = boto3.Session(
+                aws_access_key_id=access_key_id,
+                aws_secret_access_key=secret_access_key,
+                aws_session_token=session_token if session_token else None,
+                region_name=region,
+                botocore_session=botocore_sess,
+            )
+            
+            # Create a config to avoid profile issues
+            config = Config(
+                region_name=region,
+                signature_version='v4',
+                retries={'max_attempts': 3}
+            )
+            
+            sts = session.client('sts', config=config, use_ssl=True)
+            identity = sts.get_caller_identity()
+            logger.info(f"TIME: AWS STS validation took {time.perf_counter() - sts_start:.2f}s")
+            
+            account_id = identity['Account']
+            user_arn = identity.get('Arn', 'Unknown')
+            logger.info(f"Successfully validated AWS credentials for account: {account_id}")
+            logger.info(f"User ARN: {user_arn}")
 
-                sts = boto3.client(**sts_kwargs)
-                
-                identity = sts.get_caller_identity()
-                logger.info(f"TIME: AWS STS validation took {time.perf_counter() - sts_start:.2f}s")
-                
-                account_id = identity['Account']
-                user_arn = identity.get('Arn', 'Unknown')
-                logger.info(f"Successfully validated AWS credentials for account: {account_id}")
-                logger.info(f"User ARN: {user_arn}")
+            # Stash account ID in isolated env for downstream display without extra calls
+            try:
+                isolated_env["AURORA_AWS_ACCOUNT_ID"] = str(account_id)
+            except Exception as env_err:
+                logger.debug(f"Could not store AWS account ID in isolated_env: {env_err}")
 
-                # Stash account ID in isolated env for downstream display without extra calls
-                try:
-                    isolated_env["AURORA_AWS_ACCOUNT_ID"] = str(account_id)
-                except Exception:
-                    pass
-
-                # Also attempt to resolve a friendly account alias (optional)
-                try:
-                    iam = boto3.client(
-                        'iam',
-                        aws_access_key_id=access_key_id,
-                        aws_secret_access_key=secret_access_key,
-                        aws_session_token=session_token if session_token else None,
-                        config=config,
-                        use_ssl=True,
-                    )
-                    alias_resp = iam.list_account_aliases(MaxItems=1)
-                    aliases = alias_resp.get('AccountAliases', [])
-                    if isinstance(aliases, list) and aliases:
-                        isolated_env["AURORA_AWS_ACCOUNT_ALIAS"] = str(aliases[0])
-                except Exception as alias_err:
-                    logger.info(f"Could not resolve AWS account alias: {alias_err}")
-                    
+            # Also attempt to resolve a friendly account alias (optional)
+            try:
+                iam = session.client('iam', config=config, use_ssl=True)
+                alias_resp = iam.list_account_aliases(MaxItems=1)
+                aliases = alias_resp.get('AccountAliases', [])
+                if isinstance(aliases, list) and aliases:
+                    isolated_env["AURORA_AWS_ACCOUNT_ALIAS"] = str(aliases[0])
+            except Exception as alias_err:
+                logger.info(f"Could not resolve AWS account alias: {alias_err}")
         except Exception as e:
             logger.error(f"AWS credentials validation failed: {e}")
             return False, None, None, None
@@ -1168,169 +1130,6 @@ def execute_tailscale_command(command: str, isolated_env: dict) -> dict:
         }
 
 
-# OLD GLOBAL AWS FUNCTION REMOVED - Use setup_aws_environment_isolated() instead
-
-def setup_kubeconfig_for_eks(cluster_name: str, region: str) -> bool:
-    """Set up kubeconfig for EKS cluster using AWS CLI."""
-    try:
-        logger.info(f"Setting up kubeconfig for EKS cluster: {cluster_name} in {region}")
-        
-        # Update kubeconfig for the EKS cluster
-        kubeconfig_cmd = f"aws eks update-kubeconfig --name {cluster_name} --region {region}"
-        result = terminal_run(
-            shlex.split(kubeconfig_cmd),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=os.environ.copy()
-        )
-        
-        if result.returncode == 0:
-            logger.info(f"Successfully updated kubeconfig for cluster {cluster_name}")
-            return True
-        else:
-            logger.error(f"Failed to update kubeconfig: {result.stderr}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error setting up kubeconfig: {e}")
-        return False
-
-def deploy_helm_chart(chart_path: str, release_name: str, namespace: str = "default", values_file: str = None, kube_context: str = None) -> str:
-    """Deploy a Helm chart using the cloud execution tool."""
-    try:
-        logger.info(f"Deploying Helm chart: {chart_path} as {release_name} in namespace {namespace}")
-        
-        # Build the helm upgrade --install command
-        helm_cmd = f"helm upgrade --install {release_name} {chart_path} --namespace {namespace}"
-        
-        # Add values file if specified
-        if values_file:
-            helm_cmd += f" --values {values_file}"
-        
-        # Add kube context if specified
-        if kube_context:
-            helm_cmd += f" --kube-context {kube_context}"
-        
-        # Add additional flags for better output
-        helm_cmd += " --wait --timeout 10m"
-        
-        logger.info(f"Executing Helm command: {helm_cmd}")
-        
-        # Execute the helm command
-        result = terminal_run(
-            shlex.split(helm_cmd),
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minutes timeout for Helm operations
-            env=os.environ.copy()
-        )
-        
-        if result.returncode == 0:
-            logger.info(f"Helm deployment successful for {release_name}")
-            return json.dumps({
-                "success": True,
-                "message": f"Helm chart {release_name} deployed successfully",
-                "output": result.stdout,
-                "release_name": release_name,
-                "namespace": namespace
-            })
-        else:
-            logger.error(f"Helm deployment failed: {result.stderr}")
-            return json.dumps({
-                "success": False,
-                "error": f"Helm deployment failed: {result.stderr}",
-                "output": result.stdout,
-                "release_name": release_name,
-                "namespace": namespace
-            })
-            
-    except Exception as e:
-        logger.error(f"Error deploying Helm chart: {e}")
-        return json.dumps({
-            "success": False,
-            "error": f"Helm deployment error: {str(e)}",
-            "release_name": release_name,
-            "namespace": namespace
-        })
-
-def extract_and_deploy_helm_chart(zip_path: str, cluster_name: str, region: str, release_name: str = None) -> str:
-    """Extract Helm chart from zip and deploy it to EKS cluster."""
-    try:
-        import zipfile
-        import tempfile
-        import os
-        
-        logger.info(f"Extracting and deploying Helm chart from {zip_path}")
-        
-        # Create temporary directory for extraction
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Extract the zip file
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-            
-            # Look for deploy directory or Chart.yaml
-            chart_path = None
-            values_file = None
-            
-            # Check for deploy directory first
-            deploy_dir = os.path.join(temp_dir, "deploy")
-            if os.path.exists(deploy_dir) and os.path.isdir(deploy_dir):
-                chart_path = deploy_dir
-                values_file = os.path.join(deploy_dir, "values.yaml")
-                if not os.path.exists(values_file):
-                    values_file = None
-            else:
-                # Look for Chart.yaml in root or subdirectories
-                for root, dirs, files in os.walk(temp_dir):
-                    if "Chart.yaml" in files:
-                        chart_path = root
-                        # Look for values.yaml in the same directory
-                        potential_values = os.path.join(root, "values.yaml")
-                        if os.path.exists(potential_values):
-                            values_file = potential_values
-                        break
-            
-            if not chart_path:
-                return json.dumps({
-                    "success": False,
-                    "error": "No Helm chart found in the zip file. Expected 'deploy' directory or 'Chart.yaml' file."
-                })
-            
-            # Set up kubeconfig for the EKS cluster
-            if not setup_kubeconfig_for_eks(cluster_name, region):
-                return json.dumps({
-                    "success": False,
-                    "error": f"Failed to set up kubeconfig for EKS cluster {cluster_name}"
-                })
-            
-            # Use provided release name or default to chart name
-            if not release_name:
-                # Try to extract chart name from Chart.yaml
-                chart_yaml_path = os.path.join(chart_path, "Chart.yaml")
-                if os.path.exists(chart_yaml_path):
-                    try:
-                        with open(chart_yaml_path, 'r') as f:
-                            for line in f:
-                                if line.startswith('name:'):
-                                    release_name = line.split(':', 1)[1].strip()
-                                    break
-                    except Exception:
-                        pass
-                
-                if not release_name:
-                    release_name = "aurora-app"
-            
-            # Deploy the Helm chart
-            return deploy_helm_chart(chart_path, release_name, "default", values_file)
-            
-    except Exception as e:
-        logger.error(f"Error extracting and deploying Helm chart: {e}")
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to extract and deploy Helm chart: {str(e)}"
-        })
-
 def is_read_only_command(command: str) -> bool:
     """Check if a cloud command is read-only (list, describe, get, etc.)."""
     read_only_verbs = ['list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status', 'read', 'view', 'help', 'logs', 'top']
@@ -1722,7 +1521,7 @@ Security & Compliance
                             pj = r.json()
                             resource_name = pj.get("name") or pj.get("projectId") or resource_id
                     except Exception:
-                        pass
+                        pass  # optional metadata lookup; fallback to resource_id below
                 resource_name = resource_name or resource_id
 
             elif provider.lower() in ['aws', 'amazon']:

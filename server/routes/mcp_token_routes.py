@@ -4,12 +4,14 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
 from psycopg2.extras import RealDictCursor
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_adapters import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
 mcp_token_bp = Blueprint('mcp_token', __name__)
+_LOG_PREFIX = "[MCPToken]"
 
 
 def _generate_token():
@@ -51,8 +53,7 @@ def create_mcp_token(user_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute("""
                     INSERT INTO mcp_tokens (token, user_id, org_id, name, expires_at, status)
                     VALUES (%s, %s, %s, %s, %s, 'active')
@@ -61,7 +62,7 @@ def create_mcp_token(user_id):
                 result = cursor.fetchone()
                 conn.commit()
 
-        logger.info(f"Created MCP token for user {user_id}, name: {name}")
+        logger.info(f"Created MCP token for user {sanitize(user_id)}, name: {sanitize(name)}")
         return jsonify({
             'success': True,
             'token': result['token'],
@@ -87,8 +88,7 @@ def list_mcp_tokens(user_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute("""
                     SELECT id, name, created_at, last_used_at, expires_at, status,
                            CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
@@ -118,8 +118,7 @@ def revoke_mcp_token(user_id, token_id):
 
         with connect_to_db_as_user() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     "UPDATE mcp_tokens SET status = 'revoked' WHERE id = %s AND user_id = %s AND org_id = %s RETURNING id",
                     (token_id, user_id, org_id)
@@ -130,7 +129,7 @@ def revoke_mcp_token(user_id, token_id):
         if not result:
             return jsonify({'error': 'Token not found or unauthorized'}), 404
 
-        logger.info(f"Revoked MCP token {token_id} for user {user_id}")
+        logger.info(f"Revoked MCP token {token_id} for user {sanitize(user_id)}")
         return jsonify({'success': True, 'message': 'Token revoked'}), 200
     except Exception as e:
         logger.error(f"Error revoking MCP token: {e}", exc_info=True)

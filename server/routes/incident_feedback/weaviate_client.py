@@ -18,6 +18,8 @@ from weaviate.classes.init import AdditionalConfig, Timeout
 from weaviate.classes.query import Filter, MetadataQuery
 from weaviate.util import generate_uuid5
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "IncidentKnowledge"
@@ -232,7 +234,7 @@ Investigation:
         collection.data.insert(properties=properties, uuid=uuid)
 
         logger.info(
-            f"[AURORA LEARN] Stored good RCA for incident {incident_id} (user: {user_id})"
+            f"[AURORA LEARN] Stored good RCA for incident {sanitize(incident_id)} (user: {sanitize(user_id)})"
         )
         return True
 

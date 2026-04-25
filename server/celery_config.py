@@ -83,6 +83,7 @@ celery_app.conf.update(
         'routes.newrelic.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
+        'routes.incidentio.tasks',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',

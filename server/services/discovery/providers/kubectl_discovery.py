@@ -41,9 +41,9 @@ def _execute_kubectl(user_id, cluster_id, command):
     if not chatbot_url:
         return None, "CHATBOT_INTERNAL_URL not configured"
 
-    secret = os.getenv("FLASK_SECRET_KEY")
+    secret = os.getenv("INTERNAL_API_SECRET")
     if not secret:
-        return None, "FLASK_SECRET_KEY not configured"
+        return None, "INTERNAL_API_SECRET not configured"
 
     try:
         response = requests.post(

@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 
 from chat.backend.agent.tools.iac.iac_write_tool import get_terraform_directory
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.storage.storage import get_storage_manager
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ def _list_storage_files(user_id: str, session_id: str) -> List[Dict[str, Any]]:
 
         return files
     except Exception as e:
-        logger.warning(f"Failed to list storage files for session {session_id}: {e}")
+        logger.warning(f"Failed to list storage files for session {sanitize(session_id)}: {e}")
         return []
 
 
@@ -53,18 +54,18 @@ def _read_storage_file(user_id: str, session_id: str, filename: str) -> Optional
         if file_info:
             size = file_info.get("size")
             if size and size > _MAX_FILE_SIZE_BYTES:
-                logger.warning(f"File {filename} too large: {size} bytes")
+                logger.warning(f"File {sanitize(filename)} too large: {size} bytes")
                 return None
 
-        
+
         content_bytes = storage.download_bytes(file_path)
         return content_bytes.decode('utf-8')
 
     except UnicodeDecodeError:
-        logger.warning(f"File {filename} is not valid UTF-8")
+        logger.warning(f"File {sanitize(filename)} is not valid UTF-8")
         return None
     except Exception as e:
-        logger.warning(f"Failed to read storage file {filename} for session {session_id}: {e}")
+        logger.warning(f"Failed to read storage file {sanitize(filename)} for session {sanitize(session_id)}: {e}")
         return None
 
 

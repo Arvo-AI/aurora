@@ -20,8 +20,18 @@ from werkzeug.exceptions import HTTPException
 
 from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
 from utils.auth.enforcer import get_enforcer, reload_policies
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_auth_failure(user_id, org_id, action, detail) -> None:
+    """Best-effort audit log for auth/RBAC failures."""
+    try:
+        from routes.audit_routes import record_audit_event
+        record_audit_event(org_id or "", user_id or "", action, "auth", None, detail, request)
+    except Exception:
+        logger.debug("Could not record auth audit event", exc_info=True)
 
 
 def require_permission(resource: str, action: str):
@@ -46,14 +56,16 @@ def require_permission(resource: str, action: str):
 
             user_id = get_user_id_from_request()
             if not user_id:
+                _audit_auth_failure(None, None, "auth_failed", {"endpoint": fn.__name__, "reason": "no_user_id"})
                 return jsonify({"error": "Unauthorized"}), 401
 
             org_id = get_org_id_from_request()
             if not org_id:
                 logger.warning(
                     "RBAC denied: no org context for user=%s endpoint=%s",
-                    user_id, fn.__name__,
+                    sanitize(user_id), fn.__name__,
                 )
+                _audit_auth_failure(user_id, None, "rbac_denied", {"endpoint": fn.__name__, "reason": "no_org_context"})
                 return jsonify({"error": "Forbidden - no organization context"}), 403
 
             enforcer = get_enforcer()
@@ -62,8 +74,11 @@ def require_permission(resource: str, action: str):
                 if not enforcer.enforce(user_id, org_id, resource, action):
                     logger.warning(
                         "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
-                        user_id, org_id, resource, action, fn.__name__,
+                        sanitize(user_id), sanitize(org_id), resource, action, fn.__name__,
                     )
+                    _audit_auth_failure(user_id, org_id, "rbac_denied", {
+                        "endpoint": fn.__name__, "resource": resource, "action": action,
+                    })
                     return jsonify({"error": "Forbidden"}), 403
 
             try:
@@ -97,6 +112,7 @@ def require_auth_only(fn):
 
         user_id = get_user_id_from_request()
         if not user_id:
+            _audit_auth_failure(None, None, "auth_failed", {"endpoint": fn.__name__, "reason": "no_user_id"})
             return jsonify({"error": "Unauthorized"}), 401
         try:
             return fn(user_id, *args, **kwargs)

@@ -1,3 +1,5 @@
+"use client"
+
 /**
  * Output rendering utilities for different tool types.
  * Handles syntax highlighting, formatting, and special displays.
@@ -6,6 +8,7 @@
 
 import * as React from "react"
 import Convert from 'ansi-to-html'
+import DOMPurify from 'dompurify'
 import { Button } from "@/components/ui/button"
 import { IaCEditorPanel } from "./iac-editor-panel"
 
@@ -28,7 +31,8 @@ interface RenderOutputProps {
 // Helper to detect tool type for appropriate rendering
 const isCliTool = (toolName: string) => {
   return toolName.includes('cloud_exec') || toolName.includes('kubectl') || 
-         toolName.includes('gcloud') || toolName.includes('aws') || toolName.includes('azure')
+         toolName.includes('gcloud') || toolName.includes('aws') || toolName.includes('azure') ||
+         toolName.includes('terminal_exec') || toolName.includes('tailscale_ssh')
 }
 
 const isIacTool = (toolName: string) => {
@@ -180,7 +184,7 @@ export function RenderOutput({
 
     // CLI tools - use ANSI to HTML for terminal colors
     if (isCliTool(toolName)) {
-      const htmlOutput = ansiConverter.toHtml(output)
+      const htmlOutput = DOMPurify.sanitize(ansiConverter.toHtml(output))
       return (
         <div 
           className="text-xs leading-relaxed whitespace-pre-wrap font-mono"
@@ -492,7 +496,7 @@ export function RenderOutput({
     }
 
     if (isCliTool(toolName)) {
-      const htmlOutput = ansiConverter.toHtml(chatOutput)
+      const htmlOutput = DOMPurify.sanitize(ansiConverter.toHtml(chatOutput))
       return (
         <div 
           className="text-xs leading-relaxed whitespace-pre-wrap font-mono"

@@ -11,11 +11,13 @@ load_dotenv()
 
 import logging
 import os
+import hmac
 import secrets
-from flask import Flask
+import hmac
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
+from utils.log_sanitizer import sanitize
 
 # Configure logging first, before importing any modules
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -23,60 +25,15 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(leve
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('utils.auth.stateless_auth').setLevel(logging.INFO)
  
-import requests
-import os, json, base64
+import os
 import secrets  # For generating a secure random key
 import flask
-from flask import Flask, redirect, request, session, jsonify
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from utils.db.db_utils import (
     ensure_database_exists,
     initialize_tables,
-    connect_to_db_as_admin,
-    connect_to_db_as_user,
 )
-import urllib.parse
-import time
-import traceback
-from datetime import datetime
-import subprocess
-import shutil
-
-# CORS imports
-from flask_cors import CORS
-from utils.web.cors_utils import create_cors_response
-
-# Routes imports - organized sections below
-
-# GCP imports
-from connectors.gcp_connector.auth import (
-    get_credentials,
-    get_project_list,
-    ensure_aurora_full_access,
-    get_aurora_service_account_email,
-)
-from connectors.gcp_connector.auth.oauth import (
-    get_auth_url,
-    exchange_code_for_token,
-)
-from utils.auth.token_management import (
-    get_token_data,
-    store_tokens_in_db,
-)
-from connectors.gcp_connector.billing import store_bigquery_data, is_bigquery_enabled, has_active_billing
-from connectors.gcp_connector.gcp.projects import list_gke_clusters
-
-# Azure imports
-from connectors.azure_connector.k8s_client import get_aks_clusters, extract_resource_group
-from azure.identity import ClientSecretCredential
-
-# AWS imports
-import boto3, flask
-from utils.auth.stateless_auth import get_user_id_from_request
-
-# Google API imports
-from googleapiclient.discovery import build  # local import to avoid global dependency
-
 
 
 # Initialize Flask application
@@ -153,6 +110,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                             "Authorization", "X-Provider-Preference"],
+                           "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/bigpanda/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                             "Authorization", "X-Provider-Preference"],
@@ -207,24 +168,125 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                                  "methods": ["GET", "POST", "OPTIONS"]},
         r"/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                 "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID", 
-                                "Authorization", "X-Provider-Preference"], 
+                                "Authorization", "X-Provider-Preference", "X-Org-ID", "X-Internal-Secret"], 
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}
      }
 )
 
 # ============================================================================
+# Internal API Secret Verification
+# ============================================================================
+# Ensures requests originate from the Next.js frontend (or another trusted
+# internal service) rather than from an unauthenticated external caller.
+
+_INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_AURORA_ENV = os.getenv("AURORA_ENV", "production")
+
+if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
+    raise RuntimeError(
+        "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+        "Refusing to start without authentication secrets in production." % _AURORA_ENV
+    )
+
+_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
+
+_HEALTH_PATH = "/health"
+
+_OPEN_PREFIXES = (
+    _HEALTH_PATH,
+    "/callback",
+    "/github/callback",
+    "/bitbucket/callback",
+    "/slack/callback",
+    "/slack/events",
+    "/pagerduty/oauth/callback",
+    "/google-chat/callback",
+    "/google-chat/events",
+    "/datadog/webhook/",
+    "/grafana/alerts/webhook/",
+    "/splunk/alerts/webhook/",
+    "/netdata/alerts/webhook/",
+    "/bigpanda/webhook/",
+    "/dynatrace/webhook/",
+    "/newrelic/webhook/",
+    "/pagerduty/webhook/",
+    "/opsgenie/webhook/",
+    "/jenkins/webhook/",
+    "/cloudbees/webhook/",
+    "/spinnaker/webhook/",
+    "/incidentio/alerts/webhook/",
+    "/ovh_api/ovh/oauth2/callback",
+    "/azure/callback",
+    "/azure/setup-script",
+    "/azure/setup-script-ps1",
+    "/aws/setup-script",
+    "/aws/setup-role",
+    "/aws/setup-script-ps1",
+    "/aws/setup-role-ps1",
+)
+
+@app.before_request
+def verify_internal_api_secret():
+    """Reject requests that don't carry a valid INTERNAL_API_SECRET header.
+
+    Skipped when the secret is not configured (backward-compatible default)
+    and for open endpoints (login, register, health) and external-facing
+    webhook/callback/event endpoints called by third-party services.
+    """
+    if not _INTERNAL_API_SECRET:
+        return None
+
+    if request.method == "OPTIONS":
+        return None
+
+    if request.path in _OPEN_PATHS:
+        return None
+
+    path = request.path
+    if any(
+        path == prefix or path.startswith(prefix + '/') or (prefix.endswith('/') and path.startswith(prefix))
+        for prefix in _OPEN_PREFIXES
+    ):
+        return None
+
+    provided = request.headers.get("X-Internal-Secret", "")
+    if not provided or not hmac.compare_digest(provided, _INTERNAL_API_SECRET):
+        logger.warning(
+            "Rejected request missing/invalid X-Internal-Secret: %s %s from %s",
+            request.method, request.path, request.remote_addr,
+        )
+        return jsonify({"error": "Forbidden: invalid or missing X-Internal-Secret header"}), 403
+
+    return None
+
+# ============================================================================
 # Tenant Isolation Middleware - Validates X-User-ID / X-Org-ID Pairing
 # ============================================================================
 
-_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", "/health")
+# Separate from _OPEN_PREFIXES: this only skips routes that carry identity headers before auth completes (login/register); webhook routes don't need listing here because they lack X-User-ID/X-Org-ID and the check below short-circuits on missing headers.
+_TENANT_OPEN_PREFIXES = ("/api/auth/login", "/api/auth/register", _HEALTH_PATH)
+
+
+def _audit_tenant_failure(user_id, org_id, action, reason, detail=None) -> None:
+    """Best-effort audit log for tenant isolation failures."""
+    try:
+        from routes.audit_routes import record_audit_event
+        payload = {"reason": reason, **(detail or {})}
+        record_audit_event(org_id or "", user_id or "", action, "auth", None, payload, request)
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "Could not record tenant audit event", exc_info=True
+        )
 
 @app.before_request
 def enforce_user_org_binding():
     """Reject requests where X-Org-ID doesn't match the user's actual org."""
+
+    # Skip verification for OPTIONS requests (CORS preflight)
     if request.method == "OPTIONS":
         return None
 
-    if any(request.path.startswith(p) for p in _OPEN_PREFIXES):
+    if any(request.path.startswith(p) for p in _TENANT_OPEN_PREFIXES):
         return None
 
     user_id = request.headers.get("X-User-ID")
@@ -237,13 +299,17 @@ def enforce_user_org_binding():
     actual_org = resolve_org_id(user_id)
 
     if not actual_org:
+        _audit_tenant_failure(user_id, None, "auth_failed", "unknown_user",
+                              {"claimed_org": claimed_org})
         return jsonify({"error": "Unauthorized - unknown user"}), 401
 
     if actual_org != claimed_org:
         logging.getLogger(__name__).warning(
             "Tenant mismatch: user=%s claimed_org=%s actual_org=%s",
-            user_id, claimed_org, actual_org,
+            sanitize(user_id), sanitize(claimed_org), sanitize(actual_org),
         )
+        _audit_tenant_failure(user_id, actual_org, "tenant_mismatch", "org_id_mismatch",
+                              {"claimed_org": claimed_org, "actual_org": actual_org})
         return jsonify({"error": "Forbidden - organization mismatch"}), 403
 
     return None
@@ -334,6 +400,11 @@ from routes.splunk import bp as splunk_bp, search_bp as splunk_search_bp  # noqa
 import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
+
+# --- incident.io Integration Routes ---
+from routes.incidentio import bp as incidentio_bp  # noqa: F401
+import routes.incidentio.tasks  # noqa: F401
+app.register_blueprint(incidentio_bp, url_prefix="/incidentio")
 
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401
@@ -448,7 +519,7 @@ from routes.ssh_keys import bp as ssh_keys_bp
 from routes.vms import bp as vms_bp
 
 app.register_blueprint(user_preferences_bp)
-app.register_blueprint(health_bp, url_prefix="/health") # NEW: Health check endpoint
+app.register_blueprint(health_bp, url_prefix=_HEALTH_PATH) # NEW: Health check endpoint
 app.register_blueprint(llm_usage_bp)
 app.register_blueprint(aws_bp)  # Primary AWS routes at root
 app.register_blueprint(rca_emails_bp)  # RCA email management routes

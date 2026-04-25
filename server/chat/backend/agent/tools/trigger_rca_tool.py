@@ -112,7 +112,7 @@ def trigger_rca(
         "triggered_at": timestamp_str,
     }
 
-    from utils.auth.stateless_auth import get_org_id_for_user
+    from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
 
     org_id = get_org_id_for_user(user_id)
@@ -123,8 +123,7 @@ def trigger_rca(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[TriggerRCA]")
                 cursor.execute(
                     """INSERT INTO incidents
                        (user_id, org_id, source_type, source_alert_id, alert_title,
@@ -206,6 +205,7 @@ def trigger_rca(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[TriggerRCA:store_task_id]")
                     cursor.execute(
                         "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
                         (task.id, incident_id),
@@ -224,6 +224,7 @@ def trigger_rca(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[TriggerRCA:mark_failed]")
                     cursor.execute(
                         "UPDATE incidents SET status = 'failed' WHERE id = %s",
                         (incident_id,),

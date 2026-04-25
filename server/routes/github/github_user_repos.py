@@ -2,9 +2,11 @@
 GitHub user repositories endpoint that works with user ID authentication
 """
 import logging
+import re
 import time
 import requests
 from flask import Blueprint, jsonify, request
+from urllib.parse import quote
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.auth.rbac_decorators import require_permission
 
@@ -28,13 +30,10 @@ def create_cors_response(data=None, status=200):
     response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
 
-@github_user_repos_bp.route("/user-repos", methods=["GET", "OPTIONS"])
+@github_user_repos_bp.route("/user-repos", methods=["GET"])
 @require_permission("connectors", "read")
 def get_user_repos(user_id):
     """Fetch repositories for a user using their stored GitHub credentials"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     t0 = time.time()
     try:
         # Get stored GitHub credentials for this user
@@ -113,13 +112,14 @@ def get_user_repos(user_id):
         logger.error(f"Error fetching user repositories: {e}", exc_info=True)
         return create_cors_response({"error": "Failed to fetch repositories", "repos": []}, 500)
 
-@github_user_repos_bp.route("/user-branches/<path:repo_full_name>", methods=["GET", "OPTIONS"])
+@github_user_repos_bp.route("/user-branches/<path:repo_full_name>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_user_branches(user_id, repo_full_name):
     """Fetch branches for a repository using stored GitHub credentials"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
+    _REPO_NAME_RE = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}/[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}')
+    if not _REPO_NAME_RE.fullmatch(repo_full_name):
+        return create_cors_response({"error": "Invalid repository name format", "branches": []}, 400)
+
     try:
         # Get stored GitHub credentials for this user
         github_creds = get_credentials_from_db(user_id, "github")
@@ -140,9 +140,10 @@ def get_user_branches(user_id, repo_full_name):
         
         while True:
             response = requests.get(
-                f"https://api.github.com/repos/{repo_full_name}/branches",
+                f"https://api.github.com/repos/{quote(repo_full_name, safe='/')}/branches",
                 headers=headers,
-                params={"per_page": per_page, "page": page}
+                params={"per_page": per_page, "page": page},
+                timeout=10,
             )
             
             if response.status_code != 200:

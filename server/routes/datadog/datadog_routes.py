@@ -8,11 +8,10 @@ from flask import Blueprint, jsonify, request
 
 from routes.datadog.tasks import process_datadog_event
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
+from utils.log_sanitizer import sanitize, hash_for_log
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,7 @@ def _normalize_site(site: Optional[str]) -> Tuple[str, str]:
     if host_candidate in _SITE_BASE_URLS:
         return host_candidate, _SITE_BASE_URLS[host_candidate]
 
-    logger.warning("[DATADOG] Unknown site '%s', defaulting to datadoghq.com", site)
+    logger.warning("[DATADOG] Unknown site provided, defaulting to datadoghq.com")
     return candidate, _SITE_BASE_URLS["datadoghq.com"]
 
 
@@ -253,6 +252,7 @@ def _get_stored_datadog_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         from utils.db.db_utils import connect_to_db_as_admin
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, log_prefix="[Datadog:_get_stored_datadog_credentials]")
         cursor.execute(
             "SELECT user_id FROM user_tokens WHERE org_id = %s AND provider = 'datadog' AND is_active = TRUE AND secret_ref IS NOT NULL LIMIT 1",
             (org_id,)
@@ -280,7 +280,7 @@ def _build_client_from_creds(creds: Dict[str, Any]) -> Optional[DatadogClient]:
     return DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
 
-@datadog_bp.route("/connect", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     try:
@@ -300,26 +300,24 @@ def connect(user_id):
 
     site, base_url = _normalize_site(raw_site)
 
-    masked_api = mask_credential_value(api_key)
-    masked_app = mask_credential_value(app_key)
-    logger.info("[DATADOG] Connecting user %s to site=%s api=%s app=%s", user_id, site, masked_api, masked_app)
+    logger.info("[DATADOG] Connecting user %s to site=%s api_hash=%s app_hash=%s", sanitize(user_id), sanitize(site), hash_for_log(api_key), hash_for_log(app_key))
 
     client = DatadogClient(api_key=api_key, app_key=app_key, site=site)
 
     try:
         validation = client.validate_credentials()
         if not validation.get("valid"):
-            logger.warning("[DATADOG] Validation failed for user %s: %s", user_id, validation)
+            logger.warning("[DATADOG] Validation failed for user %s: %s", sanitize(user_id), validation)
             return jsonify({"error": "Unable to validate Datadog credentials"}), 400
     except DatadogAPIError as exc:
-        logger.error("[DATADOG] Credential validation failed for user %s: %s", user_id, exc)
+        logger.error("[DATADOG] Credential validation failed for user %s: %s", sanitize(user_id), exc)
         return jsonify({"error": "Failed to validate Datadog credentials"}), 502
 
     org_data = None
     try:
         org_data = client.get_org()
     except DatadogAPIError as exc:
-        logger.debug("[DATADOG] Org lookup failed for user %s: %s", user_id, exc)
+        logger.debug("[DATADOG] Org lookup failed for user %s: %s", sanitize(user_id), exc)
 
     token_payload = {
         "api_key": api_key,
@@ -334,7 +332,7 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "datadog")
-        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", user_id, site)
+        logger.info("[DATADOG] Stored credentials for user %s (site=%s)", sanitize(user_id), sanitize(site))
     except Exception as exc:
         logger.exception("[DATADOG] Failed to store credentials: %s", exc)
         return jsonify({"error": "Failed to store Datadog credentials"}), 500
@@ -350,7 +348,7 @@ def connect(user_id):
     return jsonify(response)
 
 
-@datadog_bp.route("/status", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -382,7 +380,7 @@ def status(user_id):
     })
 
 
-@datadog_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@datadog_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:
@@ -392,6 +390,7 @@ def disconnect(user_id):
 
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[DATADOG:disconnect]")
             cursor.execute(
                 "DELETE FROM datadog_events WHERE user_id = %s",
                 (user_id,)
@@ -411,7 +410,7 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Datadog"}), 500
 
 
-@datadog_bp.route("/logs/search", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/logs/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search_logs(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -441,7 +440,7 @@ def search_logs(user_id):
         return jsonify({"error": "Failed to search Datadog logs"}), 502
 
 
-@datadog_bp.route("/metrics/query", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/metrics/query", methods=["POST"])
 @require_permission("connectors", "read")
 def query_metrics(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -474,7 +473,7 @@ def query_metrics(user_id):
         return jsonify({"error": "Failed to query Datadog metrics"}), 502
 
 
-@datadog_bp.route("/events", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/events", methods=["GET"])
 @require_permission("connectors", "read")
 def list_events(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -509,7 +508,7 @@ def list_events(user_id):
         return jsonify({"error": "Failed to list Datadog events"}), 502
 
 
-@datadog_bp.route("/monitors", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/monitors", methods=["GET"])
 @require_permission("connectors", "read")
 def list_monitors(user_id):
     creds = _get_stored_datadog_credentials(user_id)
@@ -538,7 +537,7 @@ def list_monitors(user_id):
         return jsonify({"error": "Failed to list Datadog monitors"}), 502
 
 
-@datadog_bp.route("/events/ingested", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/events/ingested", methods=["GET"])
 @require_permission("connectors", "read")
 def list_ingested_events(user_id):
     org_id = get_org_id_from_request()
@@ -550,7 +549,7 @@ def list_ingested_events(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Datadog]")
 
             base_query = """
                 SELECT id, event_type, event_title, status, scope, payload, received_at, created_at
@@ -607,11 +606,8 @@ def list_ingested_events(user_id):
         return jsonify({"error": "Failed to load Datadog webhook events"}), 500
 
 
-@datadog_bp.route("/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@datadog_bp.route("/webhook/<user_id>", methods=["POST"])
 def webhook(user_id: str):
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[DATADOG] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -619,7 +615,7 @@ def webhook(user_id: str):
     # Check if user has Datadog connected
     creds = get_token_data(user_id, "datadog")
     if not creds:
-        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", user_id)
+        logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", sanitize(user_id))
         return jsonify({"error": "Datadog not connected for this user"}), 404
 
     payload_text = request.get_data(as_text=True) or ""
@@ -630,13 +626,13 @@ def webhook(user_id: str):
         "headers": dict(request.headers),
         "remote_addr": request.remote_addr,
     }
-    logger.info("[DATADOG] Received webhook for user %s type=%s", user_id, payload.get("event_type"))
+    logger.info("[DATADOG] Received webhook for user %s type=%s", sanitize(user_id), sanitize(payload.get("event_type")))
 
     process_datadog_event.delay(payload, metadata, user_id)
     return jsonify({"received": True})
 
 
-@datadog_bp.route("/webhook-url", methods=["GET", "OPTIONS"])
+@datadog_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def webhook_url(user_id):
     # Use ngrok URL for development if available, otherwise use backend URL

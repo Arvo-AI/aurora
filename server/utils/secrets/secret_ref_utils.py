@@ -10,6 +10,8 @@ import json
 from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
+from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import safe_provider
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
@@ -64,6 +66,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "newrelic",  # New Relic connector tokens
     "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
+    "incidentio",  # incident.io connector tokens
 }
 
 
@@ -158,6 +161,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:updateToken]")
             cursor.execute(
                 f"UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
                 f"WHERE user_id = %s AND provider = %s {clause}",
@@ -165,9 +169,9 @@ class SecretRefManager:
             )
             if cursor.rowcount > 0:
                 conn.commit()
-                logger.info("Updated secret_ref for provider %s", provider)
+                logger.info("Updated secret_ref for provider %s", safe_provider(provider))
                 return True
-            logger.warning("No record found for provider %s", provider)
+            logger.warning("No record found for provider %s", safe_provider(provider))
             return False
         except Exception as e:
             logger.error("Failed to update secret_ref: %s", e)
@@ -192,6 +196,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:hasCreds]")
             cursor.execute(
                 """SELECT 1 FROM user_tokens
                    WHERE (user_id = %s OR org_id = %s)
@@ -203,7 +208,7 @@ class SecretRefManager:
             )
             return cursor.fetchone() is not None
         except Exception as e:
-            logger.debug("Error checking credentials for provider %s: %s", provider, e)
+            logger.debug("Error checking credentials for provider %s: %s", safe_provider(provider), e)
             return False
         finally:
             if cursor:
@@ -224,6 +229,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:getToken]")
             cursor.execute(
                 """SELECT secret_ref, client_id, client_secret
                    FROM user_tokens
@@ -238,7 +244,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.debug("No secret reference found for provider %s", provider)
+                logger.debug("No secret reference found for provider %s", safe_provider(provider))
                 return None
 
             secret_ref, role_arn, external_id_secret_ref = result
@@ -295,6 +301,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:migrate]")
 
             cursor.execute(
                 f"SELECT token_data FROM user_tokens "
@@ -304,7 +311,7 @@ class SecretRefManager:
 
             result = cursor.fetchone()
             if not result:
-                logger.info("No token data to migrate for provider %s", provider)
+                logger.info("No token data to migrate for provider %s", safe_provider(provider))
                 return False
 
             token_data = result[0]
@@ -321,7 +328,7 @@ class SecretRefManager:
             )
 
             conn.commit()
-            logger.info("Successfully migrated token to Vault for provider %s", provider)
+            logger.info("Successfully migrated token to Vault for provider %s", safe_provider(provider))
             return True
 
         except Exception as e:
@@ -348,6 +355,7 @@ class SecretRefManager:
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:clearRef]")
             cursor.execute(
                 f"UPDATE user_tokens SET is_active = FALSE, secret_ref = '' "
                 f"WHERE user_id = %s AND provider = %s {clause}",
@@ -359,7 +367,7 @@ class SecretRefManager:
                 provider,
             )
         except Exception as e:
-            logger.warning("Failed to clear stale secret_ref for provider %s: %s", provider, e)
+            logger.warning("Failed to clear stale secret_ref for provider %s: %s", safe_provider(provider), e)
         finally:
             if cursor:
                 cursor.close()
@@ -383,7 +391,8 @@ class SecretRefManager:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
 
-            if org_id:
+            resolved_org = set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:deleteSecret]")
+            if resolved_org:
                 scope_where = "(user_id = %s OR org_id = %s)"
                 scope_params: Tuple = (user_id, org_id)
             else:
@@ -397,7 +406,7 @@ class SecretRefManager:
             )
             for row in cursor.fetchall():
                 if not self.delete_secret(row[0]):
-                    logger.warning("Failed to delete secret from Vault for provider %s", provider)
+                    logger.warning("Failed to delete secret from Vault for provider %s", safe_provider(provider))
                     delete_success = False
 
             cursor.execute(
@@ -408,12 +417,12 @@ class SecretRefManager:
             conn.commit()
 
             if deleted_rows > 0:
-                logger.info("Deleted credentials for provider %s", provider)
+                logger.info("Deleted credentials for provider %s", safe_provider(provider))
 
             return delete_success, deleted_rows
 
         except Exception as e:
-            logger.error("Failed to delete user secret for provider %s: %s", provider, e)
+            logger.error("Failed to delete user secret for provider %s: %s", safe_provider(provider), e)
             if conn:
                 conn.rollback()
             return False, 0

@@ -223,7 +223,7 @@ main() {
         --query 'Policy.Arn' \
         --output text 2>/dev/null)
 
-    if [ $? -eq 0 ]; then
+    if [[ $? -eq 0 ]]; then
         echo -e "${GREEN}✓ IAM policy created successfully${NC}"
     else
         echo -e "${RED}✗ Failed to create IAM policy${NC}"
@@ -254,7 +254,7 @@ main() {
     echo -e "${YELLOW}Creating access keys...${NC}"
     ACCESS_KEY_OUTPUT=$(aws iam create-access-key --user-name "$USERNAME" --output json)
 
-    if [ $? -eq 0 ]; then
+    if [[ $? -eq 0 ]]; then
         echo -e "${GREEN}✓ Access keys created successfully${NC}"
     else
         echo -e "${RED}✗ Failed to create access keys${NC}"

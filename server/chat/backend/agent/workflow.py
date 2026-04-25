@@ -10,8 +10,9 @@ import logging
 import json
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +200,8 @@ class Workflow:
             from utils.db.connection_pool import db_pool
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (input_state.user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, input_state.user_id, log_prefix="[Workflow:LegacyMigration]"):
+                    return False
                 cursor.execute("""
                     SELECT messages FROM chat_sessions 
                     WHERE id = %s AND user_id = %s AND is_active = true
@@ -712,6 +713,8 @@ class Workflow:
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    if not set_rls_context(cursor, conn, user_id, log_prefix="[Workflow:RCAContext]"):
+                        return None
                     cursor.execute(
                         """SELECT i.aurora_summary, i.alert_title, i.severity, i.alert_service,
                                   i.aurora_status, i.source_type, cs.messages
@@ -1123,7 +1126,7 @@ class Workflow:
                                 "output_token_details": output_details,
                                 "estimated_cost": estimated_cost,
                                 "response_time_ms": response_time_ms,
-                                "timestamp": datetime.utcnow().isoformat() + "Z",
+                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                 "session_totals": _session_usage.copy(),
                             })
                             _model_turn_start = None
@@ -1602,12 +1605,11 @@ class Workflow:
         """Save UI-formatted messages and UI state to the database."""
         try:
             from utils.db.connection_pool import db_pool
-            from datetime import datetime
             
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Workflow:SaveMessages]"):
+                    return False
                 
                 # Update the messages field (UI format) and ui_state in the existing session
                 if ui_state is not None:
@@ -1629,10 +1631,8 @@ class Workflow:
                     logger.info(f"Updated UI messages{' and state' if ui_state else ''} for session {session_id}")
                     return True
                 else:
-                    # Session doesn't exist yet - this is expected for new sessions
-                    # The frontend will create the session when it's ready
-                    logger.info(f"Session {session_id} not found for UI message update - will be created by frontend")
-                    return True  # Not an error condition
+                    logger.warning(f"No rows updated when saving UI messages for session {session_id} (RLS or missing session)")
+                    return False
                     
         except Exception as e:
             logger.error(f"Error saving UI messages: {e}")
@@ -1652,15 +1652,14 @@ class Workflow:
         """
         try:
             from utils.db.connection_pool import db_pool
-            from datetime import datetime
 
             if not turn_ui_messages and ui_state is None:
                 return True
 
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[Workflow:AppendMessages]"):
+                    return False
 
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
@@ -1668,10 +1667,10 @@ class Workflow:
                 )
                 row = cursor.fetchone()
                 if row is None:
-                    logger.info(
-                        f"Session {session_id} not found for UI append — frontend will create it"
+                    logger.warning(
+                        f"Session {session_id} not found for UI append (RLS or missing session)"
                     )
-                    return True
+                    return False
 
                 existing = row[0] if row[0] else []
                 if not isinstance(existing, list):

@@ -10,10 +10,9 @@ import { BitbucketIntegrationService } from '@/services/bitbucket-integration-se
 import type { Workspace, Repo, Branch } from '@/services/bitbucket-integration-service';
 
 interface BitbucketWorkspaceBrowserProps {
-  userId: string;
 }
 
-export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspaceBrowserProps) {
+export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserProps) {
   const { toast } = useToast();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -33,7 +32,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
   useEffect(() => {
     fetchWorkspaces();
     loadStoredSelection();
-  }, [userId]);
+  }, []);
 
   // Fetch repos when workspace changes (skip during selection restore)
   useEffect(() => {
@@ -41,12 +40,12 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
     if (selectedWorkspace) {
       fetchRepos(selectedWorkspace);
     }
-  }, [selectedWorkspace, userId]);
+  }, [selectedWorkspace]);
 
   const fetchWorkspaces = async () => {
     setIsLoadingWorkspaces(true);
     try {
-      const data = await BitbucketIntegrationService.getWorkspaces(userId);
+      const data = await BitbucketIntegrationService.getWorkspaces();
       const workspaceList = Array.isArray(data) ? data : data?.workspaces || [];
       setWorkspaces(workspaceList);
     } catch (error) {
@@ -63,7 +62,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
     setBranches([]);
     setSelectedBranch('');
     try {
-      const data = await BitbucketIntegrationService.getRepos(userId, workspace);
+      const data = await BitbucketIntegrationService.getRepos(workspace);
       const repoList = Array.isArray(data) ? data : data?.repositories || [];
       setRepos(repoList);
     } catch (error) {
@@ -77,7 +76,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
   const fetchBranches = async (workspace: string, repoSlug: string) => {
     setIsLoadingBranches(true);
     try {
-      const data = await BitbucketIntegrationService.getBranches(userId, workspace, repoSlug);
+      const data = await BitbucketIntegrationService.getBranches(workspace, repoSlug);
       const branchList = Array.isArray(data) ? data : data?.branches || [];
       setBranches(branchList);
       if (branchList.length > 0) {
@@ -103,13 +102,13 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
 
   const loadStoredSelection = async () => {
     try {
-      const data = await BitbucketIntegrationService.loadWorkspaceSelection(userId);
+      const data = await BitbucketIntegrationService.loadWorkspaceSelection();
       if (!data?.workspace) return;
 
       isRestoringSelectionRef.current = true;
       setSelectedWorkspace(data.workspace);
 
-      const repoData = await BitbucketIntegrationService.getRepos(userId, data.workspace);
+      const repoData = await BitbucketIntegrationService.getRepos(data.workspace);
       const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
       setRepos(repoList);
 
@@ -119,7 +118,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
         if (matchedRepo) {
           setSelectedRepo(matchedRepo);
 
-          const branchData = await BitbucketIntegrationService.getBranches(userId, data.workspace, matchedRepo.slug);
+          const branchData = await BitbucketIntegrationService.getBranches(data.workspace, matchedRepo.slug);
           const branchList = Array.isArray(branchData) ? branchData : branchData?.branches || [];
           setBranches(branchList);
 
@@ -144,7 +143,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
       return;
     }
     try {
-      await BitbucketIntegrationService.saveWorkspaceSelection(userId, {
+      await BitbucketIntegrationService.saveWorkspaceSelection({
         workspace: selectedWorkspace,
         repository: selectedRepo,
         branch: selectedBranch,
@@ -160,7 +159,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
 
   const handleClearSelection = async () => {
     try {
-      await BitbucketIntegrationService.clearWorkspaceSelection(userId);
+      await BitbucketIntegrationService.clearWorkspaceSelection();
       setSelectedWorkspace('');
       setSelectedRepo(null);
       setBranches([]);
@@ -184,7 +183,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
   return (
     <div className="space-y-3">
       <div>
-        <label className="text-sm font-medium mb-1.5 block">Workspace</label>
+        <span className="text-sm font-medium mb-1.5 block">Workspace</span>
         {isLoadingWorkspaces ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -209,7 +208,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
       {selectedWorkspace && (
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-sm font-medium">Repositories</label>
+            <span className="text-sm font-medium">Repositories</span>
             {repos.length > 0 && (
               <Badge variant="outline" className="text-xs">{repos.length} available</Badge>
             )}
@@ -222,10 +221,11 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
           ) : repos.length > 0 ? (
             <div className="space-y-1 max-h-48 overflow-y-auto border border-border rounded-lg p-2">
               {repos.map((repo) => (
-                <div
+                <button
+                  type="button"
                   key={repo.slug}
-                  className={`flex items-center justify-between p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors ${
-                    selectedRepo?.slug === repo.slug ? 'border border-primary/50 bg-primary/5' : ''
+                  className={`w-full flex items-center justify-between p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors text-left bg-transparent ${
+                    selectedRepo?.slug === repo.slug ? 'border border-primary/50 bg-primary/5' : 'border border-transparent'
                   }`}
                   onClick={() => handleRepoSelect(repo)}
                 >
@@ -237,7 +237,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
                       </Badge>
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           ) : (
@@ -248,7 +248,7 @@ export default function BitbucketWorkspaceBrowser({ userId }: BitbucketWorkspace
 
       {selectedRepo && (
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Branch</label>
+          <span className="text-sm font-medium mb-1.5 block">Branch</span>
           {isLoadingBranches ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />

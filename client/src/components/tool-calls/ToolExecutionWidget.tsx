@@ -424,7 +424,10 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
               }
             })()}
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="flex items-center gap-2 flex-shrink-0 ml-2"
+            onClick={(e) => e.stopPropagation()}
+          >
             {allowEditing && userId && sessionId && (
               <Button
                 size="sm"

@@ -20,6 +20,8 @@ import concurrent.futures
 from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
 
+logger = logging.getLogger(__name__)
+
 # Import cloud tools
 from .iac_tool import run_iac_tool
 
@@ -37,6 +39,9 @@ from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
 # Visualization trigger caching
 from cachetools import TTLCache
 _viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .cloud_exec_tool import cloud_exec
@@ -74,6 +79,15 @@ from .splunk_tool import (
     SplunkSearchArgs,
     SplunkListIndexesArgs,
     SplunkListSourcetypesArgs,
+)
+from .incidentio_tool import (
+    list_incidentio_incidents,
+    get_incidentio_incident,
+    get_incidentio_timeline,
+    is_incidentio_connected,
+    ListIncidentsArgs,
+    GetIncidentArgs,
+    GetTimelineArgs,
 )
 from .coroot_tool import (
     coroot_get_incidents,
@@ -417,7 +431,16 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # If we're in an async context, schedule the send
-                        asyncio.create_task(agent_websocket_sender(result_data))
+                        def _on_ws_send_done(task: asyncio.Task) -> None:
+                            _background_tasks.discard(task)
+                            if not task.cancelled():
+                                exc = task.exception()
+                                if exc is not None:
+                                    logger.warning("Agent WebSocket send failed: %s", exc)
+
+                        _ws_send_task = asyncio.create_task(agent_websocket_sender(result_data))
+                        _background_tasks.add(_ws_send_task)
+                        _ws_send_task.add_done_callback(_on_ws_send_done)
                     else:
                         # If we're in a sync context, run in thread
                         loop.run_until_complete(agent_websocket_sender(result_data))
@@ -1491,6 +1514,58 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added 3 Splunk tools for user {user_id}")
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
+
+    # Add incident.io tools if connected
+    if user_id and is_incidentio_connected(user_id):
+        context_wrapped_list = with_user_context(list_incidentio_incidents)
+        notification_wrapped_list = with_completion_notification(context_wrapped_list)
+        final_list_func = wrap_func_with_capture(notification_wrapped_list, "list_incidentio_incidents") if tool_capture else notification_wrapped_list
+
+        tools.append(StructuredTool.from_function(
+            func=final_list_func,
+            name="list_incidentio_incidents",
+            description=(
+                "List incidents from incident.io. Use this to find related incidents, "
+                "identify patterns, and understand the scope of an ongoing issue. "
+                "Filter by status (live/closed/declined) or severity. "
+                "Supports pagination via 'after' cursor for large result sets."
+            ),
+            args_schema=ListIncidentsArgs,
+        ))
+
+        context_wrapped_get = with_user_context(get_incidentio_incident)
+        notification_wrapped_get = with_completion_notification(context_wrapped_get)
+        final_get_func = wrap_func_with_capture(notification_wrapped_get, "get_incidentio_incident") if tool_capture else notification_wrapped_get
+
+        tools.append(StructuredTool.from_function(
+            func=final_get_func,
+            name="get_incidentio_incident",
+            description=(
+                "Get full details of a specific incident.io incident including severity, "
+                "roles, custom fields, timestamps, and duration. Use this for deep-dive "
+                "investigation of a particular incident."
+            ),
+            args_schema=GetIncidentArgs,
+        ))
+
+        context_wrapped_timeline = with_user_context(get_incidentio_timeline)
+        notification_wrapped_timeline = with_completion_notification(context_wrapped_timeline)
+        final_timeline_func = wrap_func_with_capture(notification_wrapped_timeline, "get_incidentio_timeline") if tool_capture else notification_wrapped_timeline
+
+        tools.append(StructuredTool.from_function(
+            func=final_timeline_func,
+            name="get_incidentio_timeline",
+            description=(
+                "Get the timeline/updates for an incident.io incident. Shows the sequence "
+                "of events, status changes, severity changes, and human updates — essential "
+                "for understanding what happened and when during an incident."
+            ),
+            args_schema=GetTimelineArgs,
+        ))
+
+        logging.info(f"Added 3 incident.io tools for user {user_id}")
+    else:
+        logging.debug(f"incident.io tools not added - user {user_id} not connected")
 
     # Add Dynatrace tool if connected
     if user_id and is_dynatrace_connected(user_id):

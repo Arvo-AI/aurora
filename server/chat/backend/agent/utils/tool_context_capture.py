@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 # Import langchain components - direct imports for LangChain 1.2.6+
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
@@ -90,10 +92,10 @@ class ToolContextCapture:
         if not self._persist_steps:
             return None
         try:
-            from utils.db.connection_pool import db_pool
             input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
                     cur.execute(
                         """INSERT INTO execution_steps
                            (incident_id, session_id, org_id, step_index, tool_name,
@@ -156,6 +158,7 @@ class ToolContextCapture:
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:end]")
                     cur.execute(
                         """UPDATE execution_steps
                            SET status = %s,

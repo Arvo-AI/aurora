@@ -49,7 +49,7 @@ def ensure_database_exists():
         logging.debug(f"Connecting to postgres database as {init_params['user']}")
         conn = psycopg2.connect(**init_params)
         conn.autocommit = True
-        cursor = conn.cursor()
+        cursor = conn.cursor()  # No RLS needed — infrastructure DDL/bootstrap
         logging.info("Connected to postgres database.")
 
         # Create the target database if it doesn't exist
@@ -116,7 +116,7 @@ def initialize_tables():
     logging.debug("Initializing Kubernetes database tables using admin credentials.")
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # No RLS needed — schema migration/DDL
 
             # Try to acquire advisory lock (non-blocking)
             cursor.execute("SELECT pg_try_advisory_lock(1234567890);")
@@ -377,24 +377,6 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(user_id, org_id, preference_key)
                     );
-                """,
-                "org_command_policies": """
-                    CREATE TABLE IF NOT EXISTS org_command_policies (
-                        id SERIAL PRIMARY KEY,
-                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-                        mode VARCHAR(20) NOT NULL CHECK (mode IN ('allow', 'deny')),
-                        pattern TEXT NOT NULL,
-                        description TEXT,
-                        priority INT DEFAULT 0,
-                        enabled BOOLEAN DEFAULT true,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_by VARCHAR(255),
-                        source VARCHAR(20) DEFAULT 'custom' NOT NULL,
-                        UNIQUE(org_id, mode, pattern, source)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_ocp_org
-                        ON org_command_policies(org_id);
                 """,
                 "workspaces": """
                     CREATE TABLE IF NOT EXISTS workspaces (
@@ -841,6 +823,30 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
                 """,
+                "incidentio_alerts": """
+                    CREATE TABLE IF NOT EXISTS incidentio_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        incident_id VARCHAR(255),
+                        incident_name TEXT,
+                        incident_status VARCHAR(100),
+                        severity VARCHAR(50),
+                        incident_type VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incidentio_alerts_org_incident
+                        ON incidentio_alerts(org_id, incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_incidentio_alerts_user_id
+                        ON incidentio_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_incidentio_alerts_status
+                        ON incidentio_alerts(incident_status);
+                    CREATE INDEX IF NOT EXISTS idx_incidentio_alerts_severity
+                        ON incidentio_alerts(severity);
+                """,
                 "jenkins_deployment_events": """
                     CREATE TABLE IF NOT EXISTS jenkins_deployment_events (
                         id SERIAL PRIMARY KEY,
@@ -1008,7 +1014,7 @@ def initialize_tables():
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
-                    
+
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 """,
                 "organizations": """
@@ -1022,6 +1028,24 @@ def initialize_tables():
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
+                "org_command_policies": """
+                    CREATE TABLE IF NOT EXISTS org_command_policies (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        mode VARCHAR(20) NOT NULL CHECK (mode IN ('allow', 'deny')),
+                        pattern TEXT NOT NULL,
+                        description TEXT,
+                        priority INT DEFAULT 0,
+                        enabled BOOLEAN DEFAULT true,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_by VARCHAR(255),
+                        source VARCHAR(20) DEFAULT 'custom' NOT NULL,
+                        UNIQUE(org_id, mode, pattern, source)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_ocp_org
+                        ON org_command_policies(org_id);
                 """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
@@ -1173,12 +1197,27 @@ def initialize_tables():
                 "user_manual_vms",
             ]
 
+            # Tables with org_id NOT in this list (intentional):
+            # - users: queried during login before org context is set; RLS would break auth
+            # - audit_log: written via record_audit_event() which passes org_id explicitly;
+            #   RLS would silently drop inserts when session org_id doesn't match or isn't set
+            # - org_invitations: queried during invite/join flows before org context is set
+            # - knowledge_base_documents, knowledge_base_memory: cleanup_stale_documents
+            #   Celery task runs cross-org sweeps with no user context; needs SECURITY
+            #   DEFINER function or BYPASSRLS role before RLS can be added
+            rls_tables.append("workspaces")
+            rls_tables.append("aurora_deployments")
+            rls_tables.append("cloud_feed_metadata")
+            rls_tables.append("cloud_ingestion_state")
+            rls_tables.append("newrelic_events")
+            rls_tables.append("pagerduty_events")
+
             # Add monitoring tables
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
-            rls_tables.append("netdata_verification_tokens")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
             rls_tables.append("spinnaker_deployment_events")
@@ -1985,15 +2024,12 @@ def initialize_tables():
                 cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
                 logging.info(f"RLS forced on table '{table_name}'.")
 
-                # RLS condition: enforce org scoping when session var is set,
-                # allow through when unset (prevents crashes from code paths that
-                # don't call SET myapp.current_org_id before writing)
+                # RLS condition: deny access when org_id context is not set (default-deny).
+                # All code paths must SET myapp.current_org_id before querying.
                 _rls_using = f"""
                     org_id IS NOT NULL
-                    AND (
-                        COALESCE(current_setting('myapp.current_org_id', true), '') = ''
-                        OR org_id = current_setting('myapp.current_org_id', true)::text
-                    )
+                    AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
+                    AND org_id = current_setting('myapp.current_org_id', true)::text
                 """
 
                 # SELECT policy
@@ -2044,6 +2080,31 @@ def initialize_tables():
                 logging.info(f"RLS policies for table '{table_name}': {policies}")
 
             # Commit table creation and RLS before running migrations
+            conn.commit()
+
+            # The MCP server must resolve a bearer token to (user_id, org_id) before
+            # it knows which org the request belongs to. This policy permits SELECT
+            # when the session explicitly opts in via myapp.mcp_token_resolve='true'.
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS select_by_token_resolve ON mcp_tokens;
+                    CREATE POLICY select_by_token_resolve ON mcp_tokens
+                    FOR SELECT USING (
+                        current_setting('myapp.mcp_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS update_by_token_resolve ON mcp_tokens;
+                    CREATE POLICY update_by_token_resolve ON mcp_tokens
+                    FOR UPDATE USING (
+                        current_setting('myapp.mcp_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
+
             conn.commit()
 
             # Migration: Add role column to users table for RBAC
@@ -2405,7 +2466,7 @@ def initialize_tables():
 
             # Release advisory lock
             try:
-                with conn.cursor() as unlock_cursor:
+                with conn.cursor() as unlock_cursor:  # No RLS needed — advisory lock release
                     unlock_cursor.execute("SELECT pg_advisory_unlock(1234567890);")
             except Exception as unlock_error:
                 logging.warning(f"Error releasing advisory lock: {unlock_error}")
@@ -2422,7 +2483,7 @@ def store_data_in_db(data):
     """
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor()  # No RLS needed — cloud_billing_usage not RLS-protected
 
             insert_query = """
                 INSERT INTO cloud_billing_usage (

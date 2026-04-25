@@ -10,9 +10,11 @@ from celery_config import celery_app
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
 from utils.db.connection_pool import db_pool
 from utils.cache.redis_client import get_redis_client
+from utils.auth.stateless_auth import set_rls_context
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 logger = logging.getLogger(__name__)
+_LOG_PREFIX = "[Visualization]"
 
 # Module-level singleton extractor (reuses LLM client across invocations)
 _extractor: Optional[VisualizationExtractor] = None
@@ -22,7 +24,7 @@ def _get_extractor() -> VisualizationExtractor:
     global _extractor
     if _extractor is None:
         _extractor = VisualizationExtractor()
-        logger.info("[Visualization] Created singleton VisualizationExtractor")
+        logger.info(f"{_LOG_PREFIX} Created singleton VisualizationExtractor")
     return _extractor
 
 
@@ -51,21 +53,21 @@ def update_visualization(
         force_full: If True, process all available context (final viz)
         tool_calls_json: JSON string of recent tool calls to process
     """
-    logger.info(f"[Visualization] Starting update for incident {incident_id} (force_full={force_full})")
+    logger.info(f"{_LOG_PREFIX} Starting update for incident {incident_id} (force_full={force_full})")
     
     try:
         # Get recent tool calls
         if tool_calls_json:
             tool_calls = json.loads(tool_calls_json)
-            logger.info(f"[Visualization] Using {len(tool_calls)} tool calls from parameters")
+            logger.info(f"{_LOG_PREFIX} Using {len(tool_calls)} tool calls from parameters")
         else:
             tool_calls = _fetch_recent_tool_calls(session_id, user_id, limit=10 if not force_full else 50)
-            logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from llm_context_history")
+            logger.info(f"{_LOG_PREFIX} Fetched {len(tool_calls)} tool calls from llm_context_history")
         
         if not tool_calls:
             return {"status": "skipped", "reason": "no_tool_calls"}
         
-        existing_viz = _fetch_existing_visualization(incident_id)
+        existing_viz = _fetch_existing_visualization(incident_id, user_id)
         
         extractor = _get_extractor()
         updated_viz = extractor.extract_incremental(
@@ -74,7 +76,7 @@ def update_visualization(
         )
         
         if not updated_viz.nodes:
-            logger.warning(f"[Visualization] No entities extracted for incident {incident_id}")
+            logger.warning(f"{_LOG_PREFIX} No entities extracted for incident {incident_id}")
             return {"status": "skipped", "reason": "no_entities"}
         
         # Post-process: Remove 'investigating' status from final visualization
@@ -86,14 +88,14 @@ def update_visualization(
                     investigating_count += 1
             
             if investigating_count > 0:
-                logger.info(f"[Visualization] Converted {investigating_count} 'investigating' nodes to 'unknown' in final visualization")
+                logger.info(f"{_LOG_PREFIX} Converted {investigating_count} 'investigating' nodes to 'unknown' in final visualization")
         
         validated_json = updated_viz.model_dump_json(indent=2)
-        _store_visualization(incident_id, validated_json)
+        _store_visualization(incident_id, validated_json, user_id)
         _notify_sse_clients(incident_id, updated_viz.version)
         
         logger.info(
-            f"[Visualization] Updated incident {incident_id}: "
+            f"{_LOG_PREFIX} Updated incident {incident_id}: "
             f"v{updated_viz.version}, {len(updated_viz.nodes)} nodes, {len(updated_viz.edges)} edges"
         )
         
@@ -105,7 +107,7 @@ def update_visualization(
         }
     
     except Exception as e:
-        logger.error(f"[Visualization] Update failed for incident {incident_id}: {e}")
+        logger.error(f"{_LOG_PREFIX} Update failed for incident {incident_id}: {e}")
         return {"status": "error", "error": str(e)}
 
 
@@ -114,6 +116,8 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return []
                 cursor.execute("""
                     SELECT llm_context_history
                     FROM chat_sessions
@@ -123,7 +127,7 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
                 row = cursor.fetchone()
         
         if not row or not row[0]:
-            logger.warning(f"[Visualization] No llm_context_history found for session {session_id}")
+            logger.warning(f"{_LOG_PREFIX} No llm_context_history found for session {session_id}")
             return []
         
         llm_context = row[0]
@@ -141,19 +145,21 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
                     'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
                 })
         
-        logger.info(f"[Visualization] Fetched {len(tool_calls)} infrastructure tool calls from database for session {session_id}")
+        logger.info(f"{_LOG_PREFIX} Fetched {len(tool_calls)} infrastructure tool calls from database for session {session_id}")
         return tool_calls[-limit:] if tool_calls else []
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch tool calls from database: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to fetch tool calls from database: {e}")
         return []
 
 
-def _fetch_existing_visualization(incident_id: str) -> Optional[VisualizationData]:
+def _fetch_existing_visualization(incident_id: str, user_id: str) -> Optional[VisualizationData]:
     """Fetch current visualization from incidents table."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return None
                 cursor.execute("""
                     SELECT visualization_code
                     FROM incidents
@@ -168,15 +174,17 @@ def _fetch_existing_visualization(incident_id: str) -> Optional[VisualizationDat
         return None
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch existing viz: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to fetch existing viz: {e}")
         return None
 
 
-def _store_visualization(incident_id: str, json_str: str):
+def _store_visualization(incident_id: str, json_str: str, user_id: str):
     """Store updated visualization in database."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    raise RuntimeError(f"Cannot resolve org_id for user {user_id}")
                 cursor.execute("""
                     UPDATE incidents
                     SET visualization_code = %s,
@@ -186,7 +194,7 @@ def _store_visualization(incident_id: str, json_str: str):
                 conn.commit()
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to store viz: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to store viz: {e}")
         raise
 
 
@@ -195,11 +203,11 @@ def _notify_sse_clients(incident_id: str, version: int):
     try:
         redis_client = get_redis_client()
         if not redis_client:
-            logger.warning("[Visualization] Redis unavailable, skipping SSE notification")
+            logger.warning(f"{_LOG_PREFIX} Redis unavailable, skipping SSE notification")
             return
         
         channel = f"visualization:{incident_id}"
         message = json.dumps({"type": "update", "version": version})
         redis_client.publish(channel, message)
     except Exception as e:
-        logger.warning(f"[Visualization] Failed to notify SSE clients: {e}")
+        logger.warning(f"{_LOG_PREFIX} Failed to notify SSE clients: {e}")

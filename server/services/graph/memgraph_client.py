@@ -11,6 +11,8 @@ from collections import Counter
 
 from neo4j import GraphDatabase
 
+from utils.log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 _client_instance = None
@@ -26,8 +28,9 @@ def get_memgraph_client():
                 _client_instance = MemgraphClient(
                     host=os.environ["MEMGRAPH_HOST"],
                     port=int(os.environ["MEMGRAPH_PORT"]),
-                    username=os.environ["MEMGRAPH_USER"],
-                    password=os.environ["MEMGRAPH_PASSWORD"],
+                    username=os.environ.get("MEMGRAPH_USER", ""),
+                    password=os.environ.get("MEMGRAPH_PASSWORD", ""),
+                    scheme=os.environ.get("MEMGRAPH_SCHEME", "bolt"),
                 )
     return _client_instance
 
@@ -35,20 +38,22 @@ def get_memgraph_client():
 class MemgraphClient:
     """Encapsulates all Memgraph Cypher queries for the Aurora dependency graph."""
 
-    def __init__(self, host, port, username, password):
+    def __init__(self, host, port, username="", password="", scheme="bolt"):
         self._host = host
         self._port = port
         self._username = username
         self._password = password
+        self._scheme = scheme
         self._driver = None
         self._schema_initialized = False
 
     def _get_driver(self):
         if self._driver is None:
-            uri = f"bolt://{self._host}:{self._port}"
+            uri = f"{self._scheme}://{self._host}:{self._port}"
+            auth = (self._username, self._password) if self._username else None
             self._driver = GraphDatabase.driver(
                 uri,
-                auth=(self._username, self._password),
+                auth=auth,
                 max_connection_pool_size=50,
             )
             logger.info(f"Connected to Memgraph at {uri}")
@@ -73,7 +78,7 @@ class MemgraphClient:
                 result = session.run(query, params or {})
                 return [dict(record) for record in result]
         except Exception as e:
-            logger.error(f"Memgraph query error: {e}\nQuery: {query}\nParams: {params}")
+            logger.error(f"Memgraph query error: {sanitize(e)}\nQuery: {sanitize(query)}\nParams: {sanitize(params)}")
             raise
 
     def _execute_no_fetch(self, query, params=None):
@@ -83,7 +88,7 @@ class MemgraphClient:
             with driver.session() as session:
                 session.run(query, params or {})
         except Exception as e:
-            logger.error(f"Memgraph execute error: {e}\nQuery: {query}")
+            logger.error(f"Memgraph execute error: {sanitize(e)}\nQuery: {sanitize(query)}")
             raise
 
     # =========================================================================

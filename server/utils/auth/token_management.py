@@ -8,24 +8,26 @@ import logging
 import time
 from typing import Dict, Optional, List, Any
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import safe_provider, hash_for_log
 
 logger = logging.getLogger(__name__)
 
 
 def _log_no_org(provider: str) -> None:
-    logger.warning("[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope", provider)
+    logger.warning("[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope", safe_provider(provider))
 
 
 def _log_store_start(provider: str) -> None:
-    logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
+    logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", safe_provider(provider))
 
 
 def _log_store_ok(provider: str, elapsed_ms: float) -> None:
-    logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", provider, elapsed_ms)
+    logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", safe_provider(provider), elapsed_ms)
 
 
 def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
-    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", provider, elapsed_ms, type(exc).__name__, exc, exc_info=True)
+    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", safe_provider(provider), elapsed_ms, type(exc).__name__, exc, exc_info=True)
 
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
@@ -79,9 +81,9 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
-            if request_org_id:
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s;", (request_org_id,))
+            resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[STORE-TOKENS]")
+            if resolved_org_id:
+                request_org_id = resolved_org_id
 
             # Store only metadata and secret reference in database
             if provider == "azure":
@@ -540,6 +542,6 @@ def _schedule_prediscovery(user_id: str) -> None:
             kwargs={"user_id": user_id, "trigger": "new_connector"},
             countdown=600,
         )
-        logger.info("[STORE-TOKENS] Scheduled prediscovery for user %s (10min delay)", user_id)
+        logger.info("[STORE-TOKENS] Scheduled prediscovery for user_hash=%s (10min delay)", hash_for_log(user_id))
     except Exception as e:
         logger.debug("[STORE-TOKENS] Could not schedule prediscovery: %s", e)

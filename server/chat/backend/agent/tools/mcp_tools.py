@@ -266,9 +266,9 @@ class RealMCPServerManager:
                     env["AWS_DEFAULT_REGION"] = str(aws_creds.get("region", "us-east-1"))
                     env["AWS_REGION"] = str(aws_creds.get("region", "us-east-1")) 
                     
-                    # Create AWS config directory in /tmp to ensure it's writable
-                    aws_dir = "/tmp/.aws"
-                    os.makedirs(aws_dir, exist_ok=True)
+                    # Per-invocation AWS config dir (0o700) so concurrent users in the same
+                    # worker cannot overwrite each other's credentials via a shared path.
+                    aws_dir = tempfile.mkdtemp(prefix=".aws-")
                     
                     # Create credentials file
                     credentials_content = f"""[default]
@@ -280,10 +280,15 @@ region = {aws_creds.get("region", "us-east-1")}
                         credentials_content += f"aws_session_token = {aws_creds.get('session_token', '')}\n"
                     
                     credentials_file = os.path.join(aws_dir, "credentials")
-                    # Write credentials with restricted permissions (0600 = owner read/write only)
-                    fd = os.open(credentials_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(credentials_content)
+
+                    # Write credentials with restricted permissions (0600 = owner read/write only).
+                    # Offload blocking file I/O to a thread so we don't stall the event loop.
+                    def _write_secure_file(path: str, content: str) -> None:
+                        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(content)
+
+                    await asyncio.to_thread(_write_secure_file, credentials_file, credentials_content)
                     
                     # Create config file
                     config_content = f"""[default]
@@ -291,10 +296,8 @@ region = {aws_creds.get("region", "us-east-1")}
 output = json
 """
                     config_file = os.path.join(aws_dir, "config")
-                    fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(config_content)
-                    
+                    await asyncio.to_thread(_write_secure_file, config_file, config_content)
+
                     # Set environment variables to point to our custom AWS config location
                     env["AWS_SHARED_CREDENTIALS_FILE"] = credentials_file
                     env["AWS_CONFIG_FILE"] = config_file
@@ -306,16 +309,22 @@ output = json
                     pass
 
             
-            process = subprocess.Popen(
+            # Offload the blocking Popen spawn to a worker thread so we don't
+            # stall the event loop while the child is fork/exec'd. The returned
+            # Popen object is still used with its synchronous stdin/stdout
+            # pipes in send_mcp_message, so we keep subprocess.Popen here rather
+            # than switching to asyncio.create_subprocess_exec.
+            process = await asyncio.to_thread(
+                subprocess.Popen,
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
                 text=True,
-                bufsize=1
+                bufsize=1,
             )
-            
+
             # Give the process a moment to start
             # Docker containers need more time, especially on first run (image pull)
             startup_wait = 2.0 if server_type == "github" else 0.5
@@ -870,7 +879,7 @@ def get_user_cloud_credentials(user_id: str) -> Dict[str, Dict]:
             """Get credentials for a specific provider from database."""
             try:
                 with conn.cursor() as cursor:
-                    # Cloud providers store credentials in connected_accounts table
+                    # No RLS needed — connected_accounts not RLS-protected
                     cursor.execute("""
                         SELECT provider_data FROM connected_accounts 
                         WHERE user_id = %s AND provider = %s AND status = 'active'

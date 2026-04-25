@@ -3,10 +3,12 @@
 import logging
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.auth.stateless_auth import (
     get_user_preference,
     store_user_preference,
     get_org_id_from_request,
+    set_rls_context,
 )
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from routes.incident_feedback.weaviate_client import store_good_rca
@@ -77,8 +79,7 @@ def submit_feedback(user_id, incident_id: str):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[IncidentFeedback]")
 
                 # Check if feedback already exists (feedback is final)
                 cursor.execute(
@@ -197,7 +198,7 @@ def submit_feedback(user_id, incident_id: str):
                         conn.rollback()
                         logger.error(
                             "[FEEDBACK] Weaviate storage failed, rolling back feedback for incident %s",
-                            incident_id,
+                            sanitize(incident_id),
                         )
                         return jsonify({
                             "error": "Failed to store feedback for learning. Please try again."
@@ -208,9 +209,9 @@ def submit_feedback(user_id, incident_id: str):
 
                 logger.info(
                     "[FEEDBACK] User %s submitted %s feedback for incident %s (stored_for_learning=%s)",
-                    user_id,
-                    feedback_type,
-                    incident_id,
+                    sanitize(user_id),
+                    sanitize(feedback_type),
+                    sanitize(incident_id),
                     stored_for_learning,
                 )
 
@@ -223,7 +224,7 @@ def submit_feedback(user_id, incident_id: str):
                 }), 201
 
     except Exception as exc:
-        logger.exception("[FEEDBACK] Failed to submit feedback for incident %s", incident_id)
+        logger.exception("[FEEDBACK] Failed to submit feedback for incident %s", sanitize(incident_id))
         return jsonify({"error": "Failed to submit feedback"}), 500
 
 
@@ -234,13 +235,10 @@ def get_feedback(user_id, incident_id: str):
     if not _validate_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
-    org_id = get_org_id_from_request()
-
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                set_rls_context(cursor, conn, user_id, log_prefix="[IncidentFeedback]")
 
                 cursor.execute(
                     """
@@ -267,7 +265,7 @@ def get_feedback(user_id, incident_id: str):
                 }), 200
 
     except Exception as exc:
-        logger.exception("[FEEDBACK] Failed to get feedback for incident %s", incident_id)
+        logger.exception("[FEEDBACK] Failed to get feedback for incident %s", sanitize(incident_id))
         return jsonify({"error": "Failed to get feedback"}), 500
 
 
@@ -298,8 +296,8 @@ def set_aurora_learn_setting(user_id):
 
     try:
         store_user_preference(user_id, AURORA_LEARN_PREFERENCE_KEY, enabled)
-        logger.info("[AURORA LEARN] User %s set Aurora Learn to %s", user_id, enabled)
+        logger.info("[AURORA LEARN] User %s set Aurora Learn to %s", sanitize(user_id), enabled)
         return jsonify({"success": True, "enabled": enabled}), 200
     except Exception as exc:
-        logger.exception("[AURORA LEARN] Failed to update setting for user %s", user_id)
+        logger.exception("[AURORA LEARN] Failed to update setting for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to update setting"}), 500

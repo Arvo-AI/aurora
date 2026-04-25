@@ -8,7 +8,8 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.log_sanitizer import sanitize
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 TITLE_MAX_LENGTH = 100
 
 incidents_bp = Blueprint("incidents", __name__)
+_LOG_PREFIX = "[Incidents]"
 
 # Maximum length for chat session titles (in characters)
 TITLE_MAX_LENGTH = 50
@@ -56,6 +58,7 @@ def _build_source_url(source_type: str, user_id: str) -> str:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     "SELECT client_id FROM user_tokens WHERE user_id=%s AND provider=%s",
                     (user_id, source_type),
@@ -107,7 +110,7 @@ def _record_lifecycle_event(cursor, incident_id, user_id, event_type, previous_v
             cursor.execute("ROLLBACK TO SAVEPOINT sp_incident_lifecycle")
         except Exception as rb_exc:
             logger.debug("[INCIDENTS] Rollback to sp_incident_lifecycle failed: %s", rb_exc)
-        logger.warning("[INCIDENTS] Failed to record lifecycle event %s for %s: %s", event_type, incident_id, e)
+        logger.warning("[INCIDENTS] Failed to record lifecycle event %s for %s: %s", sanitize(event_type), sanitize(incident_id), e)
 
 
 def _format_incident_response(
@@ -278,10 +281,7 @@ def get_incidents(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                 query = """
                     SELECT 
@@ -347,10 +347,7 @@ def get_incident(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 # Get incident details
                 cursor.execute(
                     """
@@ -564,12 +561,25 @@ def get_incident(user_id, incident_id: str):
                             logger.debug("[INCIDENTS] Found OpsGenie/JSM payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for opsgenie alert (non-integer id)")
+                elif source_type == "incidentio":
+                    try:
+                        alert_id_int = int(source_alert_id)
+                        cursor.execute(
+                            "SELECT payload FROM incidentio_alerts WHERE id = %s AND org_id = %s",
+                            (alert_id_int, org_id),
+                        )
+                        alert_row = cursor.fetchone()
+                        if alert_row and alert_row[0] is not None:
+                            raw_payload = alert_row[0]
+                            logger.debug("[INCIDENTS] Found incident.io payload for alert")
+                    except (ValueError, TypeError):
+                        logger.debug("[INCIDENTS] Skipping payload fetch for incidentio alert (non-integer id)")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:
                     logger.warning(
                         "[INCIDENTS] No payload found for incident %s",
-                        incident_id,
+                        sanitize(incident_id),
                     )
 
                 # Add raw payload to alert object (sourceUrl already set by _format_incident_response)
@@ -720,7 +730,7 @@ def get_incident(user_id, incident_id: str):
                 except Exception as citation_err:
                     logger.warning(
                         "[INCIDENTS] Failed to fetch citations for %s: %s",
-                        incident_id,
+                        sanitize(incident_id),
                         citation_err,
                     )
                     citation_rows = []
@@ -754,7 +764,7 @@ def get_incident(user_id, incident_id: str):
                 except Exception as chat_err:
                     logger.warning(
                         "[INCIDENTS] Failed to fetch chat sessions for %s: %s",
-                        incident_id,
+                        sanitize(incident_id),
                         chat_err,
                     )
                     chat_session_rows = []
@@ -911,9 +921,7 @@ def get_incident_alerts(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                 cursor.execute(
                     "SELECT 1 FROM incidents WHERE id = %s AND org_id = %s",
@@ -953,13 +961,13 @@ def get_incident_alerts(user_id, incident_id: str):
                 logger.info(
                     "[INCIDENTS] Retrieved %d alerts for incident %s",
                     len(alerts),
-                    incident_id,
+                    sanitize(incident_id),
                 )
                 return jsonify({"alerts": alerts, "total": len(alerts)}), 200
 
     except Exception as exc:
         logger.exception(
-            "[INCIDENTS] Failed to retrieve alerts for incident %s", incident_id
+            "[INCIDENTS] Failed to retrieve alerts for incident %s", sanitize(incident_id)
         )
         return jsonify({"error": "Failed to retrieve alerts"}), 500
 
@@ -1011,10 +1019,7 @@ def update_incident(user_id, incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Set RLS context
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 # Build update query dynamically based on provided fields
                 update_fields = []
                 values = []
@@ -1092,22 +1097,22 @@ def update_incident(user_id, incident_id: str):
                         generate_postmortem.delay(incident_id, user_id, org_id)
                         logger.info(
                             "[INCIDENTS] Triggered postmortem generation for resolved incident %s",
-                            incident_id,
+                            sanitize(incident_id),
                         )
                     except Exception as pm_exc:
                         logger.warning(
                             "[INCIDENTS] Failed to trigger postmortem generation for incident %s: %s",
-                            incident_id,
+                            sanitize(incident_id),
                             pm_exc,
                         )
 
                 logger.info(
-                    "[INCIDENTS] Updated incident %s for user %s", incident_id, user_id
+                    "[INCIDENTS] Updated incident %s for user %s", sanitize(incident_id), sanitize(user_id)
                 )
                 return jsonify({"success": True, "id": str(result[0])}), 200
 
     except Exception as exc:
-        logger.exception("[INCIDENTS] Failed to update incident for user %s", user_id)
+        logger.exception("[INCIDENTS] Failed to update incident for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to update incident"}), 500
 
 
@@ -1140,9 +1145,9 @@ def incident_chat(user_id, incident_id: str):
     existing_session_id = request.args.get("session_id")
     logger.info(
         "[INCIDENTS] Received chat request for incident %s: question=%s, existing_session_id=%s",
-        incident_id,
-        question[:TITLE_MAX_LENGTH],
-        existing_session_id,
+        sanitize(incident_id),
+        sanitize(question)[:TITLE_MAX_LENGTH],
+        sanitize(existing_session_id),
     )
 
     if existing_session_id and not _validate_uuid(existing_session_id):
@@ -1157,9 +1162,7 @@ def incident_chat(user_id, incident_id: str):
             #   2. incidents.aurora_chat_session_id - for the original RCA session
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                    conn.commit()
+                    set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                     cursor.execute(
                         """
                         SELECT cs.id
@@ -1198,17 +1201,15 @@ def incident_chat(user_id, incident_id: str):
             is_new_session = False
             logger.info(
                 "[INCIDENTS] Continuing existing session %s for incident %s",
-                session_id,
-                incident_id,
+                sanitize(session_id),
+                sanitize(incident_id),
             )
 
         else:
             # Create new session - fetch incident details and thoughts for context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                    conn.commit()
+                    set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                     # Get incident
                     cursor.execute(
@@ -1320,8 +1321,8 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             is_new_session = True
             logger.info(
                 "[INCIDENTS] Created new session %s for incident %s",
-                session_id,
-                incident_id,
+                sanitize(session_id),
+                sanitize(incident_id),
             )
 
         # Launch background chat task
@@ -1346,10 +1347,10 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
 
         logger.info(
             "[INCIDENTS] Background chat task queued for incident %s, session %s (new=%s, mode=%s)",
-            incident_id,
-            session_id,
+            sanitize(incident_id),
+            sanitize(session_id),
             is_new_session,
-            mode,
+            sanitize(mode),
         )
 
         # Mark the suggestion as executed if a suggestion_id was provided
@@ -1360,6 +1361,7 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
+                        # No RLS needed — incident_suggestions not RLS-protected
                         cursor.execute(
                             """UPDATE incident_suggestions
                                SET executed_at = NOW(),
@@ -1372,16 +1374,16 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
                             conn.commit()
                             logger.info(
                                 "[INCIDENTS] Marked suggestion %s as executed (session %s)",
-                                suggestion_id, session_id,
+                                sanitize(suggestion_id), sanitize(session_id),
                             )
                         else:
                             conn.rollback()
                             logger.warning(
                                 "[INCIDENTS] Suggestion %s not found for incident %s — skipped marking",
-                                suggestion_id, incident_id,
+                                sanitize(suggestion_id), sanitize(incident_id),
                             )
             except Exception as exc:
-                logger.warning("[INCIDENTS] Failed to mark suggestion %s as executed: %s", suggestion_id, exc)
+                logger.warning("[INCIDENTS] Failed to mark suggestion %s as executed: %s", sanitize(suggestion_id), exc)
 
         return jsonify(
             {
@@ -1393,7 +1395,7 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
 
     except Exception as exc:
         logger.exception(
-            "[INCIDENTS] Failed to process chat for incident %s", incident_id
+            "[INCIDENTS] Failed to process chat for incident %s", sanitize(incident_id)
         )
         return jsonify({"error": "Failed to process question"}), 500
 
@@ -1416,6 +1418,7 @@ def update_suggestion(user_id, suggestion_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """
                     SELECT s.id FROM incident_suggestions s
@@ -1436,7 +1439,7 @@ def update_suggestion(user_id, suggestion_id: str):
                 conn.commit()
 
         logger.info(
-            "[INCIDENTS] Updated suggestion %s for user %s", suggestion_id, user_id
+            "[INCIDENTS] Updated suggestion %s for user %s", sanitize(suggestion_id), sanitize(user_id)
         )
         return jsonify({"success": True, "message": "Suggestion updated"}), 200
 
@@ -1471,6 +1474,7 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT s.id, s.incident_id
                        FROM incident_suggestions s
@@ -1505,7 +1509,7 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
                     return jsonify({"error": "Suggestion update failed — row not found"}), 404
                 conn.commit()
 
-        logger.info("[INCIDENTS] Marked suggestion %s as executed", suggestion_id)
+        logger.info("[INCIDENTS] Marked suggestion %s as executed", sanitize(suggestion_id))
         return jsonify({"success": True}), 200
 
     except Exception as exc:
@@ -1528,6 +1532,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT 1 FROM incident_suggestions s
                        JOIN incidents i ON s.incident_id = i.id
@@ -1537,7 +1542,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 if not cursor.fetchone():
                     return jsonify({"error": "Suggestion not found"}), 404
     except Exception as exc:
-        logger.exception("[INCIDENTS] Org check failed for suggestion %s", suggestion_id)
+        logger.exception("[INCIDENTS] Org check failed for suggestion %s", sanitize(suggestion_id))
         return jsonify({"error": "Internal error"}), 500
 
     data = request.get_json() or {}
@@ -1558,7 +1563,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
         if result.get("success"):
             logger.info(
                 "[INCIDENTS] Applied fix suggestion %s, PR: %s",
-                suggestion_id,
+                sanitize(suggestion_id),
                 result.get("pr_url"),
             )
             _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
@@ -1567,7 +1572,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
 
         logger.warning(
             "[INCIDENTS] Failed to apply fix suggestion %s: %s",
-            suggestion_id,
+            sanitize(suggestion_id),
             result.get("error"),
         )
         return jsonify(result), 400
@@ -1605,15 +1610,13 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
         
         # Cancel the source incident's RCA FIRST (before any DB changes)
         # This uses Celery task revocation to immediately stop the running task
-        rca_cancelled = cancel_rca_for_incident(source_incident_id)
+        rca_cancelled = cancel_rca_for_incident(source_incident_id, user_id=user_id)
         if rca_cancelled:
             logger.info(f"[INCIDENTS] Cancelled RCA for source incident {source_incident_id}")
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                 # Get source incident details
                 cursor.execute(
@@ -1863,9 +1866,7 @@ def get_recent_unlinked_incidents(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                 query = """
                     SELECT id, alert_title, alert_service, severity, source_type,

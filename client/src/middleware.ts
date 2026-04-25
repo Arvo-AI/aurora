@@ -23,12 +23,26 @@ const publicRoutes = [
 // Routes that should redirect authenticated users away
 const authRoutes = ["/sign-in", "/sign-up"]
 
+// Strips framework/runtime fingerprint headers from every outgoing response.
+// Note: x-nextjs-* headers on cached responses are injected by Next.js after
+// middleware runs, so the authoritative strip belongs at the CDN/proxy layer
+// (Cloudflare Transform Rules, Nginx, etc.). These deletes remain as defense
+// in depth for dynamic responses where middleware headers propagate.
+function sanitizeResponse(response: NextResponse): NextResponse {
+  response.headers.delete('x-powered-by')
+  response.headers.delete('x-nextjs-cache')
+  response.headers.delete('x-nextjs-prerender')
+  response.headers.delete('x-nextjs-stale-time')
+  response.headers.delete('server-timing')
+  return response
+}
+
 export default auth((req) => {
   const { nextUrl } = req
   const isLoggedIn = !!req.auth?.user?.id
   
-  const isPublicRoute = publicRoutes.some(route => 
-    nextUrl.pathname.startsWith(route)
+  const isPublicRoute = publicRoutes.some(route =>
+    nextUrl.pathname === route || nextUrl.pathname.startsWith(`${route}/`)
   )
   const isAuthRoute = authRoutes.some(route =>
     nextUrl.pathname.startsWith(route)
@@ -41,36 +55,36 @@ export default auth((req) => {
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {
-    return NextResponse.redirect(new URL("/", nextUrl))
+    return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }
 
   // Force password change: redirect to /change-password if flag is set
   if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
-    return NextResponse.redirect(new URL("/change-password", nextUrl))
+    return sanitizeResponse(NextResponse.redirect(new URL("/change-password", nextUrl)))
   }
 
   // Force org setup: redirect users without an org (or in Default Org) to create one
   const orgName = req.auth?.user?.orgName
   const needsOrg = !req.auth?.user?.orgId || (orgName && orgName.toLowerCase() === "default organization")
   if (isLoggedIn && needsOrg && !isSetupOrgRoute && !isOrgSwitching && !isChangePasswordRoute && !isApiRoute) {
-    return NextResponse.redirect(new URL("/setup-org", nextUrl))
+    return sanitizeResponse(NextResponse.redirect(new URL("/setup-org", nextUrl)))
   }
 
   // If user is not logged in and tries to access protected route
   if (!isPublicRoute && !isLoggedIn) {
     // For API routes, return 401 JSON response instead of redirecting
     if (isApiRoute) {
-      return NextResponse.json(
+      return sanitizeResponse(NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
-      )
+      ))
     }
-    
+
     // For page routes, redirect to sign-in
     const callbackUrl = nextUrl.pathname + nextUrl.search
     const signInUrl = new URL("/sign-in", nextUrl)
     signInUrl.searchParams.set("callbackUrl", callbackUrl)
-    return NextResponse.redirect(signInUrl)
+    return sanitizeResponse(NextResponse.redirect(signInUrl))
   }
 
   // Gate admin routes to admin role only
@@ -78,13 +92,37 @@ export default auth((req) => {
     const role = req.auth?.user?.role
     if (role !== ROLE_ADMIN) {
       if (isApiRoute) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        return sanitizeResponse(NextResponse.json({ error: "Forbidden" }, { status: 403 }))
       }
-      return NextResponse.redirect(new URL("/", nextUrl))
+      return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
     }
   }
 
-  return NextResponse.next()
+  const response = NextResponse.next()
+
+  const backendOrigin = process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || ''
+  const wsOrigin = process.env.PUBLIC_WS_URL || process.env.NEXT_PUBLIC_WEBSOCKET_URL || ''
+  const connectSrc = [
+    "'self'",
+    backendOrigin,
+    wsOrigin,
+    backendOrigin ? backendOrigin.replace(/^http/, 'ws') : '',
+  ].filter(Boolean).join(' ')
+
+  response.headers.set('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src ${connectSrc}`,
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "form-action 'self'",
+  ].join('; '))
+
+  return sanitizeResponse(response)
 })
 
 export const config = {

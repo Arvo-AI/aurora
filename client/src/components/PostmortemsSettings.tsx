@@ -199,8 +199,10 @@ export function PostmortemsSettings() {
         return (
           <div key={item.id} className="border border-zinc-800 rounded-lg mb-2">
             {/* Collapsed row header */}
-            <div
-              className="flex items-center justify-between p-4 cursor-pointer hover:bg-zinc-800/50"
+            <button
+              type="button"
+              aria-expanded={isExpanded}
+              className="w-full flex items-center justify-between p-4 cursor-pointer hover:bg-zinc-800/50 text-left bg-transparent border-0"
               onClick={() => handleToggle(item.id)}
             >
               <div className="flex items-center gap-2 min-w-0">
@@ -214,7 +216,7 @@ export function PostmortemsSettings() {
               <span className="text-xs text-zinc-500 shrink-0 ml-4">
                 {formatDate(item.generatedAt)}
               </span>
-            </div>
+            </button>
 
             {/* Expanded content */}
             {isExpanded && (
@@ -306,8 +308,9 @@ export function PostmortemsSettings() {
                     <p className="text-xs text-zinc-400 mb-3">Export postmortem to Confluence</p>
                     <div className="space-y-2">
                       <div>
-                        <label className="text-xs text-zinc-500 block mb-1">Space Key *</label>
+                        <label htmlFor={`postmortem-settings-space-key-${item.id}`} className="text-xs text-zinc-500 block mb-1">Space Key *</label>
                         <input
+                          id={`postmortem-settings-space-key-${item.id}`}
                           type="text"
                           value={cfl.spaceKey}
                           onChange={e => updateConfluence(item.id, { spaceKey: e.target.value })}
@@ -316,8 +319,9 @@ export function PostmortemsSettings() {
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-zinc-500 block mb-1">Parent Page ID (optional)</label>
+                        <label htmlFor={`postmortem-settings-parent-page-${item.id}`} className="text-xs text-zinc-500 block mb-1">Parent Page ID (optional)</label>
                         <input
+                          id={`postmortem-settings-parent-page-${item.id}`}
                           type="text"
                           value={cfl.parentPageId}
                           onChange={e => updateConfluence(item.id, { parentPageId: e.target.value })}

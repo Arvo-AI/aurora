@@ -345,9 +345,11 @@ def _has_onprem_clusters(user_id: Optional[str]) -> bool:
         return False
     try:
         from utils.db.db_adapters import connect_to_db_as_user
+        from utils.auth.stateless_auth import set_rls_context
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:onprem]")
             cursor.execute("""
                 SELECT COUNT(*) FROM active_kubectl_connections c
                 JOIN kubectl_agent_tokens t ON c.token = t.token
@@ -438,8 +440,10 @@ def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_mi
     lookback_minutes = max(1, min(int(lookback_minutes), 10080))  # 1 min to 7 days
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:_get_recent_jenkins_deployments]")
                 conditions = ["user_id = %s", "received_at >= NOW() - make_interval(mins => %s)"]
                 params: list = [user_id, lookback_minutes]
 
@@ -1202,3 +1206,67 @@ def build_opsgenie_rca_prompt(
         alert_details['entity'] = entity
 
     return build_rca_prompt('opsgenie', alert_details, providers, user_id)
+
+
+def _incidentio_dict_name(obj, default: str = "") -> str:
+    """Extract .name from a dict-or-scalar incident.io field."""
+    if isinstance(obj, dict):
+        return obj.get("name", default)
+    return str(obj) if obj else default
+
+
+def _incidentio_format_roles(roles: list) -> str:
+    return ", ".join(
+        f"{r.get('role', {}).get('name', '?')}: {r.get('assignee', {}).get('name', 'unassigned')}"
+        for r in roles[:5]
+    )
+
+
+def _incidentio_format_custom_fields(custom_fields: list) -> str:
+    return ", ".join(
+        f"{cf.get('custom_field', {}).get('name', '?')}="
+        f"{(cf.get('values') or [{}])[0].get('label', '?')}"
+        for cf in custom_fields[:5]
+        if cf.get("values")
+    )
+
+
+def build_incidentio_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Build RCA prompt from incident.io webhook event payload."""
+    event = payload.get("event", {}) or {}
+    incident = event.get("incident") or payload.get("incident") or {}
+
+    name = incident.get("name") or incident.get("title") or "Unknown Incident"
+    status = incident.get("status") or "unknown"
+    summary = incident.get("summary") or ""
+    permalink = incident.get("permalink") or ""
+    severity = _incidentio_dict_name(incident.get("severity"))
+    inc_type = _incidentio_dict_name(incident.get("incident_type"))
+
+    role_str = _incidentio_format_roles(incident.get("incident_role_assignments") or [])
+    cf_str = _incidentio_format_custom_fields(incident.get("custom_field_entries") or [])
+
+    message_parts = [f"Incident: {name}"]
+    for label, value in [("Summary", summary), ("Roles", role_str),
+                         ("Fields", cf_str), ("Link", permalink)]:
+        if value:
+            message_parts.append(f"{label}: {value}")
+
+    labels = {}
+    if severity:
+        labels['severity'] = severity
+    if inc_type:
+        labels['incident_type'] = inc_type
+
+    alert_details = {
+        'title': name,
+        'status': f"{status} (severity: {severity})" if severity else status,
+        'message': ". ".join(message_parts),
+        'labels': labels,
+    }
+
+    return build_rca_prompt('incidentio', alert_details, providers, user_id)

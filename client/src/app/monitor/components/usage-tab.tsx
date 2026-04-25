@@ -82,7 +82,7 @@ function formatTokenAxis(n: number): string {
 function makeTimeFormatter(granularity: 'hour' | 'day' | 'week' = 'day') {
   return (dateStr: string): string => {
     const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
+    if (Number.isNaN(d.getTime())) return dateStr;
     if (granularity === 'hour') {
       return d.toLocaleString('en-US', { hour: 'numeric', hour12: true });
     }
@@ -99,7 +99,7 @@ function makeHourAxisFormatter(dates: string[]) {
   let lastDayStr = '';
   for (const ds of dates) {
     const d = new Date(ds);
-    if (isNaN(d.getTime())) continue;
+    if (Number.isNaN(d.getTime())) continue;
     const dayStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     if (dayStr !== lastDayStr) {
       dayHeaderAt.add(ds);
@@ -108,7 +108,7 @@ function makeHourAxisFormatter(dates: string[]) {
   }
   return (dateStr: string): string => {
     const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
+    if (Number.isNaN(d.getTime())) return dateStr;
     if (dayHeaderAt.has(dateStr)) {
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
@@ -124,7 +124,7 @@ const OUTPUT_COLOR = '#8b5cf6';
 
 function formatTooltipDate(dateStr: string): string {
   const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
+  if (Number.isNaN(d.getTime())) return dateStr;
   const hasTime = dateStr.includes('T') || dateStr.includes(' ');
   if (hasTime) {
     return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });

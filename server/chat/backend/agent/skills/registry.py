@@ -313,18 +313,18 @@ class SkillRegistry:
             return ""
 
         lines = [
-            "CONNECTED INTEGRATIONS (MANDATORY: call load_skill('id') BEFORE using ANY integration tool below):",
-            "You MUST call load_skill first to get the workflow, syntax, and constraints. Using tools without loading the skill first will produce wrong results.",
+            "CONNECTED INTEGRATIONS — call load_skill with the exact skill_id before using that integration's tools.",
             "",
         ]
         for meta in sorted(connected, key=lambda m: m.name):
+            display_name = meta.name or meta.id
             if meta.tools:
                 tools_str = ", ".join(meta.tools[:4])
                 if len(meta.tools) > 4:
                     tools_str += ", ..."
-                lines.append(f"- {meta.id}: {meta.index} [tools: {tools_str}]")
+                lines.append(f"- load_skill('{meta.id}')  # {display_name}: {meta.index} [tools: {tools_str}]")
             else:
-                lines.append(f"- {meta.id}: {meta.index}")
+                lines.append(f"- load_skill('{meta.id}')  # {display_name}: {meta.index}")
 
         lines.append("")
         return "\n".join(lines)
@@ -496,9 +496,11 @@ class SkillRegistry:
         """Fetch connected on-prem cluster names and IDs for template rendering."""
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
 
             with db_pool.get_user_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:kubectl]")
                     cur.execute(
                         """SELECT c.cluster_id, t.cluster_name
                            FROM active_kubectl_connections c
@@ -606,9 +608,11 @@ class SkillRegistry:
         """Fetch recent deployment records from the database."""
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
 
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:_get_recent_deploys]")
                     cur.execute(
                         """SELECT service, environment, result, build_number,
                                   commit_sha, trace_id, received_at

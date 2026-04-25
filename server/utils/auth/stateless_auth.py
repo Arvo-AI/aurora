@@ -4,6 +4,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from flask import request, jsonify
 from utils.db.db_utils import connect_to_db_as_user
+from utils.log_sanitizer import sanitize
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def resolve_org_id(user_id: str) -> Optional[str]:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 if row and row[0]:
@@ -95,10 +97,11 @@ def validate_user_exists(user_id: str) -> bool:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
                 return cursor.fetchone() is not None
     except Exception as e:
-        logger.warning("Failed to validate user_id %s: %s", user_id, e)
+        logger.warning("Failed to validate user_id %s: %s", sanitize(user_id), e)
         return False
 
 
@@ -146,6 +149,7 @@ def get_org_id_from_request() -> Optional[str]:
             from utils.db.connection_pool import db_pool
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    # No RLS needed — users not RLS-protected
                     cursor.execute(
                         "SELECT org_id FROM users WHERE id = %s",
                         (user_id,)
@@ -155,7 +159,7 @@ def get_org_id_from_request() -> Optional[str]:
                         g._org_id_resolved = row[0]
                         return row[0]
         except Exception as e:
-            logger.warning(f"Error looking up org_id for user {user_id}: {e}")
+            logger.warning(f"Error looking up org_id for user {sanitize(user_id)}: {e}")
 
     g._org_id_resolved = ''
     return None
@@ -176,10 +180,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
 
                 conn = connect_to_db_as_user()
                 cur = conn.cursor()
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
-
-                org_id = resolve_org_id(user_id)
+                org_id = set_rls_context(cur, conn, user_id, log_prefix="[Creds:AWS]")
 
                 cur.execute(
                     """
@@ -236,10 +237,8 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 try:
                     conn = connect_to_db_as_user()
                     cursor = conn.cursor()
-                    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    conn.commit()
+                    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Creds:Azure]")
                     
-                    org_id = resolve_org_id(user_id)
                     cursor.execute(
                         """SELECT subscription_id, subscription_name
                            FROM user_tokens
@@ -279,8 +278,7 @@ def store_deployment_task(user_id: str, task_id: str, deployment_id: str = None,
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[StoreDeployTask]")
         
         cursor.execute("""
             INSERT INTO deployment_tasks (user_id, task_id, deployment_id, status, task_data)
@@ -306,8 +304,7 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[GetDeployTask]")
         
         if task_id:
             cursor.execute(
@@ -345,79 +342,66 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
 def store_user_preference(user_id: str, key: str, value: Any):
     """Store user preference in database."""
     try:
-        org_id = None
-        try:
-            org_id = get_org_id_from_request()
-        except Exception:
-            logger.debug("No request context for org_id in store_user_preference")
-
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[StoreUserPref]")
+        if not org_id:
+            return
+
+        cursor.execute(
+            "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
+            (org_id, key),
+        )
+        cursor.execute("""
+            INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, org_id, key, json.dumps(value)))
         conn.commit()
-        
-        if org_id:
-            cursor.execute("""
-                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE SET
-                    preference_value = EXCLUDED.preference_value,
-                    updated_at = CURRENT_TIMESTAMP
-            """, (user_id, org_id, key, json.dumps(value)))
-        else:
-            cursor.execute("""
-                DELETE FROM user_preferences
-                WHERE user_id = %s AND org_id IS NULL AND preference_key = %s
-            """, (user_id, key))
-            cursor.execute("""
-                INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value)
-                VALUES (%s, NULL, %s, %s)
-            """, (user_id, key, json.dumps(value)))
-        conn.commit()
-        logger.debug(f"Stored preference {key} for user {user_id}")
-    except Exception as e:
-        logger.error(f"Error storing user preference: {e}")
+        logger.debug("Stored org preference successfully")
+    except Exception:
+        logger.exception("Error storing user preference")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
         if 'conn' in locals() and conn:
             conn.close()
 
+def _parse_preference_value(raw, default=None):
+    """Decode a preference_value column, which may be JSON text or already decoded."""
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
 def get_user_preference(user_id: str, key: str, default=None):
     """Get user preference from database."""
+    conn = None
+    cursor = None
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
-        
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[Prefs:get]")
+
+        lookup_col, lookup_val = ("org_id", org_id) if org_id else ("user_id", user_id)
         cursor.execute(
-            "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = %s",
-            (user_id, key)
+            f"SELECT preference_value FROM user_preferences WHERE {lookup_col} = %s AND preference_key = %s",
+            (lookup_val, key),
         )
         result = cursor.fetchone()
-        if result:
-            logger.debug(f"Retrieved preference {key} for user {user_id}")
-            try:
-                # Try to parse as JSON, but handle cases where it might already be decoded
-                # Use 'is not None' to handle boolean False values correctly
-                value = result[0] if result[0] is not None else default
-                if isinstance(value, str):
-                    return json.loads(value)
-                return value
-            except json.JSONDecodeError:
-                # If JSON parsing fails, return the raw value
-                return result[0] if result[0] is not None else default
-        
-        logger.debug(f"No preference {key} found for user {user_id}, returning default")
-        return default
-    except Exception as e:
-        logger.error(f"Error retrieving user preference: {e}")
+        if not result:
+            return default
+        return _parse_preference_value(result[0], default)
+    except Exception:
+        logger.exception("Error retrieving user preference")
         return default
     finally:
-        if 'cursor' in locals() and cursor:
+        if cursor:
             cursor.close()
-        if 'conn' in locals() and conn:
+        if conn:
             conn.close()
 
 def get_connected_providers(user_id: str) -> List[str]:
@@ -442,8 +426,7 @@ def get_connected_providers(user_id: str) -> List[str]:
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[ConnectedProviders]")
         
         # Check user_tokens table (OAuth/secret-based providers)
         cursor.execute(
@@ -499,6 +482,7 @@ def get_user_email(user_id: str) -> Optional[str]:
         # Try to get email from user_tokens table first (faster)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — user_tokens not RLS-protected
                 cursor.execute(
                     "SELECT email FROM user_tokens WHERE user_id = %s AND email IS NOT NULL LIMIT 1",
                     (user_id,)
@@ -516,22 +500,6 @@ def get_user_email(user_id: str) -> Optional[str]:
         logger.error(f"Error getting user email: {e}")
         return None
 
-def create_cors_response():
-    """Create a CORS response for OPTIONS requests."""
-    from flask import make_response, request as flask_request
-    import os
-    response = make_response()
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    origin = flask_request.headers.get("Origin", frontend_url)
-    allowed_origins = {frontend_url, "http://localhost:3000"}
-    if origin in allowed_origins:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    else:
-        response.headers['Access-Control-Allow-Origin'] = frontend_url
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-ID, X-Org-ID'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response
 
 
 import time as _time
@@ -556,13 +524,14 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
         from utils.db.connection_pool import db_pool
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 org_id = row[0] if row and row[0] else None
                 _user_org_cache[user_id] = (org_id, _time.monotonic())
                 return org_id
     except Exception as e:
-        logger.warning("Error looking up org_id for user %s: %s", user_id, e)
+        logger.warning("Error looking up org_id for user %s: %s", sanitize(user_id), type(e).__name__)
         return None
 
 
@@ -574,7 +543,7 @@ def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Opti
     """
     org_id = get_org_id_for_user(user_id)
     if not org_id:
-        logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, user_id)
+        logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, sanitize(user_id))
         return None
 
     cursor.execute("SET myapp.current_user_id = %s;", (user_id,))

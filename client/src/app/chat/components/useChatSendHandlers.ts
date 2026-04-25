@@ -44,8 +44,8 @@ const normalizeMode = (mode?: string | null) => (mode || "agent").toLowerCase();
 const arraysEqual = (a: string[], b: string[]) => {
   if (a.length !== b.length) return false;
   // Order-independent comparison: sort both arrays before comparing
-  const sortedA = [...a].sort();
-  const sortedB = [...b].sort();
+  const sortedA = [...a].sort((x, y) => x.localeCompare(y));
+  const sortedB = [...b].sort((x, y) => x.localeCompare(y));
   return sortedA.every((value, index) => value === sortedB[index]);
 };
 

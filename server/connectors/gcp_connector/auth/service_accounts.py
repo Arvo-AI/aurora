@@ -691,8 +691,6 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
                 file.write(sa_json_str)
 
             logger.info("Created SA credentials file for local GCP tooling")
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-            os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
             return credentials_path
         except Exception as e:
             error_msg = "Failed to create SA credentials file"
@@ -718,9 +716,10 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
             "access_token": updated_token_data.get("access_token"),
             "token_uri": TOKEN_URL,
             # Use RFC3339 timestamp string for expiry to satisfy google-auth parsing
-            "expiry": datetime.datetime.utcfromtimestamp(
-                updated_token_data.get("expires_at", int(time.time()) + 3600)
-            ).isoformat("T") + "Z",
+            "expiry": datetime.datetime.fromtimestamp(
+                updated_token_data.get("expires_at", int(time.time()) + 3600),
+                datetime.timezone.utc,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "project_id": project_id,
             "quota_project_id": project_id
         }
@@ -733,10 +732,6 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
             json.dump(credentials, file)
 
         logger.info("Created OAuth credentials file for local GCP tooling")
-
-        # Set environment variables for GCP tools
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
 
         return credentials_path
 

@@ -118,7 +118,7 @@ class TerraformManager:
                 shutil.copy(terraform_binary, "/usr/local/bin/terraform")
                 
                 # Make Terraform executable
-                os.chmod("/usr/local/bin/terraform", 0o755)
+                os.chmod("/usr/local/bin/terraform", 0o750)
                 
                 logger.info("Terraform installed successfully")
                 return True
@@ -1181,15 +1181,7 @@ class TerraformManager:
             # Service-specific image variables (common in multi-service deployments)
             return 'nginx:latest'
         else:
-            # Default based on cloud provider
-            if cloud_provider == 'gcp':
-                return 'dummy-value'
-            elif cloud_provider == 'aws':
-                return 'dummy-value'
-            elif cloud_provider == 'azure':
-                return 'dummy-value'
-            else:
-                return 'dummy-value'
+            return 'dummy-value'
 
     def _post_process_terraform_code(self, terraform_code: str) -> str:
         """
@@ -1280,12 +1272,24 @@ class TerraformManager:
     def _get_terraform_env(self) -> dict:
         """
         Get environment variables for Terraform execution, including cloud provider credentials.
-        
+
         Returns:
             Dictionary of environment variables
         """
-        # Start with current environment
-        env = os.environ.copy()
+        # Build a minimal subprocess environment instead of inheriting the full server env
+        _TERRAFORM_ENV_ALLOWLIST = {
+            "PATH", "HOME", "USER", "LANG", "LC_ALL",
+            "SSL_CERT_FILE", "SSL_CERT_DIR",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "no_proxy",
+            "TMPDIR", "TMP", "TEMP",
+        }
+        env = {k: v for k, v in os.environ.items() if k in _TERRAFORM_ENV_ALLOWLIST}
+
+        # Inject per-instance .terraformrc path (avoids mutating os.environ)
+        terraformrc = getattr(self, "_terraformrc_path", None)
+        if terraformrc:
+            env["TF_CLI_CONFIG_FILE"] = terraformrc
         
         # Add cloud provider credentials if authenticator is available
         if self.authenticator:
@@ -1356,7 +1360,12 @@ class TerraformManager:
         return env
 
     def _create_terraform_network_config(self) -> None:
-        """Create Terraform configuration file for maximum performance and reliability."""
+        """Create Terraform configuration file for maximum performance and reliability.
+
+        Stores the path in ``self._terraformrc_path`` so that
+        :meth:`_get_terraform_env` can inject it into subprocess
+        environments without mutating ``os.environ``.
+        """
         try:
             # Test DNS resolution first
             self._test_network_connectivity()
@@ -1395,10 +1404,10 @@ plugin_cache_may_break_dependency_lock_file = true
             # Create plugin cache directory with proper permissions
             cache_dir = "/tmp/terraform-plugin-cache"
             os.makedirs(cache_dir, exist_ok=True)
-            os.chmod(cache_dir, 0o755)  # Ensure proper permissions
+            os.chmod(cache_dir, 0o750)  # Ensure proper permissions
             
-            # Set environment variable to use this config
-            os.environ['TF_CLI_CONFIG_FILE'] = terraformrc_path
+            # Store path so _get_terraform_env can inject it per-subprocess
+            self._terraformrc_path = terraformrc_path
             
             logger.info(f"Created Terraform network configuration at {terraformrc_path} (direct downloads only)")
             

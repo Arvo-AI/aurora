@@ -155,9 +155,9 @@ export default function SuggestionModal({
 
           {suggestion.command && (
             <div className="space-y-2">
-              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
                 Command
-              </label>
+              </span>
               <div className="relative p-4 rounded-lg bg-zinc-950 border border-zinc-800">
                 <code className="text-sm font-mono text-orange-300 whitespace-pre-wrap break-all">
                   {suggestion.command}
@@ -175,10 +175,11 @@ export default function SuggestionModal({
                 </p>
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-medium text-zinc-400">
+                <label htmlFor="suggestion-confirm-input" className="text-xs font-medium text-zinc-400">
                   Type <span className="font-mono text-orange-400">CONFIRM</span> to enable execution
                 </label>
                 <input
+                  id="suggestion-confirm-input"
                   type="text"
                   value={confirmText}
                   onChange={(e) => setConfirmText(e.target.value)}

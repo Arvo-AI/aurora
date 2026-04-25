@@ -9,17 +9,19 @@ from flask import Blueprint, jsonify, request
 
 from routes.splunk.tasks import process_splunk_alert
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
-from utils.logging.secure_logging import mask_credential_value
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
     get_user_preference,
     store_user_preference,
+    set_rls_context,
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize, hash_for_log
 from utils.secrets.secret_ref_utils import delete_user_secret
 SPLUNK_TIMEOUT = 15
+
+from utils.splunk_config import SPLUNK_SSL_VERIFY
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,8 @@ class SplunkClient:
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}{path}"
         try:
-            # verify=False to support self-signed certs (common in Splunk Enterprise)
             response = requests.request(
-                method, url, headers=self.headers, timeout=SPLUNK_TIMEOUT, verify=False, **kwargs
+                method, url, headers=self.headers, timeout=SPLUNK_TIMEOUT, verify=SPLUNK_SSL_VERIFY, **kwargs
             )
             response.raise_for_status()
             return response
@@ -84,7 +85,7 @@ class SplunkClient:
         except requests.exceptions.SSLError as exc:
             # SSLError must come before ConnectionError (it's a subclass)
             logger.error(f"[SPLUNK] {method} {url} SSL error: {exc}")
-            raise SplunkAPIError("SSL/TLS error. Check the instance URL protocol (https://).") from exc
+            raise SplunkAPIError("SSL/TLS error — check SPLUNK_SSL_VERIFY config") from exc
         except requests.exceptions.ConnectionError as exc:
             logger.error(f"[SPLUNK] {method} {url} connection error: {exc}")
             error_str = str(exc).lower()
@@ -119,11 +120,11 @@ def _get_stored_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, "splunk")
     except Exception as exc:
-        logger.error(f"Failed to retrieve Splunk credentials for user {user_id}: {exc}")
+        logger.error(f"Failed to retrieve Splunk credentials for user {sanitize(user_id)}: {sanitize(exc)}")
         return None
 
 
-@splunk_bp.route("/connect", methods=["POST", "OPTIONS"])
+@splunk_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Store Splunk API token and validate connectivity."""
@@ -142,8 +143,7 @@ def connect(user_id):
     if not base_url:
         return jsonify({"error": "A valid Splunk instance URL is required (e.g., https://your-instance.splunkcloud.com:8089)"}), 400
 
-    masked_token = mask_credential_value(api_token)
-    logger.info(f"[SPLUNK] Connecting user {user_id} to {base_url} (token={masked_token})")
+    logger.info(f"[SPLUNK] Connecting user {sanitize(user_id)} to {sanitize(base_url)} (token_hash={hash_for_log(api_token)})")
 
     client = SplunkClient(base_url, api_token)
 
@@ -151,7 +151,7 @@ def connect(user_id):
         server_info = client.get_server_info()
         user_context = client.get_current_user()
     except SplunkAPIError as exc:
-        logger.error(f"[SPLUNK] Connection validation failed for user {user_id}: {exc}")
+        logger.error(f"[SPLUNK] Connection validation failed for user {sanitize(user_id)}: {exc}")
         return jsonify({"error": "Failed to validate Splunk credentials"}), 502
 
     # Extract server details
@@ -177,9 +177,9 @@ def connect(user_id):
 
     try:
         store_tokens_in_db(user_id, token_payload, "splunk")
-        logger.info(f"[SPLUNK] Stored credentials for user {user_id} (server={server_name})")
+        logger.info(f"[SPLUNK] Stored credentials for user {sanitize(user_id)} (server={sanitize(server_name)})")
     except Exception as exc:
-        logger.exception(f"[SPLUNK] Failed to store credentials for user {user_id}: {exc}")
+        logger.exception(f"[SPLUNK] Failed to store credentials for user {sanitize(user_id)}: {exc}")
         return jsonify({"error": "Failed to store Splunk credentials"}), 500
 
     return jsonify({
@@ -194,7 +194,7 @@ def connect(user_id):
     })
 
 
-@splunk_bp.route("/status", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Splunk connection status."""
@@ -206,7 +206,7 @@ def status(user_id):
     base_url = creds.get("base_url")
 
     if not api_token or not base_url:
-        logger.warning(f"[SPLUNK] Incomplete credentials for user {user_id}")
+        logger.warning(f"[SPLUNK] Incomplete credentials for user {sanitize(user_id)}")
         return jsonify({"connected": False})
 
     client = SplunkClient(base_url, api_token)
@@ -215,7 +215,7 @@ def status(user_id):
         server_info = client.get_server_info()
         user_context = client.get_current_user()
     except SplunkAPIError as exc:
-        logger.warning(f"[SPLUNK] Status check failed for user {user_id}: {exc}")
+        logger.warning(f"[SPLUNK] Status check failed for user {sanitize(user_id)}: {sanitize(exc)}")
         return jsonify({"connected": False, "error": "Failed to validate stored Splunk credentials"})
 
     entry = server_info.get("entry", [{}])[0] if server_info.get("entry") else {}
@@ -233,7 +233,7 @@ def status(user_id):
     })
 
 
-@splunk_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@splunk_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Splunk by removing stored credentials."""
@@ -256,12 +256,9 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Splunk"}), 500
 
 
-@splunk_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@splunk_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Splunk for a specific user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[SPLUNK] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -269,11 +266,11 @@ def alert_webhook(user_id: str):
     # Check if user has Splunk connected
     creds = get_token_data(user_id, "splunk")
     if not creds:
-        logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", user_id)
+        logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", sanitize(user_id))
         return jsonify({"error": "Splunk not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
-    logger.info("[SPLUNK] Received alert webhook for user %s: %s", user_id, payload.get("search_name", "unknown"))
+    logger.info("[SPLUNK] Received alert webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("search_name", "unknown")))
 
     # Sanitize headers - redact sensitive values
     sensitive_headers = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "x-csrf-token"}
@@ -295,7 +292,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@splunk_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch Splunk alerts for the authenticated user."""
@@ -307,7 +304,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Splunk]")
 
             if state_filter:
                 cursor.execute(
@@ -371,11 +368,11 @@ def get_alerts(user_id):
             "offset": offset,
         })
     except Exception as exc:
-        logger.exception("[SPLUNK] Failed to fetch alerts for user %s: %s", user_id, exc)
+        logger.exception("[SPLUNK] Failed to fetch alerts for user %s: %s", sanitize(user_id), sanitize(exc))
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@splunk_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL that should be configured in Splunk."""
@@ -405,7 +402,7 @@ def get_webhook_url(user_id):
     })
 
 
-@splunk_bp.route("/rca-settings", methods=["GET", "OPTIONS"])
+@splunk_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
     """Get Splunk RCA settings for the authenticated user."""
@@ -416,7 +413,7 @@ def get_rca_settings(user_id):
     })
 
 
-@splunk_bp.route("/rca-settings", methods=["PUT", "OPTIONS"])
+@splunk_bp.route("/rca-settings", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_rca_settings(user_id):
     """Update Splunk RCA settings for the authenticated user."""
@@ -431,7 +428,7 @@ def update_rca_settings(user_id):
         return jsonify({"error": "rcaEnabled must be a boolean"}), 400
 
     store_user_preference(user_id, "splunk_rca_enabled", rca_enabled)
-    logger.info(f"[SPLUNK] Updated RCA settings for user {user_id}: rcaEnabled={rca_enabled}")
+    logger.info(f"[SPLUNK] Updated RCA settings for user {sanitize(user_id)}: rcaEnabled={rca_enabled}")
 
     return jsonify({
         "success": True,

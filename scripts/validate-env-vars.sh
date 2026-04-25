@@ -41,7 +41,7 @@ find server/ -type f -name "*.py" -exec grep -oh \
 
 # Extract env vars from TypeScript/JavaScript code (frontend)
 # Patterns: process.env.VAR, process.env["VAR"]
-find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \) -exec grep -oh \
+find client/ -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \) -not -path "*/node_modules/*" -not -path "*/.next/*" -exec grep -oh \
   -e 'process\.env\.[A-Z_][A-Z0-9_]*' \
   -e 'process\.env\[[^]]*' \
   {} + 2>/dev/null | \
@@ -54,7 +54,7 @@ sort -u "$USED_VARS_FILE" -o "$USED_VARS_FILE"
 
 # Filter out common false positives (framework/system variables)
 # Note: Use grep -v for better cross-platform compatibility
-grep -v -E '^(__NEXT_|NEXT_PHASE$|NEXT_DEBUG_BUILD$|NEXT_PRIVATE_|NEXT_SSG_FETCH_METRICS$|NEXT_SERVER_ACTIONS_ENCRYPTION_KEY$)' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+grep -v -E '^(__NEXT_|NEXT_PHASE$|NEXT_DEBUG_BUILD$|NEXT_PRIVATE_|NEXT_SSG_FETCH_METRICS$|NEXT_SERVER_ACTIONS_ENCRYPTION_KEY$|NEXT_RUNTIME$)' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Vercel deployment vars (only exist in Vercel environment)
 grep -v '^VERCEL' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
@@ -92,6 +92,9 @@ grep -v -E '^(AURORA_AGENT_TOKEN|AGENT_VERSION)$' "$USED_VARS_FILE" > "${USED_VA
 # Docker Compose static variables (hardcoded in docker-compose.yml, not user-configurable)
 grep -v -E '^(CHATBOT_HOST|CHATBOT_PORT|WEAVIATE_PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
+# Derived variables (set in docker-compose from NEXT_PUBLIC_* counterparts, not user-configurable)
+grep -v -E '^(PUBLIC_API_URL|PUBLIC_WS_URL)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+
 TOTAL_USED=$(wc -l < "$USED_VARS_FILE")
 echo -e "${GREEN}✓ Found ${TOTAL_USED} unique environment variables in code${NC}"
 echo ""
@@ -124,7 +127,7 @@ echo ""
 echo -e "${YELLOW}Checking: Variables in code but missing from .env.example...${NC}"
 MISSING_IN_ENV_EXAMPLE=$(comm -23 "$USED_VARS_FILE" "$ENV_EXAMPLE_VARS_FILE")
 
-if [ -n "$MISSING_IN_ENV_EXAMPLE" ]; then
+if [[ -n "$MISSING_IN_ENV_EXAMPLE" ]]; then
   echo -e "${RED}✗ ERROR: The following variables are used in code but not in .env.example:${NC}"
   echo "$MISSING_IN_ENV_EXAMPLE" | sed 's/^/  - /'
   echo ""
@@ -144,7 +147,7 @@ MISSING_DOCKER=$(echo "$MISSING_DOCKER" | grep -v '^IMAGE_BACKEND$' || true)
 MISSING_DOCKER=$(echo "$MISSING_DOCKER" | grep -v '^IMAGE_FRONTEND$' || true)
 # Add more CI-only vars here if needed in the future
 
-if [ -n "$MISSING_DOCKER" ]; then
+if [[ -n "$MISSING_DOCKER" ]]; then
   echo -e "${RED}✗ ERROR: The following variables are in docker-compose but not in .env.example:${NC}"
   echo "$MISSING_DOCKER" | sed 's/^/  - /'
   echo ""
@@ -159,10 +162,10 @@ echo -e "${BLUE}  Summary${NC}"
 echo -e "${BLUE}================================================${NC}"
 echo ""
 
-if [ $HAS_ERRORS -eq 0 ] && [ $HAS_WARNINGS -eq 0 ]; then
+if [[ $HAS_ERRORS -eq 0 && $HAS_WARNINGS -eq 0 ]]; then
   echo -e "${GREEN}✓ All checks passed! Environment variables are properly configured.${NC}"
   exit 0
-elif [ $HAS_ERRORS -eq 0 ]; then
+elif [[ $HAS_ERRORS -eq 0 ]]; then
   echo -e "${YELLOW}⚠ Validation passed with warnings.${NC}"
   exit 0
 else

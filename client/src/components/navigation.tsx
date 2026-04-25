@@ -266,8 +266,11 @@ export default function Navigation({
                   </TooltipProvider>
                   
                   <div className="relative" ref={userMenuRef}>
-                    <div 
-                      className="flex items-center gap-3 w-full px-3 py-2 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50 cursor-pointer"
+                    <button
+                      type="button"
+                      aria-haspopup="true"
+                      aria-expanded={isUserMenuOpen}
+                      className="flex items-center gap-3 w-full px-3 py-2 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50 cursor-pointer bg-transparent text-left"
                       onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                     >
                     <Avatar className="w-8 h-8">
@@ -291,7 +294,7 @@ export default function Navigation({
                         </p>
                       )}
                     </div>
-                  </div>
+                  </button>
                   
                   {isUserMenuOpen && (
                     <div className="absolute bottom-full left-0 right-0 mb-1 bg-card border border-border rounded-md shadow-lg z-50 min-w-[200px]">

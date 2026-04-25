@@ -17,6 +17,7 @@ from config.rate_limiting import (
 )
 from utils.auth.stateless_auth import get_user_id_from_request
 from utils.cache.redis_client import get_redis_ssl_kwargs
+from utils.log_sanitizer import sanitize
 
 
 def _get_remote_ip() -> str:
@@ -85,9 +86,9 @@ def log_rate_limit_hit(user_id: Optional[str] = None, endpoint: Optional[str] = 
     logger = logging.getLogger(__name__)
     logger.warning(
         "Rate limit hit: user=%s, ip=%s, endpoint=%s",
-        user_id or "anonymous",
-        _get_remote_ip(),
-        endpoint or request.endpoint,
+        sanitize(user_id or "anonymous"),
+        sanitize(_get_remote_ip()),
+        sanitize(endpoint or request.endpoint),
     )
 
 
