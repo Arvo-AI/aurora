@@ -18,7 +18,6 @@ detection:
         CommandLine|contains:
             - ' --cpu-priority='
             - '--donate-level=0'
-            - ' -o pool.'
             - ' --nicehash'
             - ' --algo=rx/0 '
             - 'stratum+tcp://'
