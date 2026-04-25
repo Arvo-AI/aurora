@@ -118,6 +118,7 @@ def _load_sigma() -> None:
         from utils.security.sigma_loader import load_sigma_rules
         sigma_rules = load_sigma_rules()
         _RULES.extend(sigma_rules)
+        logger.info("Signature matcher ready: %d rules (%d hand-written + %d Sigma)", len(_RULES), len(_RULES) - len(sigma_rules), len(sigma_rules))
     except Exception:
         logger.warning("Failed to load Sigma rules, continuing with hand-written rules only", exc_info=True)
 

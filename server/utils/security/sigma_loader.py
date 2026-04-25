@@ -7,7 +7,7 @@ patterns compatible with ``signature_match.SignatureVerdict``.
 Only supports a narrow Sigma subset:
 - product: linux, category: process_creation
 - level: high or critical
-- Detection fields: CommandLine, Image, OriginalFileName
+- Detection fields: CommandLine, Image
 - Modifiers: contains, endswith, startswith, re, contains|all
 - Conditions: selection, all of selection_*, 1 of selection_*
 """
@@ -23,9 +23,6 @@ import yaml
 logger = logging.getLogger(__name__)
 
 _SIGMA_DIR = Path(__file__).parent / "sigma_rules"
-
-_SUPPRESSIONS: set = set()
-
 
 def _load_suppressions() -> set:
     """Load suppressed rule IDs from env var and suppressions.txt."""
@@ -54,7 +51,7 @@ def _extract_mitre_technique(tags: list) -> str:
     return ""
 
 
-_SUPPORTED_FIELDS = {"commandline", "image", "originalfilename"}
+_SUPPORTED_FIELDS = {"commandline", "image"}
 
 
 def _escape_literal(s: str) -> str:
@@ -65,7 +62,7 @@ def _image_pattern(lit: str, modifiers: List[str]) -> str:
     if "endswith" in modifiers:
         return f"^\\S*{lit}(?:\\s|$)"
     if "startswith" in modifiers:
-        return f"^{lit}"
+        return f"^{lit}\\S*(?:\\s|$)"
     if "contains" in modifiers:
         return f"^\\S*{lit}\\S*(?:\\s|$)"
     return f"^{lit}(?:\\s|$)"
@@ -176,10 +173,17 @@ def _resolve_token(token: str, selections: Dict[str, str]) -> Optional[str]:
 
 
 def _resolve_compound(cond_lower: str, selections: Dict[str, str]) -> Optional[str]:
-    """Resolve compound 'A and B' conditions by parsing each token."""
+    """Resolve compound 'A and B' conditions by parsing each positive token.
+
+    Negative tokens ('not X') are stripped — we don't support filter
+    exclusions, so ignoring them errs on the side of over-detection.
+    """
     tokens = [t.strip() for t in cond_lower.split(" and ")]
+    positive = [t for t in tokens if not t.startswith("not ")]
+    if not positive:
+        return None
     parts = []
-    for token in tokens:
+    for token in positive:
         resolved = _resolve_token(token, selections)
         if resolved is None:
             return None
@@ -199,7 +203,7 @@ def _resolve_condition(cond_lower: str, selections: Dict[str, str]) -> Optional[
         if sel_parts:
             return _and_all(sel_parts)
 
-    if " and " in cond_lower and "not" not in cond_lower:
+    if " and " in cond_lower:
         return _resolve_compound(cond_lower, selections)
 
     if len(selections) == 1:
@@ -221,7 +225,7 @@ def _translate_rule(rule: Dict[str, Any]) -> Optional[str]:
 _SigmaRule = Tuple[re.Pattern, str, str, str]
 
 
-def _process_sigma_file(yml_path: Path) -> Optional[_SigmaRule]:
+def _process_sigma_file(yml_path: Path, suppressions: set) -> Optional[_SigmaRule]:
     """Parse and transpile a single Sigma YAML file. Returns None on skip."""
     try:
         with open(yml_path, encoding="utf-8") as f:
@@ -234,7 +238,7 @@ def _process_sigma_file(yml_path: Path) -> Optional[_SigmaRule]:
         return None
 
     sigma_id = rule.get("id", "")
-    if sigma_id in _SUPPRESSIONS:
+    if sigma_id in suppressions:
         logger.debug("Suppressed Sigma rule: %s", sigma_id)
         return None
 
@@ -265,8 +269,7 @@ def load_sigma_rules() -> List[_SigmaRule]:
     Returns a list of (compiled_pattern, technique, rule_id, description)
     tuples compatible with ``signature_match._RULES``.
     """
-    global _SUPPRESSIONS
-    _SUPPRESSIONS = _load_suppressions()
+    suppressions = _load_suppressions()
 
     if not _SIGMA_DIR.is_dir():
         logger.debug("Sigma rules directory not found: %s", _SIGMA_DIR)
@@ -274,7 +277,7 @@ def load_sigma_rules() -> List[_SigmaRule]:
 
     rules: List[_SigmaRule] = []
     for yml_path in sorted(_SIGMA_DIR.glob("*.yml")):
-        result = _process_sigma_file(yml_path)
+        result = _process_sigma_file(yml_path, suppressions)
         if result:
             rules.append(result)
 

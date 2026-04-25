@@ -1,5 +1,0 @@
-# SigmaHQ vendored rules
-# Source: https://github.com/SigmaHQ/sigma/releases/tag/r2026-01-01
-# Scope: rules/linux/process_creation, level high or critical,
-# detection fields: CommandLine, Image, OriginalFileName only
-# Vendored: 2026-04-24
