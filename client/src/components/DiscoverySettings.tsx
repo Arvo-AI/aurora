@@ -48,23 +48,26 @@ export function DiscoverySettings() {
       .catch(() => {});
   }, [userId]);
 
-  const cancelAndRefreshStatus = async (): Promise<boolean> => {
+  type CancelOutcome = "cancelled" | "no_active" | "error";
+
+  const cancelAndRefreshStatus = async (): Promise<CancelOutcome> => {
     try {
       const cancelRes = await fetch("/api/prediscovery/cancel", { method: "POST", credentials: "include" });
       if (!cancelRes.ok) {
         console.error("Failed to cancel prediscovery:", cancelRes.status);
-        return false;
+        return "error";
       }
+      const cancelData = await cancelRes.json().catch(() => ({}));
       const statusRes = await fetch("/api/prediscovery/status", { credentials: "include" });
       if (statusRes.ok) {
         const data = await statusRes.json();
         setStatus(data.status || "never_run");
         setLastRun(data.updated_at || data.started_at || null);
       }
-      return true;
+      return cancelData.status === "cancelled" ? "cancelled" : "no_active";
     } catch (err) {
       console.error("Failed to cancel prediscovery:", err);
-      return false;
+      return "error";
     }
   };
 
@@ -86,23 +89,25 @@ export function DiscoverySettings() {
         revert();
         return;
       }
-      let cancelOk = true;
-      if (!next) cancelOk = await cancelAndRefreshStatus();
+      const cancelOutcome = next ? "cancelled" : await cancelAndRefreshStatus();
       if (next) {
         toast({
           title: "Auto-discovery enabled",
           description: "Aurora will scan your infrastructure on the configured interval.",
         });
-      } else if (cancelOk) {
-        toast({
-          title: "Auto-discovery disabled",
-          description: "Scheduled scans paused and any running scan was cancelled.",
-        });
-      } else {
+      } else if (cancelOutcome === "error") {
         toast({
           title: "Auto-discovery disabled",
           description: "Scheduled scans paused, but cancelling the running scan failed.",
           variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Auto-discovery disabled",
+          description:
+            cancelOutcome === "cancelled"
+              ? "Scheduled scans paused and the running scan was cancelled."
+              : "Scheduled scans paused.",
         });
       }
     } catch {
@@ -115,12 +120,14 @@ export function DiscoverySettings() {
   const cancelRun = async () => {
     setCancelling(true);
     try {
-      const ok = await cancelAndRefreshStatus();
-      toast(
-        ok
-          ? { title: "Discovery cancelled", description: "The running scan has been stopped." }
-          : { title: "Failed to cancel", variant: "destructive" },
-      );
+      const outcome = await cancelAndRefreshStatus();
+      if (outcome === "cancelled") {
+        toast({ title: "Discovery cancelled", description: "The running scan has been stopped." });
+      } else if (outcome === "no_active") {
+        toast({ title: "No active scan to cancel" });
+      } else {
+        toast({ title: "Failed to cancel", variant: "destructive" });
+      }
     } finally {
       setCancelling(false);
     }
@@ -205,7 +212,7 @@ export function DiscoverySettings() {
             id="auto-discovery-toggle"
             checked={autoEnabled}
             onCheckedChange={toggleAutoDiscovery}
-            disabled={savingEnabled}
+            disabled={savingEnabled || cancelling}
           />
         </div>
 

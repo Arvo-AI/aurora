@@ -15,35 +15,38 @@ logger = logging.getLogger(__name__)
 
 
 def _get_users_with_integrations() -> List[Dict[str, Any]]:
-    """Get all users who have at least one connected integration.
+    """Get one enabled user per org who has at least one connected integration.
 
-    Iterates per-org to satisfy RLS on user_tokens / user_connections.
+    Iterates per-user to satisfy RLS on user_tokens / user_connections, skips
+    users with prediscovery_enabled=false, then dedups to one user per org.
     """
     from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
+    from utils.auth.stateless_auth import set_rls_context, get_user_preference
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                # No RLS needed — cross-org loop sets RLS per user
-                cur.execute("SELECT DISTINCT ON (org_id) id, org_id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id")
+                cur.execute("SELECT id, org_id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id")
                 all_users = cur.fetchall()
 
+                seen_orgs = set()
                 results = []
                 for user_id, org_id in all_users:
+                    if org_id in seen_orgs:
+                        continue
+                    if not get_user_preference(user_id, "prediscovery_enabled", True):
+                        continue
                     set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
-
                     cur.execute("""
                         SELECT EXISTS (
-                            SELECT 1 FROM user_tokens ut
-                            WHERE ut.is_active = true
+                            SELECT 1 FROM user_tokens ut WHERE ut.is_active = true
                             UNION
-                            SELECT 1 FROM user_connections uc
-                            WHERE uc.status = 'active'
+                            SELECT 1 FROM user_connections uc WHERE uc.status = 'active'
                         )
                     """)
                     row = cur.fetchone()
                     if row and row[0]:
+                        seen_orgs.add(org_id)
                         results.append({"user_id": user_id, "org_id": org_id})
                 return results
     except Exception as e:
@@ -239,9 +242,6 @@ def _should_run_for_user(user_id: str) -> bool:
     from utils.auth.stateless_auth import get_user_preference
     from utils.db.connection_pool import db_pool
     from datetime import datetime, timedelta
-
-    if not get_user_preference(user_id, "prediscovery_enabled", True):
-        return False
 
     interval = get_user_preference(user_id, "prediscovery_interval_hours", DEFAULT_INTERVAL_HOURS)
     interval = max(MIN_INTERVAL_HOURS, int(interval or DEFAULT_INTERVAL_HOURS))
