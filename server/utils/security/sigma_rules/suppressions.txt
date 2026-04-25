@@ -7,3 +7,9 @@
 # env var (comma-separated UUIDs).
 #
 # Format: one Sigma rule UUID per line. Lines starting with # are comments.
+
+# "find / -perm -4000" is a standard SRE SUID audit — too broad for agent context
+0cf7a157-8879-41a2-8f55-388dd23746b7
+
+# "env -i /bin/bash --noprofile --norc" is a canonical clean-environment diagnostic
+bed978f8-7f3a-432b-82c5-9286a9b3031a

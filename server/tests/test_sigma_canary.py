@@ -14,7 +14,7 @@ from utils.security.signature_match import SignatureVerdict
 def sigma_rules():
     """Load Sigma rules directly (bypasses config toggle for testing)."""
     rules = load_sigma_rules()
-    assert len(rules) >= 20, f"Expected >=20 Sigma rules, got {len(rules)}"
+    assert len(rules) >= 27, f"Expected >=27 Sigma rules, got {len(rules)}"
     return rules
 
 
@@ -89,6 +89,11 @@ class TestSigmaCanaryBenign:
         # SSH
         "ssh user@host",
         "scp file.txt user@host:/tmp/",
+        # SRE diagnostics (suppressed rules / FP-prone patterns)
+        "find / -perm -4000 -type f",
+        "env -i /bin/bash --noprofile --norc",
+        "nohup my-app /tmp/data.csv &",
+        "cp /tmp/myapp/passwd-config.json .",
     ])
     def test_benign_commands(self, sigma_rules, cmd):
         v = _check(sigma_rules, cmd)
@@ -104,7 +109,6 @@ class TestSigmaRulesDetectMalicious:
     @pytest.mark.parametrize("cmd,expected_prefix", [
         ('/usr/bin/awk \'BEGIN {system("/bin/bash")}\'', "sigma-"),
         ("/usr/bin/capsh --", "sigma-"),
-        ("/usr/bin/env /bin/bash", "sigma-"),
         ("/usr/bin/find . -exec /bin/sh ;", "sigma-"),
         ("/usr/bin/flock -u /tmp/foo /bin/bash", "sigma-"),
         ("/usr/bin/nice /bin/bash", "sigma-"),

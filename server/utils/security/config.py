@@ -15,11 +15,12 @@ class GuardrailsConfig:
     llm_model: str
 
 
+_TRUTHY = {"true", "1", "yes", "on", "enabled"}
 _FALSY = {"false", "0", "no", "off", "disabled"}
 
 
 def _load() -> GuardrailsConfig:
-    on = os.getenv("GUARDRAILS_ENABLED", "true").lower() != "false"
+    on = os.getenv("GUARDRAILS_ENABLED", "true").lower() not in _FALSY
     return GuardrailsConfig(
         enabled=on,
         sigma_enabled=on and os.getenv("GUARDRAILS_SIGMA_ENABLED", "true").lower() not in _FALSY,

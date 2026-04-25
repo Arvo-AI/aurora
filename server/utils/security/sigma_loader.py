@@ -248,7 +248,7 @@ def _process_sigma_file(yml_path: Path, suppressions: set) -> Optional[_SigmaRul
 
     regex_str = _translate_rule(rule)
     if not regex_str:
-        logger.debug("Could not translate Sigma rule: %s", yml_path.name)
+        logger.warning("Could not translate Sigma rule: %s", yml_path.name)
         return None
 
     try:
