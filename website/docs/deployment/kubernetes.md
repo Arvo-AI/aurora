@@ -173,6 +173,10 @@ ingress:
     ws: "ws.aurora-oss.<IP>.nip.io"
 ```
 
+:::note Guardrails require an LLM
+AI safety guardrails ship on by default (`GUARDRAILS_ENABLED: "true"` in `values.yaml`). The LLM judge and input rail **fail closed** on any LLM error, so every shell command is blocked if the provider is unreachable. Make sure at least one LLM key in the `llm` secret group is valid before installing the chart, or set `GUARDRAILS_ENABLED: "false"` in your values overlay. See [Command Safety](../configuration/command-safety).
+:::
+
 ```bash
 # 2. Install an ingress controller if not already installed (see Ingress Controller section below)
 # Example: nginx ingress (optional — use any controller that supports the Kubernetes Ingress API)

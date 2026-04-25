@@ -119,6 +119,10 @@ GOOGLE_AI_API_KEY=AIza...
 OPENAI_API_KEY=sk-...
 ```
 
+:::note Guardrails require an LLM
+AI safety guardrails are on by default. The LLM judge and input rail **fail closed** on any LLM error, which means every shell command will be blocked if the key above is missing or the provider is unreachable. Set `GUARDRAILS_ENABLED=false` in `.env` only if you cannot provide an LLM. See [Command Safety](/docs/configuration/command-safety).
+:::
+
 **LLM Provider Mode** — must match whichever key you set (see [LLM Providers](/docs/integrations/llm-providers) for all options):
 
 ```bash
