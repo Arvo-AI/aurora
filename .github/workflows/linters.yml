@@ -32,6 +32,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # TODO: Install dependencies, run lint, type-check, unit tests, etc.
-      - name: Placeholder – run static analysis suite
-        run: echo "Running lint & tests… (to be implemented)"
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: Run static analysis tests
+        working-directory: server
+        run: |
+          tests=(tests/test_connector_rbac.py)
+          if [ -f tests/test_rls_coverage.py ]; then
+            tests+=(tests/test_rls_coverage.py)
+          else
+            echo "::warning::tests/test_rls_coverage.py not present yet (waiting on PR #314); skipping."
+          fi
+          python -m pytest "${tests[@]}" -v
