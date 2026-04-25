@@ -42,6 +42,8 @@ def cancel_prediscovery(user_id):
     """Cancel any in-progress prediscovery runs for this user."""
     try:
         org_id = get_org_id_from_request()
+        if not org_id:
+            return jsonify({"error": "Missing org context"}), 400
         cancelled = []
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -62,7 +64,7 @@ def cancel_prediscovery(user_id):
             for session_id, task_id in rows:
                 if task_id:
                     try:
-                        celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+                        celery_app.control.revoke(task_id, terminate=True, signal="SIGKILL")
                     except Exception as e:
                         logger.warning(f"[Prediscovery API] Failed to revoke {task_id}: {e}")
                 else:
