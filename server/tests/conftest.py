@@ -4,6 +4,15 @@ import sys
 import os
 from unittest.mock import MagicMock
 
+# The signature matcher loads its Sigma corpus at module-import time and
+# gates the load on ``config.sigma_enabled``, which is computed from env
+# vars at import. Pytest sets env vars after collection, which is too late
+# for the adversarial guardrail tests. Set the relevant flags before any
+# import below pulls in ``utils.security.*``.
+os.environ.setdefault("GUARDRAILS_ENABLED", "true")
+os.environ.setdefault("GUARDRAILS_SIGMA_ENABLED", "true")
+os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key-not-real")
+
 # Ensure server/ is on sys.path so ``services.*`` imports resolve.
 _server_dir = os.path.join(os.path.dirname(__file__), os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
