@@ -299,16 +299,19 @@ def evaluate_command(
     from utils.security.audit_events import emit_block_event
     from utils.security.signature_match import check_signature
 
+    t0 = time.perf_counter()
     sig = check_signature(command)
     if sig.matched:
+        sig_latency_ms = (time.perf_counter() - t0) * 1000
         logger.warning(
             "[Guardrails:SignatureMatch] BLOCKED tool=%s cmd_fp=%s technique=%s rule=%s",
             tool, _fingerprint(command), sig.technique, sig.rule_id,
         )
         emit_block_event(
             user_id=user_id or "", session_id=session_id or "", layer="signature_match",
-            command=command, tool=tool, reason=sig.description,
+            subject=command, tool=tool, reason=sig.description,
             technique=sig.technique, rule_id=sig.rule_id,
+            latency_ms=sig_latency_ms,
         )
         return GuardrailDecision(
             blocked=True, layer="signature_match",
@@ -318,9 +321,11 @@ def evaluate_command(
 
     verdict = check_command_safety(command, tool_name=tool, user_id=user_id, session_id=session_id)
     if verdict.conclusion:
+        judge_latency_ms = (time.perf_counter() - t0) * 1000
         emit_block_event(
             user_id=user_id or "", session_id=session_id or "", layer="llm_judge",
-            command=command, tool=tool, reason=verdict.thought,
+            subject=command, tool=tool, reason=verdict.thought,
+            latency_ms=judge_latency_ms,
         )
         return GuardrailDecision(blocked=True, layer="llm_judge", reason=verdict.thought)
 

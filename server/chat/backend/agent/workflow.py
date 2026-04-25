@@ -967,7 +967,7 @@ class Workflow:
         from guardrails.input_rail import check_input
         last_msg = input_state.messages[-1] if input_state.messages else None
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
-            msg_text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
+            msg_text = _extract_text_from_content(last_msg.content)
             rail_result = await check_input(msg_text)
             if rail_result.blocked:
                 emit_block_event(
@@ -975,8 +975,9 @@ class Workflow:
                     session_id=getattr(input_state, "session_id", "") or "",
                     layer="input_rail",
                     tool="workflow",
-                    command=msg_text,
+                    subject=msg_text,
                     reason=rail_result.reason,
+                    latency_ms=rail_result.latency_ms,
                 )
                 yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
                 return
