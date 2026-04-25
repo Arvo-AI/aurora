@@ -40,5 +40,5 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest
 
-      - name: Run RBAC coverage test
-        run: cd server && python -m pytest tests/test_connector_rbac.py -v
+      - name: Run static analysis tests
+        run: cd server && python -m pytest tests/test_connector_rbac.py tests/test_rls_coverage.py -v
