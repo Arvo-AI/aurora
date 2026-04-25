@@ -117,8 +117,8 @@ class RealMCPServerManager:
             #     "description": "Azure MCP Server"
             # },
             "github": {
-                "command": ["docker", "run", "-i", "--rm"],
-                "description": "GitHub Official MCP Server (Docker)"
+                "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+                "description": "GitHub Official MCP Server (npx)"
             },
             "context7": {
                 "command": ["npx", "-y", "@upstash/context7-mcp"],
@@ -222,10 +222,8 @@ class RealMCPServerManager:
                 python_cmd = shutil.which("python") or "/usr/local/bin/python"
                 cmd = [python_cmd, "-m", "awslabs.aws_api_mcp_server.server"]
             elif server_type == "github":
-                # Official GitHub MCP Server via Docker
-                # Command is built dynamically below to include the token
-                docker_cmd = shutil.which("docker") or "/usr/bin/docker"
-                # Get GitHub token from credentials
+                # Official GitHub MCP Server via npx
+                npx_cmd = shutil.which("npx") or "/usr/bin/npx"
                 github_token = ""
                 if user_credentials and "github" in user_credentials:
                     github_token = str(user_credentials["github"].get("access_token", ""))
@@ -234,16 +232,9 @@ class RealMCPServerManager:
                     logging.error(" GitHub token is required for GitHub MCP server")
                     return None
                 
-                # Build Docker command with token passed via -e flag
-                # Using GITHUB_TOOLSETS=all to enable all 60+ tools
-                cmd = [
-                    docker_cmd, "run", "-i", "--rm",
-                    "-e", f"GITHUB_PERSONAL_ACCESS_TOKEN={github_token}",
-                    "-e", "GITHUB_TOOLSETS=all",
-                    "ghcr.io/github/github-mcp-server"
-                ]
+                cmd = [npx_cmd, "-y", "@modelcontextprotocol/server-github"]
                 
-                logging.info(f" GitHub MCP server command prepared (Docker with all toolsets)")
+                logging.info(f" GitHub MCP server command prepared (npx with all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
@@ -255,7 +246,18 @@ class RealMCPServerManager:
                 node_cmd = shutil.which("node") or "/usr/bin/node"
                 cmd = [node_cmd, full_path]
             # Set up environment with cloud provider credentials
-            env = os.environ.copy()
+            if server_type == "github":
+                env = {
+                    "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+                    "HOME": os.environ.get("HOME", "/tmp"),
+                    "NODE_PATH": os.environ.get("NODE_PATH", ""),
+                    "npm_config_cache": os.environ.get("npm_config_cache", "/tmp/.npm"),
+                }
+                if user_credentials and "github" in user_credentials:
+                    env["GITHUB_PERSONAL_ACCESS_TOKEN"] = str(user_credentials["github"].get("access_token", ""))
+                    env["GITHUB_TOOLSETS"] = "all"
+            else:
+                env = os.environ.copy()
             # Add cloud provider credentials to environment
             if user_credentials:
                 if server_type == "aws" and "aws" in user_credentials:
