@@ -1,7 +1,25 @@
-"""LLM-based safety check for agent command execution.
+"""LLM-based command safety judge (last-line defense).
 
-Evaluates whether a proposed command could be dangerous, destructive, or
-facilitate unauthorized access -- regardless of whether the user requested it.
+Evaluates whether a proposed shell command could be dangerous, destructive,
+or facilitate unauthorized access -- regardless of whether the user asked
+for it.
+
+This is one layer of Aurora's defense-in-depth for agent command execution.
+The full pipeline runs in this order, and any layer can block:
+
+    1. NeMo input rail        - prompt-injection detection on the user message
+                                before the agent reasons (server/guardrails/).
+    2. Static signature match - regex corpus against the proposed command
+                                (utils/security/signature_match.py).
+    3. Org command policy     - per-org allow/deny lists from Postgres
+                                (utils/auth/command_policy.py).
+    4. LLM safety judge       - this module; evaluates commands that pass
+                                every earlier layer, using the user's request
+                                as context to catch novel or context-dependent
+                                threats signatures cannot express.
+
+The judge always fails closed: any timeout, LLM error, or missing user
+context returns a blocking verdict.
 
 Adapted from Meta's PurpleLlama AlignmentCheck architecture (MIT licensed),
 rewritten to evaluate inherent danger rather than intent alignment.
@@ -287,11 +305,15 @@ def evaluate_command(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> GuardrailDecision:
-    """Run the signature matcher and LLM judge against a command.
+    """Run the signature matcher then the LLM judge against a command.
 
-    Single source of truth for every callsite (``terminal_run``, kubectl
-    on-prem, tailscale SSH). Returns a passing decision when guardrails are
-    disabled so callers can treat the result uniformly.
+    Single source of truth for the signature + judge layers. Callers
+    (``terminal_run``, kubectl on-prem, tailscale SSH) first apply the
+    org command policy at the tool boundary, then delegate here. The input
+    rail runs even earlier, in the agent workflow, before any tool fires.
+
+    Returns a passing decision when guardrails are disabled so callers can
+    treat the result uniformly.
     """
     if not config.enabled:
         return GuardrailDecision(blocked=False)

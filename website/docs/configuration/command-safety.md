@@ -28,6 +28,18 @@ GUARDRAILS_ENABLED=false
 
 That's the only switch. When enabled (default), all three layers run. When `false`, none run.
 
+## Requirements
+
+Because guardrails are enabled by default, the LLM judge and NeMo input rail need a working LLM at startup. Without one they fail closed and every shell command is blocked.
+
+At a minimum, you need:
+
+- Either `MAIN_MODEL` or `GUARDRAILS_LLM_MODEL` set to a reachable model.
+- The corresponding provider credentials (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, or `OLLAMA_BASE_URL`).
+- Outbound network access from the `chatbot` and `celery-worker` containers to the provider endpoint (or to your Ollama host).
+
+If your environment genuinely cannot reach an LLM, set `GUARDRAILS_ENABLED=false` explicitly. Do not rely on guardrails silently being inactive -- they are on unless you turn them off.
+
 ## Model selection
 
 The safety judge and input rail share the same provider abstraction as the rest of Aurora. By default they use `MAIN_MODEL`; set `GUARDRAILS_LLM_MODEL` to override. Format is identical to `MAIN_MODEL` and other model overrides (`provider/model`), and selection honors `LLM_PROVIDER_MODE` and the same API keys the main agent uses.
