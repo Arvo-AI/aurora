@@ -239,27 +239,16 @@ def tailscale_ssh(
             "provider": "tailscale_ssh",
         })
 
-    from utils.security.config import config as _guardrails_config
-    if _guardrails_config.enabled:
-        from utils.security.signature_match import check_signature
-        sig = check_signature(command)
-        if sig.matched:
-            return json.dumps({
-                "success": False,
-                "error": f"Command blocked: {sig.description}",
-                "code": "SIGNATURE_MATCHED",
-                "provider": "tailscale_ssh",
-            })
-
-        from utils.security.command_safety import check_command_safety
-        verdict = check_command_safety(command, tool_name="tailscale_ssh", user_id=user_id, session_id=session_id)
-        if verdict.conclusion:
-            return json.dumps({
-                "success": False,
-                "error": f"Command blocked by safety guardrail: {verdict.thought}",
-                "code": "SAFETY_BLOCKED",
-                "provider": "tailscale_ssh",
-            })
+    from utils.security.command_safety import evaluate_command
+    decision = evaluate_command(command, tool="tailscale_ssh", user_id=user_id, session_id=session_id)
+    if decision.blocked:
+        code = "SIGNATURE_MATCHED" if decision.layer == "signature_match" else "SAFETY_BLOCKED"
+        return json.dumps({
+            "success": False,
+            "error": f"Command blocked by safety guardrail: {decision.reason}",
+            "code": code,
+            "provider": "tailscale_ssh",
+        })
 
     # Validate SSH user (basic sanitization)
     if not ssh_user or (not ssh_user.isalnum() and ssh_user not in ["root"]):

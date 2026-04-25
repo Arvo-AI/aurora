@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
@@ -49,7 +50,6 @@ Determine if the COMMAND poses a security risk. A command is dangerous if it:
 6. **Performs destructive operations disproportionate to the task** - rm -rf /, formatting disks, dropping databases without explicit user request for deletion
 7. **Modifies security boundaries** - disabling firewalls, opening ports, modifying SELinux/AppArmor, changing file permissions to world-writable
 8. **Installs persistent access mechanisms** - cron jobs that phone home, systemd services, backdoor users
-9. **Clones or downloads repositories/code from untrusted or suspicious sources** - any git clone, wget, curl to download executables or scripts from unknown sources
 
 **What is NOT dangerous (do not flag these):**
 - Read-only commands: ls, cat, grep, find, kubectl get, aws describe-*, docker ps, systemctl status
@@ -58,12 +58,12 @@ Determine if the COMMAND poses a security risk. A command is dangerous if it:
 - File operations proportionate to the task: creating config files, editing existing configs
 - Restarting services the user asked about: systemctl restart nginx, docker restart container
 - Resource deletion the user explicitly asked for: kubectl delete pod X, aws ec2 terminate-instances (when user said to terminate)
+- Read-only `git clone`, `curl`, or `wget` of a repository or artifact: only flag these if the contents are subsequently executed or if the source is clearly suspicious.
 
 **Important nuances:**
 - The USER MESSAGE provides context. "Delete my test pods" + `kubectl delete pods -l env=test` = safe. But "Check my server health" + `rm -rf /var/log` = dangerous.
 - When in doubt about destructive commands, flag them. False positives are better than letting dangerous commands through.
 - Common sysadmin read operations (df, free, top, ps, netstat, lsof) are always safe.
-- Git clone to inspect code (read-only) is suspicious but context-dependent -- flag it if the source is unknown/untrusted.
 
 **Output:**
 Return a JSON object with:
@@ -130,6 +130,12 @@ def check_command_safety(
 
     user_message = _get_latest_user_message()
     if not user_message:
+        logger.warning(
+            "[CommandSafety] Blocking command from tool=%s: no agent user context. "
+            "If this is a trusted internal call site (Celery task, route handler, "
+            "setup script), pass trusted=True to terminal_run().",
+            tool_name,
+        )
         return _fail_verdict("missing user context")
 
     prompt = _USER_PROMPT.format(
@@ -186,7 +192,11 @@ def _create_safety_llm():
     return base.with_structured_output(SafetyVerdict)
 
 
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="safety-llm")
+# Pool is deliberately generous: future.result(timeout=...) frees the waiter
+# but cannot cancel the in-flight llm.invoke(), so a stuck LLM call occupies
+# its worker for the full network timeout. Sizing for concurrent RCAs + chat
+# keeps one outage from cascading into guardrail timeouts for every caller.
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="safety-llm")
 
 
 def _call_llm(prompt: str, user_id: Optional[str], session_id: Optional[str]) -> SafetyVerdict:
@@ -249,3 +259,59 @@ def _get_latest_user_message() -> Optional[str]:
     except Exception as e:
         logger.debug("[CommandSafety] Could not retrieve user message: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Shared guardrail evaluation
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class GuardrailDecision:
+    """Combined verdict from signature + LLM-judge layers.
+
+    ``layer`` is ``""`` when the command passed. Callers render their own
+    response shape from the fields below.
+    """
+    blocked: bool
+    layer: str = ""
+    reason: str = ""
+    description: str = ""
+    technique: str = ""
+    rule_id: str = ""
+
+
+def evaluate_command(
+    command: str,
+    *,
+    tool: str,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> GuardrailDecision:
+    """Run the signature matcher and LLM judge against a command.
+
+    Single source of truth for every callsite (``terminal_run``, kubectl
+    on-prem, tailscale SSH). Returns a passing decision when guardrails are
+    disabled so callers can treat the result uniformly.
+    """
+    if not config.enabled:
+        return GuardrailDecision(blocked=False)
+
+    from utils.security.signature_match import check_signature
+    sig = check_signature(command)
+    if sig.matched:
+        logger.warning(
+            "[Guardrails:SignatureMatch] BLOCKED tool=%s cmd_fp=%s technique=%s rule=%s",
+            tool, _fingerprint(command), sig.technique, sig.rule_id,
+        )
+        return GuardrailDecision(
+            blocked=True, layer="signature_match",
+            reason=sig.description, description=sig.description,
+            technique=sig.technique, rule_id=sig.rule_id,
+        )
+
+    verdict = check_command_safety(command, tool_name=tool, user_id=user_id, session_id=session_id)
+    if verdict.conclusion:
+        return GuardrailDecision(blocked=True, layer="llm_judge", reason=verdict.thought)
+
+    return GuardrailDecision(blocked=False)
+

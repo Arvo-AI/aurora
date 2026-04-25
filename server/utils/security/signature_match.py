@@ -30,9 +30,7 @@ T_CRED_CLOUD = "T1552.001"          # Credentials In Files
 T_CRED_SSH = "T1552.004"            # Private Keys
 T_CRED_CONTAINER_API = "T1552.007"  # Container API credentials
 T_SCHED_TASK_CRON = "T1053.003"     # Scheduled Task/Job: Cron
-T_BOOT_AUTOSTART_RC = "T1546.004"   # Event Triggered Execution: .bash_profile/.bashrc
 T_ACCOUNT_MANIP_SSH = "T1098.004"   # Account Manipulation: SSH Authorized Keys
-T_SYSTEMD_SERVICE = "T1543.002"     # Systemd Service
 T_IMPAIR_DEFENSES = "T1562.001"     # Impair Defenses: Disable or Modify Tools
 T_IMPAIR_FIREWALL = "T1562.004"     # Impair Defenses: Disable or Modify System Firewall
 T_CLEAR_HISTORY = "T1070.003"       # Indicator Removal: Clear Command History
@@ -67,10 +65,11 @@ _r(r"/var/run/secrets/kubernetes\.io", T_CRED_CONTAINER_API, "cred-k8s-sa", "Kub
 _r(r"\blsass\b", T_OS_CRED_LSASS, "cred-lsass", "LSASS memory access")
 
 # --- Persistence (T1053 / T1136) ---
+# persist-shell-rc (writes to ~/.bashrc) and persist-systemd (systemctl enable
+# foo.service) are omitted on purpose: both are legitimate SRE operations that
+# the LLM judge is better positioned to evaluate in context.
 _r(r"\bcrontab\s+-[ei]", T_SCHED_TASK_CRON, "persist-crontab", "Crontab modification")
-_r(r">>?\s*(?:~|/[^\s]*)?/\.(bashrc|bash_profile|zshrc|profile)\b", T_BOOT_AUTOSTART_RC, "persist-shell-rc", "Shell RC file write/append")
 _r(r">>\s*.*authorized_keys", T_ACCOUNT_MANIP_SSH, "persist-authkeys", "Appending to authorized_keys")
-_r(r"\bsystemctl\s+(enable|start)\b.*\.(service|timer)", T_SYSTEMD_SERVICE, "persist-systemd", "Systemd unit enable/start")
 
 # --- Defense evasion (T1562) ---
 _r(r"\bsetenforce\s+0\b", T_IMPAIR_DEFENSES, "evasion-selinux", "Disabling SELinux")
