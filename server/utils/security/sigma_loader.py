@@ -1,4 +1,4 @@
-"""Sigma YAML → regex transpiler for the L2 signature matcher.
+"""Sigma YAML -> regex transpiler for the L2 signature matcher.
 
 Loads vendored SigmaHQ rules from ``sigma_rules/`` when
 ``config.sigma_enabled`` is True, converting them to compiled regex
@@ -10,6 +10,12 @@ Only supports a narrow Sigma subset:
 - Detection fields: CommandLine, Image
 - Modifiers: contains, endswith, startswith, re, contains|all
 - Conditions: selection, all of selection_*, 1 of selection_*
+
+Sigma ``Image|endswith: '/foo'`` selectors assume the structured Image
+field from EDR telemetry (always an absolute path). We apply them to
+raw command strings, so for a curated LOLBin basename allowlist
+(``awk``, ``perl``, ``ncat``, ``vim``, ...) we also accept the bare
+basename at the start of the command line. See ``_BARE_BASENAME_ALLOWED``.
 """
 
 import logging
@@ -54,13 +60,40 @@ def _extract_mitre_technique(tags: list) -> str:
 _SUPPORTED_FIELDS = {"commandline", "image"}
 
 
+# Sigma rules express ``Image|endswith: '/ncat'`` assuming the structured
+# ``Image`` field (always an absolute path) from EDR telemetry. We match
+# against raw command strings, where the binary is often invoked by bare
+# basename. For a hand-picked set of uncommon LOLBins the payload-anchored
+# rest of the rule (e.g. ``BEGIN {system``, ``-e`` + ``Socket``) makes
+# adding a bare-basename alternative safe. Common coreutils like rm/cp/mv
+# are intentionally NOT in this list: their Sigma rules would otherwise
+# fire on everyday SRE commands.
+_BARE_BASENAME_ALLOWED = frozenset({
+    "awk", "gawk", "mawk", "nawk",
+    "perl", "php", "python", "python2", "python3",
+    "vim", "rvim", "vimdiff",
+    "nc", "ncat",
+})
+
+
 def _escape_literal(s: str) -> str:
     return re.escape(s)
 
 
 def _image_pattern(lit: str, modifiers: List[str]) -> str:
     if "endswith" in modifiers:
-        return f"^\\S*{lit}(?:\\s|$)"
+        pat = f"^\\S*{lit}(?:\\s|$)"
+        # If the literal looks like ``/foo`` and ``foo`` is a known
+        # LOLBin basename, also match the bare-basename invocation so
+        # Sigma rules written against EDR telemetry still catch commands
+        # users type without absolute paths. Gate on the allowlist so
+        # permissive rules (``/rm``, ``/cp``, ...) keep requiring an
+        # absolute path and don't FP on routine commands.
+        if lit.startswith("/"):
+            basename = lit[1:]
+            if basename in _BARE_BASENAME_ALLOWED:
+                pat = f"(?:{pat}|^{basename}(?:\\s|$))"
+        return pat
     if "startswith" in modifiers:
         return f"^{lit}\\S*(?:\\s|$)"
     if "contains" in modifiers:
