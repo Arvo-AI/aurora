@@ -326,6 +326,15 @@ class SkillRegistry:
             else:
                 lines.append(f"- load_skill('{meta.id}')  # {display_name}: {meta.index}")
 
+            # Inline dynamic context the LLM needs at tool-call time, so it
+            # doesn't have to call load_skill first. Kept short to stay within
+            # the ~300-token budget for this always-loaded index. Reuses the
+            # ctx_data that check_connection already cached (30s TTL).
+            if meta.id == "kubectl_onprem":
+                _, ctx = self.check_connection(meta.id, user_id)
+                if ctx.get("has_clusters") and ctx.get("cluster_list"):
+                    lines.append(f"  Connected clusters:\n{ctx['cluster_list']}")
+
         lines.append("")
         return "\n".join(lines)
 
@@ -513,11 +522,11 @@ class SkillRegistry:
 
             if rows:
                 lines = [f"- {name} (cluster_id: `{cid}`)" for cid, name in rows]
-                return {"cluster_list": "\n".join(lines)}
-            return {"cluster_list": "(no active clusters)"}
+                return {"cluster_list": "\n".join(lines), "has_clusters": True}
+            return {"cluster_list": "(no active clusters)", "has_clusters": False}
         except Exception as e:
             logger.warning(f"Failed to fetch kubectl on-prem clusters: {e}")
-            return {"cluster_list": "(cluster data unavailable)"}
+            return {"cluster_list": "(cluster data unavailable)", "has_clusters": False}
 
     @staticmethod
     def _get_bitbucket_workspace_context(user_id: str) -> Dict[str, Any]:
