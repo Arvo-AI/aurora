@@ -1,7 +1,8 @@
 import "./globals.css";
 import { SessionProvider } from "next-auth/react";
-import ClientShell from "./components/ClientShell";
 import ConditionalShell from "./components/ConditionalShell";
+
+export const dynamic = 'force-dynamic';
 
 export default function RootLayout({
   children,
