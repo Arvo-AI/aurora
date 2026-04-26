@@ -9,8 +9,8 @@ The full pipeline runs in this order, and any layer can block:
 
     1. NeMo input rail        - prompt-injection detection on the user message
                                 before the agent reasons (server/guardrails/).
-    2. Static signature match - regex corpus against the proposed command
-                                (utils/security/signature_match.py).
+    2. Static signature match - SigmaHQ-backed regex corpus against the
+                                proposed command (utils/security/signature_match.py).
     3. Org command policy     - per-org allow/deny lists from Postgres
                                 (utils/auth/command_policy.py).
     4. LLM safety judge       - this module; evaluates commands that pass

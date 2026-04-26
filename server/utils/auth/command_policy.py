@@ -326,6 +326,40 @@ def get_seed_rules() -> Dict[str, list]:
 
 # ---------------------------------------------------------------------------
 # Deny rules shared across ALL templates (dangerous regardless of access level)
+#
+# DEDUPE NOTE (L1 vs L2):
+# Some rules here overlap with the L2 signature matcher (signature_match.py)
+# and Sigma-sourced rules. This is intentional — L1 and L2 serve different
+# purposes:
+#
+#   L1 (here) = org-configurable operational policy. Admins can toggle lists,
+#     add/remove rules per org. These rules block commands BEFORE execution
+#     and provide policy-level deny messages.
+#
+#   L2 (signature_match.py + Sigma) = hardcoded security detection. Runs on
+#     all orgs unconditionally. Returns MITRE ATT&CK technique metadata for
+#     audit logging. Cannot be toggled per org.
+#
+# Overlap is fine — both layers are fast (<5ms) and a command denied by L1
+# never reaches L2. The overlap provides defense-in-depth: if an admin
+# disables the denylist, L2 still catches the dangerous patterns.
+#
+# Rules that overlap with L2/Sigma:
+#   p100 rm -rf /         → L2 destruct-rm-root
+#   p90  LD_PRELOAD       → L2 lolbin-ld-preload + Sigma
+#   p88  base64|bash      → L2 lolbin-b64-pipe
+#   p75  curl|bash        → Sigma curl/wget exec
+#   p70  nc/netcat        → L2 revshell-nc + Sigma netcat
+#   p65  chmod SUID       → L2 privesc-chmod-suid
+#
+# Rules unique to L1 (operational policy, not security detections):
+#   p95  gcc/make         — blocks compilation, not a security signature
+#   p92  eval/exec        — too broad for L2, fine as org policy
+#   p85  ssh-keygen       — operational restriction
+#   p83  bash -c          — operational restriction
+#   p80  useradd/passwd   — operational restriction
+#   p60  nsenter/chroot   — operational restriction
+#   p55  iptables/nft     — operational restriction
 # ---------------------------------------------------------------------------
 _UNIVERSAL_DENY_RULES: list = [
     {"priority": 100, "pattern": r"\brm\s+-rf\s+/",

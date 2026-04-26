@@ -4,10 +4,16 @@ Compiled regex rules run against every command before the LLM judge.
 Catches ~80% of dangerous commands in <5ms with zero cost.
 
 Rule categories map to MITRE ATT&CK techniques where applicable.
+
+Sigma rules from vendored SigmaHQ YAML files are appended after the
+hand-written rules when ``config.sigma_enabled`` is True.
 """
 
+import logging
 import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -99,6 +105,24 @@ _r(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", T_ENDPOINT_DOS, "destruct-
 # or symbolic forms that explicitly add the SUID/SGID bit. Plain 3-digit modes
 # like "chmod 755 /etc/..." are routine ops and must not match.
 _r(r"\bchmod\s+(?:[2467][0-7]{3}\b|[ugo]*\+[st]\b)", T_ABUSE_ELEVATION, "privesc-chmod-suid", "Setting SUID/SGID bits")
+
+
+# --- SigmaHQ-sourced rules (loaded from vendored YAML at import time) ---
+
+def _load_sigma() -> None:
+    try:
+        from utils.security.config import config
+        if not config.sigma_enabled:
+            logger.debug("Sigma rules disabled via config")
+            return
+        from utils.security.sigma_loader import load_sigma_rules
+        sigma_rules = load_sigma_rules()
+        _RULES.extend(sigma_rules)
+        logger.info("Signature matcher ready: %d rules (%d hand-written + %d Sigma)", len(_RULES), len(_RULES) - len(sigma_rules), len(sigma_rules))
+    except Exception:
+        logger.warning("Failed to load Sigma rules, continuing with hand-written rules only", exc_info=True)
+
+_load_sigma()
 
 
 def check_signature(command: str) -> SignatureVerdict:
