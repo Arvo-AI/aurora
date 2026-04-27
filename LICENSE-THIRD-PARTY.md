@@ -16,7 +16,7 @@ component that uses them, and their upstream licenses.
   applied at snapshot time.
 - License: MIT.
 
-```
+```text
 MIT License
 
 Copyright (c) 2019 Zachary Rice

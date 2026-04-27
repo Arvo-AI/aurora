@@ -1766,6 +1766,7 @@ class Workflow:
                 return redacted
             latency_ms = (time.perf_counter() - t0) * 1000.0
             session_id = ""
+            user_id = ""
             try:
                 session_id = self.config["configurable"]["thread_id"]
             except Exception as e:
@@ -1773,9 +1774,16 @@ class Workflow:
                     "L5 ui_message: thread_id unavailable; defaulting session_id='': %s",
                     e,
                 )
+            try:
+                user_id = self._get_state_attr(self._last_state, "user_id") or ""
+            except Exception as e:
+                logger.debug(
+                    "L5 ui_message: user_id unavailable; defaulting user_id='': %s",
+                    e,
+                )
             for f in findings:
                 _l5_emit(
-                    user_id="",
+                    user_id=user_id,
                     session_id=session_id,
                     rule_id=f.rule_id,
                     value_hash=f.value_hash,

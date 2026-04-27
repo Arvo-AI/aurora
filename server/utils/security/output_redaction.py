@@ -164,7 +164,7 @@ def scan(text: str) -> list[Finding]:
             return []
         # Bound worst-case regex runtime on pathological inputs.
         scan_text = text if len(text) <= MAX_SCAN_BYTES else text[:MAX_SCAN_BYTES]
-        return _scan_unsafe(scan_text)
+        return _drop_overlaps(_scan_unsafe(scan_text))
     except Exception:
         logger.warning("output_redaction.scan failed; returning empty", exc_info=True)
         return []

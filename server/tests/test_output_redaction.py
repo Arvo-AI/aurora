@@ -200,3 +200,43 @@ def test_fast_path_does_not_short_circuit_when_secret_coexists_with_placeholder(
     _, findings = redact(text)
     assert findings, "placeholder + real secret must still be scanned"
     assert any(f.rule_id == "aws-access-token" for f in findings)
+
+
+def test_hook2_context_manager_redacts_tool_messages_and_emits_audit(monkeypatch):
+    """Exercises the real Hook 2 code path end-to-end: a ToolMessage with a
+    raw secret goes in, a ToolMessage with a placeholder comes out, and the
+    audit stream records exactly one emission per finding with the correct
+    location marker. Guards against regressions in ToolMessage field
+    preservation (model_copy) and audit metadata.
+    """
+    from langchain_core.messages import ToolMessage
+
+    from chat.backend.agent.utils.persistence import context_manager as cm_mod
+
+    emitted: list[dict] = []
+
+    def fake_emit(**kwargs):
+        emitted.append(kwargs)
+
+    monkeypatch.setattr(cm_mod, "_l5_emit", fake_emit)
+
+    instance = cm_mod.ContextManager.__new__(cm_mod.ContextManager)
+
+    raw = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
+    msg = ToolMessage(content=raw, tool_call_id="call-123", name="cloud_exec")
+    out = instance._redact_tool_messages(
+        [msg], user_id="user-42", session_id="sess-7"
+    )
+
+    assert len(out) == 1
+    assert isinstance(out[0], ToolMessage)
+    assert "AKIA6ODU7H4ZLXKDNQ3X" not in out[0].content
+    assert "[REDACTED:aws-access-token]" in out[0].content
+    assert out[0].tool_call_id == "call-123", "model_copy must preserve tool_call_id"
+    assert out[0].name == "cloud_exec", "model_copy must preserve name"
+
+    assert len(emitted) == 1
+    assert emitted[0]["location"] == "db_save"
+    assert emitted[0]["rule_id"] == "aws-access-token"
+    assert emitted[0]["user_id"] == "user-42"
+    assert emitted[0]["session_id"] == "sess-7"
