@@ -36,6 +36,52 @@ def trigger_prediscovery(user_id):
         return jsonify({"error": "Failed to start discovery"}), 500
 
 
+@prediscovery_bp.route("/cancel", methods=["POST"])
+@require_permission("connectors", "write")
+def cancel_prediscovery(user_id):
+    """Cancel any in-progress prediscovery runs for this user."""
+    try:
+        org_id = get_org_id_from_request()
+        if not org_id:
+            return jsonify({"error": "Missing org context"}), 400
+        cancelled = []
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
+                cur.execute("""
+                    SELECT id, ui_state->'triggerMetadata'->>'task_id'
+                    FROM chat_sessions
+                    WHERE org_id = %s
+                      AND user_id = %s
+                      AND status = 'in_progress'
+                      AND ui_state->'triggerMetadata'->>'source' = 'prediscovery'
+                """, (org_id, user_id))
+                rows = cur.fetchall()
+
+        if rows:
+            from celery_config import celery_app
+            from chat.background.task import _update_session_status
+            for session_id, task_id in rows:
+                if task_id:
+                    try:
+                        celery_app.control.revoke(task_id, terminate=True, signal="SIGKILL")
+                    except Exception as e:
+                        logger.warning(f"[Prediscovery API] Failed to revoke {task_id}: {e}")
+                else:
+                    logger.warning(
+                        f"[Prediscovery API] in_progress session {session_id} has no task_id; "
+                        "any running Celery worker will not be revoked"
+                    )
+                _update_session_status(str(session_id), "cancelled", user_id=user_id)
+                cancelled.append(str(session_id))
+
+        status = "cancelled" if cancelled else "no_active_sessions"
+        return jsonify({"status": status, "sessions": cancelled})
+    except Exception as e:
+        logger.exception(f"[Prediscovery API] Failed to cancel: {e}")
+        return jsonify({"error": "Failed to cancel discovery"}), 500
+
+
 @prediscovery_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def get_prediscovery_status(user_id):

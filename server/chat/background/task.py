@@ -1176,12 +1176,15 @@ async def _execute_background_chat(
                 logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
 
 
+TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
 def _update_session_status(session_id: str, status: str, user_id: str) -> None:
     """Update the status of a chat session.
     
     Args:
         session_id: The chat session ID
-        status: New status ('in_progress', 'completed', 'failed', 'active')
+        status: New status ('in_progress', 'completed', 'failed', 'cancelled', 'active')
         user_id: User ID for RLS context (required from Celery workers)
     """
     rows_updated = 0
@@ -1191,17 +1194,34 @@ def _update_session_status(session_id: str, status: str, user_id: str) -> None:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
                     return
                 cursor.execute(
-                    "UPDATE chat_sessions SET status = %s, updated_at = %s WHERE id = %s",
-                    (status, datetime.now(), session_id)
+                    "UPDATE chat_sessions SET status = %s, updated_at = %s "
+                    "WHERE id = %s AND status != ALL(%s)",
+                    (status, datetime.now(), session_id, list(TERMINAL_SESSION_STATUSES))
                 )
                 rows_updated = cursor.rowcount
+                if rows_updated == 0:
+                    cursor.execute("SELECT status FROM chat_sessions WHERE id = %s", (session_id,))
+                    existing = cursor.fetchone()
+                    if existing is None:
+                        logger.info(f"[BackgroundChat] No session found with id {session_id}")
+                    elif existing[0] in TERMINAL_SESSION_STATUSES:
+                        logger.info(
+                            f"[BackgroundChat] Skipped update for session {session_id}: "
+                            f"already in terminal status '{existing[0]}'"
+                        )
+                    else:
+                        logger.info(
+                            f"[BackgroundChat] Update for session {session_id} to '{status}' "
+                            f"affected 0 rows (current status='{existing[0]}')"
+                        )
+                else:
+                    logger.info(f"[BackgroundChat] Updated session {session_id} status to '{status}' (rows={rows_updated})")
             conn.commit()
-            logger.info(f"[BackgroundChat] Updated session {session_id} status to '{status}' (rows={rows_updated})")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
         return
 
-    if rows_updated > 0 and status in ("completed", "failed"):
+    if rows_updated > 0 and status in TERMINAL_SESSION_STATUSES:
         _propagate_suggestion_status(session_id, status)
 
 

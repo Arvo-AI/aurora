@@ -11,6 +11,7 @@ from utils.cloud.cloud_utils import get_workflow_context
 from utils.cache.redis_client import get_redis_client
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from chat.background.task import TERMINAL_SESSION_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,7 @@ def enqueue_rca_context_update(
 
     # Check if session is already completed
     session_status = _get_session_status(user_id, session_id)
-    if session_status in ("completed", "failed"):
+    if session_status in TERMINAL_SESSION_STATUSES:
         logger.info(
             "[RCA-UPDATE] Session %s is %s, appending context update directly to database",
             session_id, session_status
@@ -369,7 +370,7 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
 
     # Check if session is completed - if so, write directly to database instead of injecting into state
     session_status = _get_session_status(user_id, session_id)
-    if session_status in ("completed", "failed"):
+    if session_status in TERMINAL_SESSION_STATUSES:
         logger.info(
             "[RCA-UPDATE] Session %s is %s, writing %d drained update(s) directly to database",
             session_id,
