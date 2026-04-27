@@ -340,12 +340,22 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
             conn.close()
 
 def store_user_preference(user_id: str, key: str, value: Any):
-    """Store user preference in database."""
+    """Store a user-scoped preference.
+
+    For org-scoped preferences (shared across an organization), use
+    store_org_preference() instead — passing an "__org__<uuid>" pseudo-user id
+    here will fail because that id does not exist in the users table.
+    """
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         org_id = set_rls_context(cursor, conn, user_id, log_prefix="[StoreUserPref]")
         if not org_id:
+            logger.error(
+                "store_user_preference: cannot resolve org for user %s; "
+                "preference %s not written. Use store_org_preference() for org-scoped keys.",
+                sanitize(user_id), key,
+            )
             return
 
         cursor.execute(
@@ -365,6 +375,48 @@ def store_user_preference(user_id: str, key: str, value: Any):
             cursor.close()
         if 'conn' in locals() and conn:
             conn.close()
+
+
+_ORG_PREF_UPSERT_SQL = (
+    "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
+    "VALUES (%s, %s, %s, %s) "
+    "ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE "
+    "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
+)
+
+
+def _org_pseudo_user_id(org_id: str) -> str:
+    return f"__org__{org_id}"
+
+
+def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> None:
+    """Upsert an org-scoped preference row.
+
+    Org-scoped preferences are stored with a synthetic user_id of
+    "__org__<org_id>" so they share the user_preferences table without
+    colliding with real user-scoped keys. When `cursor` is provided, the
+    caller is responsible for RLS context and commit; otherwise an admin
+    connection is opened here.
+    """
+    params = (_org_pseudo_user_id(org_id), org_id, key, json.dumps(value))
+
+    if cursor is not None:
+        cursor.execute(_ORG_PREF_UPSERT_SQL, params)
+        return
+
+    from utils.db.connection_pool import db_pool
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(_ORG_PREF_UPSERT_SQL, params)
+            conn.commit()
+    except Exception:
+        logger.exception("Error storing org preference %s for org %s", key, sanitize(org_id))
+
+
+def get_org_preference(org_id: str, key: str, default=None):
+    """Read an org-scoped preference written via store_org_preference()."""
+    return get_user_preference(_org_pseudo_user_id(org_id), key, default)
 
 def _parse_preference_value(raw, default=None):
     """Decode a preference_value column, which may be JSON text or already decoded."""
