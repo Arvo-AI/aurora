@@ -11,6 +11,9 @@ from utils.security.signature_match import check_signature
 
 from .conftest import deny_blocks
 
+# RFC 5737 documentation-range IP used in test payloads (not a real host).
+_TEST_IP = "198.51.100.1"
+
 
 # ---------------------------------------------------------------------------
 # 1. SSH key generation
@@ -31,7 +34,7 @@ class TestSSHKeyGeneration:
 
     @pytest.mark.parametrize("cmd", [
         "ssh-copy-id user@target-host",
-        "ssh-copy-id -i /tmp/key.pub root@10.0.0.1",
+        f"ssh-copy-id -i /tmp/key.pub root@{_TEST_IP}",
     ])
     def test_ssh_copy_id_blocked_by_denylist(self, cmd):
         assert deny_blocks(cmd), f"ssh-copy-id not denied: {cmd!r}"

