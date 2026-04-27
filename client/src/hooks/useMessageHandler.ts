@@ -115,7 +115,9 @@ export const useMessageHandler = ({
                     ...tc,
                     status: 'awaiting_confirmation' as const,
                     confirmation_id: confirmationId,
-                    confirmation_message: message.data.message
+                    confirmation_message: message.data.message,
+                    block_layer: message.data.block_layer,
+                    yes_always_effect: message.data.yes_always_effect,
                   };
                 }
                 return tc;

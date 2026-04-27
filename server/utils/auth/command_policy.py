@@ -17,6 +17,7 @@ Fail-open on DB error: if rules cannot be fetched, commands are allowed.
 
 import logging
 import re
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -40,6 +41,10 @@ _cache: Dict[str, _CacheEntry] = {}
 class CommandVerdict:
     allowed: bool
     rule_description: Optional[str] = None
+    # Populated only when denylist blocked the command (id of the matched deny rule).
+    deny_rule_id: Optional[int] = None
+    # True when allowlist was enabled and no allow rule matched.
+    allowlist_exhausted: bool = False
 
 
 @dataclass(frozen=True)
@@ -141,13 +146,21 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     if states.denylist_enabled:
         for rule in deny_rules:
             if rule.compiled.search(command):
-                return CommandVerdict(allowed=False, rule_description=rule.description)
+                return CommandVerdict(
+                    allowed=False,
+                    rule_description=rule.description,
+                    deny_rule_id=rule.id,
+                )
 
     if states.allowlist_enabled:
         for rule in allow_rules:
             if rule.compiled.search(command):
                 return CommandVerdict(allowed=True, rule_description=rule.description)
-        return CommandVerdict(allowed=False, rule_description="No matching allow rule")
+        return CommandVerdict(
+            allowed=False,
+            rule_description="No matching allow rule",
+            allowlist_exhausted=True,
+        )
 
     return CommandVerdict(allowed=True)
 
@@ -284,6 +297,117 @@ def validate_pattern(pattern: str) -> Optional[str]:
         return None
     except re.error as exc:
         return str(exc)
+
+
+# Leading `VAR=value` env assignments the user didn't intend as the "command".
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+
+
+def derive_pattern_from_command(command: str) -> str:
+    """Propose a conservative allow-rule regex for *command*.
+
+    Strips leading ``sudo`` and leading ``VAR=value`` env assignments, then
+    anchors on the CLI name plus its first non-flag subcommand. Falls back to
+    the CLI name alone when there is no subcommand.
+
+    Examples:
+        "sudo kubectl delete pod foo"      -> ^kubectl delete\\b
+        "KUBECONFIG=/x kubectl get pods"   -> ^kubectl get\\b
+        "aws ec2 terminate-instances --id" -> ^aws ec2 terminate-instances\\b
+        "terraform apply -auto-approve"    -> ^terraform apply\\b
+    """
+    try:
+        tokens = shlex.split(command.strip(), posix=True)
+    except ValueError:
+        tokens = command.strip().split()
+    # Drop leading sudo / env assignments.
+    while tokens and (tokens[0] == "sudo" or _ENV_ASSIGN_RE.match(tokens[0])):
+        tokens.pop(0)
+    if not tokens:
+        return r"^" + re.escape(command.strip()) + r"\b"
+    parts = [tokens[0]]
+    for tok in tokens[1:]:
+        if tok.startswith("-"):
+            break
+        parts.append(tok)
+        # Stop after CLI + first subcommand to keep the pattern reasonably
+        # narrow. Callers (UI) can edit before applying.
+        if len(parts) >= 2:
+            break
+    return r"^" + r"\s+".join(re.escape(p) for p in parts) + r"\b"
+
+
+@dataclass(frozen=True)
+class PolicyChange:
+    """One mutation that Yes-Always will apply to org_command_policies."""
+    action: str  # "disable_deny_rule" | "add_allow_rule"
+    rule_id: Optional[int] = None
+    pattern: Optional[str] = None
+    description: Optional[str] = None
+    editable: bool = False
+
+
+def plan_yes_always(verdict: CommandVerdict, command: str) -> List[PolicyChange]:
+    """Build the list of policy mutations implied by clicking Yes-Always.
+
+    Pure function — returns the plan without touching the DB. The caller
+    renders this to the user and then calls :func:`apply_yes_always` with
+    (optionally edited) patterns.
+    """
+    changes: List[PolicyChange] = []
+    if verdict.deny_rule_id is not None:
+        changes.append(PolicyChange(
+            action="disable_deny_rule",
+            rule_id=verdict.deny_rule_id,
+            description=verdict.rule_description or "",
+            editable=False,
+        ))
+    if verdict.allowlist_exhausted:
+        changes.append(PolicyChange(
+            action="add_allow_rule",
+            pattern=derive_pattern_from_command(command),
+            description="Auto-approved from chat",
+            editable=True,
+        ))
+    return changes
+
+
+def apply_yes_always(
+    org_id: str,
+    changes: List[PolicyChange],
+    user_id: str,
+) -> None:
+    """Persist Yes-Always mutations atomically and invalidate the cache.
+
+    Each change in ``changes`` is either ``disable_deny_rule`` (soft-disable the
+    referenced rule) or ``add_allow_rule`` (insert a new allow rule with the
+    user-confirmed pattern). Patterns must already be validated by the caller.
+    """
+    if not changes:
+        return
+    from utils.db.connection_pool import db_pool
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET myapp.current_org_id = %s", (org_id,))
+            for ch in changes:
+                if ch.action == "disable_deny_rule" and ch.rule_id is not None:
+                    cur.execute(
+                        "UPDATE org_command_policies "
+                        "SET enabled = false, updated_at = NOW(), updated_by = %s "
+                        "WHERE id = %s AND org_id = %s AND mode = 'deny'",
+                        (user_id, ch.rule_id, org_id),
+                    )
+                elif ch.action == "add_allow_rule" and ch.pattern:
+                    cur.execute(
+                        "INSERT INTO org_command_policies "
+                        "(org_id, mode, pattern, description, priority, updated_by, source) "
+                        "VALUES (%s, 'allow', %s, %s, %s, %s, 'custom') "
+                        "ON CONFLICT (org_id, mode, pattern, source) DO NOTHING",
+                        (org_id, ch.pattern, ch.description or "Auto-approved from chat",
+                         50, user_id),
+                    )
+        conn.commit()
+    invalidate_cache(org_id)
 
 
 def get_policy_prompt_text(org_id: str) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 # Lazy imports to avoid circular dependency with cloud_tools.py
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,10 @@ async def handle_websocket_confirmation_response(data: dict):
         if confirmation_id in _pending_confirmations:
             confirmation_data = _pending_confirmations[confirmation_id]
             confirmation_data['result'] = decision
+            # Carry optional per-change edited patterns for Yes-Always flows.
+            edited = data.get('edited_patterns')
+            if isinstance(edited, dict):
+                confirmation_data['edited_patterns'] = edited
             logger.debug(f"WEBSOCKET: Confirmation {confirmation_id} resolved with decision: {decision}")
         else:
             logger.warning(f"WEBSOCKET: No pending confirmation found for ID: {confirmation_id}")
@@ -194,6 +198,103 @@ def wait_for_user_confirmation(
 
     logger.debug(f"WEBSOCKET: Decision for {confirmation_id}: {decision}")
     return decision == "execute"
+
+
+def wait_for_user_confirmation_ex(
+    *,
+    user_id: str,
+    message: str,
+    tool_name: str,
+    session_id: Optional[str],
+    options: list,
+    extra: Optional[Dict[str, Any]] = None,
+    workflow_instance=None,
+    timeout_seconds: int = 300,
+) -> Dict[str, Any]:
+    """Extended HITL helper that returns the full response payload.
+
+    Unlike :func:`wait_for_user_confirmation` (which returns a bool), this
+    preserves the user's exact decision (e.g. ``execute`` vs ``execute_always``
+    vs ``cancel``) plus any ``edited_patterns`` map the frontend sends back.
+
+    Returns ``{"decision": str | None, "edited_patterns": dict}``. ``decision``
+    is ``None`` only on timeout. ``edited_patterns`` maps stringified change
+    indices to user-edited regex patterns.
+    """
+    # Background chats: no interactive user.
+    try:
+        from chat.backend.agent.tools.cloud_tools import get_state_context
+        state = get_state_context()
+        if state and getattr(state, 'is_background', False):
+            logger.warning(f"[BackgroundChat] Denying confirmation for {tool_name} -- no interactive user")
+            return {"decision": "cancel", "edited_patterns": {}}
+    except Exception as e:
+        logger.debug(f"Could not check background state: {e}")
+
+    timestamp_ms = int(time.time() * 1000)
+    unique_id = str(uuid.uuid4())[:8]
+    confirmation_id = f"{timestamp_ms}:{unique_id}"
+
+    payload: Dict[str, Any] = {
+        "type": "execution_confirmation",
+        "data": {
+            "message": message,
+            "status": "awaiting_confirmation",
+            "user_id": user_id,
+            "confirmation_id": confirmation_id,
+            "tool_name": tool_name,
+            "options": options,
+        },
+    }
+    if extra:
+        payload["data"].update(extra)
+    if session_id:
+        payload["session_id"] = session_id
+    if user_id:
+        payload["user_id"] = user_id
+
+    if not workflow_instance:
+        from chat.backend.agent.tools.cloud_tools import get_workflow_context
+        workflow_instance = get_workflow_context()
+
+    if session_id and user_id and workflow_instance:
+        try:
+            workflow_instance._consolidate_message_chunks()
+            _save_ui_messages_with_confirmation_via_workflow(
+                workflow_instance, session_id, user_id, tool_name, message, confirmation_id
+            )
+        except Exception as e:
+            logger.error(f"Error consolidating/saving UI messages before confirmation: {e}")
+
+    _send_ws(payload, tool_name)
+
+    _pending_confirmations[confirmation_id] = {
+        'result': None,
+        'user_id': user_id,
+        'timestamp': time.time(),
+    }
+    logger.debug(f"WEBSOCKET: Waiting for confirmation_ex {confirmation_id}")
+
+    decision: Optional[str] = None
+    edited: Dict[str, Any] = {}
+    try:
+        elapsed, poll_interval = 0.0, 1.0
+        while elapsed < timeout_seconds:
+            data = _pending_confirmations.get(confirmation_id)
+            if data and data.get('result'):
+                decision = data['result']
+                edited = data.get('edited_patterns') or {}
+                break
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+        else:
+            logger.warning(f"WEBSOCKET: Timeout waiting for confirmation_ex {confirmation_id}")
+    except Exception as e:
+        logger.error(f"Error waiting for confirmation_ex: {e}")
+    finally:
+        _pending_confirmations.pop(confirmation_id, None)
+
+    return {"decision": decision, "edited_patterns": edited}
 
 
 def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_id: str, user_id: str, tool_name: str, message: str, confirmation_id: str) -> bool:

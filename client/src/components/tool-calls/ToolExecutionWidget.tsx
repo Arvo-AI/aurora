@@ -466,56 +466,13 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
 
             {/* Show message when awaiting confirmation */}
             {tool.status === "awaiting_confirmation" && !tool.output && !tool.error && (
-              <div className="border-t border-border bg-muted/30 px-4 py-3 flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">
-                  {(tool as any).confirmation_message || "This action requires confirmation"}
-                </span>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-2 text-xs font-medium hover:bg-background"
-                    onClick={() => {
-                      const confirmationId = (tool as any).confirmation_id
-                      if (!confirmationId || !sendRaw || !userId) return
-                      
-                      sendRaw(JSON.stringify({
-                        type: 'confirmation_response',
-                        confirmation_id: confirmationId,
-                        decision: 'cancel',
-                        user_id: userId,
-                        session_id: sessionId,
-                      }))
-                      
-                      onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
-                    }}
-                  >
-                    <X className="h-3 w-3 mr-1" />
-                    Decline
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-6 px-2 text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    onClick={() => {
-                      const confirmationId = (tool as any).confirmation_id
-                      if (!confirmationId || !sendRaw || !userId) return
-                      
-                      sendRaw(JSON.stringify({
-                        type: 'confirmation_response',
-                        confirmation_id: confirmationId,
-                        decision: 'execute',
-                        user_id: userId,
-                        session_id: sessionId,
-                      }))
-                      
-                      onToolUpdate?.({ status: 'running' })
-                    }}
-                  >
-                    <Check className="h-3 w-3 mr-1" />
-                    Confirm
-                  </Button>
-                </div>
-              </div>
+              <ConfirmationPanel
+                tool={tool}
+                userId={userId}
+                sessionId={sessionId}
+                sendRaw={sendRaw}
+                onToolUpdate={onToolUpdate}
+              />
             )}
 
             {/* Show shimmer effect while tool is running and no output yet */}
@@ -586,3 +543,116 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
 }
 
 export default ToolExecutionWidget
+
+interface ConfirmationPanelProps {
+  tool: ToolCall
+  userId?: string
+  sessionId?: string
+  sendRaw?: (data: string) => boolean
+  onToolUpdate?: (updatedTool: Partial<ToolCall>) => void
+}
+
+const ConfirmationPanel = ({ tool, userId, sessionId, sendRaw, onToolUpdate }: ConfirmationPanelProps) => {
+  const effect = tool.yes_always_effect
+  const allowYesAlways = !!(effect && effect.changes.length > 0)
+
+  // Pre-fill editable change patterns. Map is keyed by change index (as string
+  // to match the backend's JSON-parsed dict key).
+  const [edited, setEdited] = React.useState<Record<string, string>>(() => {
+    const m: Record<string, string> = {}
+    if (effect) {
+      effect.changes.forEach((c, i) => {
+        if (c.editable && c.pattern) m[String(i)] = c.pattern
+      })
+    }
+    return m
+  })
+
+  const respond = (decision: 'execute' | 'cancel' | 'execute_always') => {
+    const confirmationId = tool.confirmation_id
+    if (!confirmationId || !sendRaw || !userId) return
+    const payload: Record<string, unknown> = {
+      type: 'confirmation_response',
+      confirmation_id: confirmationId,
+      decision,
+      user_id: userId,
+      session_id: sessionId,
+    }
+    if (decision === 'execute_always') payload.edited_patterns = edited
+    sendRaw(JSON.stringify(payload))
+    if (decision === 'cancel') {
+      onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
+    } else {
+      onToolUpdate?.({ status: 'running' })
+    }
+  }
+
+  return (
+    <div className="border-t border-border bg-muted/30 px-4 py-3 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground">
+          {tool.confirmation_message || "This action requires confirmation"}
+        </span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-xs font-medium hover:bg-background"
+            onClick={() => respond('cancel')}
+          >
+            <X className="h-3 w-3 mr-1" />
+            No
+          </Button>
+          <Button
+            size="sm"
+            className="h-6 px-2 text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={() => respond('execute')}
+          >
+            <Check className="h-3 w-3 mr-1" />
+            Yes
+          </Button>
+        </div>
+      </div>
+
+      {allowYesAlways && effect && (
+        <div className="rounded border border-border bg-background px-3 py-2 flex flex-col gap-2">
+          <div className="text-xs text-muted-foreground">{effect.summary}</div>
+          <ul className="text-xs flex flex-col gap-2">
+            {effect.changes.map((c, i) => (
+              <li key={i} className="flex flex-col gap-1">
+                {c.action === 'disable_deny_rule' ? (
+                  <span>
+                    Disable deny rule: <strong>{c.description || 'rule'}</strong>
+                    {c.pattern ? <> (pattern: <code className="text-[11px]">{c.pattern}</code>)</> : null}
+                  </span>
+                ) : (
+                  <>
+                    <span>Add allow rule (you can edit the pattern):</span>
+                    <input
+                      type="text"
+                      className="w-full rounded border border-border bg-transparent px-2 py-1 font-mono text-[11px]"
+                      value={edited[String(i)] ?? c.pattern ?? ''}
+                      onChange={(e) => setEdited(prev => ({ ...prev, [String(i)]: e.target.value }))}
+                      spellCheck={false}
+                      aria-label="Allow-rule regex pattern"
+                    />
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              className="h-6 px-2 text-xs font-medium"
+              onClick={() => respond('execute_always')}
+            >
+              <Check className="h-3 w-3 mr-1" />
+              Yes, Always
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

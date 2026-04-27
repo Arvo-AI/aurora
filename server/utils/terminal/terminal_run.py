@@ -220,6 +220,20 @@ def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]
 
     cmd = args if isinstance(args, str) else shlex.join(str(a) for a in args)
 
+    # Agent-path short-circuit: command_gate ran the same signature+judge check
+    # moments ago for this exact command. Skipping avoids a second LLM call
+    # (cheap but not cached) and eliminates the small risk of a divergent
+    # verdict on the second run. Direct callers (no contextvar set) still
+    # execute the full check and fail closed as before.
+    try:
+        from utils.auth.command_gate import guardrails_approved_hash
+        import hashlib
+        approved = guardrails_approved_hash()
+        if approved and approved == hashlib.sha256(cmd.encode("utf-8", errors="replace")).hexdigest():
+            return None
+    except Exception:
+        logger.debug("[Guardrails] command_gate bypass unavailable", exc_info=True)
+
     uid, sid = None, None
     try:
         ctx = get_user_context()
