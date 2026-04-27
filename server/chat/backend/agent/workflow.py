@@ -1782,15 +1782,25 @@ class Workflow:
                     e,
                 )
             for f in findings:
-                _emit_redaction(
-                    user_id=user_id,
-                    session_id=session_id,
-                    rule_id=f.rule_id,
-                    value_hash=f.value_hash,
-                    location="ui_message",
-                    tool=tool_name,
-                    latency_ms=latency_ms,
-                )
+                try:
+                    _emit_redaction(
+                        user_id=user_id,
+                        session_id=session_id,
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="ui_message",
+                        tool=tool_name,
+                        latency_ms=latency_ms,
+                    )
+                except Exception as audit_err:
+                    # Audit emit is best-effort: never let a logger/transport
+                    # failure escape and trigger the outer fail-open, which
+                    # would return the un-redacted text.
+                    logger.info(
+                        "output-redaction ui_message audit emit failed for %s: %s",
+                        tool_name,
+                        audit_err,
+                    )
             return redacted
         except Exception as e:
             logger.error(f"Output redaction (ui_message) failed open: {e}")

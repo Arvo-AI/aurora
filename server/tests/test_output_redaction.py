@@ -156,14 +156,30 @@ class TestHookIntegration:
 
 
 def test_size_cap_truncates_scan_but_passes_tail_through():
-    from utils.security.output_redaction import MAX_SCAN_CHARS
+    from utils.security.output_redaction import MAX_SCAN_CHARS, _SCAN_OVERLAP_CHARS
 
-    filler = "x" * MAX_SCAN_CHARS
+    # Place the secret past the overlap window so it is genuinely outside
+    # the scanner's reach, not just inside the straddle buffer.
+    filler = "x" * (MAX_SCAN_CHARS + _SCAN_OVERLAP_CHARS)
     tail = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
     text = filler + tail
     redacted, findings = redact(text)
-    assert redacted == text, "content beyond MAX_SCAN_CHARS must pass through unchanged"
-    assert findings == [], "scanner must not run on content beyond the cap"
+    assert redacted == text, "content past MAX_SCAN_CHARS + overlap must pass through unchanged"
+    assert findings == [], "scanner must not run on content beyond the cap+overlap"
+
+
+def test_size_cap_overlap_catches_boundary_straddling_secret():
+    """A credential whose body crosses the MAX_SCAN_CHARS cut must still be
+    caught by the overlap window. Regression guard for a gap where only the
+    strict head was scanned."""
+    from utils.security.output_redaction import MAX_SCAN_CHARS
+
+    secret = "AKIA6ODU7H4ZLXKDNQ3X"
+    prefix_len = MAX_SCAN_CHARS - 5  # secret begins a few chars before the cut
+    text = "x" * prefix_len + f"AWS_ACCESS_KEY_ID={secret}"
+    redacted, findings = redact(text)
+    assert findings and findings[0].rule_id == "aws-access-token"
+    assert secret not in redacted
 
 
 def test_size_cap_redacts_within_head():
@@ -179,7 +195,7 @@ def test_size_cap_redacts_within_head():
 def test_fast_path_short_circuits_on_fully_redacted_input(monkeypatch):
     from utils.security import output_redaction as mod
 
-    text = "AWS_ACCESS_KEY_ID=[REDACTED:aws-access-token]\nuser=alice"
+    text = "key=[REDACTED:aws-access-token]\nuser=alice"
 
     called = {"n": 0}
     original = mod._scan_unsafe
@@ -212,6 +228,10 @@ def test_hook2_context_manager_redacts_tool_messages_and_emits_audit(monkeypatch
     audit stream records exactly one emission per finding with the correct
     location marker. Guards against regressions in ToolMessage field
     preservation (model_copy) and audit metadata.
+
+    Drives the stateless module-level helper directly -- the instance method
+    is a one-line delegate -- so the test does not depend on which instance
+    attributes ``ContextManager.__init__`` happens to set.
     """
     from langchain_core.messages import ToolMessage
 
@@ -224,12 +244,10 @@ def test_hook2_context_manager_redacts_tool_messages_and_emits_audit(monkeypatch
 
     monkeypatch.setattr(cm_mod, "_emit_redaction", fake_emit)
 
-    instance = cm_mod.ContextManager.__new__(cm_mod.ContextManager)
-
     raw = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
     msg = ToolMessage(content=raw, tool_call_id="call-123", name="cloud_exec")
-    out = instance._redact_tool_messages(
-        [msg], user_id="user-42", session_id="sess-7"
+    out = cm_mod._redact_tool_messages_impl(
+        [msg], user_id="user-42", session_id="sess-7",
     )
 
     assert len(out) == 1
@@ -244,3 +262,39 @@ def test_hook2_context_manager_redacts_tool_messages_and_emits_audit(monkeypatch
     assert emitted[0]["rule_id"] == "aws-access-token"
     assert emitted[0]["user_id"] == "user-42"
     assert emitted[0]["session_id"] == "sess-7"
+
+
+def test_hook2_audit_failure_does_not_drop_redaction(monkeypatch):
+    """If the audit emitter throws, the ToolMessage must still come out
+    redacted and the helper must not raise. Regression guard for a path
+    where an unhealthy audit pipeline would crash the entire context save."""
+    from langchain_core.messages import ToolMessage
+
+    from chat.backend.agent.utils.persistence import context_manager as cm_mod
+
+    def broken_emit(**_kwargs):
+        raise RuntimeError("audit backend down")
+
+    monkeypatch.setattr(cm_mod, "_emit_redaction", broken_emit)
+
+    raw = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
+    msg = ToolMessage(content=raw, tool_call_id="call-1", name="cloud_exec")
+    out = cm_mod._redact_tool_messages_impl(
+        [msg], user_id="u", session_id="s",
+    )
+    assert len(out) == 1
+    assert "AKIA6ODU7H4ZLXKDNQ3X" not in out[0].content
+    assert "[REDACTED:aws-access-token]" in out[0].content
+
+
+def test_fast_path_does_not_short_circuit_for_short_rule_captures():
+    """With the fast-path threshold tightened to 14, a shorter-capture rule
+    whose secret is appended to a post-Hook-1 transcript must still be caught.
+    Regression guard against the previous 20-char heuristic that could miss
+    ``sumologic-access-id`` (14 chars) and ``confluent-access-token`` (16)."""
+    # ``sumologic-access-id`` pattern: ``\bsu[a-zA-Z0-9]{12}\b`` (14 chars).
+    text = "API_KEY=[REDACTED:aws-access-token]\nSUMO_ID=suABCDEFGH1234"
+    _, findings = redact(text)
+    assert any(f.rule_id == "sumologic-access-id" for f in findings), (
+        "fast-path must not short-circuit 14-char captures"
+    )

@@ -16,6 +16,55 @@ from utils.security.audit_events import emit_redaction_event as _emit_redaction
 logger = logging.getLogger(__name__)
 
 
+def _redact_tool_messages_impl(messages, *, user_id: str, session_id: str):
+    """Module-level Hook 2 implementation: redact ``ToolMessage.content`` and
+    emit per-finding audit events. Kept stateless so tests can exercise the
+    exact persistence path without standing up a full ``ContextManager``.
+
+    Per-message fail-open: if the redactor or audit emit raises, the original
+    message is kept and processing continues. Dropping the whole context save
+    because one message tripped the engine would defeat the entire backstop.
+    """
+    if not messages or not _guardrails_config.enabled:
+        return messages
+
+    from langchain_core.messages import ToolMessage
+
+    out = []
+    for msg in messages:
+        if not isinstance(msg, ToolMessage) or not isinstance(msg.content, str):
+            out.append(msg)
+            continue
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _redact(msg.content)
+            if not findings:
+                out.append(msg)
+                continue
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            for f in findings:
+                try:
+                    _emit_redaction(
+                        user_id=user_id or "",
+                        session_id=session_id or "",
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="db_save",
+                        latency_ms=latency_ms,
+                    )
+                except Exception as audit_err:
+                    logger.info("output-redaction db_save audit emit failed: %s", audit_err)
+            # Preserve every ToolMessage field (name, id, additional_kwargs,
+            # response_metadata, artifact, status, ...) by copying the model
+            # with only ``content`` replaced. Constructing a fresh ToolMessage
+            # would silently drop any field LangGraph/LangChain adds later.
+            out.append(msg.model_copy(update={"content": redacted}))
+        except Exception as redact_err:
+            logger.warning("output-redaction db_save failed open for message: %s", redact_err)
+            out.append(msg)
+    return out
+
+
 class ContextManager:
     """Drop-in replacement for LLMContextManager with performance optimizations."""
 
@@ -172,37 +221,9 @@ class ContextManager:
         A non-zero rate of ``location=db_save`` audit events is an operational
         signal that an upstream path is bypassing Hook 1.
         """
-        if not messages or not _guardrails_config.enabled:
-            return messages
-
-        from langchain_core.messages import ToolMessage
-
-        out = []
-        for msg in messages:
-            if not isinstance(msg, ToolMessage) or not isinstance(msg.content, str):
-                out.append(msg)
-                continue
-            t0 = time.perf_counter()
-            redacted, findings = _redact(msg.content)
-            if not findings:
-                out.append(msg)
-                continue
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            for f in findings:
-                _emit_redaction(
-                    user_id=user_id or "",
-                    session_id=session_id or "",
-                    rule_id=f.rule_id,
-                    value_hash=f.value_hash,
-                    location="db_save",
-                    latency_ms=latency_ms,
-                )
-            # Preserve every ToolMessage field (name, id, additional_kwargs,
-            # response_metadata, artifact, status, ...) by copying the model
-            # with only ``content`` replaced. Constructing a fresh ToolMessage
-            # would silently drop any field LangGraph/LangChain adds later.
-            out.append(msg.model_copy(update={"content": redacted}))
-        return out
+        return _redact_tool_messages_impl(
+            messages, user_id=user_id, session_id=session_id,
+        )
 
     def _serialize_messages(self, processed_messages):
         """Serialize messages, using cache when possible."""

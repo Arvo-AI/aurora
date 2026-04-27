@@ -28,7 +28,8 @@ Design notes
 * ``redact()`` is idempotent: ``[REDACTED:<rule>]`` placeholders contain no
   rule keywords, so re-scanning already-redacted text is a near-no-op.
 * Inputs larger than ``MAX_SCAN_CHARS`` are truncated before scanning to
-  bound worst-case regex runtime on pathological inputs.
+  bound worst-case regex runtime on pathological inputs; a small overlap
+  window is scanned past the cut so secrets that straddle it are caught.
 * Fail-open: on any unexpected exception the original text is returned and
   a warning is logged. A redaction bug must not break a chat session.
 """
@@ -58,13 +59,17 @@ _REDACTION_SCAN = re.compile(r"\[REDACTED:[a-z0-9][a-z0-9-]{0,64}\]")
 # ~10 KB for the WebSocket path, but the redaction pass also runs in the
 # decorator site before that cap is applied. Bound the scanner input so
 # worst-case regex runtime stays linear in a small constant even if a caller
-# forgets to truncate. Values above the cap are scanned up to the cap; content beyond
-# it is passed through unmodified. Measured in code points (Python ``len``),
-# not bytes; for UTF-8 that is within a 4x factor of bytes, which is fine
-# for a coarse runtime bound. The cap is deliberately generous: real
+# forgets to truncate. Values above the cap are scanned up to the cap; content
+# beyond it is passed through unmodified. Measured in code points (Python
+# ``len``), not bytes; for UTF-8 that is within a 4x factor of bytes, which
+# is fine for a coarse runtime bound. The cap is deliberately generous: real
 # credentials are short and nearly always appear near the top of a tool
 # result (headers, env dumps, YAML manifests).
 MAX_SCAN_CHARS = 256 * 1024
+# Extra chars scanned past ``MAX_SCAN_CHARS`` so a credential whose body
+# straddles the cut is still caught. 512 comfortably exceeds the longest
+# shipped rule capture (AWS session tokens, JWTs, long PEM lines).
+_SCAN_OVERLAP_CHARS = 512
 
 
 @dataclass(frozen=True)
@@ -164,8 +169,12 @@ def scan(text: str) -> list[Finding]:
         # Hook 2/3 path where inputs are typically post-Hook-1.
         if _is_fully_redacted(text):
             return []
-        # Bound worst-case regex runtime on pathological inputs.
-        scan_text = text if len(text) <= MAX_SCAN_CHARS else text[:MAX_SCAN_CHARS]
+        # Bound worst-case regex runtime on pathological inputs. An overlap
+        # window past the cap catches credentials whose body straddles the
+        # cut; only bytes beyond ``MAX_SCAN_CHARS + _SCAN_OVERLAP_CHARS``
+        # are left unscanned.
+        cap = MAX_SCAN_CHARS + _SCAN_OVERLAP_CHARS
+        scan_text = text if len(text) <= cap else text[:cap]
         return _drop_overlaps(_scan_unsafe(scan_text))
     except Exception:
         logger.warning("output_redaction.scan failed; returning empty", exc_info=True)
@@ -190,20 +199,21 @@ def redact(text: str) -> tuple[str, list[Finding]]:
     spans in left-to-right order; substitution is applied in one forward
     pass. On any error the input is returned unchanged with an empty
     finding list (fail-open). Inputs larger than ``MAX_SCAN_CHARS`` are
-    scanned only up to the cap; bytes beyond the cap are passed through
-    unmodified.
+    scanned up to ``MAX_SCAN_CHARS + _SCAN_OVERLAP_CHARS`` (the overlap
+    catches credentials that straddle the cut); content beyond that point
+    is passed through unmodified.
     """
     if not text:
         return text, []
     try:
         if _is_fully_redacted(text):
             return text, []
-        if len(text) > MAX_SCAN_CHARS:
-            head, tail = text[:MAX_SCAN_CHARS], text[MAX_SCAN_CHARS:]
-            findings = _scan_unsafe(head)
+        cap = MAX_SCAN_CHARS + _SCAN_OVERLAP_CHARS
+        if len(text) > cap:
+            head, tail = text[:cap], text[cap:]
         else:
             head, tail = text, ""
-            findings = _scan_unsafe(head)
+        findings = _scan_unsafe(head)
         if not findings:
             return text, []
         kept = _drop_overlaps(findings)
@@ -229,16 +239,20 @@ def already_redacted(text: str) -> bool:
 def _is_fully_redacted(text: str) -> bool:
     """Heuristic fast-path: text has at least one placeholder and no obvious
     secret-looking content outside the placeholders. We approximate "outside"
-    by stripping placeholders and checking for any remaining high-entropy
-    long alnum run that could plausibly carry a secret. Conservative: when
-    in doubt we return False and let the full scanner decide.
+    by stripping placeholders and checking for any remaining alnum /
+    url-safe run long enough to plausibly carry a secret.
+
+    Threshold rationale: the shortest capture lengths in the shipped ruleset
+    are 14 chars (``sumologic-access-id``: ``su[A-Za-z0-9]{12}``) and
+    16 chars (``confluent-access-token``). Using 14 keeps those rules in the
+    scan path when a new secret is appended to a post-Hook-1 transcript.
+    A handful of rules match shorter values (e.g. ``slack-legacy-*`` 8-char
+    tails) and would still short-circuit here -- an accepted recall tradeoff
+    in exchange for the hot-path speedup on the dominant case of fully
+    redacted inputs. When in doubt return False and let the full scanner
+    decide.
     """
     if not _REDACTION_SCAN.search(text):
         return False
     stripped = _REDACTION_SCAN.sub("", text)
-    # Any run of 20+ alnum / url-safe chars is a candidate secret. Real
-    # Gitleaks rules fire on shorter runs, but 20 is the minimum length at
-    # which shannon-entropy screening becomes meaningful. This keeps the
-    # fast-path safe on post-Hook-1 inputs while declining to short-circuit
-    # anything ambiguous.
-    return not re.search(r"[A-Za-z0-9_\-+/=]{20,}", stripped)
+    return not re.search(r"[A-Za-z0-9_\-+/=]{14,}", stripped)

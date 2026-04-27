@@ -363,15 +363,22 @@ def _apply_output_redaction(
         return text
     latency_ms = (time.perf_counter() - t0) * 1000.0
     for f in findings:
-        _emit_redaction(
-            user_id=user_id or "",
-            session_id=session_id or "",
-            rule_id=f.rule_id,
-            value_hash=f.value_hash,
-            location="tool_completion",
-            tool=tool_name,
-            latency_ms=latency_ms,
-        )
+        try:
+            _emit_redaction(
+                user_id=user_id or "",
+                session_id=session_id or "",
+                rule_id=f.rule_id,
+                value_hash=f.value_hash,
+                location="tool_completion",
+                tool=tool_name,
+                latency_ms=latency_ms,
+            )
+        except Exception as audit_err:
+            logging.warning(
+                "output-redaction audit emit failed for %s tool_completion: %s",
+                tool_name,
+                audit_err,
+            )
     return redacted
 
 
