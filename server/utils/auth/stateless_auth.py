@@ -354,7 +354,7 @@ def store_user_preference(user_id: str, key: str, value: Any):
             logger.error(
                 "store_user_preference: cannot resolve org for user %s; "
                 "preference %s not written. Use store_org_preference() for org-scoped keys.",
-                sanitize(user_id), key,
+                sanitize(user_id), sanitize(key),
             )
             return
 
@@ -389,6 +389,16 @@ def _org_pseudo_user_id(org_id: str) -> str:
     return f"__org__{org_id}"
 
 
+def _set_org_rls(cursor, org_id: str) -> None:
+    """Set RLS session vars directly from an org_id (no users-table lookup).
+
+    Needed because org-scoped prefs use a synthetic "__org__<uuid>" user id
+    that set_rls_context() can't resolve via get_org_id_for_user().
+    """
+    cursor.execute("SET myapp.current_user_id = %s;", (_org_pseudo_user_id(org_id),))
+    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+
+
 def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> None:
     """Upsert an org-scoped preference row.
 
@@ -396,7 +406,7 @@ def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> N
     "__org__<org_id>" so they share the user_preferences table without
     colliding with real user-scoped keys. When `cursor` is provided, the
     caller is responsible for RLS context and commit; otherwise an admin
-    connection is opened here.
+    connection is opened here and RLS is configured from org_id directly.
     """
     params = (_org_pseudo_user_id(org_id), org_id, key, json.dumps(value))
 
@@ -408,15 +418,37 @@ def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> N
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                _set_org_rls(cur, org_id)
                 cur.execute(_ORG_PREF_UPSERT_SQL, params)
             conn.commit()
     except Exception:
-        logger.exception("Error storing org preference %s for org %s", key, sanitize(org_id))
+        logger.exception("Error storing org preference %s for org %s", sanitize(key), sanitize(org_id))
 
 
 def get_org_preference(org_id: str, key: str, default=None):
-    """Read an org-scoped preference written via store_org_preference()."""
-    return get_user_preference(_org_pseudo_user_id(org_id), key, default)
+    """Read an org-scoped preference written via store_org_preference().
+
+    Uses an admin connection with RLS configured from org_id directly, so it
+    works outside Flask request context (e.g. Celery) where connection-pool
+    RLS vars aren't auto-populated.
+    """
+    from utils.db.connection_pool import db_pool
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                _set_org_rls(cur, org_id)
+                cur.execute(
+                    "SELECT preference_value FROM user_preferences "
+                    "WHERE org_id = %s AND user_id = %s AND preference_key = %s",
+                    (org_id, _org_pseudo_user_id(org_id), key),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return default
+                return _parse_preference_value(row[0], default)
+    except Exception:
+        logger.exception("Error reading org preference %s for org %s", sanitize(key), sanitize(org_id))
+        return default
 
 def _parse_preference_value(raw, default=None):
     """Decode a preference_value column, which may be JSON text or already decoded."""
