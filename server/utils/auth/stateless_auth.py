@@ -408,6 +408,9 @@ def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> N
     caller is responsible for RLS context and commit; otherwise an admin
     connection is opened here and RLS is configured from org_id directly.
     """
+    if not org_id:
+        raise ValueError("store_org_preference requires a non-empty org_id")
+
     params = (_org_pseudo_user_id(org_id), org_id, key, json.dumps(value))
 
     if cursor is not None:
@@ -432,6 +435,9 @@ def get_org_preference(org_id: str, key: str, default=None):
     works outside Flask request context (e.g. Celery) where connection-pool
     RLS vars aren't auto-populated.
     """
+    if not org_id:
+        raise ValueError("get_org_preference requires a non-empty org_id")
+
     from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
