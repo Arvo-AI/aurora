@@ -1757,7 +1757,7 @@ class Workflow:
         Hook 1 never sees. Idempotent; fail-open on any unexpected error.
         """
         text = str(content or "")
-        if not text or not _guardrails_config.output_redaction:
+        if not text or not _guardrails_config.enabled:
             return text
         try:
             t0 = time.perf_counter()

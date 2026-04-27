@@ -172,7 +172,7 @@ class ContextManager:
         A non-zero rate of ``location=db_save`` audit events is an operational
         signal that an upstream path is bypassing Hook 1.
         """
-        if not messages or not _guardrails_config.output_redaction:
+        if not messages or not _guardrails_config.enabled:
             return messages
 
         from langchain_core.messages import ToolMessage

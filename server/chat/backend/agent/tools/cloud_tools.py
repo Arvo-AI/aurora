@@ -352,10 +352,10 @@ def _apply_l5_redaction(
     decorator before the result is fanned out. The redacted string then
     flows to ``send_tool_completion`` (WebSocket) and to LangGraph as the
     ``ToolMessage.content`` the next LLM turn will see, so both paths
-    carry the same redacted copy. Fail-open via the engine; config-gated
-    via GUARDRAILS_OUTPUT_REDACTION.
+    carry the same redacted copy. Fail-open via the engine; gated by
+    ``GUARDRAILS_ENABLED`` (no separate L5 toggle).
     """
-    if not text or not _guardrails_config.output_redaction:
+    if not text or not _guardrails_config.enabled:
         return text
     t0 = time.perf_counter()
     redacted, findings = _l5_redact(text)
