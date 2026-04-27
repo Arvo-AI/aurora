@@ -52,3 +52,43 @@ def emit_block_event(
         "latency_ms": round(latency_ms, 2),
     }
     logger.warning("GUARDRAIL_AUDIT %s", json.dumps(event, separators=(",", ":")))
+
+
+def emit_redaction_event(
+    *,
+    user_id: str,
+    session_id: str,
+    rule_id: str,
+    value_hash: str,
+    location: str,
+    tool: str = "",
+    latency_ms: float = 0,
+) -> None:
+    """Emit a structured audit log for an output-redaction event.
+
+    ``location`` is the hook identifier ("tool_completion", "ui_message",
+    or "db_save"). ``tool_completion`` is the primary hook on the outbound
+    WebSocket / LLM-context path; ``ui_message`` is the hook that scrubs
+    ``tool_call['output']`` as it is stitched onto the persisted UI
+    transcript; ``db_save`` is the belt-and-suspenders pass immediately
+    before write. Non-zero rates at later hooks indicate that tool output
+    reached a downstream path without going through an earlier one and
+    should be treated as an operational signal.
+
+    ``value_hash`` is the truncated sha256 already computed by the scanner;
+    the raw secret value is never passed to this function.
+    """
+    event = {
+        "event_type": "guardrail_redaction",
+        "timestamp": time.time(),
+        "user_id": user_id or "",
+        "session_id": session_id or "",
+        "layer": "output_redaction",
+        "decision": "redacted",
+        "rule_id": rule_id,
+        "value_hash": value_hash,
+        "location": location,
+        "tool": tool,
+        "latency_ms": round(latency_ms, 2),
+    }
+    logger.info("GUARDRAIL_AUDIT %s", json.dumps(event, separators=(",", ":")))

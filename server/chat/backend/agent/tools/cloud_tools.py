@@ -19,6 +19,9 @@ import concurrent.futures
 
 from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +338,49 @@ def send_websocket_message(message_data: Dict[str, Any], tool_name: str, fallbac
         daemon=True,
     )
     thread.start()
+
+
+def _apply_output_redaction(
+    tool_name: str,
+    text: str,
+    user_id: Optional[str],
+    session_id: Optional[str],
+) -> str:
+    """Output redaction (Hook 1): strip secrets from tool output.
+
+    Invoked once per tool call from the ``with_completion_notification``
+    decorator before the result is fanned out. The redacted string then
+    flows to ``send_tool_completion`` (WebSocket) and to LangGraph as the
+    ``ToolMessage.content`` the next LLM turn will see, so both paths
+    carry the same redacted copy. Fail-open via the engine; gated by
+    ``GUARDRAILS_ENABLED``.
+    """
+    if not text or not _guardrails_config.enabled:
+        return text
+    t0 = time.perf_counter()
+    redacted, findings = _redact(text)
+    if not findings:
+        return text
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    for f in findings:
+        try:
+            _emit_redaction(
+                user_id=user_id or "",
+                session_id=session_id or "",
+                rule_id=f.rule_id,
+                value_hash=f.value_hash,
+                location="tool_completion",
+                tool=tool_name,
+                latency_ms=latency_ms,
+            )
+        except Exception as audit_err:
+            logging.warning(
+                "output-redaction audit emit failed for %s tool_completion: %s",
+                tool_name,
+                audit_err,
+            )
+    return redacted
+
 
 def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None):
     """Send tool completion notification via WebSocket if available."""
@@ -690,7 +736,36 @@ def with_completion_notification(func):
         try:
             # Execute the original function
             result = func(*args, **kwargs)
-            
+
+            # Output redaction applied at the single fan-out point so the
+            # same redacted copy flows to both the WebSocket notification
+            # (see send_tool_completion) and the ToolMessage.content returned
+            # into LangGraph state for the next LLM turn. Structured results
+            # (dict/list) are serialized here so the same redacted string is
+            # reused by every downstream consumer (send_tool_completion,
+            # wrap_func_with_capture's json.dumps, and the iac_tool branch's
+            # json.loads round-trip). Both the serialization and redaction
+            # are gated by GUARDRAILS_ENABLED so disabling the feature is a
+            # true no-op (dict/list results still flow through as-is).
+            if _guardrails_config.enabled:
+                try:
+                    ctx = get_user_context()
+                    _uid = ctx.get('user_id') if isinstance(ctx, dict) else ctx
+                    _sctx = get_state_context()
+                    _sid = _sctx.session_id if _sctx and hasattr(_sctx, 'session_id') else None
+                    if isinstance(result, (dict, list)):
+                        try:
+                            result = json.dumps(result, ensure_ascii=False, default=str)
+                        except Exception as dump_err:
+                            logging.warning(
+                                f"Output-redaction serialize failed for {tool_name}: {dump_err}; redacting repr"
+                            )
+                            result = str(result)
+                    if isinstance(result, str):
+                        result = _apply_output_redaction(tool_name, result, _uid, _sid)
+                except Exception as redact_err:
+                    logging.warning(f"Output-redaction pre-completion pass failed open for {tool_name}: {redact_err}")
+
             # Only send completion notification if no stop request
             try:
                 logging.info(f"🔍 TOOL COMPLETION: {tool_name} with signature_id: {signature_id}, input: {tool_input_data}")

@@ -10,10 +10,14 @@ import logging
 import json
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
 from utils.security.audit_events import emit_block_event
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
@@ -1743,6 +1747,65 @@ class Workflow:
             logger.error(f"Error appending UI messages: {e}")
             return False
 
+    def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
+        """Output redaction (Hook 3) on tool output as it is stitched onto
+        the persisted UI transcript.
+
+        Hook 1 redacts ``send_tool_completion``'s outbound payload; this hook
+        covers the parallel assignment to ``tool_call['output']`` that lands
+        in ``chat_sessions.messages`` (rendered by the UI on reload) and that
+        Hook 1 never sees. Idempotent; fail-open on any unexpected error.
+        """
+        text = str(content or "")
+        if not text or not _guardrails_config.enabled:
+            return text
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _redact(text)
+            if not findings:
+                return redacted
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            session_id = ""
+            user_id = ""
+            try:
+                session_id = self.config["configurable"]["thread_id"]
+            except Exception as e:
+                logger.debug(
+                    "Output redaction (ui_message): thread_id unavailable; defaulting session_id='': %s",
+                    e,
+                )
+            try:
+                user_id = self._get_state_attr(self._last_state, "user_id") or ""
+            except Exception as e:
+                logger.debug(
+                    "Output redaction (ui_message): user_id unavailable; defaulting user_id='': %s",
+                    e,
+                )
+            for f in findings:
+                try:
+                    _emit_redaction(
+                        user_id=user_id,
+                        session_id=session_id,
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="ui_message",
+                        tool=tool_name,
+                        latency_ms=latency_ms,
+                    )
+                except Exception as audit_err:
+                    # Audit emit is best-effort: never let a logger/transport
+                    # failure escape and trigger the outer fail-open, which
+                    # would return the un-redacted text.
+                    logger.info(
+                        "output-redaction ui_message audit emit failed for %s: %s",
+                        tool_name,
+                        audit_err,
+                    )
+            return redacted
+        except Exception as e:
+            logger.error(f"Output redaction (ui_message) failed open: {e}")
+            return text
+
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
         """Associate tool calls with output in the UI messages."""
 
@@ -1796,7 +1859,10 @@ class Workflow:
                                     continue
                             
                             # Update the tool call with output (ID match is sufficient)
-                            tool_call['output'] = str(getattr(msg, 'content', ''))
+                            tool_call['output'] = self._redact_for_ui(
+                                getattr(msg, 'content', ''),
+                                tool_name=tool_call.get('tool_name') or '',
+                            )
                             tool_call['status'] = 'completed'
                             tool_call['timestamp'] = datetime.now().isoformat()  # Update timestamp to completion time
                             updated = True
@@ -1827,7 +1893,10 @@ class Workflow:
                     f"extras will be dropped"
                 )
             for msg, tc in zip(unmatched_tool_messages, running_tool_calls):
-                tc['output'] = str(getattr(msg, 'content', ''))
+                tc['output'] = self._redact_for_ui(
+                    getattr(msg, 'content', ''),
+                    tool_name=tc.get('tool_name') or '',
+                )
                 tc['status'] = 'completed'
                 tc['timestamp'] = datetime.now().isoformat()
 
