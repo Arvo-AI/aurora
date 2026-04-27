@@ -17,6 +17,6 @@ if os.path.abspath(_server_dir) not in sys.path:
 # can be imported and patched normally.
 for _pkg in ("neo4j", "casbin", "casbin_sqlalchemy_adapter", "sqlalchemy",
               "hvac", "redis", "celery", "weaviate", "flask_socketio",
-              "flask_cors", "langchain", "langgraph"):
+              "flask_cors", "langchain", "langgraph", "requests"):
     if _pkg not in sys.modules:
         sys.modules[_pkg] = MagicMock()
