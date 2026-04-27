@@ -11,7 +11,7 @@ cleanly on rule-version bumps so reviewers can see exactly which regexes
 changed. Build-time failures are preferable to silent runtime mismatches.
 
 Run: ``python scripts/gen_secret_patterns.py``
-CI:  ``make check-generated`` re-runs this and fails on drift.
+CI:  ``python scripts/gen_secret_patterns.py --check`` fails on drift.
 """
 
 from __future__ import annotations

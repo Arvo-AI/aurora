@@ -121,15 +121,18 @@ def test_findings_are_ordered_by_position():
     assert [f.start for f in findings] == sorted(f.start for f in findings)
 
 
-class TestTwoHookIntegration:
-    """Integration across Hook 1 (tool_completion) and Hook 2 (db_save).
+class TestHookIntegration:
+    """Integration across the three redaction hooks.
 
-    Proves that a secret produced by a tool is redacted exactly once on the
-    primary path and that the secondary hook is a true no-op in steady state,
-    matching the belt-and-suspenders invariant.
+    Hook 1 (decorator in ``cloud_tools.py``) is the primary path and feeds
+    both the WebSocket notification and the LangGraph ``ToolMessage.content``
+    for the next LLM turn. Hooks 2 (``ContextManager._redact_tool_messages``,
+    pre-DB) and 3 (``Workflow._redact_for_ui``, UI transcript) are
+    belt-and-suspenders passes whose findings-rate is an operational signal
+    that an upstream path is bypassing Hook 1.
     """
 
-    def test_hook2_is_noop_on_output_already_redacted_by_hook1(self):
+    def test_later_hooks_are_noop_on_output_already_redacted_by_hook1(self):
         raw = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
         hook1_out, hook1_findings = redact(raw)
         assert hook1_findings and "[REDACTED:" in hook1_out
@@ -138,11 +141,62 @@ class TestTwoHookIntegration:
         assert hook2_out == hook1_out
         assert hook2_findings == []
 
-    def test_hook2_catches_output_that_bypassed_hook1(self):
+    def test_later_hooks_catch_output_that_bypassed_hook1(self):
         # Simulates a ToolMessage constructed directly (background chat, some
         # summarization rewrites, etc.) that never flowed through Hook 1.
         raw = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
         out, findings = redact(raw)
-        assert findings, "Hook 2 must redact when Hook 1 was bypassed"
+        assert findings, "later hooks must redact when Hook 1 was bypassed"
         assert "AKIA6ODU7H4ZLXKDNQ3X" not in out
         assert findings[0].rule_id == "aws-access-token"
+
+
+def test_size_cap_truncates_scan_but_passes_tail_through():
+    from utils.security.output_redaction import MAX_SCAN_BYTES
+
+    filler = "x" * MAX_SCAN_BYTES
+    tail = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
+    text = filler + tail
+    redacted, findings = redact(text)
+    assert redacted == text, "content beyond MAX_SCAN_BYTES must pass through unchanged"
+    assert findings == [], "scanner must not run on content beyond the cap"
+
+
+def test_size_cap_redacts_within_head():
+    from utils.security.output_redaction import MAX_SCAN_BYTES
+
+    secret = "AKIA6ODU7H4ZLXKDNQ3X"
+    head = f"AWS_ACCESS_KEY_ID={secret}\n" + "x" * MAX_SCAN_BYTES
+    redacted, findings = redact(head)
+    assert findings and findings[0].rule_id == "aws-access-token"
+    assert secret not in redacted
+
+
+def test_fast_path_short_circuits_on_fully_redacted_input(monkeypatch):
+    from utils.security import output_redaction as mod
+
+    text = "AWS_ACCESS_KEY_ID=[REDACTED:aws-access-token]\nuser=alice"
+
+    called = {"n": 0}
+    original = mod._scan_unsafe
+
+    def counting(s):
+        called["n"] += 1
+        return original(s)
+
+    monkeypatch.setattr(mod, "_scan_unsafe", counting)
+
+    out, findings = redact(text)
+    assert out == text
+    assert findings == []
+    assert called["n"] == 0, "fast-path must skip _scan_unsafe on fully-redacted input"
+
+
+def test_fast_path_does_not_short_circuit_when_secret_coexists_with_placeholder():
+    text = (
+        "AWS_ACCESS_KEY_ID=[REDACTED:aws-access-token]\n"
+        "OTHER=AKIA6ODU7H4ZLXKDNQ3X"
+    )
+    _, findings = redact(text)
+    assert findings, "placeholder + real secret must still be scanned"
+    assert any(f.rule_id == "aws-access-token" for f in findings)

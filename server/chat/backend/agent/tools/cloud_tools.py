@@ -348,10 +348,12 @@ def _apply_l5_redaction(
 ) -> str:
     """L5 output redaction (Hook 1): strip secrets from tool output.
 
-    Runs on the finalized ``cleaned_output`` string inside
-    ``send_tool_completion`` so the same redacted copy is delivered to the
-    WebSocket, the LLM context on the next turn, and (via Hook 2) the DB.
-    Fail-open via the engine; config-gated via GUARDRAILS_OUTPUT_REDACTION.
+    Invoked once per tool call from the ``with_completion_notification``
+    decorator before the result is fanned out. The redacted string then
+    flows to ``send_tool_completion`` (WebSocket) and to LangGraph as the
+    ``ToolMessage.content`` the next LLM turn will see, so both paths
+    carry the same redacted copy. Fail-open via the engine; config-gated
+    via GUARDRAILS_OUTPUT_REDACTION.
     """
     if not text or not _guardrails_config.output_redaction:
         return text
@@ -440,10 +442,6 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
             cleaned_output = cleaned_output.encode('utf-8', errors='replace').decode('utf-8')
         except Exception:
             cleaned_output = "[output encoding error]"
-
-        # L5 output redaction (Hook 1): applied to the finalized string so the
-        # same redacted copy flows to the WebSocket, the LLM context, and the DB.
-        cleaned_output = _apply_l5_redaction(tool_name, cleaned_output, user_id, session_id)
         
         result_data = {
             "type": "tool_result",

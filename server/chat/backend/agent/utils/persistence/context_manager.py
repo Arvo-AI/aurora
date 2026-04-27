@@ -197,7 +197,11 @@ class ContextManager:
                     location="db_save",
                     latency_ms=latency_ms,
                 )
-            out.append(ToolMessage(content=redacted, tool_call_id=msg.tool_call_id))
+            # Preserve every ToolMessage field (name, id, additional_kwargs,
+            # response_metadata, artifact, status, ...) by copying the model
+            # with only ``content`` replaced. Constructing a fresh ToolMessage
+            # would silently drop any field LangGraph/LangChain adds later.
+            out.append(msg.model_copy(update={"content": redacted}))
         return out
 
     def _serialize_messages(self, processed_messages):
