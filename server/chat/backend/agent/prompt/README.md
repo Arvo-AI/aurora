@@ -217,7 +217,6 @@ Segments typically cached:
 - Feature-flag-gated skills are hidden when disabled.
 - Unknown/invalid connection methods fail closed (not connected).
 - Untrusted module paths for `is_connected_function` are blocked.
-- `skills/core/security.md` carries the "do not echo secrets from tool output" instruction, which is the only line of defense against secrets leaking via assistant-generated text. Code-level L5 output redaction (`server/utils/security/output_redaction.py`) redacts tool outputs but does not touch assistant prose, so this prompt-level rule must stay in sync with any changes to the L5 placeholder format (`[REDACTED:<rule_id>]`).
 
 ## 10) Validation checklist after edits
 
