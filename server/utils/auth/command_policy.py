@@ -302,29 +302,46 @@ def validate_pattern(pattern: str) -> Optional[str]:
 # Leading `VAR=value` env assignments the user didn't intend as the "command".
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 
+# Shell keywords / operators that mean "the first token is not a CLI name".
+# When we see one of these at position 0 (after stripping sudo / env assigns),
+# the command is a shell compound statement, pipeline, subshell, or similar
+# construct whose first token is not a useful anchor for an allow rule. In
+# that case we fall back to the full regex-escaped command so the proposed
+# rule only matches this exact invocation -- the user can relax it in the
+# editable UI field.
+_SHELL_NON_CLI_LEADERS = frozenset({
+    "for", "while", "until", "if", "case", "select", "time", "function",
+    "{", "(", "[", "[[", "!", "coproc",
+})
+
 
 def derive_pattern_from_command(command: str) -> str:
     """Propose a conservative allow-rule regex for *command*.
 
     Strips leading ``sudo`` and leading ``VAR=value`` env assignments, then
-    anchors on the CLI name plus its first non-flag subcommand. Falls back to
-    the CLI name alone when there is no subcommand.
+    anchors on the CLI name plus its first non-flag subcommand.
+
+    When the leading token after stripping is a shell keyword (``for``,
+    ``while``, ``if``, subshell ``(``, brace group ``{`` ...) the first token
+    is not a CLI name, so instead we anchor on the full regex-escaped command.
+    That pattern only matches the exact invocation; it is intentionally narrow
+    because the user can loosen it in the edit box before confirming.
 
     Examples:
-        "sudo kubectl delete pod foo"      -> ^kubectl delete\\b
-        "KUBECONFIG=/x kubectl get pods"   -> ^kubectl get\\b
-        "aws ec2 terminate-instances --id" -> ^aws ec2 terminate-instances\\b
-        "terraform apply -auto-approve"    -> ^terraform apply\\b
+        "sudo kubectl delete pod foo"            -> ^kubectl delete\\b
+        "KUBECONFIG=/x kubectl get pods"         -> ^kubectl get\\b
+        "aws ec2 terminate-instances --id"       -> ^aws ec2 terminate-instances\\b
+        "for i in {1..10}; do echo $i; done"     -> ^for i in \\{1\\.\\.10\\}; do echo \\$i; done$
     """
+    stripped = command.strip()
     try:
-        tokens = shlex.split(command.strip(), posix=True)
+        tokens = shlex.split(stripped, posix=True)
     except ValueError:
-        tokens = command.strip().split()
-    # Drop leading sudo / env assignments.
+        tokens = stripped.split()
     while tokens and (tokens[0] == "sudo" or _ENV_ASSIGN_RE.match(tokens[0])):
         tokens.pop(0)
-    if not tokens:
-        return r"^" + re.escape(command.strip()) + r"\b"
+    if not tokens or tokens[0] in _SHELL_NON_CLI_LEADERS:
+        return r"^" + re.escape(stripped) + r"$"
     parts = [tokens[0]]
     for tok in tokens[1:]:
         if tok.startswith("-"):
