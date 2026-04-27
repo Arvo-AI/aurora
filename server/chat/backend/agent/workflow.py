@@ -1768,8 +1768,11 @@ class Workflow:
             session_id = ""
             try:
                 session_id = self.config["configurable"]["thread_id"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "L5 ui_message: thread_id unavailable; defaulting session_id='': %s",
+                    e,
+                )
             for f in findings:
                 _l5_emit(
                     user_id="",
