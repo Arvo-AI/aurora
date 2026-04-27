@@ -6,6 +6,8 @@ authorized_keys writes.
 """
 
 import os
+import sys
+import types
 from unittest.mock import patch
 
 import pytest
@@ -125,14 +127,23 @@ class TestCrontabPersistence:
 class TestEnvSanitization:
     """terminal_exec_tool strips secrets from the child-process environment."""
 
-    _DB_DEFAULTS = {
-        "POSTGRES_DB": "test", "POSTGRES_USER": "test",
-        "POSTGRES_PASSWORD": "test", "POSTGRES_HOST": "localhost",
-        "POSTGRES_PORT": "5432",
-    }
+    @staticmethod
+    def _stub_heavy_deps():
+        """Stub transitive imports so terminal_exec_tool can load in CI
+        without Flask, werkzeug, psycopg2, etc."""
+        stubs = {}
+        for mod_name in (
+            "utils.terminal.terminal_run",
+            "chat.backend.agent.tools.cloud_exec_tool",
+            "chat.backend.agent.tools.iac_tool",
+        ):
+            if mod_name not in sys.modules:
+                stubs[mod_name] = types.ModuleType(mod_name)
+        return stubs
 
     def test_safe_env_keys_excludes_secrets(self):
-        with patch.dict(os.environ, self._DB_DEFAULTS):
+        stubs = self._stub_heavy_deps()
+        with patch.dict(sys.modules, stubs):
             from chat.backend.agent.tools.terminal_exec_tool import _SAFE_ENV_KEYS
 
         dangerous_keys = {
@@ -144,9 +155,9 @@ class TestEnvSanitization:
         assert not leaked, f"Secret keys must not be in _SAFE_ENV_KEYS: {leaked}"
 
     def test_build_sanitized_env_omits_secrets(self, monkeypatch):
-        for k, v in self._DB_DEFAULTS.items():
-            monkeypatch.setenv(k, v)
-        from chat.backend.agent.tools.terminal_exec_tool import _build_sanitized_env
+        stubs = self._stub_heavy_deps()
+        with patch.dict(sys.modules, stubs):
+            from chat.backend.agent.tools.terminal_exec_tool import _build_sanitized_env
 
         monkeypatch.setenv("VAULT_TOKEN", "test-secret-token")
         monkeypatch.setenv("DATABASE_URL", "postgres://secret@localhost/db")
