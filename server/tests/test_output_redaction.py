@@ -5,8 +5,12 @@ Coverage:
 - Negative cases sourced from placeholders, UUIDs, and example strings
 - Idempotence (redact(redact(x)) == redact(x))
 - Fail-open behavior when the engine errors
-- Integration across the two hooks (send_tool_completion + save_context_history)
-  using the audit event stream to prove exactly-one-emission semantics.
+- Size cap and fast-path short-circuit behavior
+- Integration across the three redaction hooks (tool_completion in
+  ``cloud_tools.with_completion_notification``, db_save in
+  ``ContextManager._redact_tool_messages``, ui_message in
+  ``Workflow._redact_for_ui``); Hook 2 is exercised directly, Hooks 1
+  and 3 via the shared ``redact()`` entrypoint they all call through.
 """
 
 from __future__ import annotations
@@ -152,21 +156,21 @@ class TestHookIntegration:
 
 
 def test_size_cap_truncates_scan_but_passes_tail_through():
-    from utils.security.output_redaction import MAX_SCAN_BYTES
+    from utils.security.output_redaction import MAX_SCAN_CHARS
 
-    filler = "x" * MAX_SCAN_BYTES
+    filler = "x" * MAX_SCAN_CHARS
     tail = "AWS_ACCESS_KEY_ID=AKIA6ODU7H4ZLXKDNQ3X"
     text = filler + tail
     redacted, findings = redact(text)
-    assert redacted == text, "content beyond MAX_SCAN_BYTES must pass through unchanged"
+    assert redacted == text, "content beyond MAX_SCAN_CHARS must pass through unchanged"
     assert findings == [], "scanner must not run on content beyond the cap"
 
 
 def test_size_cap_redacts_within_head():
-    from utils.security.output_redaction import MAX_SCAN_BYTES
+    from utils.security.output_redaction import MAX_SCAN_CHARS
 
     secret = "AKIA6ODU7H4ZLXKDNQ3X"
-    head = f"AWS_ACCESS_KEY_ID={secret}\n" + "x" * MAX_SCAN_BYTES
+    head = f"AWS_ACCESS_KEY_ID={secret}\n" + "x" * MAX_SCAN_CHARS
     redacted, findings = redact(head)
     assert findings and findings[0].rule_id == "aws-access-token"
     assert secret not in redacted

@@ -27,7 +27,7 @@ Design notes
   throughput.
 * ``redact()`` is idempotent: ``[REDACTED:<rule>]`` placeholders contain no
   rule keywords, so re-scanning already-redacted text is a near-no-op.
-* Inputs larger than ``MAX_SCAN_BYTES`` are truncated before scanning to
+* Inputs larger than ``MAX_SCAN_CHARS`` are truncated before scanning to
   bound worst-case regex runtime on pathological inputs.
 * Fail-open: on any unexpected exception the original text is returned and
   a warning is logged. A redaction bug must not break a chat session.
@@ -59,10 +59,12 @@ _REDACTION_SCAN = re.compile(r"\[REDACTED:[a-z0-9][a-z0-9-]{0,64}\]")
 # before that cap is applied. Bound the scanner input so worst-case regex
 # runtime stays linear in a small constant even if a caller forgets to
 # truncate. Values above the cap are scanned up to the cap; content beyond
-# it is passed through unmodified. The cap is deliberately generous: real
+# it is passed through unmodified. Measured in code points (Python ``len``),
+# not bytes; for UTF-8 that is within a 4x factor of bytes, which is fine
+# for a coarse runtime bound. The cap is deliberately generous: real
 # credentials are short and nearly always appear near the top of a tool
 # result (headers, env dumps, YAML manifests).
-MAX_SCAN_BYTES = 256 * 1024
+MAX_SCAN_CHARS = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -163,7 +165,7 @@ def scan(text: str) -> list[Finding]:
         if _is_fully_redacted(text):
             return []
         # Bound worst-case regex runtime on pathological inputs.
-        scan_text = text if len(text) <= MAX_SCAN_BYTES else text[:MAX_SCAN_BYTES]
+        scan_text = text if len(text) <= MAX_SCAN_CHARS else text[:MAX_SCAN_CHARS]
         return _drop_overlaps(_scan_unsafe(scan_text))
     except Exception:
         logger.warning("output_redaction.scan failed; returning empty", exc_info=True)
@@ -187,7 +189,7 @@ def redact(text: str) -> tuple[str, list[Finding]]:
     Returns ``(redacted_text, findings)``. Findings cover non-overlapping
     spans in left-to-right order; substitution is applied in one forward
     pass. On any error the input is returned unchanged with an empty
-    finding list (fail-open). Inputs larger than ``MAX_SCAN_BYTES`` are
+    finding list (fail-open). Inputs larger than ``MAX_SCAN_CHARS`` are
     scanned only up to the cap; bytes beyond the cap are passed through
     unmodified.
     """
@@ -196,8 +198,8 @@ def redact(text: str) -> tuple[str, list[Finding]]:
     try:
         if _is_fully_redacted(text):
             return text, []
-        if len(text) > MAX_SCAN_BYTES:
-            head, tail = text[:MAX_SCAN_BYTES], text[MAX_SCAN_BYTES:]
+        if len(text) > MAX_SCAN_CHARS:
+            head, tail = text[:MAX_SCAN_CHARS], text[MAX_SCAN_CHARS:]
             findings = _scan_unsafe(head)
         else:
             head, tail = text, ""

@@ -737,24 +737,27 @@ def with_completion_notification(func):
             # (dict/list) are serialized here so the same redacted string is
             # reused by every downstream consumer (send_tool_completion,
             # wrap_func_with_capture's json.dumps, and the iac_tool branch's
-            # json.loads round-trip).
-            try:
-                ctx = get_user_context()
-                _uid = ctx.get('user_id') if isinstance(ctx, dict) else ctx
-                _sctx = get_state_context()
-                _sid = _sctx.session_id if _sctx and hasattr(_sctx, 'session_id') else None
-                if isinstance(result, (dict, list)):
-                    try:
-                        result = json.dumps(result, ensure_ascii=False, default=str)
-                    except Exception as dump_err:
-                        logging.warning(
-                            f"L5 pre-completion serialize failed for {tool_name}: {dump_err}; redacting repr"
-                        )
-                        result = str(result)
-                if isinstance(result, str):
-                    result = _apply_l5_redaction(tool_name, result, _uid, _sid)
-            except Exception as redact_err:
-                logging.warning(f"L5 pre-completion redaction failed open for {tool_name}: {redact_err}")
+            # json.loads round-trip). Both the serialization and redaction
+            # are gated by GUARDRAILS_ENABLED so disabling L5 is a true
+            # no-op (dict/list results still flow through as-is).
+            if _guardrails_config.enabled:
+                try:
+                    ctx = get_user_context()
+                    _uid = ctx.get('user_id') if isinstance(ctx, dict) else ctx
+                    _sctx = get_state_context()
+                    _sid = _sctx.session_id if _sctx and hasattr(_sctx, 'session_id') else None
+                    if isinstance(result, (dict, list)):
+                        try:
+                            result = json.dumps(result, ensure_ascii=False, default=str)
+                        except Exception as dump_err:
+                            logging.warning(
+                                f"L5 pre-completion serialize failed for {tool_name}: {dump_err}; redacting repr"
+                            )
+                            result = str(result)
+                    if isinstance(result, str):
+                        result = _apply_l5_redaction(tool_name, result, _uid, _sid)
+                except Exception as redact_err:
+                    logging.warning(f"L5 pre-completion redaction failed open for {tool_name}: {redact_err}")
 
             # Only send completion notification if no stop request
             try:
