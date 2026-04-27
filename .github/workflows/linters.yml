@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest
+        run: pip install pytest pyyaml pydantic
 
       - name: Run static analysis tests
         working-directory: server
@@ -50,3 +50,7 @@ jobs:
             echo "::warning::tests/test_rls_coverage.py not present yet (waiting on PR #314); skipping."
           fi
           python -m pytest "${tests[@]}" -v
+
+      - name: Run security tests
+        working-directory: server
+        run: python -m pytest tests/security/ -v
