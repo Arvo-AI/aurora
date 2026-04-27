@@ -66,10 +66,14 @@ def emit_redaction_event(
 ) -> None:
     """Emit a structured audit log for an L5 output-redaction event.
 
-    ``location`` is the hook identifier ("tool_completion" or "db_save");
-    non-zero rates at ``db_save`` indicate that tool output reached the
-    persistence layer without going through the primary hook and should be
-    treated as an operational signal.
+    ``location`` is the hook identifier ("tool_completion", "ui_message",
+    or "db_save"). ``tool_completion`` is the primary hook on the outbound
+    WebSocket / LLM-context path; ``ui_message`` is the hook that scrubs
+    ``tool_call['output']`` as it is stitched onto the persisted UI
+    transcript; ``db_save`` is the belt-and-suspenders pass immediately
+    before write. Non-zero rates at later hooks indicate that tool output
+    reached a downstream path without going through an earlier one and
+    should be treated as an operational signal.
 
     ``value_hash`` is the truncated sha256 already computed by the scanner;
     the raw secret value is never passed to this function.

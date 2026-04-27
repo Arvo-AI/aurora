@@ -731,7 +731,21 @@ def with_completion_notification(func):
         try:
             # Execute the original function
             result = func(*args, **kwargs)
-            
+
+            # L5 output redaction applied at the single fan-out point so the
+            # same redacted copy flows to both the WebSocket notification
+            # (see send_tool_completion) and the ToolMessage.content returned
+            # into LangGraph state for the next LLM turn.
+            try:
+                ctx = get_user_context()
+                _uid = ctx.get('user_id') if isinstance(ctx, dict) else ctx
+                _sctx = get_state_context()
+                _sid = _sctx.session_id if _sctx and hasattr(_sctx, 'session_id') else None
+                if isinstance(result, str):
+                    result = _apply_l5_redaction(tool_name, result, _uid, _sid)
+            except Exception as redact_err:
+                logging.warning(f"L5 pre-completion redaction failed open for {tool_name}: {redact_err}")
+
             # Only send completion notification if no stop request
             try:
                 logging.info(f"🔍 TOOL COMPLETION: {tool_name} with signature_id: {signature_id}, input: {tool_input_data}")

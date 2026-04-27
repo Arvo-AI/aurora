@@ -10,10 +10,14 @@ import logging
 import json
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
 from utils.security.audit_events import emit_block_event
+from utils.security.audit_events import emit_redaction_event as _l5_emit
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _l5_redact
 
 logger = logging.getLogger(__name__)
 
@@ -1743,6 +1747,44 @@ class Workflow:
             logger.error(f"Error appending UI messages: {e}")
             return False
 
+    def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
+        """L5 output redaction (Hook 3) on tool output as it is stitched onto
+        the persisted UI transcript.
+
+        Hook 1 redacts ``send_tool_completion``'s outbound payload; this hook
+        covers the parallel assignment to ``tool_call['output']`` that lands
+        in ``chat_sessions.messages`` (rendered by the UI on reload) and that
+        Hook 1 never sees. Idempotent; fail-open on any unexpected error.
+        """
+        text = str(content or "")
+        if not text or not _guardrails_config.output_redaction:
+            return text
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _l5_redact(text)
+            if not findings:
+                return redacted
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            session_id = ""
+            try:
+                session_id = self.config["configurable"]["thread_id"]
+            except Exception:
+                pass
+            for f in findings:
+                _l5_emit(
+                    user_id="",
+                    session_id=session_id,
+                    rule_id=f.rule_id,
+                    value_hash=f.value_hash,
+                    location="ui_message",
+                    tool=tool_name,
+                    latency_ms=latency_ms,
+                )
+            return redacted
+        except Exception as e:
+            logger.error(f"L5 ui_message redaction failed open: {e}")
+            return text
+
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
         """Associate tool calls with output in the UI messages."""
 
@@ -1796,7 +1838,10 @@ class Workflow:
                                     continue
                             
                             # Update the tool call with output (ID match is sufficient)
-                            tool_call['output'] = str(getattr(msg, 'content', ''))
+                            tool_call['output'] = self._redact_for_ui(
+                                getattr(msg, 'content', ''),
+                                tool_name=tool_call.get('tool_name') or '',
+                            )
                             tool_call['status'] = 'completed'
                             tool_call['timestamp'] = datetime.now().isoformat()  # Update timestamp to completion time
                             updated = True
@@ -1827,7 +1872,10 @@ class Workflow:
                     f"extras will be dropped"
                 )
             for msg, tc in zip(unmatched_tool_messages, running_tool_calls):
-                tc['output'] = str(getattr(msg, 'content', ''))
+                tc['output'] = self._redact_for_ui(
+                    getattr(msg, 'content', ''),
+                    tool_name=tc.get('tool_name') or '',
+                )
                 tc['status'] = 'completed'
                 tc['timestamp'] = datetime.now().isoformat()
 
