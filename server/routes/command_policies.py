@@ -4,7 +4,6 @@ Blueprint: command_policies_bp
 Prefix: /api/org
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 
@@ -13,9 +12,9 @@ from flask import Blueprint, jsonify, request
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
-    get_user_preference,
-    store_user_preference,
+    get_org_preference,
     set_rls_context,
+    store_org_preference,
 )
 from utils.auth.command_policy import (
     evaluate_compound_command,
@@ -32,10 +31,9 @@ command_policies_bp = Blueprint("command_policies", __name__, url_prefix="/api/o
 
 def _list_states(org_id: str) -> dict:
     """Read allowlist/denylist toggle states from user_preferences."""
-    org_key = f"__org__{org_id}"
-    al = get_user_preference(org_key, "command_policy_allowlist") or "off"
-    dl = get_user_preference(org_key, "command_policy_denylist") or "off"
-    at = get_user_preference(org_key, "command_policy_active_template")
+    al = get_org_preference(org_id, "command_policy_allowlist") or "off"
+    dl = get_org_preference(org_id, "command_policy_denylist") or "off"
+    at = get_org_preference(org_id, "command_policy_active_template")
     return {
         "allowlist_enabled": str(al).lower() == "on",
         "denylist_enabled": str(dl).lower() == "on",
@@ -175,10 +173,10 @@ def update_policy(user_id, rule_id):
             )
             if cur.rowcount == 0:
                 return jsonify({"error": "Rule not found"}), 404
+            store_org_preference(org_id, "command_policy_active_template", None, cursor=cur)
         conn.commit()
 
     invalidate_cache(org_id)
-    store_user_preference(f"__org__{org_id}", "command_policy_active_template", None)
     return jsonify({"status": "updated"})
 
 
@@ -199,10 +197,10 @@ def delete_policy(user_id, rule_id):
             )
             if cur.rowcount == 0:
                 return jsonify({"error": "Rule not found"}), 404
+            store_org_preference(org_id, "command_policy_active_template", None, cursor=cur)
         conn.commit()
 
     invalidate_cache(org_id)
-    store_user_preference(f"__org__{org_id}", "command_policy_active_template", None)
     return jsonify({"status": "deleted"})
 
 
@@ -243,16 +241,15 @@ def toggle_list(user_id):
         return jsonify({"error": "enabled must be a boolean"}), 400
 
     pref_key = f"command_policy_{list_name}"
-    org_key = f"__org__{org_id}"
-    store_user_preference(org_key, pref_key, "on" if enabled else "off")
+    from utils.db.connection_pool import db_pool
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:toggle]")
+            store_org_preference(org_id, pref_key, "on" if enabled else "off", cursor=cur)
 
-    # Auto-seed rules on first enable if list is empty
-    if enabled:
-        mode = "allow" if list_name == "allowlist" else "deny"
-        from utils.db.connection_pool import db_pool
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:toggle]")
+            # Auto-seed rules on first enable if list is empty
+            if enabled:
+                mode = "allow" if list_name == "allowlist" else "deny"
                 cur.execute(
                     "SELECT COUNT(*) FROM org_command_policies "
                     "WHERE org_id = %s AND mode = %s",
@@ -270,7 +267,7 @@ def toggle_list(user_id):
                             (org_id, mode, seed["pattern"],
                              seed["description"], seed["priority"], user_id),
                         )
-            conn.commit()
+        conn.commit()
 
     invalidate_cache(org_id)
     return jsonify({"status": "updated", **_list_states(org_id)})
@@ -315,13 +312,6 @@ def apply_template(user_id):
     if not tpl:
         return jsonify({"error": f"Unknown template: {template_id}"}), 400
 
-    org_key = f"__org__{org_id}"
-    pref_upsert = (
-        "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
-        "VALUES (%s, %s, %s, %s) "
-        "ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE "
-        "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
-    )
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
@@ -339,9 +329,9 @@ def apply_template(user_id):
                         (org_id, mode_key, rule["pattern"],
                          rule["description"], rule["priority"], user_id),
                     )
-            cur.execute(pref_upsert, (org_key, org_id, "command_policy_allowlist", json.dumps("on")))
-            cur.execute(pref_upsert, (org_key, org_id, "command_policy_denylist", json.dumps("on")))
-            cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(template_id)))
+            store_org_preference(org_id, "command_policy_allowlist", "on", cursor=cur)
+            store_org_preference(org_id, "command_policy_denylist", "on", cursor=cur)
+            store_org_preference(org_id, "command_policy_active_template", template_id, cursor=cur)
         conn.commit()
 
     invalidate_cache(org_id)
@@ -355,19 +345,12 @@ def clear_active_template(user_id):
     if not org_id:
         return jsonify({"error": "No organization context"}), 403
 
-    org_key = f"__org__{org_id}"
-    pref_upsert = (
-        "INSERT INTO user_preferences (user_id, org_id, preference_key, preference_value) "
-        "VALUES (%s, %s, %s, %s) "
-        "ON CONFLICT (user_id, org_id, preference_key) WHERE org_id IS NOT NULL DO UPDATE "
-        "SET preference_value = EXCLUDED.preference_value, updated_at = CURRENT_TIMESTAMP"
-    )
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CommandPolicies:clear_template]")
             cur.execute("DELETE FROM org_command_policies WHERE org_id = %s AND source = 'template'", (org_id,))
-            cur.execute(pref_upsert, (org_key, org_id, "command_policy_active_template", json.dumps(None)))
+            store_org_preference(org_id, "command_policy_active_template", None, cursor=cur)
         conn.commit()
 
     invalidate_cache(org_id)
