@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Infinity, Bot, MessageSquare, ChevronDown } from "lucide-react";
+import { Infinity, MessageSquare, ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,11 +35,6 @@ const modeOptions: ModeOption[] = [
     id: "agent",
     displayName: "Agent",
     icon: <Infinity className="w-2 h-2 flex-shrink-0" />,
-  },
-  {
-    id: "sandbox",
-    displayName: "Testing Sandbox",
-    icon: <Bot className="w-2 h-2 flex-shrink-0" />,
   },
 ];
 
