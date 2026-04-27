@@ -10,8 +10,8 @@ from .redis_cache import RedisCache
 from .async_save_queue import AsyncSaveQueue
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from utils.security.config import config as _guardrails_config
-from utils.security.output_redaction import redact as _l5_redact
-from utils.security.audit_events import emit_redaction_event as _l5_emit
+from utils.security.output_redaction import redact as _redact
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ class ContextManager:
         return processed
 
     def _redact_tool_messages(self, messages, *, user_id: str, session_id: str):
-        """L5 output redaction (Hook 2): belt-and-suspenders pass on tool output
+        """Output redaction (Hook 2): belt-and-suspenders pass on tool output
         before persistence.
 
         Hook 1 redacts at ``send_tool_completion``; this is the authoritative
@@ -183,13 +183,13 @@ class ContextManager:
                 out.append(msg)
                 continue
             t0 = time.perf_counter()
-            redacted, findings = _l5_redact(msg.content)
+            redacted, findings = _redact(msg.content)
             if not findings:
                 out.append(msg)
                 continue
             latency_ms = (time.perf_counter() - t0) * 1000.0
             for f in findings:
-                _l5_emit(
+                _emit_redaction(
                     user_id=user_id or "",
                     session_id=session_id or "",
                     rule_id=f.rule_id,

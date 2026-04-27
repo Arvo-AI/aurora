@@ -15,9 +15,9 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
 from utils.security.audit_events import emit_block_event
-from utils.security.audit_events import emit_redaction_event as _l5_emit
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
 from utils.security.config import config as _guardrails_config
-from utils.security.output_redaction import redact as _l5_redact
+from utils.security.output_redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
@@ -1748,7 +1748,7 @@ class Workflow:
             return False
 
     def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
-        """L5 output redaction (Hook 3) on tool output as it is stitched onto
+        """Output redaction (Hook 3) on tool output as it is stitched onto
         the persisted UI transcript.
 
         Hook 1 redacts ``send_tool_completion``'s outbound payload; this hook
@@ -1761,7 +1761,7 @@ class Workflow:
             return text
         try:
             t0 = time.perf_counter()
-            redacted, findings = _l5_redact(text)
+            redacted, findings = _redact(text)
             if not findings:
                 return redacted
             latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -1771,18 +1771,18 @@ class Workflow:
                 session_id = self.config["configurable"]["thread_id"]
             except Exception as e:
                 logger.debug(
-                    "L5 ui_message: thread_id unavailable; defaulting session_id='': %s",
+                    "Output redaction (ui_message): thread_id unavailable; defaulting session_id='': %s",
                     e,
                 )
             try:
                 user_id = self._get_state_attr(self._last_state, "user_id") or ""
             except Exception as e:
                 logger.debug(
-                    "L5 ui_message: user_id unavailable; defaulting user_id='': %s",
+                    "Output redaction (ui_message): user_id unavailable; defaulting user_id='': %s",
                     e,
                 )
             for f in findings:
-                _l5_emit(
+                _emit_redaction(
                     user_id=user_id,
                     session_id=session_id,
                     rule_id=f.rule_id,
@@ -1793,7 +1793,7 @@ class Workflow:
                 )
             return redacted
         except Exception as e:
-            logger.error(f"L5 ui_message redaction failed open: {e}")
+            logger.error(f"Output redaction (ui_message) failed open: {e}")
             return text
 
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):

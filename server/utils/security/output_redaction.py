@@ -1,4 +1,4 @@
-"""L5 output redaction: deterministic secret-scrubbing for tool call outputs.
+"""Output redaction: deterministic secret-scrubbing for tool call outputs.
 
 Aurora runs in customer infrastructure, which means tool outputs routinely
 contain real customer credentials: ``kubectl get secret -o yaml``, ``env``,
@@ -7,13 +7,13 @@ Those credentials must not be (a) echoed back to the LLM provider on the
 next turn, (b) persisted to the chat-history DB in raw form, or (c) exposed
 via log shipping / backups / screenshots / support tickets.
 
-L5 covers (a)-(c) by redacting tool-output strings at three hooks: the
-``with_completion_notification`` decorator (primary, feeds WebSocket +
-LangGraph), ``ContextManager._redact_tool_messages`` (belt-and-suspenders
-before DB persistence), and ``Workflow._redact_for_ui`` (UI transcript
-stitched onto ``chat_sessions.messages``). Model-generated assistant text
-is out of scope here; see the "do not echo secrets" instruction in
-``skills/core/security.md`` for that path.
+Output redaction covers (a)-(c) by redacting tool-output strings at three
+hooks: the ``with_completion_notification`` decorator (primary, feeds
+WebSocket + LangGraph), ``ContextManager._redact_tool_messages``
+(belt-and-suspenders before DB persistence), and ``Workflow._redact_for_ui``
+(UI transcript stitched onto ``chat_sessions.messages``). Model-generated
+assistant text is out of scope here; see the "do not echo secrets"
+instruction in ``skills/core/security.md`` for that path.
 
 Design notes
 ------------
@@ -55,10 +55,10 @@ _REDACTION_FMT = "[REDACTED:{rule_id}]"
 _REDACTION_SCAN = re.compile(r"\[REDACTED:[a-z0-9][a-z0-9-]{0,64}\]")
 
 # Upstream callers (e.g. ``send_tool_completion``) already cap tool output at
-# ~10 KB for the WebSocket path, but L5 also runs in the decorator site
-# before that cap is applied. Bound the scanner input so worst-case regex
-# runtime stays linear in a small constant even if a caller forgets to
-# truncate. Values above the cap are scanned up to the cap; content beyond
+# ~10 KB for the WebSocket path, but the redaction pass also runs in the
+# decorator site before that cap is applied. Bound the scanner input so
+# worst-case regex runtime stays linear in a small constant even if a caller
+# forgets to truncate. Values above the cap are scanned up to the cap; content beyond
 # it is passed through unmodified. Measured in code points (Python ``len``),
 # not bytes; for UTF-8 that is within a 4x factor of bytes, which is fine
 # for a coarse runtime bound. The cap is deliberately generous: real

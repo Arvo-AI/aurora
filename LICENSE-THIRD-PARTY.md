@@ -6,7 +6,7 @@ component that uses them, and their upstream licenses.
 ## Gitleaks rule corpus
 
 - Derived work: `server/utils/security/_generated_patterns.py`.
-- Used by: L5 output redaction (`server/utils/security/output_redaction.py`).
+- Used by: output redaction (`server/utils/security/output_redaction.py`).
 - Upstream: https://github.com/gitleaks/gitleaks
 - Source version: v8.28.0 (https://github.com/gitleaks/gitleaks/releases/tag/v8.28.0).
 - Relationship: the Python module above is a frozen, hand-reviewable

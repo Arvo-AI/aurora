@@ -1,4 +1,4 @@
-"""Tests for L5 output redaction.
+"""Tests for output redaction.
 
 Coverage:
 - Per-rule positive cases (one canonical leak per shipped rule family)
@@ -222,7 +222,7 @@ def test_hook2_context_manager_redacts_tool_messages_and_emits_audit(monkeypatch
     def fake_emit(**kwargs):
         emitted.append(kwargs)
 
-    monkeypatch.setattr(cm_mod, "_l5_emit", fake_emit)
+    monkeypatch.setattr(cm_mod, "_emit_redaction", fake_emit)
 
     instance = cm_mod.ContextManager.__new__(cm_mod.ContextManager)
 

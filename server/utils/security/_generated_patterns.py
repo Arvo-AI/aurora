@@ -1,4 +1,4 @@
-"""L5 redaction patterns (frozen artifact).
+"""Output redaction patterns (frozen artifact).
 
 Source
 ------

@@ -64,7 +64,7 @@ def emit_redaction_event(
     tool: str = "",
     latency_ms: float = 0,
 ) -> None:
-    """Emit a structured audit log for an L5 output-redaction event.
+    """Emit a structured audit log for an output-redaction event.
 
     ``location`` is the hook identifier ("tool_completion", "ui_message",
     or "db_save"). ``tool_completion`` is the primary hook on the outbound
@@ -83,7 +83,7 @@ def emit_redaction_event(
         "timestamp": time.time(),
         "user_id": user_id or "",
         "session_id": session_id or "",
-        "layer": "L5",
+        "layer": "output_redaction",
         "decision": "redacted",
         "rule_id": rule_id,
         "value_hash": value_hash,
