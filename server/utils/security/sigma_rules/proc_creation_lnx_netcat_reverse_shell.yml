@@ -21,6 +21,7 @@ detection:
         Image|endswith:
             - '/nc'
             - '/ncat'
+            - '/netcat'
     selection_flags:
         CommandLine|contains:
             - ' -c '

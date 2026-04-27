@@ -5,6 +5,9 @@ generation, user/password changes, credential file reads, and
 authorized_keys writes.
 """
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from utils.security.signature_match import check_signature
@@ -122,8 +125,15 @@ class TestCrontabPersistence:
 class TestEnvSanitization:
     """terminal_exec_tool strips secrets from the child-process environment."""
 
+    _DB_DEFAULTS = {
+        "POSTGRES_DB": "test", "POSTGRES_USER": "test",
+        "POSTGRES_PASSWORD": "test", "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5432",
+    }
+
     def test_safe_env_keys_excludes_secrets(self):
-        from chat.backend.agent.tools.terminal_exec_tool import _SAFE_ENV_KEYS
+        with patch.dict(os.environ, self._DB_DEFAULTS):
+            from chat.backend.agent.tools.terminal_exec_tool import _SAFE_ENV_KEYS
 
         dangerous_keys = {
             "VAULT_TOKEN", "DATABASE_URL", "SECRET_KEY",
@@ -134,6 +144,8 @@ class TestEnvSanitization:
         assert not leaked, f"Secret keys must not be in _SAFE_ENV_KEYS: {leaked}"
 
     def test_build_sanitized_env_omits_secrets(self, monkeypatch):
+        for k, v in self._DB_DEFAULTS.items():
+            monkeypatch.setenv(k, v)
         from chat.backend.agent.tools.terminal_exec_tool import _build_sanitized_env
 
         monkeypatch.setenv("VAULT_TOKEN", "test-secret-token")

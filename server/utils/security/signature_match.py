@@ -85,7 +85,7 @@ _r(r"\bhistory\s+-c\b|>\s*~/?\.(bash_history|zsh_history)", T_CLEAR_HISTORY, "ev
 _r(r"\bunset\s+HISTFILE\b", T_CLEAR_HISTORY, "evasion-histfile", "Unsetting HISTFILE")
 
 # --- Reverse shells (T1059) ---
-_r(r"\bnc\s+.*-e\s", T_UNIX_SHELL, "revshell-nc", "Netcat reverse shell")
+_r(r"\b(?:nc|ncat|netcat)\s+.*-e\s", T_UNIX_SHELL, "revshell-nc", "Netcat reverse shell")
 _r(r"\bmkfifo\b.*\bnc\b", T_UNIX_SHELL, "revshell-mkfifo", "Named pipe reverse shell")
 _r(r"socket\.socket.*connect.*dup2", T_PYTHON, "revshell-python", "Python reverse shell")
 _r(r"\bsocat\b.*TCP[-:]", T_UNIX_SHELL, "revshell-socat", "Socat reverse/bind shell")
