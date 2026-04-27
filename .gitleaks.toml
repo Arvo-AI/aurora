@@ -29,10 +29,9 @@ paths = [
   # the engine detects them.
   '''server/tests/test_output_redaction\.py$''',
 
-  # Vendored upstream Gitleaks rule corpus and its build-time codegen
-  # output. Both contain illustrative example tokens from the upstream
-  # rule definitions, not real credentials.
-  '''server/utils/security/rules/gitleaks-.*\.toml$''',
+  # Frozen translation of the upstream Gitleaks rule corpus. Contains
+  # illustrative example tokens from the upstream rule definitions, not
+  # real credentials. See LICENSE-THIRD-PARTY.md.
   '''server/utils/security/_generated_patterns\.py$''',
 
   # Helm templates (contain template variables, not real secrets)

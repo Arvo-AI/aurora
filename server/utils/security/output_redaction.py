@@ -17,9 +17,10 @@ is out of scope here; see the "do not echo secrets" instruction in
 
 Design notes
 ------------
-* Patterns are codegen'd from a pinned Gitleaks TOML; see
-  ``scripts/gen_secret_patterns.py``. Runtime has zero dependency on TOML
-  parsing.
+* Patterns are a frozen translation of the Gitleaks v8.28.0 rule corpus;
+  see ``_generated_patterns.py`` for the extraction provenance and the
+  Go->Python regex transforms applied. The runtime has no TOML or
+  parsing dependency.
 * Scan hot path is: size-cap -> already-redacted short-circuit -> keyword
   prefilter -> regex -> entropy -> allowlist. Rules without a keyword hit
   skip the regex entirely, which matches how Gitleaks itself gets its

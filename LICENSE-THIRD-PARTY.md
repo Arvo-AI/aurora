@@ -5,12 +5,15 @@ component that uses them, and their upstream licenses.
 
 ## Gitleaks rule corpus
 
-- Path: `server/utils/security/rules/gitleaks-v8.28.0.toml`
-- Used by: L5 output redaction (`server/utils/security/output_redaction.py`),
-  via the build-time pattern generator `scripts/gen_secret_patterns.py`.
+- Derived work: `server/utils/security/_generated_patterns.py`.
+- Used by: L5 output redaction (`server/utils/security/output_redaction.py`).
 - Upstream: https://github.com/gitleaks/gitleaks
-- Version: v8.28.0 (pinned, vendored verbatim; regenerate by refetching the
-  file at `config/gitleaks.toml` from the pinned tag).
+- Source version: v8.28.0 (https://github.com/gitleaks/gitleaks/releases/tag/v8.28.0).
+- Relationship: the Python module above is a frozen, hand-reviewable
+  translation of a curated subset of the upstream TOML rule corpus at
+  that tag. The upstream file itself is not vendored here; see the
+  module header for the extraction and Go->Python regex translation
+  applied at snapshot time.
 - License: MIT.
 
 ```

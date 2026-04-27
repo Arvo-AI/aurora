@@ -1,7 +1,38 @@
-"""Auto-generated from gitleaks-v8.28.0.toml by scripts/gen_secret_patterns.py.
+"""L5 redaction patterns (frozen artifact).
 
-Do not edit by hand. Regenerate with ``python scripts/gen_secret_patterns.py``
-and commit the result alongside the updated TOML.
+Source
+------
+Derived from the Gitleaks project's TOML rule corpus at tag v8.28.0
+(https://github.com/gitleaks/gitleaks, MIT license; see
+LICENSE-THIRD-PARTY.md). The upstream TOML and the one-shot extraction
+script are intentionally not tracked in this repo -- this module is the
+frozen, hand-reviewable result of that translation.
+
+Translation applied (once, at extraction time)
+----------------------------------------------
+1. Filtered to a curated subset of rule IDs covering the surface Aurora
+   tool output actually carries: cloud providers, SCM, observability,
+   LLM vendors, and a few in-scope SaaS tools referenced in runbooks.
+   Crypto exchange, regional payment processor, and e-commerce rules
+   were excluded to keep false positives off customer data.
+2. Rewrote regexes to be Python-re compatible. Go's regexp engine
+   accepts mid-pattern ``(?i)`` flags; Python's ``re`` does not. Every
+   such occurrence was hoisted to the start of the pattern. This is a
+   widening-only transform and is safe for the affected rules (the
+   preceding literal portions are already lowercase).
+3. Lowercased every keyword and stopword so the prefilter can run a
+   single case-insensitive substring check per rule.
+4. Compiled every regex at import time; the runtime has no TOML or
+   parsing dependency.
+
+Refreshing the corpus
+---------------------
+This snapshot is not intended to be regenerated in-tree. If the
+Gitleaks rule corpus is refreshed at a future version, redo the
+extraction from upstream and replace this file wholesale -- the
+translation rules above are the only transforms required.
+
+Do not edit individual rules by hand.
 """
 
 from __future__ import annotations
@@ -20,7 +51,7 @@ class Rule:
     stopwords: tuple[str, ...]
 
 
-SOURCE_FILE = 'gitleaks-v8.28.0.toml'
+SOURCE_CORPUS = "gitleaks v8.28.0 (https://github.com/gitleaks/gitleaks/releases/tag/v8.28.0)"
 
 RULES: tuple[Rule, ...] = (
     Rule(
