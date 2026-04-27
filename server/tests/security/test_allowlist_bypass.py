@@ -76,7 +76,7 @@ class TestPathEvasion:
 class TestUniversalDenyRules:
     """Every pattern in _UNIVERSAL_DENY_RULES should fire on its canonical example."""
 
-    @pytest.mark.parametrize("cmd,desc", [
+    @pytest.mark.parametrize(("cmd", "desc"), [
         ("rm -rf /", "Recursive root deletion"),
         ("gcc -o payload payload.c", "Native code compilation"),
         ("make all", "Native code compilation"),

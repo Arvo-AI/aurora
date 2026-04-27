@@ -90,7 +90,7 @@ class TestUserPasswordManagement:
 class TestCredentialFileAccess:
     """Reading sensitive credential files must be caught by the signature matcher."""
 
-    @pytest.mark.parametrize("cmd,expected_rule", [
+    @pytest.mark.parametrize(("cmd", "expected_rule"), [
         ("cat /etc/shadow", "cred-shadow"),
         ("cat ~/.aws/credentials", "cred-aws"),
         ("cat ~/.ssh/id_rsa", "cred-ssh"),
