@@ -4,10 +4,14 @@ import asyncio
 import json
 import hashlib
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from .redis_cache import RedisCache
 from .async_save_queue import AsyncSaveQueue
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _l5_redact
+from utils.security.audit_events import emit_redaction_event as _l5_emit
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +115,9 @@ class ContextManager:
             logger.info(f"Saving context for session {session_id}: {len(messages)} messages")
             
             processed_messages = self._apply_summarization(messages, tool_capture)
+            processed_messages = self._redact_tool_messages(
+                processed_messages, user_id=user_id, session_id=session_id,
+            )
             serialized_messages = self._serialize_messages(processed_messages)
             
             with db_pool.get_user_connection() as conn:
@@ -153,6 +160,45 @@ class ContextManager:
             else:
                 processed.append(msg)
         return processed
+
+    def _redact_tool_messages(self, messages, *, user_id: str, session_id: str):
+        """L5 output redaction (Hook 2): belt-and-suspenders pass on tool output
+        before persistence.
+
+        Hook 1 redacts at ``send_tool_completion``; this is the authoritative
+        guarantee for the DB and covers paths that bypass Hook 1 (background
+        chats, directly-constructed ToolMessages, summarization rewrites). The
+        engine is idempotent so already-redacted content is a near-no-op.
+        A non-zero rate of ``location=db_save`` audit events is an operational
+        signal that an upstream path is bypassing Hook 1.
+        """
+        if not messages or not _guardrails_config.output_redaction:
+            return messages
+
+        from langchain_core.messages import ToolMessage
+
+        out = []
+        for msg in messages:
+            if not isinstance(msg, ToolMessage) or not isinstance(msg.content, str):
+                out.append(msg)
+                continue
+            t0 = time.perf_counter()
+            redacted, findings = _l5_redact(msg.content)
+            if not findings:
+                out.append(msg)
+                continue
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            for f in findings:
+                _l5_emit(
+                    user_id=user_id or "",
+                    session_id=session_id or "",
+                    rule_id=f.rule_id,
+                    value_hash=f.value_hash,
+                    location="db_save",
+                    latency_ms=latency_ms,
+                )
+            out.append(ToolMessage(content=redacted, tool_call_id=msg.tool_call_id))
+        return out
 
     def _serialize_messages(self, processed_messages):
         """Serialize messages, using cache when possible."""

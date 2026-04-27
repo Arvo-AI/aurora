@@ -19,6 +19,9 @@ import concurrent.futures
 
 from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _l5_redact
+from utils.security.audit_events import emit_redaction_event as _l5_emit
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +339,40 @@ def send_websocket_message(message_data: Dict[str, Any], tool_name: str, fallbac
     )
     thread.start()
 
+
+def _apply_l5_redaction(
+    tool_name: str,
+    text: str,
+    user_id: Optional[str],
+    session_id: Optional[str],
+) -> str:
+    """L5 output redaction (Hook 1): strip secrets from tool output.
+
+    Runs on the finalized ``cleaned_output`` string inside
+    ``send_tool_completion`` so the same redacted copy is delivered to the
+    WebSocket, the LLM context on the next turn, and (via Hook 2) the DB.
+    Fail-open via the engine; config-gated via GUARDRAILS_OUTPUT_REDACTION.
+    """
+    if not text or not _guardrails_config.output_redaction:
+        return text
+    t0 = time.perf_counter()
+    redacted, findings = _l5_redact(text)
+    if not findings:
+        return text
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    for f in findings:
+        _l5_emit(
+            user_id=user_id or "",
+            session_id=session_id or "",
+            rule_id=f.rule_id,
+            value_hash=f.value_hash,
+            location="tool_completion",
+            tool=tool_name,
+            latency_ms=latency_ms,
+        )
+    return redacted
+
+
 def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None):
     """Send tool completion notification via WebSocket if available."""
     try:
@@ -403,6 +440,10 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
             cleaned_output = cleaned_output.encode('utf-8', errors='replace').decode('utf-8')
         except Exception:
             cleaned_output = "[output encoding error]"
+
+        # L5 output redaction (Hook 1): applied to the finalized string so the
+        # same redacted copy flows to the WebSocket, the LLM context, and the DB.
+        cleaned_output = _apply_l5_redaction(tool_name, cleaned_output, user_id, session_id)
         
         result_data = {
             "type": "tool_result",

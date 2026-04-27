@@ -12,6 +12,7 @@ from dataclasses import dataclass
 class GuardrailsConfig:
     enabled: bool
     sigma_enabled: bool
+    output_redaction: bool
     llm_model: str
 
 
@@ -23,6 +24,7 @@ def _load() -> GuardrailsConfig:
     return GuardrailsConfig(
         enabled=on,
         sigma_enabled=on and os.getenv("GUARDRAILS_SIGMA_ENABLED", "true").lower() not in _FALSY,
+        output_redaction=on and os.getenv("GUARDRAILS_OUTPUT_REDACTION", "true").lower() not in _FALSY,
         llm_model=os.getenv("GUARDRAILS_LLM_MODEL", ""),
     )
 
