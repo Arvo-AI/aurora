@@ -44,7 +44,6 @@ from chat.backend.agent.workflow import Workflow
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
-from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
 from utils.db.connection_pool import db_pool
 from utils.billing.billing_cache import update_api_cost_cache_async, get_cached_api_cost
 from utils.billing.billing_utils import get_api_cost
@@ -1540,10 +1539,6 @@ async def handle_connection(websocket) -> None:
 
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")
             logger.info(f"WebSocket sender initialized: {websocket_sender is not None}")
-
-            # IMMEDIATE SAVE: Save user message immediately when received
-            if session_id and user_id:
-                handle_immediate_save(session_id, user_id, question)
 
             # Launch workflow processing as async task without blocking
             # Set UI state in workflow before processing so it gets saved

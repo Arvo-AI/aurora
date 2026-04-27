@@ -982,6 +982,14 @@ class Workflow:
                 yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
                 return
 
+            # Rail passed: NOW it's safe to persist the user message.
+            # Kept inside the rail gate so blocked messages never touch
+            # chat_sessions.messages (which legacy migration rehydrates into
+            # llm_context_history on the next turn).
+            if input_state.session_id and input_state.user_id:
+                from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
+                handle_immediate_save(input_state.session_id, input_state.user_id, msg_text)
+
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
         
