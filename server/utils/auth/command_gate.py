@@ -135,10 +135,54 @@ def gate_command(
         _gate_inflight_command.reset(token)
 
 
+def is_session_tainted(session_id: Optional[str]) -> bool:
+    """Return True iff ``session_id`` has been marked tainted (NeMo input-rail
+    hit on the opening user message of this foreground chat).
+
+    Tainted sessions force every command through user confirmation, even when
+    all guardrail layers pass. Fails closed on DB errors (treats as untainted)
+    since the gate's other layers already provide defense-in-depth.
+    """
+    if not session_id:
+        return False
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT security_tainted FROM chat_sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            return bool(row and row[0])
+    except Exception as e:
+        logger.warning(f"[CommandGate] taint lookup failed for {session_id}: {e}")
+        return False
+
+
+def mark_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> None:
+    """Flip ``security_tainted`` to true for this session. Idempotent."""
+    if not session_id or not user_id:
+        return
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            if not set_rls_context(cursor, conn, user_id, log_prefix="[CommandGate:Taint]"):
+                return
+            cursor.execute(
+                "UPDATE chat_sessions SET security_tainted = true WHERE id = %s AND user_id = %s",
+                (session_id, user_id),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[CommandGate] failed to mark session {session_id} tainted: {e}")
+
+
 def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> GateDecision:
     from utils.auth.command_policy import (
         evaluate_compound_command, CommandVerdict, plan_yes_always,
-        apply_yes_always, validate_pattern, PolicyChange,
     )
     from utils.auth.stateless_auth import get_org_id_for_user
     from utils.security.command_safety import evaluate_command as safety_evaluate
@@ -147,71 +191,75 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     foreground = _is_foreground()
     session_id = _session_id()
 
-    # --- Layer 1 & 3: signature_match + LLM judge ----------------------------
-    # command_safety.evaluate_command bundles both: signature first (fast,
-    # cached), LLM judge second (network call). We read decision.layer to know
-    # which fired.
+    # Evaluate all layers unconditionally so we can report the combined
+    # block state to the user. The previous short-circuit (return on first
+    # safety block) prevented Always from showing when the policy layer
+    # would have also fired.
     safety_decision = safety_evaluate(
         command, tool=tool_name, user_id=user_id, session_id=session_id,
     )
-    if safety_decision.blocked:
-        layer = safety_decision.layer or "llm_judge"
-        code = "SIGNATURE_MATCHED" if layer == "signature_match" else "SAFETY_BLOCKED"
-        reason = f"Command blocked by safety guardrail: {safety_decision.reason}"
-        if not foreground:
-            return _block(code, reason)
-        # Foreground: ask user. No Yes-Always for this layer because there is
-        # no policy slot to flip.
-        return _prompt_user(
-            user_id=user_id,
-            session_id=session_id,
-            tool_name=tool_name,
-            command=command,
-            block_code=code,
-            block_reason=reason,
-            block_layer=layer,
-            allow_yes_always=False,
-            yes_always_changes=[],
-            org_id=None,
-            cmd_hash=cmd_hash,
-        )
-
-    # --- Layer 2: org allow/deny --------------------------------------------
     policy_verdict: CommandVerdict = evaluate_compound_command(org_id, command)
-    if policy_verdict.allowed:
+
+    safety_blocked = safety_decision.blocked
+    policy_blocked = not policy_verdict.allowed
+    tainted = foreground and is_session_tainted(session_id)
+
+    if not (safety_blocked or policy_blocked or tainted):
         # Tell terminal_run._check_guardrails it may skip re-running
         # signature+judge for this command on the same invocation.
         _guardrails_approved_command.set(cmd_hash)
         return _ALLOWED
 
-    reason = (policy_verdict.rule_description or "Matched organization policy")[:200]
-    block_reason = f"Command blocked by organization policy: {reason}"
-    layer = (
-        "policy_both" if policy_verdict.deny_rule_id and policy_verdict.allowlist_exhausted
-        else "policy_deny" if policy_verdict.deny_rule_id
-        else "policy_allow_exhausted"
+    # Compose the block code/reason/layer from whichever layers fired.
+    safety_layer = safety_decision.layer if safety_blocked else None
+    safety_code = (
+        "SIGNATURE_MATCHED" if safety_layer == "signature_match"
+        else "SAFETY_BLOCKED" if safety_blocked else None
     )
-    if not foreground or not org_id:
-        return _block("POLICY_DENIED", block_reason)
+    policy_layer = (
+        "policy_both" if policy_blocked and policy_verdict.deny_rule_id
+            and policy_verdict.allowlist_exhausted
+        else "policy_deny" if policy_blocked and policy_verdict.deny_rule_id
+        else "policy_allow_exhausted" if policy_blocked
+        else None
+    )
+    layers = [l for l in (safety_layer, policy_layer) if l]
+    if not layers and tainted:
+        layers = ["session_taint"]
+    block_layer = "+".join(layers)
 
-    changes = plan_yes_always(policy_verdict, command)
+    code = safety_code or ("POLICY_DENIED" if policy_blocked else "SESSION_TAINTED")
+    reasons = []
+    if safety_blocked:
+        reasons.append(f"safety guardrail: {safety_decision.reason}")
+    if policy_blocked:
+        reasons.append(
+            "organization policy: "
+            + (policy_verdict.rule_description or "matched organization policy")[:200]
+        )
+    if not reasons and tainted:
+        reasons.append("session flagged by input safety check; approval required")
+    block_reason = "Command blocked by " + "; ".join(reasons)
+
+    if not foreground:
+        return _block(code, block_reason)
+
+    # Always is offered iff the policy layer fired with a real mutation to
+    # propose. Safety-only or taint-only blocks show Yes/No.
+    changes = plan_yes_always(policy_verdict, command) if policy_blocked else []
     decision = _prompt_user(
         user_id=user_id,
         session_id=session_id,
         tool_name=tool_name,
         command=command,
-        block_code="POLICY_DENIED",
+        block_code=code,
         block_reason=block_reason,
-        block_layer=layer,
+        block_layer=block_layer or "unknown",
         allow_yes_always=bool(changes),
         yes_always_changes=changes,
-        org_id=org_id,
+        org_id=org_id if policy_blocked else None,
         cmd_hash=cmd_hash,
     )
-    # On Yes / Yes-Always, also clear the guardrails-approved marker so the
-    # downstream signature+judge re-check (if any) still runs normally for
-    # commands that bypassed the policy via user consent — the safety layers
-    # already passed above.
     if decision.allowed:
         _guardrails_approved_command.set(cmd_hash)
     return decision

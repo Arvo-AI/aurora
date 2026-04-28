@@ -1478,6 +1478,23 @@ def initialize_tables():
                 logging.warning(f"Error adding pending_turn column: {e}")
                 conn.rollback()
 
+            # Migration: Add security_tainted column. When NeMo's input rail
+            # blocks the opening user message in a foreground chat, we mark
+            # the session tainted instead of hard-failing; every subsequent
+            # tool call then requires user approval via the command gate.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS security_tainted BOOLEAN NOT NULL DEFAULT false;
+                """)
+                logging.info(
+                    "Added security_tainted column to chat_sessions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding security_tainted column: {e}")
+                conn.rollback()
+
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist
             try:
                 cursor.execute("""
