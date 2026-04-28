@@ -133,7 +133,14 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
 
 
 def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
-    """Core gate. Returns whether *command* is allowed for *org_id*."""
+    """Core gate. Returns whether *command* is allowed for *org_id*.
+
+    Both lists are evaluated independently so the verdict carries the full
+    picture: a deny-list hit still reports whether the allowlist would have
+    matched, which is what the Yes-Always planner needs to decide whether
+    clicking ``Always`` should also add an allow rule alongside disabling
+    the deny rule.
+    """
     if not org_id:
         logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
         return CommandVerdict(allowed=True)
@@ -143,26 +150,35 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     if not states.denylist_enabled and not states.allowlist_enabled:
         return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
 
-    if states.denylist_enabled:
-        for rule in deny_rules:
-            if rule.compiled.search(command):
-                return CommandVerdict(
-                    allowed=False,
-                    rule_description=rule.description,
-                    deny_rule_id=rule.id,
-                )
+    deny_hit = next(
+        (r for r in deny_rules if r.compiled.search(command)),
+        None,
+    ) if states.denylist_enabled else None
 
-    if states.allowlist_enabled:
-        for rule in allow_rules:
-            if rule.compiled.search(command):
-                return CommandVerdict(allowed=True, rule_description=rule.description)
+    allow_hit = next(
+        (r for r in allow_rules if r.compiled.search(command)),
+        None,
+    ) if states.allowlist_enabled else None
+
+    if deny_hit:
+        return CommandVerdict(
+            allowed=False,
+            rule_description=deny_hit.description,
+            deny_rule_id=deny_hit.id,
+            allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
+        )
+
+    if states.allowlist_enabled and allow_hit is None:
         return CommandVerdict(
             allowed=False,
             rule_description="No matching allow rule",
             allowlist_exhausted=True,
         )
 
-    return CommandVerdict(allowed=True)
+    return CommandVerdict(
+        allowed=True,
+        rule_description=allow_hit.description if allow_hit else None,
+    )
 
 
 _UNSPLITTABLE_SHELL_RE = re.compile(r"<<-?\s*\w+|<\(|>\(")

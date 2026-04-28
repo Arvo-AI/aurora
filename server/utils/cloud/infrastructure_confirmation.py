@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 # Lazy imports to avoid circular dependency with cloud_tools.py
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,8 @@ def wait_for_user_confirmation_ex(
         try:
             workflow_instance._consolidate_message_chunks()
             _save_ui_messages_with_confirmation_via_workflow(
-                workflow_instance, session_id, user_id, tool_name, message, confirmation_id
+                workflow_instance, session_id, user_id, tool_name, message, confirmation_id,
+                extra=extra,
             )
         except Exception as e:
             logger.error(f"Error consolidating/saving UI messages before confirmation: {e}")
@@ -297,9 +298,24 @@ def wait_for_user_confirmation_ex(
     return {"decision": decision, "edited_patterns": edited}
 
 
-def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_id: str, user_id: str, tool_name: str, message: str, confirmation_id: str) -> bool:
+def _save_ui_messages_with_confirmation_via_workflow(
+    workflow_instance,
+    session_id: str,
+    user_id: str,
+    tool_name: str,
+    message: str,
+    confirmation_id: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> bool:
     """Save UI messages to database including any ongoing tool calls and confirmation marker.
-    Uses workflow's methods to avoid code duplication."""
+
+    When *extra* is provided (gate-driven confirmations), the awaiting tool call
+    is enriched with ``command`` / ``block_layer`` / ``yes_always_effect`` so the
+    Yes-Always popover can rehydrate correctly after a page reload. We also
+    merge-preserve any previously saved user messages that the rebuilt UI list
+    happens to omit (e.g. when the LLM state snapshot was taken mid-turn), so
+    navigating away does not silently drop the user's prompt.
+    """
     try:
         # Get LLM messages from workflow state
         if workflow_instance._last_state:
@@ -342,9 +358,17 @@ def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_
                     for tool_call in ui_msg.get('toolCalls', []):
                         # Match by tool_call_id (call_xxx format)
                         if tool_call.get('id') == target_tool_call:
-                            # Update the tool call to show it's awaiting confirmation
                             tool_call['status'] = 'awaiting_confirmation'
                             tool_call['confirmation_id'] = confirmation_id
+                            tool_call['confirmation_message'] = message
+                            if extra:
+                                # Persist only the fields the confirmation UI
+                                # needs on rehydrate; avoid leaking internal
+                                # fields into the saved record.
+                                for key in ("command", "block_layer", "yes_always_effect"):
+                                    val = extra.get(key)
+                                    if val is not None:
+                                        tool_call[key] = val
                             logger.debug(f"Updated tool call {target_tool_call} to awaiting_confirmation status")
                             tool_call_updated = True
                             break
@@ -356,7 +380,13 @@ def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_
         else:
             logger.warning(f"No tool call found for {tool_name} in current tool calls")
             logger.debug(f"Available tool calls: {list(tool_capture.current_tool_calls.keys())}")
-        
+
+        # Preserve any previously-saved user messages the rebuild dropped. The
+        # LLM-state snapshot may not include the current turn's HumanMessage
+        # if the gate fires before LangGraph has persisted it; without this
+        # merge the unconditional overwrite would wipe the user's prompt.
+        ui_messages = _merge_missing_user_messages(session_id, user_id, ui_messages)
+
         # Use workflow's _save_ui_messages method to save the updated messages
         logger.debug(f"Saving {len(ui_messages)} UI messages")
         return workflow_instance._save_ui_messages(session_id, user_id, ui_messages)
@@ -364,3 +394,61 @@ def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_
     except Exception as e:
         logger.error(f"Error saving UI messages with confirmation: {e}")
         return False
+
+
+def _merge_missing_user_messages(
+    session_id: str, user_id: str, rebuilt: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Re-insert persisted user messages that ``rebuilt`` is missing.
+
+    The LLM-state snapshot may not include the current turn's HumanMessage,
+    in which case ``rebuilt`` starts with the assistant/tool response and
+    drops the user's prompt. We splice those missing user messages back in
+    at their original chronological position from the persisted row so the
+    UI renders the prompt above its response. Fails open on any DB error.
+    """
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_user_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    (session_id, user_id),
+                )
+                row = cur.fetchone()
+        existing = row[0] if row and row[0] else []
+        if not isinstance(existing, list):
+            return rebuilt
+    except Exception as e:
+        logger.warning(f"merge_missing_user_messages: could not read existing messages: {e}")
+        return rebuilt
+
+    rebuilt_user_texts = {
+        m.get('text') for m in rebuilt if m.get('sender') == 'user' and m.get('text')
+    }
+    missing_any = any(
+        m.get('sender') == 'user' and m.get('text') and m.get('text') not in rebuilt_user_texts
+        for m in existing
+    )
+    if not missing_any:
+        return rebuilt
+
+    # Walk ``existing`` in order. For each user message not present in the
+    # rebuilt set, insert a copy into ``merged`` at the position we reach in
+    # ``existing``; for every other slot we advance through ``rebuilt``.
+    merged: List[Dict[str, Any]] = []
+    rebuilt_idx = 0
+    for em in existing:
+        if (em.get('sender') == 'user' and em.get('text')
+                and em.get('text') not in rebuilt_user_texts):
+            merged.append(em)
+            continue
+        if rebuilt_idx < len(rebuilt):
+            merged.append(rebuilt[rebuilt_idx])
+            rebuilt_idx += 1
+    # Anything left in ``rebuilt`` is newer than ``existing`` — append as-is.
+    merged.extend(rebuilt[rebuilt_idx:])
+
+    for i, m in enumerate(merged, start=1):
+        m['message_number'] = i
+    return merged
