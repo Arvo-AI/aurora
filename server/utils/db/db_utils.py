@@ -1461,6 +1461,23 @@ def initialize_tables():
                 logging.warning(f"Error adding incident_id index: {e}")
                 conn.rollback()
 
+            # Migration: Add pending_turn column (live HITL state, separate from
+            # the append-only messages history). Cleared by the command gate
+            # once the user resolves the confirmation. Rehydrated as a
+            # synthetic tail card on session load.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS pending_turn JSONB;
+                """)
+                logging.info(
+                    "Added pending_turn column to chat_sessions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding pending_turn column: {e}")
+                conn.rollback()
+
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist
             try:
                 cursor.execute("""
