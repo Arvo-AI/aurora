@@ -604,7 +604,8 @@ const ConfirmationPanel = ({ tool, command, userId, sessionId, sendRaw, onToolUp
       session_id: sessionId,
     }
     if (decision === 'execute_always') payload.edited_patterns = edited
-    sendRaw(JSON.stringify(payload))
+    const sent = sendRaw(JSON.stringify(payload))
+    if (!sent) return
     if (decision === 'cancel') {
       onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
     } else {

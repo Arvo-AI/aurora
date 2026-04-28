@@ -344,8 +344,8 @@ def derive_pattern_from_command(command: str) -> str:
     because the user can loosen it in the edit box before confirming.
 
     Examples:
-        "sudo kubectl delete pod foo"            -> ^kubectl delete\\b
-        "KUBECONFIG=/x kubectl get pods"         -> ^kubectl get\\b
+        "sudo kubectl delete pod foo"            -> ^kubectl delete pod\\b
+        "KUBECONFIG=/x kubectl get pods"         -> ^kubectl get pods\\b
         "aws ec2 terminate-instances --id"       -> ^aws ec2 terminate-instances\\b
         "for i in {1..10}; do echo $i; done"     -> ^for i in \\{1\\.\\.10\\}; do echo \\$i; done$
     """
@@ -363,9 +363,11 @@ def derive_pattern_from_command(command: str) -> str:
         if tok.startswith("-"):
             break
         parts.append(tok)
-        # Stop after CLI + first subcommand to keep the pattern reasonably
-        # narrow. Callers (UI) can edit before applying.
-        if len(parts) >= 2:
+        # Stop after CLI + up to two subcommand tokens so multi-word
+        # subcommands like "aws ec2 terminate-instances" match the docstring
+        # example rather than collapsing to "^aws\s+ec2\b". Users can still
+        # tighten or loosen in the editable UI field.
+        if len(parts) >= 3:
             break
     return r"^" + r"\s+".join(re.escape(p) for p in parts) + r"\b"
 

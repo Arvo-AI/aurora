@@ -135,23 +135,27 @@ def gate_command(
         _gate_inflight_command.reset(token)
 
 
-def is_session_tainted(session_id: Optional[str]) -> bool:
+def is_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> bool:
     """Return True iff ``session_id`` has been marked tainted (NeMo input-rail
     hit on the opening user message of this foreground chat).
 
     Tainted sessions force every command through user confirmation, even when
-    all guardrail layers pass. Fails closed on DB errors (treats as untainted)
+    all guardrail layers pass. Reads under the caller's RLS context (matches
+    ``mark_session_tainted``); fails closed (treats as untainted) on DB error
     since the gate's other layers already provide defense-in-depth.
     """
-    if not session_id:
+    if not session_id or not user_id:
         return False
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
+            if not set_rls_context(cursor, conn, user_id, log_prefix="[CommandGate:TaintRead]"):
+                return False
             cursor.execute(
-                "SELECT security_tainted FROM chat_sessions WHERE id = %s",
-                (session_id,),
+                "SELECT security_tainted FROM chat_sessions WHERE id = %s AND user_id = %s",
+                (session_id, user_id),
             )
             row = cursor.fetchone()
             return bool(row and row[0])
@@ -202,7 +206,7 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
 
     safety_blocked = safety_decision.blocked
     policy_blocked = not policy_verdict.allowed
-    tainted = foreground and is_session_tainted(session_id)
+    tainted = foreground and is_session_tainted(session_id, user_id)
 
     if not (safety_blocked or policy_blocked or tainted):
         # Tell terminal_run._check_guardrails it may skip re-running
@@ -265,6 +269,24 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     return decision
 
 
+def _user_is_org_admin(user_id: str, org_id: Optional[str]) -> bool:
+    """Return True iff *user_id* has admin access in *org_id*.
+
+    Yes-Always mutates ``org_command_policies``, which the HTTP routes
+    gate behind ``require_permission("admin", "access")``. We mirror that
+    check here so a non-admin cannot rewrite org policy by clicking a
+    chat button. Fails closed on any error.
+    """
+    if not user_id or not org_id:
+        return False
+    try:
+        from utils.auth.enforcer import get_enforcer
+        return bool(get_enforcer().enforce(user_id, org_id, "admin", "access"))
+    except Exception as e:
+        logger.warning(f"[CommandGate] admin check failed for {user_id}/{org_id}: {e}")
+        return False
+
+
 def _prompt_user(
     *,
     user_id: str,
@@ -292,7 +314,15 @@ def _prompt_user(
         "block_reason": block_reason,
         "command": command,
     }
-    if allow_yes_always and yes_always_changes:
+    # Yes-Always rewrites org_command_policies, which the HTTP routes gate
+    # behind admin. Non-admins get Yes/No only; their approval is
+    # session-scoped and no policy row changes.
+    offer_always = (
+        allow_yes_always
+        and bool(yes_always_changes)
+        and _user_is_org_admin(user_id, org_id)
+    )
+    if offer_always:
         options.append({"text": "Yes, Always", "value": "execute_always"})
         extra["yes_always_effect"] = {
             "summary": "This will modify your organization's command policy:",
@@ -324,7 +354,7 @@ def _prompt_user(
 
     if decision == "execute":
         return _ALLOWED
-    if decision == "execute_always" and allow_yes_always and org_id:
+    if decision == "execute_always" and offer_always and org_id:
         edited = result.get("edited_patterns") or {}
         applied = []
         for idx, ch in enumerate(yes_always_changes):

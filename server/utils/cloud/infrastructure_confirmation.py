@@ -122,14 +122,16 @@ async def handle_websocket_confirmation_response(data: dict):
             if isinstance(edited, dict):
                 confirmation_data['edited_patterns'] = edited
             logger.debug(f"WEBSOCKET: Confirmation {confirmation_id} resolved with decision: {decision}")
+            # Clear the durable live-state slot immediately on user response
+            # so a concurrent reload in another tab sees the resolved state
+            # rather than the stale prompt. The waiter's finally block also
+            # clears it, which makes this a safe no-op if it ran first.
+            # Only clear when the id actually matched a pending waiter --
+            # otherwise a stale/late response for a superseded prompt would
+            # erase the currently active slot.
+            _clear_pending_turn(session_id, user_id)
         else:
             logger.warning(f"WEBSOCKET: No pending confirmation found for ID: {confirmation_id}")
-
-        # Clear the durable live-state slot immediately on user response so a
-        # concurrent reload in another tab sees the resolved state rather
-        # than the stale prompt. The waiter's finally block also clears it,
-        # which makes this a safe no-op if it ran first.
-        _clear_pending_turn(session_id, user_id)
 
     except Exception as e:
         logger.error(f"Error handling WebSocket confirmation response: {e}")
@@ -194,13 +196,12 @@ def wait_for_user_confirmation(
     if user_id:
         payload["user_id"] = user_id
 
-    _send_ws(payload, tool_name)
-
     _pending_confirmations[confirmation_id] = {
         'result': None,
         'user_id': user_id,
         'timestamp': time.time()
     }
+    _send_ws(payload, tool_name)
 
     logger.debug(f"WEBSOCKET: Waiting for user confirmation via WebSocket with ID: {confirmation_id}")
 
@@ -290,13 +291,15 @@ def wait_for_user_confirmation_ex(
             "created_at": datetime.now().isoformat(),
         })
 
-    _send_ws(payload, tool_name)
-
     _pending_confirmations[confirmation_id] = {
         'result': None,
         'user_id': user_id,
         'timestamp': time.time(),
     }
+    # Register the waiter before sending so a fast client response can never
+    # arrive before _pending_confirmations has the entry
+    # (_send_ws dispatches on a daemon thread, see cloud_tools).
+    _send_ws(payload, tool_name)
     logger.debug(f"WEBSOCKET: Waiting for confirmation_ex {confirmation_id}")
 
     decision: Optional[str] = None
