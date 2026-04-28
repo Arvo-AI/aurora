@@ -260,8 +260,10 @@ def _prompt_user(
             ],
         }
 
-    # A single-line human prompt shown in the UI alongside the options.
-    message = f"{tool_name}: {block_reason}. Command: {command[:500]}"
+    # Compact label for the UI. The full reason and command ride along in
+    # ``extra`` (``block_reason`` / ``command``) for tooltips, logging, and
+    # the pattern derivation in the Yes-Always popover.
+    message = "Approval needed"
     result = wait_for_user_confirmation_ex(
         user_id=user_id,
         message=message,
