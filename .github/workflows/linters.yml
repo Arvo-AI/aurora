@@ -51,6 +51,10 @@ jobs:
           fi
           python -m pytest "${tests[@]}" -v
 
+      - name: Run unit tests
+        working-directory: server
+        run: python -m pytest tests/test_log_sanitizer.py tests/test_payload_timestamp.py -v
+
       - name: Run security tests
         working-directory: server
         run: python -m pytest tests/security/ -v
