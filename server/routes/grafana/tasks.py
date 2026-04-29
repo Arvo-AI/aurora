@@ -515,12 +515,13 @@ def process_grafana_alert(
                                             user_id=user_id, title=chat_title,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
                                         )
-                                        rca_prompt = build_grafana_rca_prompt(alert_payload, user_id=user_id)
+                                        rca_prompt, rail_text = build_grafana_rca_prompt(alert_payload, user_id=user_id)
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
                                                               "alert_title": per_alert_title, "alert_state": alert_state},
                                             incident_id=str(incident_id) if incident_id else None,
+                                            rail_text=rail_text,
                                         )
                                         if incident_id:
                                             cursor.execute(

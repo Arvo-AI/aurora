@@ -345,7 +345,7 @@ def process_splunk_alert(
                                 )
 
                                 # Build comprehensive RCA prompt with provider context
-                                rca_prompt = build_splunk_rca_prompt(
+                                rca_prompt, rail_text = build_splunk_rca_prompt(
                                     payload, user_id=user_id
                                 )
 
@@ -362,6 +362,7 @@ def process_splunk_alert(
                                     incident_id=str(incident_id)
                                     if incident_id
                                     else None,
+                                    rail_text=rail_text,
                                 )
                                 
                                 # Store Celery task ID immediately for cancellation support

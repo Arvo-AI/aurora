@@ -347,13 +347,14 @@ def trigger_delayed_rca(
 
                         event_data = consolidated_payload.get("event", {})
                         incident_data = event_data.get("data", {})
-                        rca_prompt = build_pagerduty_rca_prompt(
+                        rca_prompt, rail_text = build_pagerduty_rca_prompt(
                             incident_data, user_id=user_id
                         )
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         rca_prompt = (
                             f"PagerDuty incident #{incident_number}: {incident_title}"
                         )
+                        rail_text = f"PagerDuty incident #{incident_number}: {incident_title}"
                         logger.warning(
                             "[PAGERDUTY][RCA-DELAYED] Failed to parse consolidated payload: %s",
                             e,
@@ -362,6 +363,7 @@ def trigger_delayed_rca(
                     rca_prompt = (
                         f"PagerDuty incident #{incident_number}: {incident_title}"
                     )
+                    rail_text = f"PagerDuty incident #{incident_number}: {incident_title}"
 
                 # Try to fetch and attach runbook if available
                 if runbook_url:
@@ -404,6 +406,7 @@ def trigger_delayed_rca(
                         "incident_number": incident_number,
                     },
                     incident_id=incident_db_id,
+                    rail_text=rail_text,
                 )
                 
                 # Store Celery task ID immediately for cancellation support

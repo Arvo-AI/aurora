@@ -29,6 +29,29 @@ RCA_SEGMENTS_DIR = os.path.normpath(
 )
 
 
+def build_alert_rail_text(alert_details: Dict[str, Any]) -> str:
+    """Extract the webhook-authored subset of an alert for input-rail evaluation.
+
+    Synthesized RCA prompts wrap externally-controlled fields (alert title,
+    status, message/description) in a large instruction scaffold. The scaffold
+    is not user input and must not be fed to the prompt-injection rail (it
+    produces false positives with stricter models). This helper returns only
+    the webhook-provided text so the rail evaluates exactly the attacker-
+    controllable surface.
+    """
+    parts: List[str] = []
+    title = alert_details.get('title')
+    if isinstance(title, str) and title.strip():
+        parts.append(title.strip())
+    status = alert_details.get('status')
+    if isinstance(status, str) and status.strip() and status.strip().lower() != 'unknown':
+        parts.append(f"Status: {status.strip()}")
+    message = alert_details.get('message')
+    if isinstance(message, str) and message.strip():
+        parts.append(message.strip())
+    return "\n\n".join(parts)
+
+
 @lru_cache(maxsize=32)
 def _load_rca_segment_template(segment_name: str) -> str:
     """
@@ -485,8 +508,16 @@ def build_rca_prompt(
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
     integrations: Optional[Dict[str, bool]] = None,
-) -> str:
-    """Build a comprehensive, provider-aware RCA prompt."""
+) -> tuple[str, str]:
+    """Build a comprehensive, provider-aware RCA prompt.
+
+    Returns:
+        (prompt, rail_text) tuple where ``prompt`` is the full synthesized
+        RCA instruction scaffold sent to the agent as the initial message,
+        and ``rail_text`` is the webhook-authored subset that input guardrails
+        should evaluate for prompt injection. Callers must forward rail_text
+        into ``run_background_chat`` via the ``rail_text`` parameter.
+    """
     # Fetch providers if not provided
     if not providers and user_id:
         providers = get_user_providers(user_id)
@@ -688,14 +719,14 @@ def build_rca_prompt(
     _append_rca_segment(prompt_parts, "what_to_investigate", leading_blank=True)
     _append_rca_segment(prompt_parts, "output_requirements", leading_blank=True)
 
-    return "\n".join(prompt_parts)
+    return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
 
 
 def build_grafana_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from Grafana alert payload."""
     title = payload.get("title") or payload.get("ruleName") or "Unknown Alert"
     status = payload.get("state") or payload.get("status") or "unknown"
@@ -725,7 +756,7 @@ def build_datadog_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from Datadog alert payload."""
     title = payload.get("title") or payload.get("event_title") or payload.get("event", {}).get("title") or "Unknown Alert"
     status = payload.get("status") or payload.get("state") or payload.get("alert_type") or "unknown"
@@ -751,7 +782,7 @@ def build_dynatrace_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from Dynatrace problem notification payload."""
     title = payload.get("ProblemTitle") or "Unknown Problem"
     impact = payload.get("ProblemImpact") or "unknown"
@@ -779,7 +810,7 @@ def build_netdata_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from Netdata alert payload."""
     alarm = payload.get("name") or payload.get("alarm") or payload.get("title") or "Unknown Alert"
     status = payload.get("status") or "unknown"
@@ -816,7 +847,7 @@ def build_pagerduty_rca_prompt(
     incident: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from PagerDuty V3 incident data."""
     title = incident.get("title", "Untitled Incident")
     incident_number = incident.get("number", "unknown")
@@ -906,7 +937,7 @@ def build_jenkins_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from a Jenkins deployment failure event."""
     service = payload.get("service") or payload.get("job_name") or "Unknown Service"
     result = payload.get("result", "FAILURE")
@@ -938,7 +969,7 @@ def build_cloudbees_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from a CloudBees CI deployment failure event."""
     service = payload.get("service") or payload.get("job_name") or "Unknown Service"
     result = payload.get("result", "FAILURE")
@@ -970,7 +1001,7 @@ def build_spinnaker_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from a Spinnaker pipeline failure event."""
     application = payload.get("application") or "Unknown Application"
     pipeline_name = payload.get("pipeline_name") or payload.get("pipeline", "Unknown Pipeline")
@@ -1002,7 +1033,7 @@ def build_bigpanda_rca_prompt(
     alerts: list,
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from BigPanda incident payload."""
     first_alert = alerts[0] if alerts else {}
     title = (
@@ -1048,7 +1079,7 @@ def build_splunk_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from Splunk alert payload."""
     search_name = payload.get("search_name") or payload.get("name") or "Unknown Alert"
     result_count = payload.get("result_count") or payload.get("results_count") or 0
@@ -1089,7 +1120,7 @@ def build_newrelic_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from New Relic alert/issue webhook payload."""
     from routes.newrelic.tasks import extract_newrelic_title
     title = extract_newrelic_title(payload)
@@ -1146,7 +1177,7 @@ def build_chat_rca_prompt(
     severity: str = "medium",
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from a user-reported incident in chat.
 
     Wraps the user's free-text description into the standard alert_details
@@ -1174,7 +1205,7 @@ def build_opsgenie_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from OpsGenie alert webhook payload."""
     alert = payload.get("alert", {})
     message = alert.get("message") or "Unknown Alert"
@@ -1235,7 +1266,7 @@ def build_incidentio_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
-) -> str:
+) -> tuple[str, str]:
     """Build RCA prompt from incident.io webhook event payload."""
     event = payload.get("event", {}) or {}
     incident = event.get("incident") or payload.get("incident") or {}

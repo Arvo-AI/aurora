@@ -368,7 +368,7 @@ def _trigger_rca_pipeline(
             incident_id=str(incident_id),
         )
 
-        rca_prompt = build_incidentio_rca_prompt(payload, user_id=user_id)
+        rca_prompt, rail_text = build_incidentio_rca_prompt(payload, user_id=user_id)
 
         task = run_background_chat.delay(
             user_id=user_id,
@@ -380,6 +380,7 @@ def _trigger_rca_pipeline(
                 "incident_name": fields["incident_name"],
             },
             incident_id=str(incident_id),
+            rail_text=rail_text,
         )
 
         # Store task ID for cancellation support

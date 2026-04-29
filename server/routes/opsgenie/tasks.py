@@ -340,7 +340,7 @@ def process_opsgenie_event(
                                 incident_id=str(incident_id),
                             )
 
-                            rca_prompt = build_opsgenie_rca_prompt(
+                            rca_prompt, rail_text = build_opsgenie_rca_prompt(
                                 payload, user_id=user_id
                             )
 
@@ -355,6 +355,7 @@ def process_opsgenie_event(
                                     "action": action,
                                 },
                                 incident_id=str(incident_id),
+                                rail_text=rail_text,
                             )
 
                             cursor.execute(

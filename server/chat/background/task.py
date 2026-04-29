@@ -399,6 +399,7 @@ def run_background_chat(
     incident_id: Optional[str] = None,
     send_notifications: bool = True,
     mode: str = "ask",
+    rail_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -417,6 +418,12 @@ def run_background_chat(
             e.g., {"source": "grafana", "alert_id": "abc123"}
         provider_preference: Cloud providers to use, defaults to user's configured providers
         mode: Chat mode - "ask" for read-only (default), "agent" for execution
+        rail_text: Optional user-authored subset of the initial_message to evaluate
+            with the input guardrail rail. When triggers synthesize a large prompt
+            around a webhook payload (e.g. PagerDuty incident title + description),
+            only the externally-controlled fields should be checked for prompt
+            injection; the internal instruction scaffolding should not. When
+            omitted, falls back to initial_message (legacy behavior).
 
     Returns:
         Dict with session_id, status, and any error information
@@ -547,6 +554,7 @@ def run_background_chat(
                 provider_preference=provider_preference,
                 incident_id=incident_id,
                 mode=mode,
+                rail_text=rail_text,
             ))
             pass
         except Exception as e:
@@ -1009,6 +1017,7 @@ async def _execute_background_chat(
     provider_preference: Optional[List[str]] = None,
     incident_id: Optional[str] = None,
     mode: str = "ask",
+    rail_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1069,6 +1078,15 @@ async def _execute_background_chat(
         # Import centralized model config
         from chat.backend.agent.llm import ModelConfig
 
+        # state.question is what input guardrails evaluate (see
+        # workflow._get_input_rail_text). For synthesized RCA prompts built
+        # around an external webhook payload, only the webhook-authored text
+        # should be rail-checked — the internal instruction scaffolding is not
+        # user input and would produce false positives. Callers pass rail_text
+        # for that case; fall back to initial_message to preserve legacy
+        # semantics for triggers that forward a raw user question.
+        rail_question = rail_text if rail_text else initial_message
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
@@ -1078,7 +1096,7 @@ async def _execute_background_chat(
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],
-            question=initial_message,
+            question=rail_question,
             model=ModelConfig.RCA_MODEL,
             mode=mode,
             is_background=True,  # Key flag for background behavior

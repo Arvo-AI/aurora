@@ -406,7 +406,7 @@ def process_datadog_event(
                                 )
 
                                 # Build comprehensive RCA prompt with provider context
-                                rca_prompt = build_datadog_rca_prompt(
+                                rca_prompt, rail_text = build_datadog_rca_prompt(
                                     payload, user_id=user_id
                                 )
 
@@ -422,6 +422,7 @@ def process_datadog_event(
                                         "status": status,
                                     },
                                     incident_id=str(incident_id),
+                                    rail_text=rail_text,
                                 )
                                 
                                 # Store Celery task ID immediately for cancellation support

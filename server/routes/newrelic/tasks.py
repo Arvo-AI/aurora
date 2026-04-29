@@ -423,7 +423,7 @@ def process_newrelic_event(
                                 incident_id=str(incident_id),
                             )
 
-                            rca_prompt = build_newrelic_rca_prompt(payload, user_id=user_id)
+                            rca_prompt, rail_text = build_newrelic_rca_prompt(payload, user_id=user_id)
 
                             task = run_background_chat.delay(
                                 user_id=user_id,
@@ -435,6 +435,7 @@ def process_newrelic_event(
                                     "status": status_str,
                                 },
                                 incident_id=str(incident_id),
+                                rail_text=rail_text,
                             )
 
                             cursor.execute(

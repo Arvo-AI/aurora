@@ -191,7 +191,7 @@ def trigger_rca(
             trigger_metadata=trigger_metadata, incident_id=incident_id,
         )
 
-        rca_prompt = build_chat_rca_prompt(
+        rca_prompt, rail_text = build_chat_rca_prompt(
             description=issue_description, title=incident_title,
             service=service, severity=severity, user_id=user_id,
         )
@@ -200,6 +200,7 @@ def trigger_rca(
             user_id=user_id, session_id=rca_session_id,
             initial_message=rca_prompt, trigger_metadata=trigger_metadata,
             incident_id=incident_id,
+            rail_text=rail_text,
         )
 
         try:
