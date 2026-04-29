@@ -141,6 +141,7 @@ export interface StreamingThought {
   timestamp: string;
   content: string;
   type: 'analysis' | 'finding' | 'hypothesis' | 'action';
+  agent_id?: string | null;
 }
 
 export interface Citation {
@@ -236,6 +237,44 @@ export interface Incident {
   } | null;
 }
 
+// ============================================================================
+// Multi-Agent / SubAgent Types
+// ============================================================================
+
+export type SubAgentRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type SubAgentRole = 'main' | 'subagent';
+
+export interface SubAgentRun {
+  agent_id: string;
+  parent_agent_id: string | null;
+  role: SubAgentRole;
+  delegate_level: number;
+  purpose: string | null;
+  ui_label: string | null;
+  model_used: string | null;
+  status: SubAgentRunStatus;
+  self_assessed_strength: 'high' | 'medium' | 'low' | 'inconclusive' | null;
+  started_at: string | null;
+  ended_at: string | null;
+  findings_artifact_ref: string | null;
+  error: string | null;
+  suggested_skill_focus: string[];
+}
+
+export interface SubAgentDetail {
+  run: SubAgentRun;
+  findings_markdown: string | null;
+  findings_frontmatter: Record<string, unknown> | null;
+  findings_sections: Record<string, string> | null;
+}
+
+export interface SubAgentTranscriptEvent {
+  seq: number;
+  type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 // Mock data removed - all data now comes from the backend API
 
 // ============================================================================
@@ -307,6 +346,7 @@ export const incidentsService = {
           timestamp: t.timestamp,
           content: t.content,
           type: t.type || 'analysis',
+          agent_id: t.agent_id ?? null,
         })),
         suggestions: (inc.suggestions || []).map((s: any) => ({
           id: s.id,
@@ -648,4 +688,39 @@ export const postmortemService = {
     }
   },
 };
+
+// ============================================================================
+// Multi-Agent fetchers
+// ============================================================================
+
+export async function fetchIncidentSubAgents(incidentId: string): Promise<SubAgentRun[]> {
+  try {
+    const data = await apiGet<{ runs: SubAgentRun[] }>(`/api/incidents/${incidentId}/subagents`);
+    return data.runs ?? [];
+  } catch (error) {
+    if ((error as ApiError).status === 404) return [];
+    console.error('Error fetching sub-agent runs:', error);
+    return [];
+  }
+}
+
+export async function fetchSubAgentDetail(
+  incidentId: string,
+  agentId: string,
+): Promise<SubAgentDetail> {
+  return apiGet<SubAgentDetail>(
+    `/api/incidents/${incidentId}/subagents/${encodeURIComponent(agentId)}`,
+  );
+}
+
+export async function fetchSubAgentTranscript(
+  incidentId: string,
+  agentId: string,
+  afterSeq?: number,
+): Promise<{ events: SubAgentTranscriptEvent[]; truncated?: boolean; next_seq?: number }> {
+  const qs = afterSeq !== undefined ? `?after_seq=${afterSeq}` : '';
+  return apiGet<{ events: SubAgentTranscriptEvent[]; truncated?: boolean; next_seq?: number }>(
+    `/api/incidents/${incidentId}/subagents/${encodeURIComponent(agentId)}/transcript${qs}`,
+  );
+}
 
