@@ -1,5 +1,47 @@
 """Regression coverage for chat-triggered RCA input rail handling."""
 
+import sys
+from types import ModuleType
+
+
+def _stub_module(name, **attrs):
+    module = ModuleType(name)
+    for attr, value in attrs.items():
+        setattr(module, attr, value)
+    sys.modules[name] = module
+    return module
+
+
+class _Dummy:
+    pass
+
+
+class _DummyRunnableConfig(dict):
+    pass
+
+
+_stub_module("langgraph")
+_stub_module("langgraph.graph", StateGraph=_Dummy, START="START", END="END")
+_stub_module("langgraph.graph.state", CompiledStateGraph=_Dummy)
+_stub_module("langchain_core")
+_stub_module("langchain_core.runnables")
+_stub_module("langchain_core.runnables.config", RunnableConfig=_DummyRunnableConfig)
+_stub_module(
+    "langchain_core.messages",
+    AIMessageChunk=_Dummy,
+    AIMessage=_Dummy,
+    SystemMessage=_Dummy,
+    AnyMessage=_Dummy,
+)
+_stub_module("chat.backend.agent.agent", Agent=_Dummy)
+_stub_module(
+    "chat.backend.agent.utils.safe_memory_saver",
+    SafeMemorySaver=_Dummy,
+)
+_stub_module("chat.backend.agent.utils.state", State=_Dummy)
+_stub_module("utils.auth.stateless_auth", set_rls_context=lambda *args, **kwargs: None)
+_stub_module("utils.security.audit_events", emit_block_event=lambda *args, **kwargs: None)
+
 from chat.backend.agent.workflow import _get_input_rail_text
 
 
