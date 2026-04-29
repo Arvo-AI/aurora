@@ -126,8 +126,24 @@ class ToolContextCapture:
         self.content_to_tool_id = {}  # Map: content_hash → tool_call_id
         # Lock to guard concurrent access to current_tool_calls from concurrent threads/tasks
         self.lock = threading.Lock()
-        # Enforce sequential tool execution per session
-        self.execution_lock = threading.Lock()
+        # Per-agent execution locks. Within an agent_id tool calls remain serial
+        # (preserves the existing ordering invariant relied on by signature
+        # matching); across agent_ids — sub-agents fanning out — locks are
+        # independent so parallelism is preserved. The map is created lazily
+        # via get_execution_lock(); the wrapper is sync, so threading.Lock is
+        # the right primitive.
+        self.execution_locks: Dict[str, threading.Lock] = {}
+        self._execution_locks_guard = threading.Lock()
+
+    def get_execution_lock(self, agent_id: Optional[str]) -> threading.Lock:
+        """Return (creating if needed) the threading.Lock for a given agent_id."""
+        key = agent_id or "main"
+        with self._execution_locks_guard:
+            lock = self.execution_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self.execution_locks[key] = lock
+            return lock
 
     # ------------------------------------------------------------------
     # execution_steps persistence (only for incident-linked sessions)

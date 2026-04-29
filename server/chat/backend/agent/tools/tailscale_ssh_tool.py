@@ -80,11 +80,19 @@ def _execute_ssh_local(
     ])
 
     try:
-        result = subprocess.run(
-            ssh_cmd,
+        # Cancel-aware Popen wait. Long-running SSH commands must die when the
+        # user cancels the RCA — otherwise we tie up the device until the
+        # default 5-min timeout elapses.
+        from utils.terminal.terminal_run import run_with_cancel
+        result = run_with_cancel(
+            cmd=ssh_cmd,
+            args=ssh_cmd,
             capture_output=True,
             text=True,
-            timeout=timeout
+            shell=False,
+            timeout=timeout,
+            cwd=None,
+            env=None,
         )
 
         output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout)

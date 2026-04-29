@@ -180,181 +180,198 @@ from utils.cloud.cloud_utils import (
 )
 from chat.backend.agent.access import ModeAccessController
 
-# Thread-local storage for user context and WebSocket sender
-_context = threading.local()
-
-# Global lock for WebSocket sending to prevent message corruption
-_websocket_send_lock = threading.Lock()
-
-# Lock for WebSocket connection management
-_websocket_connection_lock = threading.Lock()
-_websocket_connections: Dict[Tuple[str, str], Tuple[Any, Any, int]] = {}
-
 # -----------------------------------------------------------------------------
-# WebSocket connection management functions (keep these in cloud_tools.py)
+# Tool emit helpers
+#
+# All tool start/result/error events go through chat_events.record_event(...),
+# which fans out to: chat_events DB row + active WS sender (legacy WS path)
+# + Redis Stream (SSE path) + pub/sub. Sub-agent execution and SSE both rely
+# on this single emit path; cloud_tools no longer keeps its own WS connection
+# registry, lock, or thread-spawning sender.
+#
+# The non-tool-event helpers (`send_websocket_message`) preserve their public
+# signatures because callers in infrastructure_confirmation, terminal_pod_manager,
+# and iac_user_flows still need a way to push raw envelopes (toasts, awaiting-
+# confirmation cards) to whichever transport is currently active. Those
+# envelopes are not domain events, so they bypass record_event and write
+# directly to the active WS sender contextvar (or schedule onto the captured
+# event loop when called from a non-async context).
 # -----------------------------------------------------------------------------
 
-def register_websocket_connection(user_id: str, session_id: str, websocket_sender, event_loop, connection_id: int):
-    """Register a new WebSocket connection for a user/session pair."""
-    with _websocket_connection_lock:
-        key = (user_id, session_id)
-        _websocket_connections[key] = (websocket_sender, event_loop, connection_id)
-        logging.info(f"WEBSOCKET: Registered connection {connection_id} for user {user_id}, session {session_id}")
 
-def unregister_websocket_connection(user_id: str, session_id: str):
-    """Unregister a WebSocket connection when it's closed."""
-    with _websocket_connection_lock:
-        key = (user_id, session_id)
-        if key in _websocket_connections:
-            old_connection_id = _websocket_connections[key][2]
-            del _websocket_connections[key]
-            logging.info(f"WEBSOCKET: Unregistered connection {old_connection_id} for user {user_id}, session {session_id}")
+def _capture_request_loop() -> Optional[asyncio.AbstractEventLoop]:
+    """Best-effort grab of the request-bound event loop captured by cloud_utils.
 
-def get_active_websocket_connection(user_id: str, session_id: str):
-    """Get the currently active WebSocket connection for a user/session pair."""
-    with _websocket_connection_lock:
-        key = (user_id, session_id)
-        return _websocket_connections.get(key)
-
-def update_workflow_websocket_context(user_id: str, session_id: str):
-    """Update the workflow's WebSocket context with the current active connection."""
-    active_connection = get_active_websocket_connection(user_id, session_id)
-    if active_connection:
-        websocket_sender, event_loop, connection_id = active_connection
-        set_websocket_context(websocket_sender, event_loop)
-        logging.debug(f"WEBSOCKET: Updated workflow context with connection {connection_id} for user {user_id}, session {session_id}")
-        
-        # Also update the Agent's websocket_sender if we can find the workflow
-        try:
-            workflow = get_workflow_context()
-            if workflow and hasattr(workflow, 'agent') and hasattr(workflow.agent, 'update_websocket_sender'):
-                workflow.agent.update_websocket_sender(websocket_sender, event_loop)
-                logging.debug(f"WEBSOCKET: Updated Agent websocket_sender for user {user_id}, session {session_id}")
-            else:
-                logging.warning(f"WEBSOCKET: Could not find workflow or agent to update websocket_sender")
-        except Exception as e:
-            logging.warning(f"WEBSOCKET: Error updating Agent websocket_sender: {e}")
-        
-        return True
-    else:
-        logging.warning(f"WEBSOCKET: No active connection found for user {user_id}, session {session_id}")
-        return False
-
-def validate_websocket_message(data):
-    """Validate that data can be safely serialized as JSON for WebSocket transmission."""
-    try:
-        # Try to serialize and deserialize to ensure it's valid
-        json_str = json.dumps(data, ensure_ascii=False)
-        parsed_back = json.loads(json_str)
-        return True, json_str
-    except Exception as e:
-        logging.error(f"WebSocket message validation failed: {e}")
-        return False, None
-
-def _send_ws_message_now(websocket_sender, message_data: Dict[str, Any], tool_name: str, fallback_message: Optional[str] = None, connection_id: str = "unknown") -> None:
-    """Send a validated WebSocket message immediately in the current thread.
-
-    Extracted from the nested function inside send_websocket_message for clarity.
+    Used by sync code paths (IaC `with_completion_notification`, the MCP
+    wrapper) that need to schedule an async record_event onto the same loop
+    the WS handler is running on.
     """
-    with _websocket_send_lock:
+    try:
+        _, event_loop = get_websocket_context()
+    except Exception:
+        return None
+    if event_loop and not event_loop.is_closed():
+        return event_loop
+    return None
+
+
+def _resolve_session_org() -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve (session_id, org_id, user_id) from the active capture/context."""
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    org_id: Optional[str] = None
+    try:
+        ctx = get_user_context()
+        user_id = ctx.get('user_id') if isinstance(ctx, dict) else ctx
+    except Exception:
+        pass
+    try:
+        state_ctx = get_state_context()
+        if state_ctx is not None:
+            session_id = getattr(state_ctx, 'session_id', None)
+            org_id = getattr(state_ctx, 'org_id', None)
+    except Exception:
+        pass
+    capture = get_tool_capture()
+    if capture is not None:
+        session_id = session_id or getattr(capture, 'session_id', None)
+        org_id = org_id or getattr(capture, 'org_id', None)
+        user_id = user_id or getattr(capture, 'user_id', None)
+    return session_id, org_id, user_id
+
+
+def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
+    """Emit a single chat_events record_event from any context (sync or async).
+
+    record_event writes the durable DB row first, then fans out to the active
+    WS sender (legacy WS) and the Redis Stream/pub-sub bridge (SSE). If no
+    event loop is reachable we drop the emit and log; durability isn't lost
+    because tool_context_capture's own _emit_chat_event covers the
+    backend-driven side, and these helpers only originate from the optional
+    UI-signal path.
+    """
+    session_id, org_id, _ = _resolve_session_org()
+    if not session_id or not org_id:
+        logger.debug("emit_event skipped (missing session/org) type=%s", event_type)
+        return
+
+    from chat.backend.agent.utils.persistence.chat_events import record_event
+    from chat.backend.agent.utils.tool_context_capture import (
+        _capture_agent_id_var,
+        _capture_parent_agent_id_var,
+    )
+
+    agent_id = _capture_agent_id_var.get()
+    parent_agent_id = _capture_parent_agent_id_var.get()
+
+    coro = record_event(
+        session_id=session_id,
+        org_id=org_id,
+        type=event_type,
+        payload=payload,
+        agent_id=agent_id,
+        parent_agent_id=parent_agent_id,
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        task = loop.create_task(coro)
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        return
+
+    request_loop = _capture_request_loop()
+    if request_loop is not None:
         try:
-
-            # Validate the message before sending
-            is_valid, json_message = validate_websocket_message(message_data)
-
-            if not is_valid and fallback_message:
-                logging.error(f"Failed to validate WebSocket message for {tool_name}, sending fallback")
-                # Create fallback message
-                fallback_data = {
-                    "type": message_data.get("type", "tool_result"),
-                    "data": {
-                        "tool_name": str(tool_name),
-                        "output": fallback_message,
-                        "status": message_data.get("data", {}).get("status", "completed"),
-                        "timestamp": str(datetime.now().isoformat())
-                    }
-                }
-                is_valid, json_message = validate_websocket_message(fallback_data)
-
-            if not is_valid:
-                logging.error(f"WebSocket message validation failed for {tool_name}")
-                return
-
-            # Create a new event loop in this thread if needed
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            # Run the websocket send coroutine
-            logging.debug(f"📤 Sending WebSocket message for {tool_name} via connection {connection_id}: {json_message[:200]}...")
-            if websocket_sender:  # Type checker hint
-                loop.run_until_complete(websocket_sender(json_message))
-                logging.info(f"✅ Sent WebSocket message for {tool_name} via connection {connection_id}")
-
+            asyncio.run_coroutine_threadsafe(coro, request_loop)
+            return
         except Exception as e:
-            if "ConnectionClosed" in str(e) or "no close frame" in str(e):
-                logging.warning(f"WebSocket connection {connection_id} closed during message send for {tool_name}")
-            elif "AssertionError" in str(e) or "permessage_deflate" in str(e):
-                logging.error(f"WebSocket compression error for tool {tool_name} via connection {connection_id}: {e}")
-            else:
-                logging.error(f"Failed to send WebSocket message for {tool_name} via connection {connection_id}: {e}")
-                logging.debug(f"Error details: {str(e)}")
+            logger.warning("emit_event run_coroutine_threadsafe failed type=%s err=%s", event_type, e)
+
+    logger.warning("emit_event dropped (no event loop) type=%s", event_type)
+    coro.close()
+
+
+def _send_raw_envelope(envelope: Dict[str, Any]) -> None:
+    """Send a raw (non-record_event) envelope to the active WS sender.
+
+    Used for non-domain-event payloads like awaiting-confirmation cards and
+    toast notifications. These envelopes have no chat_events shape, so they
+    bypass record_event and go straight to the WS sender contextvar.
+    """
+    from chat.backend.agent.utils.persistence.chat_events import _active_ws_sender_var
+
+    sender = _active_ws_sender_var.get()
+    if sender is None:
+        logger.debug("send_raw_envelope skipped (no active sender)")
+        return
+
+    coro = sender(envelope)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        task = loop.create_task(coro)
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        return
+
+    request_loop = _capture_request_loop()
+    if request_loop is not None:
+        try:
+            asyncio.run_coroutine_threadsafe(coro, request_loop)
+            return
+        except Exception as e:
+            logger.warning("send_raw_envelope run_coroutine_threadsafe failed: %s", e)
+
+    logger.warning("send_raw_envelope dropped (no event loop)")
+    coro.close()
+
 
 def send_websocket_message(message_data: Dict[str, Any], tool_name: str, fallback_message: Optional[str] = None):
-    """Send a WebSocket message in a background thread with proper error handling."""
-    websocket_sender, event_loop = get_websocket_context()
-    
-    if not websocket_sender or not event_loop:
-        return  # No WebSocket context available
-    
-    # Get connection ID for logging
-    connection_id = "unknown"
-    try:
-        context = get_user_context()
-        user_id = context.get('user_id') if isinstance(context, dict) else context
-        state_context = get_state_context()
-        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-        if user_id and session_id:
-            active_connection = get_active_websocket_connection(user_id, session_id)
-            if active_connection:
-                connection_id = active_connection[2]
-                logging.info(f"🔍 WEBSOCKET DEBUG: Found active connection {connection_id} for {tool_name}")
-            else:
-                logging.warning(f"🔍 WEBSOCKET DEBUG: No active connection found for user {user_id}, session {session_id}")
-    except Exception as e:
-        logging.debug(f"Could not get connection ID for logging: {e}")
-    
-    logging.info(f"🔍 WEBSOCKET DEBUG: Starting background thread to send {tool_name} message via connection {connection_id}")
-    
-    # Start the thread immediately
-    thread = threading.Thread(
-        target=_send_ws_message_now,
-        args=(websocket_sender, message_data, tool_name, fallback_message, connection_id),
-        daemon=True,
-    )
-    thread.start()
+    """Send a non-domain-event envelope (toasts, confirmations) via the active WS sender.
+
+    Tool start/result/error events MUST go through send_tool_start /
+    send_tool_completion / send_tool_error so they hit chat_events. This
+    helper exists for envelopes that are pure UI signals (e.g. awaiting-
+    confirmation cards) and have no chat_events shape.
+    """
+    if not isinstance(message_data, dict):
+        logger.warning("send_websocket_message: non-dict message for tool %s", tool_name)
+        return
+    _send_raw_envelope(message_data)
 
 def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None):
-    """Send tool completion notification via WebSocket if available."""
+    """Emit a tool completion event through chat_events.record_event.
+
+    Public signature preserved (mcp_tools, rag_indexer_tool depend on it). The
+    body now writes a single domain event; record_event handles the WS + SSE
+    broadcast.
+    """
     try:
-        # Get user and session context
-        context = get_user_context()
-        user_id = context.get('user_id') if isinstance(context, dict) else context
-        state_context = get_state_context()
-        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-        
-        # Trigger visualization update every 30s for incident RCAs
-        incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+        # Trigger visualization update every 30s for incident RCAs (independent of emit path)
+        try:
+            state_context = get_state_context()
+            incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+        except Exception:
+            incident_id = None
+            state_context = None
+
         if incident_id:
             try:
-                global _viz_triggers
-                
+                ctx = get_user_context()
+                user_id = ctx.get('user_id') if isinstance(ctx, dict) else ctx
+                session_id = getattr(state_context, 'session_id', None) if state_context else None
                 if incident_id not in _viz_triggers:
                     from chat.background.visualization_triggers import VisualizationTrigger
                     _viz_triggers[incident_id] = VisualizationTrigger(incident_id)
-                
                 if _viz_triggers[incident_id].should_trigger():
                     from chat.background.visualization_generator import update_visualization
                     update_visualization.delay(
@@ -367,204 +384,103 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
                             'output': str(output)[:MAX_TOOL_OUTPUT_CHARS]
                         }])
                     )
-                    logging.info(f"[Visualization] Triggered 30s update for incident {incident_id}")
+                    logger.info("[Visualization] Triggered 30s update for incident %s", incident_id)
             except Exception as e:
-                logging.warning(f"[Visualization] Failed to trigger update: {e}")
-        
-        # Try to get the Agent's websocket_sender first (preferred)
-        agent_websocket_sender = None
-        try:
-            workflow = get_workflow_context()
-            if workflow and hasattr(workflow, 'agent') and hasattr(workflow.agent, 'websocket_sender'):
-                agent_websocket_sender = workflow.agent.websocket_sender
-        except Exception as e:
-            logging.debug(f"Could not get Agent websocket_sender: {e}")
-        
-        # Parse output if it's JSON and apply field-level truncation
+                logger.warning("[Visualization] Failed to trigger update: %s", e)
+
+        # Normalise output for the event payload (preserve JSON structure when possible)
         try:
             output_data = json.loads(output)
-            # Apply field-level truncation to preserve JSON structure
             truncated_output = truncate_json_fields(output_data, max_field_length=10000)
             cleaned_output = json.dumps(truncated_output, ensure_ascii=False)
         except (json.JSONDecodeError, TypeError):
-            # If not JSON, treat as string and truncate if too long
             cleaned_output = str(output)
-            
-            size_limit = 10000
-            
-            if len(cleaned_output) > size_limit:
-                cleaned_output = cleaned_output[:size_limit] + "... [output truncated for WebSocket]"
-        
-        # Remove problematic characters that could break JSON
+            if len(cleaned_output) > 10000:
+                cleaned_output = cleaned_output[:10000] + "... [output truncated]"
         cleaned_output = cleaned_output.replace('\x00', '').replace('\r', '').replace('\b', '').replace('\f', '')
-        
-        # Ensure output is valid UTF-8
         try:
             cleaned_output = cleaned_output.encode('utf-8', errors='replace').decode('utf-8')
         except Exception:
             cleaned_output = "[output encoding error]"
-        
-        result_data = {
-            "type": "tool_result",
-            "data": {
-                "tool_name": str(tool_name),
-                "output": cleaned_output,
-                "status": str(status),
-                "timestamp": str(datetime.now().isoformat()),
-                "tool_call_id": tool_call_id,
-                "tool_input": tool_input
-            }
-        }
-        
-        # Add session and user information if available
-        if session_id:
-            result_data["session_id"] = session_id
-        if user_id:
-            result_data["user_id"] = user_id
-        
-        # Use Agent's websocket_sender if available, otherwise fall back to global context
-        if agent_websocket_sender:
-            # Send directly using Agent's sender
-            try:
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # If we're in an async context, schedule the send
-                        def _on_ws_send_done(task: asyncio.Task) -> None:
-                            _background_tasks.discard(task)
-                            if not task.cancelled():
-                                exc = task.exception()
-                                if exc is not None:
-                                    logger.warning("Agent WebSocket send failed: %s", exc)
 
-                        _ws_send_task = asyncio.create_task(agent_websocket_sender(result_data))
-                        _background_tasks.add(_ws_send_task)
-                        _ws_send_task.add_done_callback(_on_ws_send_done)
-                    else:
-                        # If we're in a sync context, run in thread
-                        loop.run_until_complete(agent_websocket_sender(result_data))
-                except RuntimeError as e:
-                    if "no current event loop" in str(e):
-                        # We're in a background thread without an event loop
-                        # Try to get the Agent's event loop and use it
-                        try:
-                            workflow = get_workflow_context()
-                            if workflow and hasattr(workflow, 'agent') and hasattr(workflow.agent, 'event_loop'):
-                                agent_event_loop = workflow.agent.event_loop
-                                if agent_event_loop and not agent_event_loop.is_closed():
-                                    # Use the Agent's event loop to send the message
-                                    future = asyncio.run_coroutine_threadsafe(agent_websocket_sender(result_data), agent_event_loop)
-                                    future.result(timeout=5)  # Wait up to 5 seconds
-                                    return
-                        except Exception as agent_loop_error:
-                            logging.warning(f"Failed to use Agent's event loop for {tool_name}: {agent_loop_error}")
-                        
-                        # Fall back to global context
-                        fallback_message = f"Tool {tool_name} completed successfully"
-                        send_websocket_message(result_data, tool_name, fallback_message)
-                    else:
-                        raise e
-            except Exception as e:
-                logging.warning(f"Failed to send via Agent websocket_sender for {tool_name}: {e}")
-                # Fall back to global context
-                fallback_message = f"Tool {tool_name} completed successfully"
-                send_websocket_message(result_data, tool_name, fallback_message)
-        else:
-            fallback_message = f"Tool {tool_name} completed successfully"
-            send_websocket_message(result_data, tool_name, fallback_message)
-        
+        payload: Dict[str, Any] = {
+            "tool_name": str(tool_name),
+            "tool_call_id": tool_call_id,
+            "output": cleaned_output,
+            "status": str(status),
+        }
+        if tool_input is not None:
+            payload["tool_input"] = tool_input
+        _emit_event("tool_call_result", payload)
     except Exception as e:
-        logging.error(f"Error in send_tool_completion for {tool_name}: {e}")
-        # Don't let tool completion errors break the tool execution
+        logger.error("Error in send_tool_completion for %s: %s", tool_name, e)
+
 
 def send_tool_start(tool_name: str, input_data: Any = None, tool_call_id: Optional[str] = None):
-    """Send a tool start (running) notification via WebSocket if available."""
+    """Emit a tool start event through chat_events.record_event."""
     try:
-        # Safely prepare a representation of the input for transmission
-        cleaned_input = None
+        cleaned_input: Any = None
         if input_data is not None:
             try:
-                # Apply field-level truncation to input data
                 if isinstance(input_data, (dict, list)):
-                    truncated_input = truncate_json_fields(input_data, max_field_length=10000)
-                    cleaned_input = json.dumps(truncated_input, ensure_ascii=False, default=str)
+                    cleaned_input = truncate_json_fields(input_data, max_field_length=10000)
                 else:
                     cleaned_input = str(input_data)
             except (TypeError, ValueError):
                 cleaned_input = str(input_data)
-
-            # Final truncation check for the serialized input
-            if len(cleaned_input) > 10000:
+            if isinstance(cleaned_input, str) and len(cleaned_input) > 10000:
                 cleaned_input = cleaned_input[:10000] + "... [input truncated]"
 
-        # Get user and session context
-        context = get_user_context()
-        user_id = context.get('user_id') if isinstance(context, dict) else context
-        state_context = get_state_context()
-        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
+        if not tool_call_id:
+            logger.warning("send_tool_start: %s missing tool_call_id", tool_name)
 
-        result_data = {
-            "type": "tool_call",
-            "data": {
+        _emit_event(
+            "tool_call_started",
+            {
                 "tool_name": str(tool_name),
+                "tool_call_id": tool_call_id,
                 "input": cleaned_input,
                 "status": "running",
-                "timestamp": str(datetime.now().isoformat())
-            }
-        }
-        
-        # Add tool_call_id if provided
-        if tool_call_id:
-            result_data["data"]["tool_call_id"] = tool_call_id
-        else:
-            logging.warning(f"Tool call for {tool_name} does not have a tool_call_id")
-
-        # Add session and user information if available
-        if session_id:
-            result_data["session_id"] = session_id
-        if user_id:
-            result_data["user_id"] = user_id
-
-        send_websocket_message(result_data, tool_name)
-        
+            },
+        )
     except Exception as e:
-        logging.error(f"Error in send_tool_start for {tool_name}: {e}")
+        logger.error("Error in send_tool_start for %s: %s", tool_name, e)
+
 
 def send_tool_error(tool_name: str, error_msg: str, tool_call_id: Optional[str] = None):
-    """Send a tool error notification via WebSocket if available."""
+    """Emit a tool error event through chat_events.record_event."""
     try:
         cleaned_error = str(error_msg)
-        # Truncate error message if too long
         if len(cleaned_error) > 10000:
             cleaned_error = cleaned_error[:10000] + "... [error truncated]"
 
-        # Get user and session context
-        context = get_user_context()
-        user_id = context.get('user_id') if isinstance(context, dict) else context
-        state_context = get_state_context()
-        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-
-        result_data = {
-            "type": "tool_error",
-            "data": {
+        _emit_event(
+            "tool_call_result",
+            {
                 "tool_name": str(tool_name),
-                "error": cleaned_error,
-                "timestamp": str(datetime.now().isoformat()),
-                "tool_call_id": tool_call_id
-            }
-        }
-
-        # Add session and user information if available
-        if session_id:
-            result_data["session_id"] = session_id
-        if user_id:
-            result_data["user_id"] = user_id
-
-        send_websocket_message(result_data, tool_name)
-        
+                "tool_call_id": tool_call_id,
+                "output": cleaned_error,
+                "status": "error",
+            },
+        )
     except Exception as e:
-        logging.error(f"Error in send_tool_error for {tool_name}: {e}")
+        logger.error("Error in send_tool_error for %s: %s", tool_name, e)
+
+
+def update_workflow_websocket_context(user_id: str, session_id: str):
+    """No-op shim retained for backward compatibility.
+
+    The legacy implementation kept a per-(user, session) WS-sender registry
+    and rebound it on confirmation re-connects. The active sender is now a
+    ContextVar (`_active_ws_sender_var`) wired by the WS handler when the
+    workflow starts; reconnects go through the WS handler directly. Callers
+    (infrastructure_confirmation) keep calling this; we simply log.
+    """
+    logger.debug(
+        "update_workflow_websocket_context: no-op (sender is bound via ContextVar) user=%s session=%s",
+        user_id, session_id,
+    )
+    return True
 
 def with_user_context(func):
     """Decorator to inject user_id and session_id from context if not provided.
@@ -934,7 +850,10 @@ def get_cloud_tools(agent_id: str = "main", parent_agent_id: Optional[str] = Non
 
         @wraps(func)
         def wrapped_func(**kwargs):
-            exec_lock = getattr(tool_capture, 'execution_lock', None)
+            # Per-agent execution lock: serialise tool calls within a single
+            # agent_id (preserves the existing within-agent ordering invariant)
+            # while allowing different sub-agents to run tools in parallel.
+            exec_lock = tool_capture.get_execution_lock(agent_id) if tool_capture else None
             acquired = False
             agent_id_tokens = None
             try:
@@ -943,7 +862,7 @@ def get_cloud_tools(agent_id: str = "main", parent_agent_id: Optional[str] = Non
                     agent_id_tokens = set_capture_agent_id(agent_id, parent_agent_id)
                 except Exception as e:
                     logger.warning(f"Failed to set capture agent_id context: {e}")
-                if exec_lock:
+                if exec_lock is not None:
                     exec_lock.acquire()
                     acquired = True
                 
@@ -988,8 +907,18 @@ def get_cloud_tools(agent_id: str = "main", parent_agent_id: Optional[str] = Non
                 if cached_result is not None:
                     result = f"[deduped from another sub-agent on this incident]\n{cached_result}"
                 else:
+                    # Cancel-token gate: if the user cancelled before this tool
+                    # started, abort now so we don't burn upstream API quota.
+                    from chat.backend.agent.utils.cancel_token import raise_if_cancelled
+                    raise_if_cancelled()
+
                     # Execute the original function
                     result = func(**kwargs)
+
+                    # Re-check after the call returns. If the user cancelled
+                    # while the connector was in-flight, drop the result and
+                    # abort the LangGraph node so no further tools fire.
+                    raise_if_cancelled()
                 
                 # FIXED: Find the matching tool call ID by signature match instead of just "incomplete" status
                 matching_tool_call_id = None
@@ -1106,6 +1035,12 @@ def get_cloud_tools(agent_id: str = "main", parent_agent_id: Optional[str] = Non
                 result = cap_tool_output(result_str, tool_name)
 
                 return result
+            except asyncio.CancelledError:
+                # Cancel propagates to the LangGraph node; do NOT capture as a
+                # tool error (no ToolMessage written) so the orchestrator can
+                # finalise the run cleanly.
+                logger.info(f"[cancel] tool {tool_name} aborted by cancel token")
+                raise
             except Exception as e:
                 # Find matching tool call for error reporting
                 matching_tool_call_id = None
