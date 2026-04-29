@@ -3,7 +3,13 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { incidentsService, Incident, StreamingThought } from '@/lib/services/incidents';
+import {
+  incidentsService,
+  Incident,
+  StreamingThought,
+  SubAgentRun,
+  fetchIncidentSubAgents,
+} from '@/lib/services/incidents';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
@@ -12,6 +18,7 @@ import { canWrite } from '@/lib/roles';
 
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel from '../components/ThoughtsPanel';
+import AgentTree from '../components/AgentTree';
 
 export default function IncidentDetailPage() {
   const params = useParams();
@@ -22,6 +29,7 @@ export default function IncidentDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showThoughts, setShowThoughts] = useState(false);
   const [thoughts, setThoughts] = useState<StreamingThought[]>([]);
+  const [subAgentRuns, setSubAgentRuns] = useState<SubAgentRun[]>([]);
   const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const userClosedThoughtsRef = useRef<boolean>(false);
 
@@ -75,6 +83,15 @@ export default function IncidentDetailPage() {
     fetchAndSchedule(true);
     return () => { active = false; clearTimeout(timer); };
   }, [params.id, applyIncidentData]);
+
+  useEffect(() => {
+    if (!params.id) return;
+    let cancelled = false;
+    fetchIncidentSubAgents(params.id as string)
+      .then(runs => { if (!cancelled) setSubAgentRuns(runs); })
+      .catch(() => { /* silent — multi-agent panel just won't render */ });
+    return () => { cancelled = true; };
+  }, [params.id]);
 
   if (loading) {
     return (
@@ -188,6 +205,11 @@ export default function IncidentDetailPage() {
               citations={incident.citations}
               onRefresh={refreshIncident}
             />
+            {subAgentRuns.length > 0 && (
+              <section className="mt-8">
+                <AgentTree incidentId={params.id as string} runs={subAgentRuns} />
+              </section>
+            )}
           </div>
         </div>
 

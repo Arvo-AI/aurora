@@ -7,6 +7,19 @@ import { StreamingMessageState } from "./useStreamingMessages";
 import { useChatExpansion } from "../app/components/ClientShell";
 import { generateUniqueId, generateNumericId } from "../utils/idGenerator";
 
+// Multi-agent event types emitted alongside the existing envelope.
+// Consumers (e.g., the incident page) can subscribe via `onSubAgentEvent`.
+export type SubAgentEventType =
+  | 'subagent_dispatched'
+  | 'subagent_finished'
+  | 'subagent_failed'
+  | 'plan_committed';
+
+export interface SubAgentEvent {
+  type: SubAgentEventType;
+  payload: Record<string, unknown>;
+}
+
 interface UseMessageHandlerProps {
   streaming: StreamingMessageState;
   onNewMessage: (message: Message) => void;
@@ -19,6 +32,9 @@ interface UseMessageHandlerProps {
   currentSessionId: string | null;
   onUsageUpdate?: (data: Record<string, unknown>) => void;
   onUsageFinal?: (data: Record<string, unknown>) => void;
+  // Multi-agent: optional subscriber for sub-agent lifecycle events.
+  // If absent, events are silently dropped (forward-compatible no-op).
+  onSubAgentEvent?: (evt: SubAgentEvent) => void;
 }
 
 export const useMessageHandler = ({
@@ -33,6 +49,7 @@ export const useMessageHandler = ({
   currentSessionId,
   onUsageUpdate,
   onUsageFinal,
+  onSubAgentEvent,
 }: UseMessageHandlerProps) => {
   // Store tool call message IDs for updates
   const toolCallMessageIds = useRef<Map<string, number>>(new Map());
@@ -59,6 +76,24 @@ export const useMessageHandler = ({
         }
         return;
       }
+    }
+
+    // Multi-agent lifecycle events — forward to optional subscriber.
+    // Unknown event types fall through harmlessly (forward-compatible).
+    const msgType = message.type as string;
+    if (
+      msgType === 'subagent_dispatched' ||
+      msgType === 'subagent_finished' ||
+      msgType === 'subagent_failed' ||
+      msgType === 'plan_committed'
+    ) {
+      if (onSubAgentEvent) {
+        onSubAgentEvent({
+          type: msgType as SubAgentEventType,
+          payload: (message.data ?? {}) as Record<string, unknown>,
+        });
+      }
+      return;
     }
 
     // Handle tool status updates (e.g., "setting_up_environment")
@@ -382,7 +417,7 @@ export const useMessageHandler = ({
       // Always clear the sending state when we receive any completion signal
       onSendingStateChange(false);
     }
-  }, [streaming, onNewMessage, onUpdateMessage, onSendingStateChange, isSending, refreshChatHistory, justCreatedSessionRef, currentSessionId, onUsageUpdate, onUsageFinal]);
+  }, [streaming, onNewMessage, onUpdateMessage, onSendingStateChange, isSending, refreshChatHistory, justCreatedSessionRef, currentSessionId, onUsageUpdate, onUsageFinal, onSubAgentEvent]);
 
   // Clear tool call message IDs when switching sessions to prevent cross-session contamination
   useEffect(() => {

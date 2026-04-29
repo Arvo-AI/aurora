@@ -1,7 +1,8 @@
 'use client';
 
-import { Incident, AuroraStatus, Citation, incidentsService } from '@/lib/services/incidents';
+import { Incident, AuroraStatus, Citation, incidentsService, fetchIncidentSubAgents, SubAgentRun } from '@/lib/services/incidents';
 import { Badge } from '@/components/ui/badge';
+import { useQuery } from '@/lib/query';
 import {
   ExternalLink,
   Clock,
@@ -16,6 +17,7 @@ import {
   FileText,
   Coins,
   Activity,
+  Network,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -36,6 +38,7 @@ import PostmortemPanel from './PostmortemPanel';
 import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
+import AgentTree from './AgentTree';
 import { ReactFlowProvider } from '@xyflow/react';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 
@@ -114,7 +117,20 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showPostmortem, setShowPostmortem] = useState(false);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [showWaterfall, setShowWaterfall] = useState(false);
+  const [showAgents, setShowAgents] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
+
+  // Fetch sub-agent runs to gate the Agents button — only show for multi-agent incidents.
+  const { data: subAgentRuns } = useQuery<SubAgentRun[]>(
+    `incident-subagents:${incident.id}`,
+    (_key, _signal) => fetchIncidentSubAgents(incident.id),
+    { staleTime: 30_000 },
+  );
+  const hasMultiAgent = Boolean(
+    subAgentRuns &&
+      subAgentRuns.length > 0 &&
+      !(subAgentRuns.length === 1 && subAgentRuns[0].role === 'main'),
+  );
   const alert = incident.alert;
   const router = useRouter();
   const { toast } = useToast();
@@ -663,6 +679,22 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             </button>
           )}
 
+          {/* Agents button — only for multi-agent incidents */}
+          {hasMultiAgent && (
+            <button
+              onClick={() => setShowAgents(!showAgents)}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+                showAgents
+                  ? 'text-orange-300 bg-orange-500/10'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+              }`}
+            >
+              <Network className="w-3 h-3" />
+              Agents
+              <ChevronRight className={`w-3 h-3 transition-transform ${showAgents ? 'rotate-90' : ''}`} />
+            </button>
+          )}
+
       </div>
 
       {/* Feedback Section - only show when analysis is complete */}
@@ -752,6 +784,20 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           </div>
         </div>
       </div>
+
+      {/* Agents Panel (collapsible) — only mount when expanded. */}
+      {hasMultiAgent && (
+        <div className="collapsible-panel" data-open={showAgents}>
+          <div>
+            <div className="border-t border-zinc-800 mt-4" />
+            <div className="mt-4">
+              {showAgents && subAgentRuns && (
+                <AgentTree incidentId={incident.id} runs={subAgentRuns} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Postmortem Panel */}
       <PostmortemPanel

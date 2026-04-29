@@ -1,8 +1,16 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type ChangeEvent } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type KeyboardEvent, type ChangeEvent } from 'react';
 import { MessageSquare, Send } from 'lucide-react';
-import { StreamingThought, Incident, ChatSession, incidentsService } from '@/lib/services/incidents';
+import {
+  StreamingThought,
+  Incident,
+  ChatSession,
+  SubAgentRun,
+  fetchIncidentSubAgents,
+  incidentsService,
+} from '@/lib/services/incidents';
+import { useQuery } from '@/lib/query';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 
 // Maximum length for short titles in incident chat tabs
@@ -63,6 +71,28 @@ function stripIncidentPrefix(title: string): string {
 export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true }: ThoughtsPanelProps) {
   // 'thoughts' or session ID
   const [activeTab, setActiveTab] = useState<string>('thoughts');
+  // Multi-agent: which agent's thoughts to show ('main' | sub-agent agent_id)
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('main');
+
+  // Fetch sub-agent runs; on error/empty -> single-tab fallback (no tab strip).
+  const { data: subAgentRuns } = useQuery<SubAgentRun[]>(
+    `incident-subagents:${incident.id}`,
+    (_key, _signal) => fetchIncidentSubAgents(incident.id),
+    { staleTime: 15_000 },
+  );
+  const subAgents = useMemo<SubAgentRun[]>(
+    () => (subAgentRuns ?? []).filter((r) => r.role !== 'main'),
+    [subAgentRuns],
+  );
+  const isMultiAgent = subAgents.length > 0;
+
+  const filteredThoughts = useMemo(() => {
+    if (!isMultiAgent) return thoughts;
+    if (selectedAgentId === 'main') {
+      return thoughts.filter((t) => !t.agent_id || t.agent_id === 'main');
+    }
+    return thoughts.filter((t) => t.agent_id === selectedAgentId);
+  }, [thoughts, isMultiAgent, selectedAgentId]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(
     (incident.chatSessions || []).filter((s: ChatSession) => s.id !== incident.chatSessionId)
   );
@@ -402,9 +432,51 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       {/* Main Thoughts View */}
       {activeTab === 'thoughts' && (
         <div className="flex-1 relative overflow-hidden">
-          <div className="absolute inset-0 overflow-y-auto p-5 pb-32">
+          {/* Per-agent tab strip — only when multi-agent run exists; absolute so the
+              existing scroll area + bottom input keep their original positioning. */}
+          {isMultiAgent && (
+            <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-1 px-3 h-9 border-b border-zinc-800/50 bg-zinc-900/30 overflow-x-auto">
+              <button
+                onClick={() => setSelectedAgentId('main')}
+                className={`px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap ${
+                  selectedAgentId === 'main'
+                    ? 'bg-zinc-800 text-white'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Main
+              </button>
+              {subAgents.map((run) => {
+                const label = run.ui_label || run.agent_id;
+                const isActive = selectedAgentId === run.agent_id;
+                const badge =
+                  run.status === 'running' ? '▷'
+                  : run.status === 'succeeded' ? '✓'
+                  : run.status === 'failed' ? '✗'
+                  : '';
+                const badgeColor =
+                  run.status === 'running' ? 'text-orange-400'
+                  : run.status === 'succeeded' ? 'text-emerald-400'
+                  : run.status === 'failed' ? 'text-red-400'
+                  : 'text-zinc-500';
+                return (
+                  <button
+                    key={run.agent_id}
+                    onClick={() => setSelectedAgentId(run.agent_id)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap ${
+                      isActive ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    <span>{label}</span>
+                    {badge && <span className={badgeColor}>{badge}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className={isMultiAgent ? 'absolute top-9 bottom-0 left-0 right-0 overflow-y-auto p-5 pb-32' : 'absolute inset-0 overflow-y-auto p-5 pb-32'}>
             <div className="space-y-4">
-              {thoughts.map((thought) => (
+              {filteredThoughts.map((thought) => (
                 <div key={thought.id} className="pl-4 border-l-2 border-zinc-700 hover:border-orange-500/50 transition-colors">
                   <div className="text-xs text-zinc-500 mb-1">
                     {new Date(thought.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -424,7 +496,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                   </div>
                 </div>
               )}
-              {thoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
+              {filteredThoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
                 <p className="text-center text-zinc-500 text-sm py-8">No investigation thoughts yet</p>
               )}
             </div>
