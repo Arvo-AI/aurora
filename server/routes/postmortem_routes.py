@@ -408,7 +408,10 @@ def export_to_notion(user_id, incident_id):
         logger.exception("[POSTMORTEM] Notion export failed for user %s", user_id)
         return jsonify({"error": "Failed to export to Notion"}), 502
 
-    return jsonify(result)
+    return jsonify({
+        "success": True,
+        "exported": True,
+    })
 
 
 @postmortem_bp.route("/api/postmortems", methods=["GET"])

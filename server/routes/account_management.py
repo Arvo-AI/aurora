@@ -292,7 +292,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             try:
                 from utils.secrets.secret_cache import clear_secret_cache
                 clear_secret_cache(secret_ref)
-                logging.info(f"Cleared secret cache for {provider}: {secret_ref}")
+                logging.info("Cleared secret cache for provider %s", provider)
             except Exception as e:
                 logging.warning(f"Failed to clear secret cache: {e}")
 

@@ -56,7 +56,12 @@ class CloudflareClient:
                 for e in errors
                 if isinstance(e, dict)
             ) or "Unknown Cloudflare API error"
-            logger.warning("[CF-API] %s %s returned success=false: %s", method, path, msg)
+            logger.warning(
+                "[CF-API] %s %s returned success=false (%d error(s))",
+                method,
+                path,
+                len(errors),
+            )
             raise CloudflareAPIError(msg)
 
         return data

@@ -2,6 +2,7 @@
 import logging
 from typing import Optional
 from utils.cache.redis_client import get_redis_client
+from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,11 @@ def get_cached_secret(secret_name: str) -> Optional[str]:
     try:
         cache_key = f"secret:{secret_name}"
         value = redis_client.get(cache_key)
+        secret_fp = hash_for_log(secret_name)
         if value:
-            logger.debug(f"  Cache HIT for secret: {secret_name[:60]}...")
+            logger.debug("Cache HIT for secret fp=%s", secret_fp)
         else:
-            logger.debug(f"Cache MISS for secret: {secret_name[:60]}...")
+            logger.debug("Cache MISS for secret fp=%s", secret_fp)
         return value
     except Exception as e:
         logger.warning(f"Redis get failed: {e}")
@@ -41,7 +43,7 @@ def update_secret_cache(secret_name: str, secret_value: str, ttl_seconds: Option
         
         cache_key = f"secret:{secret_name}"
         redis_client.setex(cache_key, ttl_seconds, secret_value)
-        logger.info(f"  Cached secret '{secret_name[:60]}...' with TTL {ttl_seconds}s")
+        logger.info("Cached secret fp=%s with TTL %ss", hash_for_log(secret_name), ttl_seconds)
     except Exception as e:
         logger.warning(f"Redis set failed: {e}")
 
@@ -58,7 +60,7 @@ def clear_secret_cache(secret_name: Optional[str] = None):
             cache_key = f"secret:{secret_name}"
             deleted = redis_client.delete(cache_key)
             if deleted:
-                logger.info(f"  Cleared cache for secret: {secret_name[:60]}...")
+                logger.info("Cleared cache for secret fp=%s", hash_for_log(secret_name))
             else:
                 logger.debug(f"Secret not in cache (already cleared or never cached)")
         else:

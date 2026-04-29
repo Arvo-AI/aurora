@@ -155,13 +155,13 @@ class VaultSecretsBackend(SecretsBackend):
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             secret_ref = f"{VAULT_REF_PREFIX}{self.mount_point}/{path}"
 
-            logger.info("Stored secret '%s' in Vault (%.1fms)", secret_name, elapsed_ms)
+            logger.info("Stored secret in Vault (%.1fms)", elapsed_ms)
 
             return secret_ref
 
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            logger.error("Failed to store secret '%s' (%.1fms): %s", secret_name, elapsed_ms, e)
+            logger.error("Failed to store secret (%.1fms): %s", elapsed_ms, type(e).__name__)
             raise
 
     def get_secret(self, secret_ref: str) -> str:
@@ -217,14 +217,11 @@ class VaultSecretsBackend(SecretsBackend):
 
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            error_msg = str(e) if e else repr(e)
             error_type = type(e).__name__
             logger.error(
-                "Failed to retrieve secret (%.1fms): %s (%s), path: %s",
+                "Failed to retrieve secret (%.1fms): %s",
                 elapsed_ms,
-                error_msg or "Unknown error",
                 error_type,
-                path if 'path' in locals() else secret_ref,
             )
             raise
 
@@ -270,7 +267,7 @@ class VaultSecretsBackend(SecretsBackend):
             )
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            logger.info("Deleted secret '%s' from Vault (%.1fms)", path, elapsed_ms)
+            logger.info("Deleted secret from Vault (%.1fms)", elapsed_ms)
 
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000

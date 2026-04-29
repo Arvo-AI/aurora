@@ -352,7 +352,7 @@ def fetch_page(user_id):
 
     page_payload, _, error_message, error_status = _fetch_page_payload(user_id, page_url)
     if error_message:
-        return jsonify({"error": "Failed to fetch Confluence page"}), error_status
+        return jsonify({"error": "Failed to fetch Confluence page"}), 400
     return jsonify(page_payload)
 
 
@@ -371,7 +371,7 @@ def parse_page(user_id):
 
     page_payload, creds, error_message, error_status = _fetch_page_payload(user_id, page_url)
     if error_message:
-        return jsonify({"error": "Failed to fetch Confluence page"}), error_status
+        return jsonify({"error": "Failed to fetch Confluence page"}), 400
 
     storage_html = (page_payload.get("body") or {}).get("storage", {}).get("value") or ""
     parsed = parse_confluence_runbook(storage_html)

@@ -342,7 +342,7 @@ def check_manual_vm_connection(user_id):
                 logger.error(
                     f"Failed to update connection_verified for VM {sanitize(vm_id)}: {db_exc}"
                 )
-        return jsonify({"success": True, "connectedAs": connected_as})
+        return jsonify({"success": True, "connectedAs": "verified"})
     except Exception as exc:
         logger.error("SSH validation failed unexpectedly: %s", exc, exc_info=True)
         return jsonify(

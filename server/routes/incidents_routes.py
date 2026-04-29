@@ -1568,7 +1568,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
             )
             _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
                                 {"pr_url": result.get("pr_url")}, request)
-            return jsonify(result), 200
+            return jsonify({"success": True}), 200
 
         logger.warning(
             "[INCIDENTS] Failed to apply fix suggestion %s: %s",

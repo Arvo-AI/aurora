@@ -600,7 +600,7 @@ def save_scaleway_ssh_keys(user_id, server_id):
         logger.info(f"Successfully saved SSH key for server {server_id}, user {user_id}")
         return jsonify({
             "success": True,
-            "message": f"SSH key validated and saved successfully (connected as {connected_as})"
+            "message": "SSH key validated and saved successfully"
         })
     
     except Exception as e:

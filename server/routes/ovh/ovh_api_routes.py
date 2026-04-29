@@ -461,7 +461,7 @@ def save_ovh_ssh_keys(user_id, instance_id):
     logger.info(f"Successfully saved SSH key for instance {sanitize(instance_id)}, user {sanitize(user_id)}")
     return jsonify({
         "success": True,
-        "message": f"SSH key validated and saved successfully (connected as {connected_as})"
+        "message": "SSH key validated and saved successfully"
     })
 
 
