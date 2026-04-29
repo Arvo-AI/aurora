@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import logging
 import os
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -12,6 +14,16 @@ from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 
 logger = logging.getLogger(__name__)
+
+
+_PROVIDER_DEFAULT_MODELS: Dict[str, str] = {
+    "anthropic": "claude-sonnet-4.6",
+    "openai": "gpt-5",
+    "google": "gemini-2.5-flash",
+    "vertex": "gemini-2.5-flash",
+    "ollama": "llama-3.3-70b",
+    "openrouter": "openrouter/auto",
+}
 
 
 class ModelConfig:
@@ -45,6 +57,183 @@ class ModelConfig:
 
     # Email report generation
     EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
+
+ModelRole = Literal["orchestrator", "subagent", "triage", "judge"]
+
+
+def _enforce_tenant_policy(
+    org_id: Optional[str],
+    candidates: List[Tuple[str, str]],
+) -> List[Tuple[str, str]]:
+    if not org_id or not candidates:
+        return candidates
+    try:
+        from utils.auth.stateless_auth import get_org_preference
+        allowed = get_org_preference(org_id, "allowed_providers")
+    except Exception as e:
+        logger.warning(f"_enforce_tenant_policy: allowed_providers lookup failed: {e}")
+        return candidates
+
+    if not allowed:
+        return candidates
+    if not isinstance(allowed, list):
+        logger.warning(f"_enforce_tenant_policy: allowed_providers not a list (type={type(allowed).__name__}), skipping policy")
+        return candidates
+
+    allowlist = {str(p).lower() for p in allowed if p}
+    filtered = [(p, m) for (p, m) in candidates if (p or "").lower() in allowlist]
+    if not filtered:
+        logger.warning(f"[policy violation: empty allowlist] org_id={org_id} allowlist={sorted(allowlist)} fell back to original candidates")
+        return candidates
+    return filtered
+
+
+def _fetch_role_provider_model(org_id: str, role: ModelRole) -> Optional[Tuple[str, str]]:
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import _set_org_rls
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                _set_org_rls(cur, org_id)
+                cur.execute(
+                    "SELECT provider, model_id FROM model_roles "
+                    "WHERE org_id = %s AND role = %s",
+                    (org_id, role),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0], row[1]
+    except Exception as e:
+        logger.warning(f"_fetch_role_provider_model: model_roles lookup failed for role={role}: {e}")
+    return None
+
+
+def _fetch_org_selected_model(org_id: str) -> Optional[Tuple[str, str]]:
+    try:
+        from utils.auth.stateless_auth import get_org_preference
+        selected = get_org_preference(org_id, "selectedModel")
+        if selected:
+            provider, model_id = ModelMapper.split_provider_model(selected)
+            if provider and model_id:
+                return provider, model_id
+    except Exception as e:
+        logger.warning(f"_fetch_org_selected_model: lookup failed: {e}")
+    return None
+
+
+def _fetch_fallback_provider_chain(org_id: str) -> List[str]:
+    try:
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import _set_org_rls
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                _set_org_rls(cur, org_id)
+                cur.execute(
+                    "SELECT fallback_provider_chain FROM multi_agent_config WHERE org_id = %s",
+                    (org_id,),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    return [str(p) for p in row[0] if p]
+    except Exception as e:
+        logger.warning(f"_fetch_fallback_provider_chain: lookup failed: {e}")
+    return []
+
+
+def _primary_candidate(
+    role: ModelRole,
+    org_id: Optional[str],
+) -> Tuple[str, str]:
+    if org_id:
+        primary = _fetch_role_provider_model(org_id, role)
+        if primary:
+            return primary
+        selected = _fetch_org_selected_model(org_id)
+        if selected:
+            return selected
+
+    provider, model_id = ModelMapper.split_provider_model(ModelConfig.MAIN_MODEL)
+    return provider or "", model_id
+
+
+MONTHLY_CAP_WARNING_FLAG = "__monthly_cap_warning__"
+
+
+def resolve_role_model(
+    role: ModelRole,
+    user_id: Optional[str],
+    org_id: Optional[str],
+    *,
+    prefer_cheap: bool = False,
+) -> Tuple[str, str]:
+    if prefer_cheap and role != "triage":
+        primary = _primary_candidate("triage", org_id)
+    else:
+        primary = _primary_candidate(role, org_id)
+    survivors = _enforce_tenant_policy(org_id, [primary])
+    return survivors[0]
+
+
+def resolve_role_model_with_fallbacks(
+    role: ModelRole,
+    user_id: Optional[str],
+    org_id: Optional[str],
+    *,
+    prefer_cheap: bool = False,
+) -> List[Tuple[str, str]]:
+    if prefer_cheap and role != "triage":
+        candidates: List[Tuple[str, str]] = [_primary_candidate("triage", org_id)]
+    else:
+        candidates = [_primary_candidate(role, org_id)]
+
+    if org_id:
+        for provider in _fetch_fallback_provider_chain(org_id):
+            provider_lc = provider.lower()
+            default_model = _PROVIDER_DEFAULT_MODELS.get(provider_lc)
+            if not default_model:
+                logger.warning(f"resolve_role_model_with_fallbacks: no default model for provider={provider}, skipping")
+                continue
+            entry = (provider_lc, default_model)
+            if entry not in candidates:
+                candidates.append(entry)
+
+    return _enforce_tenant_policy(org_id, candidates)
+
+
+def get_token_spend(
+    incident_id: Optional[str],
+    org_id: Optional[str],
+    agent_id: Optional[str] = None,
+) -> int:
+    if not incident_id or not org_id:
+        return 0
+    try:
+        from utils.db.connection_pool import db_pool
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET myapp.current_org_id = %s", (org_id,))
+                if agent_id is None:
+                    cur.execute(
+                        "SELECT COALESCE(SUM(total_tokens), 0) FROM llm_usage_tracking "
+                        "WHERE incident_id = %s",
+                        (incident_id,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COALESCE(SUM(total_tokens), 0) FROM llm_usage_tracking "
+                        "WHERE incident_id = %s AND agent_id = %s",
+                        (incident_id, agent_id),
+                    )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    return int(row[0])
+    except Exception as e:
+        logger.warning(f"get_token_spend: query failed for incident_id={incident_id} agent_id={agent_id}: {e}")
+    return 0
 
 
 class LLMManager:

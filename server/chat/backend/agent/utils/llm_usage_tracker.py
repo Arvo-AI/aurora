@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import contextvars
 import logging
 import os
 import time
@@ -11,6 +14,22 @@ from .openrouter_pricing_service import get_pricing_service
 from .provider_pricing_service import get_provider_pricing_service
 
 logger = logging.getLogger(__name__)
+
+
+_usage_incident_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "usage_incident_id", default=None
+)
+
+
+def set_usage_incident_id_var(incident_id: Optional[str]) -> contextvars.Token:
+    return _usage_incident_id_var.set(incident_id)
+
+
+def reset_usage_incident_id_var(token: contextvars.Token) -> None:
+    try:
+        _usage_incident_id_var.reset(token)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -290,14 +309,36 @@ class LLMUsageTracker:
                     return False
                 usage.org_id = resolved_org_id
 
+                resolved_agent_id: Optional[str] = None
+                try:
+                    from chat.backend.agent.utils.tool_context_capture import _capture_agent_id_var
+                    resolved_agent_id = _capture_agent_id_var.get()
+                except Exception as e:
+                    logger.debug(f"[LLMUsage:store] could not read _capture_agent_id_var: {e}")
+                if not resolved_agent_id:
+                    resolved_agent_id = "main"
+
+                resolved_incident_id: Optional[str] = _usage_incident_id_var.get()
+                if not resolved_incident_id and usage.session_id:
+                    try:
+                        cursor.execute(
+                            "SELECT incident_id FROM chat_sessions WHERE id = %s LIMIT 1",
+                            (usage.session_id,),
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            resolved_incident_id = str(row[0])
+                    except Exception as e:
+                        logger.debug(f"[LLMUsage:store] incident lookup by session_id failed: {e}")
+
                 # Insert usage record
                 cursor.execute(
                     """
                     INSERT INTO llm_usage_tracking (
                         user_id, org_id, session_id, model_name, api_provider, request_type,
                         input_tokens, output_tokens, estimated_cost, response_time_ms,
-                        error_message, request_metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        error_message, request_metadata, agent_id, incident_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                     (
                         usage.user_id,
@@ -314,6 +355,8 @@ class LLMUsageTracker:
                         json.dumps(usage.request_metadata)
                         if usage.request_metadata
                         else None,
+                        resolved_agent_id,
+                        resolved_incident_id,
                     ),
                 )
 
