@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import hashlib
 import logging
 from typing import List, Dict, Any, Optional
 from .redis_cache import RedisCache
@@ -33,44 +32,29 @@ class ContextManager:
             logger.debug("Event loop not available for async queue")
     
     @classmethod
-    def save_context_history(cls, session_id: str, user_id: str, 
-                           messages: List[Dict[str, Any]], 
+    def save_context_history(cls, session_id: str, user_id: str,
+                           messages: List[Dict[str, Any]],
                            tool_capture: Optional[List[Any]] = None) -> bool:
-        """Save LLM context with Redis-based dedup + cached serialization.
+        """Save LLM context. Runs synchronously.
 
-        Runs synchronously. The previous async-queue path was removed because
-        it raced with asyncio.run() teardown in Celery tasks and silently
-        dropped saves.
+        The previous async-queue path was removed because it raced with
+        asyncio.run() teardown in Celery tasks and silently dropped saves.
+
+        The previous MD5 last-message dedup guard was also removed: it caused
+        real-world data loss when two consecutive turns happened to end with
+        the same trailing assistant text (e.g. "Done."). Idempotency belongs
+        at the chat_events terminal-UNIQUE layer, not on a content hash.
         """
         instance = cls._get_instance()
-        
+        if not session_id or not user_id:
+            return False
         try:
-            # Quick validation
-            if not session_id or not user_id:
-                return False
-            
-            # Check for duplicate save (using Redis)
-            if messages:
-                # Use message content for hash, not the whole object
-                last_message_content = getattr(messages[-1], 'content', str(messages[-1]))
-                content_hash = hashlib.md5(
-                    str(last_message_content).encode()
-                ).hexdigest()[:16]
-                
-                if instance.cache.check_duplicate_save(session_id, content_hash):
-                    logger.debug(f"Skipping duplicate save for session {session_id}")
-                    return True
-            
             return instance._execute_actual_save(
                 session_id, user_id, messages, tool_capture
             )
-            
         except Exception as e:
             logger.error(f"Optimized save error: {e}")
-            # Fall back to direct save on any error
-            return instance._execute_actual_save(
-                session_id, user_id, messages, tool_capture
-            )
+            return False
     
     @classmethod
     def get_optimized_serialization(cls, messages: List[Dict[str, Any]]) -> str:

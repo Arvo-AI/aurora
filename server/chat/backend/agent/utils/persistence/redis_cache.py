@@ -87,24 +87,3 @@ class RedisCache:
             
         except Exception as e:
             logger.debug(f"Cache set error: {e}")
-    
-    def check_duplicate_save(self, session_id: str, content_hash: str) -> bool:
-        """Check if this exact content was recently saved."""
-        if not self.redis_client:
-            return False
-            
-        try:
-            cache_key = f"aurora:save_hash:{session_id}"
-            last_hash = self.redis_client.get(cache_key)
-            
-            if last_hash == content_hash:
-                logger.debug(f"Duplicate save detected for session {session_id}")
-                return True
-                
-            # Update with new hash (5 minute TTL)
-            self.redis_client.setex(cache_key, 300, content_hash)
-            return False
-            
-        except Exception as e:
-            logger.debug(f"Duplicate check error: {e}")
-            return False
