@@ -335,6 +335,22 @@ app.register_blueprint(org_bp)
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
 
+# --- Multi-Agent Config Routes ---
+from routes.multi_agent_config import multi_agent_config_bp
+app.register_blueprint(multi_agent_config_bp)
+
+# --- Sub-Agent Overrides ---
+from routes.subagent_overrides import subagent_overrides_bp
+app.register_blueprint(subagent_overrides_bp)
+
+# --- Incident Sub-Agent Audit ---
+from routes.incident_subagents import incident_subagents_bp
+app.register_blueprint(incident_subagents_bp)
+
+# --- Model Role Bindings ---
+from routes.model_roles import model_roles_bp
+app.register_blueprint(model_roles_bp)
+
 # --- GitHub Integration Routes ---
 from routes.github.github import github_bp
 from routes.github.github_user_repos import github_user_repos_bp
