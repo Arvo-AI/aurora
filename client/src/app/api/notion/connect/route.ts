@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { isSafeFetchTimeout, safeFetch } from '@/lib/safe-fetch';
 
 const API_BASE_URL = process.env.BACKEND_URL;
-const FETCH_TIMEOUT_MS = 15000;
+const FETCH_TIMEOUT_MS = 15_000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,11 +12,9 @@ export async function POST(request: NextRequest) {
     }
 
     const authResult = await getAuthenticatedUser();
-
     if (authResult instanceof NextResponse) {
       return authResult;
     }
-
     const { headers: authHeaders } = authResult;
 
     let body = '';
@@ -25,24 +24,16 @@ export async function POST(request: NextRequest) {
       body = '';
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    let response: Response;
-    try {
-      response = await fetch(`${API_BASE_URL}/notion/connect`, {
-        method: 'POST',
-        headers: {
-          ...authHeaders,
-          'Content-Type': 'application/json',
-        },
-        body: body || JSON.stringify({}),
-        credentials: 'include',
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const response = await safeFetch(`${API_BASE_URL}/notion/connect`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: body || JSON.stringify({}),
+      credentials: 'include',
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
 
     const text = await response.text();
     return new NextResponse(text, {
@@ -52,7 +43,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (isSafeFetchTimeout(error)) {
       console.error('[api/notion/connect] Request timeout');
       return NextResponse.json({ error: 'Connection timeout' }, { status: 504 });
     }

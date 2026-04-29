@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { isSafeFetchTimeout, safeFetch } from '@/lib/safe-fetch';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
@@ -14,12 +15,12 @@ export async function GET(
     const { headers: authHeaders } = authResult;
     const { sessionId } = await params;
 
-    const response = await fetch(
+    const response = await safeFetch(
       `${API_BASE_URL}/api/llm-usage/session/${sessionId}`,
       {
         method: 'GET',
         headers: authHeaders,
-        signal: AbortSignal.timeout(10_000),
+        timeoutMs: 10_000,
       }
     );
 
@@ -33,7 +34,7 @@ export async function GET(
 
     return NextResponse.json(await response.json());
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'TimeoutError') {
+    if (isSafeFetchTimeout(error)) {
       return NextResponse.json({ error: 'Backend timeout' }, { status: 504 });
     }
     console.error('Error fetching session usage:', error);

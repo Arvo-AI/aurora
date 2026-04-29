@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { isSafeFetchTimeout, safeFetch } from '@/lib/safe-fetch';
 
 const API_BASE_URL = process.env.BACKEND_URL;
-const FETCH_TIMEOUT_MS = 15000;
+const FETCH_TIMEOUT_MS = 15_000;
 
 async function proxyToBackend(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   if (!API_BASE_URL) {
@@ -19,13 +20,10 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
     const subPath = path.join('/');
     const { headers: authHeaders } = authResult;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    const fetchOptions: RequestInit = {
+    const fetchOptions: RequestInit & { timeoutMs?: number } = {
       method: request.method,
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      signal: controller.signal,
+      timeoutMs: FETCH_TIMEOUT_MS,
     };
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -34,12 +32,7 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
     }
 
     const backendUrl = `${API_BASE_URL}/thousandeyes/${subPath}${request.nextUrl.search}`;
-    let response: Response;
-    try {
-      response = await fetch(backendUrl, fetchOptions);
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const response = await safeFetch(backendUrl, fetchOptions);
 
     if (!response.ok) {
       const text = await response.text();
@@ -73,7 +66,7 @@ async function proxyToBackend(request: NextRequest, { params }: { params: Promis
     }
     return NextResponse.json(data);
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (isSafeFetchTimeout(error)) {
       return NextResponse.json({ error: 'Connection timeout' }, { status: 504 });
     }
     console.error('[api/thousandeyes] Error:', error instanceof Error ? error.message : 'Unknown error');

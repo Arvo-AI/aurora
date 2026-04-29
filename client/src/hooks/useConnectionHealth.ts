@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from 'react';
+import { safeFetch } from '@/lib/safe-fetch';
 
 /**
  * Detects stale browser→server connections after idle periods.
@@ -24,20 +25,15 @@ export function useConnectionHealth() {
 
       if (hiddenDuration < 120_000) return;
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
-
       try {
-        const res = await fetch('/api/ping', {
-          signal: controller.signal,
+        const res = await safeFetch('/api/ping', {
           cache: 'no-store',
+          timeoutMs: 3_000,
         });
-        clearTimeout(timeout);
         if (!res.ok) {
           window.dispatchEvent(new Event('aurora:connection-stale'));
         }
       } catch {
-        clearTimeout(timeout);
         window.dispatchEvent(new Event('aurora:connection-stale'));
       }
     };

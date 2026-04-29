@@ -1,33 +1,24 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { isSafeFetchTimeout, safeFetch } from '@/lib/safe-fetch';
 
 const API_BASE_URL = process.env.BACKEND_URL;
-const FETCH_TIMEOUT_MS = 15000;
+const FETCH_TIMEOUT_MS = 15_000;
 
 export async function GET() {
   try {
     const authResult = await getAuthenticatedUser();
-
     if (authResult instanceof NextResponse) {
       return authResult;
     }
-
     const { headers: authHeaders } = authResult;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    let response: Response;
-    try {
-      response = await fetch(`${API_BASE_URL}/splunk/status`, {
-        method: 'GET',
-        headers: authHeaders,
-        credentials: 'include',
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const response = await safeFetch(`${API_BASE_URL}/splunk/status`, {
+      method: 'GET',
+      headers: authHeaders,
+      credentials: 'include',
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
 
     if (!response.ok) {
       const text = await response.text();
@@ -38,7 +29,7 @@ export async function GET() {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (isSafeFetchTimeout(error)) {
       console.error('[api/splunk/status] Request timeout');
       return NextResponse.json({ error: 'Request timeout' }, { status: 504 });
     }
