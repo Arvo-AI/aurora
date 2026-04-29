@@ -1691,6 +1691,64 @@ def initialize_tables():
                 logging.warning(f"Error swapping status index on incident_subagent_runs: {e}")
                 conn.rollback()
 
+            # Phase 5A: parent_message_id on chat_messages — Vercel resumable-stream's terminal-row rule.
+            # A cancelled/failed message_id is terminal forever; "continue" creates a new message
+            # whose parent_message_id points to the interrupted one. Never reuse interrupted rows.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_messages
+                    ADD COLUMN IF NOT EXISTS parent_message_id UUID;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_chat_messages_parent
+                    ON chat_messages(parent_message_id) WHERE parent_message_id IS NOT NULL;
+                """)
+                conn.commit()
+                logging.info("Added parent_message_id column to chat_messages (if not exists).")
+            except Exception as e:
+                logging.warning(f"Error adding parent_message_id column to chat_messages: {e}")
+                conn.rollback()
+
+            # Phase 5A: state machine CHECK on chat_messages.status (streaming | complete | interrupted | failed).
+            # Existing rows may carry legacy values, so we drop any prior constraint and re-add NOT VALID
+            # so Postgres enforces only on new writes; backfill happens lazily as messages re-finalize.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_messages
+                    DROP CONSTRAINT IF EXISTS chat_messages_status_check;
+                """)
+                cursor.execute("""
+                    ALTER TABLE chat_messages
+                    ADD CONSTRAINT chat_messages_status_check
+                    CHECK (status IN ('streaming', 'complete', 'interrupted', 'failed'))
+                    NOT VALID;
+                """)
+                conn.commit()
+                logging.info("Added chat_messages.status CHECK constraint (NOT VALID — enforced on new writes).")
+            except Exception as e:
+                logging.warning(f"Error adding chat_messages.status CHECK constraint: {e}")
+                conn.rollback()
+
+            # Phase 5A: terminal-event idempotency — partial UNIQUE on chat_events (session_id, message_id)
+            # for terminal types only. Eliminates the natural-finalization vs cancel-handler save race
+            # structurally: first writer wins, second is a primary-key violation the writer catches and logs.
+            try:
+                cursor.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_events_terminal_per_msg
+                    ON chat_events(session_id, message_id)
+                    WHERE type IN ('assistant_finalized', 'assistant_interrupted', 'assistant_failed')
+                      AND message_id IS NOT NULL;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_chat_events_msg_type
+                    ON chat_events(message_id, type) WHERE message_id IS NOT NULL;
+                """)
+                conn.commit()
+                logging.info("Added terminal-event UNIQUE + (message_id, type) index on chat_events.")
+            except Exception as e:
+                logging.warning(f"Error adding terminal-event indexes on chat_events: {e}")
+                conn.rollback()
+
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist
             try:
                 cursor.execute("""
