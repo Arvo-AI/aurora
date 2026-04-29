@@ -1170,6 +1170,111 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
                 """,
+                # Multi-agent: chat events stream
+                "chat_events": """
+                    CREATE TABLE IF NOT EXISTS chat_events (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        session_id VARCHAR(50) NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                        seq BIGINT NOT NULL,
+                        org_id VARCHAR(255),
+                        agent_id VARCHAR(255),
+                        parent_agent_id VARCHAR(255),
+                        type VARCHAR(64) NOT NULL,
+                        payload JSONB NOT NULL,
+                        payload_schema_version INTEGER NOT NULL DEFAULT 1,
+                        message_id UUID,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (session_id, seq)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_chat_events_session_seq ON chat_events(session_id, seq);
+                    CREATE INDEX IF NOT EXISTS idx_chat_events_message ON chat_events(session_id, message_id);
+                    CREATE INDEX IF NOT EXISTS idx_chat_events_agent ON chat_events(session_id, agent_id);
+                """,
+                # Multi-agent: durable chat messages
+                "chat_messages": """
+                    CREATE TABLE IF NOT EXISTS chat_messages (
+                        id UUID PRIMARY KEY,
+                        session_id VARCHAR(50) NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                        seq BIGINT NOT NULL,
+                        role VARCHAR(32) NOT NULL,
+                        agent_id VARCHAR(255),
+                        status VARCHAR(32) NOT NULL,
+                        parts JSONB NOT NULL,
+                        metadata JSONB,
+                        org_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        finalized_at TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_seq ON chat_messages(session_id, seq);
+                """,
+                # Multi-agent: per-incident sub-agent run audit
+                "incident_subagent_runs": """
+                    CREATE TABLE IF NOT EXISTS incident_subagent_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        session_id VARCHAR(50) NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                        agent_id VARCHAR(255) NOT NULL,
+                        parent_agent_id VARCHAR(255),
+                        role VARCHAR(32) NOT NULL,
+                        delegate_level INTEGER NOT NULL DEFAULT 0,
+                        purpose TEXT,
+                        ui_label VARCHAR(255),
+                        suggested_skill_focus TEXT[],
+                        model_used VARCHAR(255),
+                        status VARCHAR(32) NOT NULL,
+                        self_assessed_strength VARCHAR(32),
+                        findings_artifact_ref TEXT,
+                        extra_artifact_refs JSONB,
+                        transcript_ref TEXT,
+                        error TEXT,
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        ended_at TIMESTAMP,
+                        org_id VARCHAR(255)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_incident_subagent_runs_incident ON incident_subagent_runs(incident_id);
+                    CREATE INDEX IF NOT EXISTS idx_incident_subagent_runs_session ON incident_subagent_runs(session_id);
+                    CREATE INDEX IF NOT EXISTS idx_incident_subagent_runs_status ON incident_subagent_runs(status, org_id);
+                """,
+                # Multi-agent: per-org sub-agent enable/disable overrides
+                "subagent_overrides": """
+                    CREATE TABLE IF NOT EXISTS subagent_overrides (
+                        org_id VARCHAR(255) NOT NULL,
+                        subagent_id VARCHAR(255) NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, subagent_id)
+                    );
+                """,
+                # Multi-agent: per-org orchestration limits
+                "multi_agent_config": """
+                    CREATE TABLE IF NOT EXISTS multi_agent_config (
+                        org_id VARCHAR(255) PRIMARY KEY,
+                        max_parallel_subagents INTEGER NOT NULL DEFAULT 3,
+                        max_total_subagents INTEGER NOT NULL DEFAULT 5,
+                        max_delegate_depth INTEGER NOT NULL DEFAULT 1,
+                        max_concurrent_rcas INTEGER NOT NULL DEFAULT 10,
+                        multi_agent_min_severity VARCHAR(32) NOT NULL DEFAULT 'medium',
+                        per_rca_token_budget BIGINT NOT NULL DEFAULT 1500000,
+                        per_subagent_token_budget BIGINT NOT NULL DEFAULT 300000,
+                        per_rca_wallclock_seconds INTEGER NOT NULL DEFAULT 900,
+                        per_subagent_wallclock_seconds INTEGER NOT NULL DEFAULT 240,
+                        monthly_token_cap BIGINT,
+                        fallback_provider_chain TEXT[],
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """,
+                # Multi-agent: per-org model role assignments
+                "model_roles": """
+                    CREATE TABLE IF NOT EXISTS model_roles (
+                        org_id VARCHAR(255) NOT NULL,
+                        role VARCHAR(64) NOT NULL,
+                        provider VARCHAR(64) NOT NULL,
+                        model_id VARCHAR(255) NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, role)
+                    );
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1236,6 +1341,14 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+
+            # Multi-agent: chat events, messages, sub-agent runs, and config
+            rls_tables.append("chat_events")
+            rls_tables.append("chat_messages")
+            rls_tables.append("incident_subagent_runs")
+            rls_tables.append("subagent_overrides")
+            rls_tables.append("multi_agent_config")
+            rls_tables.append("model_roles")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1459,6 +1572,123 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding incident_id index: {e}")
+                conn.rollback()
+
+            # Multi-agent: Add agent_id column to execution_steps
+            try:
+                cursor.execute("""
+                    ALTER TABLE execution_steps
+                    ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255);
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_execution_steps_agent
+                    ON execution_steps(incident_id, agent_id);
+                """)
+                conn.commit()
+                logging.info(
+                    "Added agent_id column and index to execution_steps table (if not exists)."
+                )
+            except Exception as e:
+                logging.warning(f"Error adding agent_id column to execution_steps: {e}")
+                conn.rollback()
+
+            # Multi-agent: Add agent_id column to incident_thoughts
+            try:
+                cursor.execute("""
+                    ALTER TABLE incident_thoughts
+                    ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255);
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incident_thoughts_agent
+                    ON incident_thoughts(incident_id, agent_id);
+                """)
+                conn.commit()
+                logging.info(
+                    "Added agent_id column and index to incident_thoughts table (if not exists)."
+                )
+            except Exception as e:
+                logging.warning(f"Error adding agent_id column to incident_thoughts: {e}")
+                conn.rollback()
+
+            # Multi-agent: Add active_stream_id column to chat_sessions
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS active_stream_id VARCHAR(255);
+                """)
+                conn.commit()
+                logging.info(
+                    "Added active_stream_id column to chat_sessions table (if not exists)."
+                )
+            except Exception as e:
+                logging.warning(f"Error adding active_stream_id column to chat_sessions: {e}")
+                conn.rollback()
+
+            # Multi-agent B5: agent_id + incident_id on llm_usage_tracking for per-agent / per-incident spend rollups.
+            try:
+                cursor.execute("""
+                    ALTER TABLE llm_usage_tracking
+                    ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS incident_id UUID;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_llm_usage_incident
+                    ON llm_usage_tracking(incident_id) WHERE incident_id IS NOT NULL;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_llm_usage_incident_agent
+                    ON llm_usage_tracking(incident_id, agent_id) WHERE incident_id IS NOT NULL;
+                """)
+                conn.commit()
+                logging.info("Added agent_id + incident_id columns to llm_usage_tracking (if not exists).")
+            except Exception as e:
+                logging.warning(f"Error adding agent_id/incident_id to llm_usage_tracking: {e}")
+                conn.rollback()
+
+            # Multi-agent B5: fingerprint + is_multi_agent on incidents.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS is_multi_agent BOOLEAN NOT NULL DEFAULT FALSE;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incidents_fingerprint
+                    ON incidents(org_id, fingerprint) WHERE fingerprint IS NOT NULL;
+                """)
+                conn.commit()
+                logging.info("Added fingerprint + is_multi_agent to incidents (if not exists).")
+            except Exception as e:
+                logging.warning(f"Error adding fingerprint/is_multi_agent to incidents: {e}")
+                conn.rollback()
+
+            # Multi-agent B5: step_uuid for batcher start→end correlation under deferred writes.
+            try:
+                cursor.execute("""
+                    ALTER TABLE execution_steps
+                    ADD COLUMN IF NOT EXISTS step_uuid UUID;
+                """)
+                cursor.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_steps_step_uuid
+                    ON execution_steps(step_uuid) WHERE step_uuid IS NOT NULL;
+                """)
+                conn.commit()
+                logging.info("Added step_uuid column to execution_steps (if not exists).")
+            except Exception as e:
+                logging.warning(f"Error adding step_uuid to execution_steps: {e}")
+                conn.rollback()
+
+            # Multi-agent B5: replace full status index with a partial index on running rows only.
+            try:
+                cursor.execute("DROP INDEX IF EXISTS idx_incident_subagent_runs_status;")
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incident_subagent_runs_running
+                    ON incident_subagent_runs(org_id, started_at) WHERE status = 'running';
+                """)
+                conn.commit()
+                logging.info("Replaced status index with partial running-only index on incident_subagent_runs.")
+            except Exception as e:
+                logging.warning(f"Error swapping status index on incident_subagent_runs: {e}")
                 conn.rollback()
 
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist
