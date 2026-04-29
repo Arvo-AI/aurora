@@ -15,7 +15,15 @@
   <a href="https://github.com/Arvo-AI/aurora/actions/workflows/publish-images.yml"><img src="https://img.shields.io/github/actions/workflow/status/Arvo-AI/aurora/publish-images.yml?label=build" alt="Build Status" /></a>
   <a href="https://github.com/Arvo-AI/aurora/network/members"><img src="https://img.shields.io/github/forks/Arvo-AI/aurora?style=flat" alt="Forks" /></a>
   <a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book%20a%20Demo-cal.com-FF6B4A?logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
+</p>
+
+<p align="center">
+  <a href="https://sonarcloud.io/summary/overall?id=Arvo-AI_aurora"><img src="https://sonarcloud.io/api/project_badges/measure?project=Arvo-AI_aurora&metric=security_rating" alt="Security Rating" /></a>
+  <a href="https://sonarcloud.io/summary/overall?id=Arvo-AI_aurora"><img src="https://sonarcloud.io/api/project_badges/measure?project=Arvo-AI_aurora&metric=vulnerabilities" alt="Vulnerabilities" /></a>
+</p>
+
+<p align="center">
+  <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/%F0%9F%93%85%20Book%20a%20Demo-See%20Aurora%20in%20Action-FF6B4A?style=for-the-badge&logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
 </p>
 
 <p align="center">
@@ -37,6 +45,10 @@
 - **OVH & Scaleway Support** — New cloud connectors for European providers
 
 See the full [CHANGELOG](CHANGELOG.md) for all releases.
+
+---
+
+> **Want to see Aurora in action?** [**Book a 15-minute demo**](https://cal.com/arvo-ai) with the team — we'll walk through a live incident investigation and answer any questions.
 
 ---
 
@@ -330,6 +342,10 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 Apache License 2.0. See [LICENSE](LICENSE).
 
 ---
+
+<p align="center">
+  <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/%F0%9F%93%85%20Book%20a%20Demo-See%20Aurora%20in%20Action-FF6B4A?style=for-the-badge&logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
+</p>
 
 <p align="center">
   <strong>If Aurora helps your team, give us a <a href="https://github.com/Arvo-AI/aurora">star on GitHub</a>!</strong>
