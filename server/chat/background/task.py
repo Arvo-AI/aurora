@@ -539,16 +539,35 @@ def run_background_chat(
         # Run the async workflow in the sync Celery context
         logger.info(f"[BackgroundChat] Starting workflow execution for session {session_id}, incident {incident_id}")
         try:
-            result = asyncio.run(_execute_background_chat(
-                user_id=user_id,
-                session_id=session_id,
-                initial_message=initial_message,
-                trigger_metadata=trigger_metadata,
-                provider_preference=provider_preference,
-                incident_id=incident_id,
-                mode=mode,
-            ))
-            pass
+            use_multi = _should_use_multi_agent(mode, trigger_metadata, incident_id)
+            if use_multi:
+                org_id_for_caps = _resolve_org_id(user_id)
+                if not _can_admit_multi_agent_rca(org_id_for_caps):
+                    logger.warning(
+                        f"[MultiAgentRCA] Concurrency cap reached for org {org_id_for_caps}; "
+                        f"falling back to single-agent for session {session_id}"
+                    )
+                    use_multi = False
+            if use_multi:
+                logger.info(f"[BackgroundChat] Routing session {session_id} to multi-agent RCA")
+                result = asyncio.run(_execute_multi_agent_rca(
+                    user_id=user_id,
+                    session_id=session_id,
+                    initial_message=initial_message,
+                    trigger_metadata=trigger_metadata,
+                    provider_preference=provider_preference,
+                    incident_id=incident_id,
+                ))
+            else:
+                result = asyncio.run(_execute_background_chat(
+                    user_id=user_id,
+                    session_id=session_id,
+                    initial_message=initial_message,
+                    trigger_metadata=trigger_metadata,
+                    provider_preference=provider_preference,
+                    incident_id=incident_id,
+                    mode=mode,
+                ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
@@ -2130,3 +2149,447 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
         return {"error": str(e), "cleaned": 0}
+
+
+def _should_use_multi_agent(
+    mode: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    incident_id: Optional[str],
+) -> bool:
+    if not incident_id:
+        return False
+    if os.getenv("ENABLE_MULTI_AGENT_RCA", "false").lower() not in {"1", "true", "yes"}:
+        return False
+    if mode == "rca-multi":
+        return True
+    if trigger_metadata and trigger_metadata.get("multi_agent"):
+        return True
+    return False
+
+
+_DEFAULT_MULTI_AGENT_CAPS: Dict[str, int] = {
+    "max_concurrent_rcas": 10,
+    "per_rca_wallclock_seconds": 900,
+    "per_rca_token_budget": 1500000,
+}
+
+_RCA_CONCURRENCY_KEY = "rca:concurrent:{org_id}"
+_RCA_CONCURRENCY_TTL_SECONDS = 3600
+_RCA_RATE_KEY = "rca:rate:{org_id}:{provider}"
+_RCA_RATE_WINDOW_SECONDS = 60
+_DEFAULT_RCA_PROVIDER_RPM_LIMIT = 100
+
+
+def _rca_provider_rpm_limit() -> int:
+    raw = os.getenv("RCA_PROVIDER_RPM_LIMIT")
+    if not raw:
+        return _DEFAULT_RCA_PROVIDER_RPM_LIMIT
+    try:
+        return int(raw)
+    except ValueError:
+        return _DEFAULT_RCA_PROVIDER_RPM_LIMIT
+
+
+def _acquire_provider_rate_token(org_id: Optional[str], provider: Optional[str]) -> bool:
+    if not org_id or not provider:
+        return True
+    client = get_redis_client()
+    if client is None:
+        logger.warning("[MultiAgentRCA] Redis unavailable for rate-limit check; allowing")
+        return True
+    limit = _rca_provider_rpm_limit()
+    key = _RCA_RATE_KEY.format(org_id=org_id, provider=provider)
+    try:
+        new_value = client.incr(key)
+        if new_value == 1:
+            client.expire(key, _RCA_RATE_WINDOW_SECONDS)
+        if int(new_value) > limit:
+            logger.warning(
+                f"[MultiAgentRCA] Rate limit reached for org {org_id} provider {sanitize(provider)} "
+                f"(value={new_value}, limit={limit})"
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Rate-limit check failed for org {org_id}: {e}; allowing")
+        return True
+
+
+def _resolve_primary_provider(role: str, user_id: str, org_id: Optional[str]) -> Optional[str]:
+    try:
+        from chat.backend.agent.llm import resolve_role_model
+        provider, _ = resolve_role_model(role, user_id, org_id)  # type: ignore[arg-type]
+        return (provider or "").lower() or None
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] _resolve_primary_provider({role}) failed: {e}")
+        return None
+
+
+def _resolve_org_id(user_id: str) -> Optional[str]:
+    try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        return get_org_id_for_user(user_id)
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Failed to resolve org_id for user {sanitize(user_id)}: {e}")
+        return None
+
+
+def _load_multi_agent_caps(org_id: Optional[str]) -> Dict[str, int]:
+    caps = dict(_DEFAULT_MULTI_AGENT_CAPS)
+    if not org_id:
+        return caps
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+                conn.commit()
+                cursor.execute(
+                    """SELECT max_concurrent_rcas, per_rca_wallclock_seconds, per_rca_token_budget
+                       FROM multi_agent_config WHERE org_id = %s""",
+                    (org_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    caps["max_concurrent_rcas"] = int(row[0])
+                    caps["per_rca_wallclock_seconds"] = int(row[1])
+                    caps["per_rca_token_budget"] = int(row[2])
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Could not load caps for org {org_id}: {e}; using defaults")
+    return caps
+
+
+def _can_admit_multi_agent_rca(org_id: Optional[str]) -> bool:
+    caps = _load_multi_agent_caps(org_id)
+    max_concurrent = caps["max_concurrent_rcas"]
+    if not org_id:
+        return True
+    client = get_redis_client()
+    if client is None:
+        logger.warning("[MultiAgentRCA] Redis unavailable for admission check; allowing")
+        return True
+    key = _RCA_CONCURRENCY_KEY.format(org_id=org_id)
+    try:
+        current = client.get(key)
+        if current is not None and int(current) >= max_concurrent:
+            return False
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Admission check failed for org {org_id}: {e}; allowing")
+        return True
+    return True
+
+
+def _increment_rca_counter(org_id: Optional[str], max_concurrent: int) -> bool:
+    if not org_id:
+        return True
+    client = get_redis_client()
+    if client is None:
+        logger.warning("[MultiAgentRCA] Redis unavailable; skipping concurrency tracking")
+        return True
+    key = _RCA_CONCURRENCY_KEY.format(org_id=org_id)
+    try:
+        new_value = client.incr(key)
+        if new_value == 1:
+            client.expire(key, _RCA_CONCURRENCY_TTL_SECONDS)
+        if new_value > max_concurrent:
+            try:
+                client.decr(key)
+            except Exception as e:
+                logger.warning(f"[MultiAgentRCA] Failed to roll back counter for org {org_id}: {e}")
+            logger.warning(
+                f"[MultiAgentRCA] Concurrency cap reached for org {org_id} "
+                f"(value={new_value}, cap={max_concurrent})"
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Counter increment failed for org {org_id}: {e}; allowing")
+        return True
+
+
+def _decrement_rca_counter(org_id: Optional[str]) -> None:
+    if not org_id:
+        return
+    client = get_redis_client()
+    if client is None:
+        return
+    key = _RCA_CONCURRENCY_KEY.format(org_id=org_id)
+    try:
+        client.decr(key)
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Counter decrement failed for org {org_id}: {e}")
+
+
+async def _execute_multi_agent_rca(
+    *,
+    user_id: str,
+    session_id: str,
+    initial_message: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    provider_preference: Optional[List[str]],
+    incident_id: Optional[str],
+) -> Dict[str, Any]:
+    org_id: Optional[str] = None
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                resolved = set_rls_context(cursor, conn, user_id, log_prefix="[MultiAgentRCA]")
+                if resolved:
+                    org_id = resolved
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] Could not resolve org_id for {sanitize(user_id)}: {e}")
+
+    caps = _load_multi_agent_caps(org_id)
+    max_concurrent = caps["max_concurrent_rcas"]
+
+    admitted = _increment_rca_counter(org_id, max_concurrent)
+    if not admitted:
+        return {
+            "session_id": session_id,
+            "incident_id": incident_id,
+            "status": "rejected",
+            "mode": "rca-multi",
+            "reason": "concurrency_cap",
+        }
+
+    try:
+        return await _run_multi_agent_graph(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=initial_message,
+            trigger_metadata=trigger_metadata,
+            provider_preference=provider_preference,
+            incident_id=incident_id,
+            org_id=org_id,
+            caps=caps,
+        )
+    finally:
+        _decrement_rca_counter(org_id)
+
+
+async def _run_multi_agent_graph(
+    *,
+    user_id: str,
+    session_id: str,
+    initial_message: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    provider_preference: Optional[List[str]],
+    incident_id: Optional[str],
+    org_id: Optional[str],
+    caps: Dict[str, int],
+) -> Dict[str, Any]:
+    from chat.backend.agent.orchestrator.graph import build_main_agent_graph
+    from chat.backend.agent.orchestrator.state import MainAgentState
+    from chat.backend.agent.utils.persistence.chat_events import record_event
+    from chat.backend.agent.utils.postgres_checkpointer import get_postgres_checkpointer
+    from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
+
+    primary_provider = _resolve_primary_provider("orchestrator", user_id, org_id)
+    if not _acquire_provider_rate_token(org_id, primary_provider):
+        try:
+            await record_event(
+                session_id=session_id,
+                org_id=org_id or "",
+                type="assistant_failed",
+                payload={"reason": "provider_rate_limited", "provider": primary_provider},
+                agent_id="main",
+            )
+        except Exception as e:
+            logger.warning(f"[chat_events:dual_write_failed] {e}")
+        return {
+            "session_id": session_id,
+            "incident_id": incident_id,
+            "status": "rate_limited",
+            "mode": "rca-multi",
+            "provider": primary_provider,
+        }
+
+    initial_state = MainAgentState(
+        question=initial_message,
+        user_id=user_id,
+        session_id=session_id,
+        incident_id=incident_id,
+        org_id=org_id,
+        provider_preference=provider_preference,
+        is_background=True,
+        mode="rca-multi",
+        agent_id="main",
+        delegate_level=0,
+    )
+
+    if os.getenv("ENABLE_POSTGRES_CHECKPOINTER", "false").lower() in {"1", "true", "yes"}:
+        try:
+            checkpointer = await get_postgres_checkpointer()
+        except Exception as e:
+            logger.warning(f"[MultiAgentRCA] postgres checkpointer unavailable, falling back to in-memory: {e}")
+            checkpointer = SafeMemorySaver()
+    else:
+        checkpointer = SafeMemorySaver()
+    graph = build_main_agent_graph(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        await record_event(
+            session_id=session_id,
+            org_id=org_id or "",
+            type="plan_committed",
+            payload={"mode": "rca-multi", "trigger": trigger_metadata or {}},
+            agent_id="main",
+        )
+    except Exception as e:
+        logger.warning(f"[chat_events:dual_write_failed] {e}")
+
+    wallclock = caps["per_rca_wallclock_seconds"]
+    final_state: Optional[Dict[str, Any]] = None
+
+    async def _drain_stream() -> Optional[Dict[str, Any]]:
+        last: Optional[Dict[str, Any]] = None
+        async for chunk in graph.astream(initial_state, config=config, subgraphs=True):
+            last = chunk
+        return last
+
+    usage_token = None
+    try:
+        from chat.backend.agent.utils.llm_usage_tracker import (
+            set_usage_incident_id_var,
+        )
+        if incident_id:
+            usage_token = set_usage_incident_id_var(incident_id)
+    except ImportError:
+        logger.info("[MultiAgentRCA] llm_usage_tracker ContextVar helpers unavailable; skipping")
+
+    try:
+        try:
+            final_state = await asyncio.wait_for(_drain_stream(), timeout=wallclock)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[MultiAgentRCA] Wall-clock timeout ({wallclock}s) exceeded for session {session_id}"
+            )
+            try:
+                await record_event(
+                    session_id=session_id,
+                    org_id=org_id or "",
+                    type="assistant_failed",
+                    payload={"reason": "rca_timeout", "wallclock_seconds": wallclock},
+                    agent_id="main",
+                )
+            except Exception:
+                pass
+            return {
+                "session_id": session_id,
+                "incident_id": incident_id,
+                "status": "timeout",
+                "mode": "rca-multi",
+                "wallclock_seconds": wallclock,
+            }
+        except Exception as e:
+            logger.exception(f"[MultiAgentRCA] Graph stream failed for session {session_id}: {e}")
+            try:
+                await record_event(
+                    session_id=session_id,
+                    org_id=org_id or "",
+                    type="assistant_failed",
+                    payload={"error": str(e)},
+                    agent_id="main",
+                )
+            except Exception:
+                pass
+            raise
+    finally:
+        if usage_token is not None:
+            try:
+                from chat.backend.agent.utils.llm_usage_tracker import (
+                    reset_usage_incident_id_var,
+                )
+                reset_usage_incident_id_var(usage_token)
+            except Exception as e:
+                logger.warning(f"[MultiAgentRCA] reset_usage_incident_id_var failed: {e}")
+
+    fallback_result = await _maybe_fallback_to_single_agent(
+        user_id=user_id,
+        session_id=session_id,
+        initial_message=initial_message,
+        trigger_metadata=trigger_metadata,
+        provider_preference=provider_preference,
+        incident_id=incident_id,
+        org_id=org_id,
+    )
+    if fallback_result is not None:
+        return fallback_result
+
+    return {
+        "session_id": session_id,
+        "incident_id": incident_id,
+        "status": "completed",
+        "mode": "rca-multi",
+        "final_state": final_state is not None,
+    }
+
+
+async def _maybe_fallback_to_single_agent(
+    *,
+    user_id: str,
+    session_id: str,
+    initial_message: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    provider_preference: Optional[List[str]],
+    incident_id: Optional[str],
+    org_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not incident_id:
+        return None
+    statuses = _fetch_subagent_run_statuses(user_id, incident_id, session_id)
+    if not statuses:
+        return None
+    succeeded = [s for s in statuses if s == "succeeded"]
+    terminal = [s for s in statuses if s in ("failed", "cancelled")]
+    if succeeded:
+        return None
+    if not terminal:
+        return None
+    logger.warning(
+        f"[MultiAgentRCA] all sub-agents failed; falling back to single-agent loop "
+        f"(session={session_id}, incident={incident_id}, count={len(statuses)})"
+    )
+    try:
+        result = await _execute_background_chat(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=initial_message,
+            trigger_metadata=trigger_metadata,
+            provider_preference=provider_preference,
+            incident_id=incident_id,
+            mode="ask",
+        )
+    except Exception as e:
+        logger.exception(f"[MultiAgentRCA] Fallback to single-agent failed: {e}")
+        return {
+            "session_id": session_id,
+            "incident_id": incident_id,
+            "status": "fallback_failed",
+            "mode": "rca-multi",
+            "error": str(e),
+        }
+    if isinstance(result, dict):
+        result.setdefault("fallback_from", "rca-multi")
+    return result
+
+
+def _fetch_subagent_run_statuses(
+    user_id: str, incident_id: str, session_id: str
+) -> List[str]:
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[MultiAgentRCA:Fallback]")
+                cursor.execute(
+                    """
+                    SELECT status FROM incident_subagent_runs
+                    WHERE incident_id = %s AND session_id = %s AND role = 'subagent'
+                    """,
+                    (incident_id, session_id),
+                )
+                rows = cursor.fetchall() or []
+                return [r[0] for r in rows if r and r[0]]
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] _fetch_subagent_run_statuses failed: {e}")
+        return []
