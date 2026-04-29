@@ -32,8 +32,8 @@ kubernetes==26.1.0
 langchain==1.2.6
 nemoguardrails>=0.21.0
 langchain_community==0.3.31
-langchain_core==1.2.11
-langchain_openai==1.1.7
+langchain_core==1.2.31
+langchain_openai==1.1.14
 langchain-anthropic>=0.3.0
 google-genai==1.58.0  # Pin to avoid interactions module using extra_items TypedDict (requires Python 3.13+)
 langchain-google-genai>=4.0.0,<5.0.0
@@ -50,13 +50,13 @@ proto-plus==1.25.0
 protobuf==5.29.6
 psycopg2-binary
 bcrypt>=4.0.0
-pyasn1==0.6.2
+pyasn1==0.6.3
 pyasn1_modules==0.4.1
 pydantic>=2.9.0  # Flexible for langchain compatibility
 pypdf>=4.0.0
 python-dateutil==2.9.0.post0
-python-dotenv==1.0.1
-requests==2.32.5
+python-dotenv==1.2.2
+requests==2.33.1
 rsa==4.9
 six==1.17.0
 typing_extensions>=4.12.2
