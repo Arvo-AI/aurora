@@ -208,6 +208,11 @@ config:
   RCA_PROVIDER_RPM_LIMIT: "100"               # Per-org per-provider request budget for orchestrator's primary call
   SUBAGENT_RECURSION_LIMIT: "50"              # Max ReAct super-steps per sub-agent
 
+  # --- Phase 5B: SSE chat transport (dual-stack with WS until pilot completes) ---
+  CHAT_TRANSPORT: "sse"                       # "sse" (Server-Sent Events + Redis Streams) | "ws" (legacy WebSocket fallback)
+  NEXT_PUBLIC_CHAT_TRANSPORT: "sse"           # Frontend mirror — must equal CHAT_TRANSPORT
+  CHAT_RATE_LIMIT_PER_MINUTE: "60"            # Per-user Redis-backed limit (chat:rate:{user_id})
+
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
