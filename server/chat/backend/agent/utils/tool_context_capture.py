@@ -26,15 +26,50 @@ Usage:
 - Threshold configurable via SUMMARIZATION_THRESHOLD_TOKENS constant
 """
 
+import asyncio
+import contextvars
 import json
 import logging
 import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
+from .write_batcher import get_default_batcher, batching_enabled
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+
+# Per-call override for agent_id; falls back to ToolContextCapture.agent_id when unset.
+_capture_agent_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "capture_agent_id", default=None
+)
+_capture_parent_agent_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "capture_parent_agent_id", default=None
+)
+
+
+def set_capture_agent_id(agent_id: Optional[str], parent_agent_id: Optional[str] = None) -> tuple:
+    """Set per-call agent_id override; returns reset tokens for restoration."""
+    return (
+        _capture_agent_id_var.set(agent_id),
+        _capture_parent_agent_id_var.set(parent_agent_id),
+    )
+
+
+def reset_capture_agent_id(tokens: tuple) -> None:
+    try:
+        _capture_agent_id_var.reset(tokens[0])
+        _capture_parent_agent_id_var.reset(tokens[1])
+    except Exception:
+        pass
+
+
+# Strong refs for fire-and-forget chat_events tasks so the loop doesn't GC them mid-flight.
+_chat_event_tasks: "set[asyncio.Task]" = set()
+_MAX_INFLIGHT_CHAT_EVENT_TASKS = 1000
+_MAX_TOOL_SIGNATURES_PER_CAPTURE = 1000
+
 # Import langchain components - direct imports for LangChain 1.2.6+
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
@@ -61,21 +96,32 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
 class ToolContextCapture:
     """Captures complete tool interactions for LLM context history."""
     
-    def __init__(self, session_id: str, user_id: str, incident_id: Optional[str] = None, org_id: Optional[str] = None):
+    def __init__(
+        self,
+        session_id: str,
+        user_id: str,
+        incident_id: Optional[str] = None,
+        org_id: Optional[str] = None,
+        agent_id: str = "main",
+        parent_agent_id: Optional[str] = None,
+    ):
         self.session_id = session_id
         self.user_id = user_id
         self.incident_id = incident_id
         self.org_id = org_id
-        if self.incident_id and not self.org_id:
+        self.agent_id = agent_id
+        self.parent_agent_id = parent_agent_id
+        if not self.org_id:
             try:
                 from utils.auth.stateless_auth import get_org_id_for_user
                 self.org_id = get_org_id_for_user(user_id)
             except Exception as e:
-                logger.warning(f"Failed to resolve org_id for user {user_id}, execution-step persistence disabled: {e}")
+                logger.warning(f"Failed to resolve org_id for user {user_id}: {e}")
         self._persist_steps = bool(self.incident_id and self.org_id)
         self.current_tool_calls = {}  # Track ongoing tool calls
         self.collected_tool_messages = []  # Store tool messages for batch addition
-        self.tool_execution_signatures = set()  # Track unique tool executions to prevent duplicates
+        # tool_execution_signatures stays per-instance; cross-agent dedup uses the Redis fingerprint cache instead.
+        self.tool_execution_signatures = set()
         # Map message content to correct tool_call_id (survives LangGraph mutations)
         self.content_to_tool_id = {}  # Map: content_hash → tool_call_id
         # Lock to guard concurrent access to current_tool_calls from concurrent threads/tasks
@@ -87,31 +133,79 @@ class ToolContextCapture:
     # execution_steps persistence (only for incident-linked sessions)
     # ------------------------------------------------------------------
 
-    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str | None = None) -> Optional[int]:
-        """INSERT a running execution_step row. Returns the row id or None."""
+    def _effective_agent_id(self) -> str:
+        return _capture_agent_id_var.get() or self.agent_id or "main"
+
+    def _effective_parent_agent_id(self) -> Optional[str]:
+        return _capture_parent_agent_id_var.get() or self.parent_agent_id
+
+    def _emit_chat_event(self, type_: str, payload: Dict[str, Any]) -> None:
+        if not self.session_id or not self.org_id:
+            return
+        try:
+            from .persistence.chat_events import record_event
+            agent_id = self._effective_agent_id()
+            parent_agent_id = self._effective_parent_agent_id()
+            coro = record_event(
+                session_id=self.session_id,
+                org_id=self.org_id,
+                type=type_,
+                payload=payload,
+                agent_id=agent_id,
+                parent_agent_id=parent_agent_id,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                if len(_chat_event_tasks) >= _MAX_INFLIGHT_CHAT_EVENT_TASKS:
+                    logger.warning(
+                        "chat_events in-flight task cap (%d) reached; dropping event type=%s",
+                        _MAX_INFLIGHT_CHAT_EVENT_TASKS, type_,
+                    )
+                    coro.close()
+                else:
+                    task = loop.create_task(coro)
+                    _chat_event_tasks.add(task)
+                    task.add_done_callback(_chat_event_tasks.discard)
+            except RuntimeError:
+                asyncio.run(coro)
+        except Exception as e:
+            logger.warning(f"chat_events emit failed (type={type_}): {e}")
+
+    def _record_step_start(self, tool_name: str, tool_input: Any, tool_call_id: str | None = None) -> Optional[str]:
+        """INSERT a running execution_step row. Returns a tracking id or None."""
         if not self._persist_steps:
             return None
         try:
             input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else json.dumps(str(tool_input))
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
-                    cur.execute(
-                        """INSERT INTO execution_steps
-                           (incident_id, session_id, org_id, step_index, tool_name,
-                            tool_call_id, tool_input, status, started_at)
-                           SELECT %s, %s, %s,
-                                  COALESCE(MAX(step_index), 0) + 1,
-                                  %s, %s, %s, 'running', %s
-                           FROM execution_steps WHERE incident_id = %s
-                           RETURNING id""",
-                        (self.incident_id, self.session_id, self.org_id,
-                         tool_name, tool_call_id, input_json,
-                         datetime.now(timezone.utc), self.incident_id),
-                    )
-                    row_id = cur.fetchone()[0]
-                conn.commit()
-            return row_id
+            tracking_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
+            sql = (
+                """INSERT INTO execution_steps
+                   (incident_id, session_id, org_id, agent_id, step_index, tool_name,
+                    tool_call_id, tool_input, status, started_at, step_uuid)
+                   SELECT %s, %s, %s, %s,
+                          COALESCE(MAX(step_index), 0) + 1,
+                          %s, %s, %s, 'running', %s, %s
+                   FROM execution_steps WHERE incident_id = %s"""
+            )
+            params = (
+                self.incident_id, self.session_id, self.org_id,
+                self._effective_agent_id(),
+                tool_name, tool_call_id, input_json,
+                now, tracking_id, self.incident_id,
+            )
+            if batching_enabled():
+                user_id = self.user_id
+                def _hook(cur, conn, _uid=user_id):
+                    set_rls_context(cur, conn, _uid, log_prefix="[ToolCapture:start]")
+                get_default_batcher().enqueue(sql, params, pre_commit_hook=_hook)
+            else:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:start]")
+                        cur.execute(sql, params)
+                    conn.commit()
+            return tracking_id
         except Exception:
             logger.exception("Failed to record execution_step start")
             return None
@@ -139,7 +233,7 @@ class ToolContextCapture:
             logger.debug("Non-JSON tool output, skipping structured error check")
         return False
 
-    def _record_step_end(self, step_id: Optional[int], output: str, is_error: bool = False):
+    def _record_step_end(self, step_id: Optional[str], output: str, is_error: bool = False):
         """UPDATE an execution_step row with completion data."""
         if step_id is None:
             return
@@ -156,29 +250,96 @@ class ToolContextCapture:
             if is_error:
                 error_msg = (output[:2048] if output else None)
 
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:end]")
-                    cur.execute(
-                        """UPDATE execution_steps
-                           SET status = %s,
-                               completed_at = %s,
-                               duration_ms = (EXTRACT(EPOCH FROM (%s - started_at)) * 1000)::int,
-                               tool_output = %s,
-                               error_message = %s
-                           WHERE id = %s""",
-                        (status, now, now, truncated_output, error_msg, step_id),
-                    )
-                conn.commit()
+            sql = (
+                """UPDATE execution_steps
+                   SET status = %s,
+                       completed_at = %s,
+                       duration_ms = (EXTRACT(EPOCH FROM (%s - started_at)) * 1000)::int,
+                       tool_output = %s,
+                       error_message = %s
+                   WHERE step_uuid = %s"""
+            )
+            params = (status, now, now, truncated_output, error_msg, step_id)
+            if batching_enabled():
+                user_id = self.user_id
+                def _hook(cur, conn, _uid=user_id):
+                    set_rls_context(cur, conn, _uid, log_prefix="[ToolCapture:end]")
+                get_default_batcher().enqueue(sql, params, pre_commit_hook=_hook)
+            else:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:end]")
+                        cur.execute(sql, params)
+                    conn.commit()
         except Exception:
             logger.exception("Failed to record execution_step end")
         
+    def _record_dedup_step_end(self, step_id: str, from_agent: Optional[str], preview: str) -> None:
+        try:
+            now = datetime.now(timezone.utc)
+            output = f"[deduped from {from_agent or 'unknown'}] " + (preview or "")
+            sql = (
+                """UPDATE execution_steps
+                   SET status = 'deduped',
+                       completed_at = %s,
+                       duration_ms = (EXTRACT(EPOCH FROM (%s - started_at)) * 1000)::int,
+                       tool_output = %s
+                   WHERE step_uuid = %s"""
+            )
+            params = (now, now, output[:10240], step_id)
+            if batching_enabled():
+                user_id = self.user_id
+                def _hook(cur, conn, _uid=user_id):
+                    set_rls_context(cur, conn, _uid, log_prefix="[ToolCapture:dedup]")
+                get_default_batcher().enqueue(sql, params, pre_commit_hook=_hook)
+            else:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, self.user_id, log_prefix="[ToolCapture:dedup]")
+                        cur.execute(sql, params)
+                    conn.commit()
+        except Exception:
+            logger.exception("Failed to record deduped execution_step end")
+
     def capture_tool_start(self, tool_name: str, tool_input: Any, tool_call_id: Optional[str] = None) -> str:
-        """Capture the start of a tool execution with improved ID management."""    
-        
-        # Create a normalized signature for this tool execution to detect duplicates
-        # Use sorted JSON to ensure consistent signature regardless of dict key order
-        import json
+        """Capture the start of a tool execution with improved ID management."""
+
+        # Cross-agent fingerprint dedup probe (best-effort). On a hit we stash the cached
+        # result on the call record; the wrapper at execution time checks this flag and
+        # short-circuits without running the tool. We do NOT raise here because this
+        # method is also called from streaming callbacks, where raising would break the
+        # stream rather than the (separate) tool execution path.
+        if self.incident_id and isinstance(tool_input, dict):
+            try:
+                from ..orchestrator.dedup import compute_fingerprint, _check_sync
+                fingerprint = compute_fingerprint(tool_name, tool_input)
+                self._last_fingerprint = fingerprint
+                cached = _check_sync(self.incident_id, fingerprint)
+                if cached and cached.get("result_preview"):
+                    preview = cached["result_preview"]
+                    from_agent = cached.get("agent_id")
+                    self_agent_id = self._effective_agent_id()
+                    self._emit_chat_event(
+                        "tool_call_result",
+                        {
+                            "deduped": True,
+                            "from_agent": from_agent,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "result_preview": preview,
+                            "agent_id": self_agent_id,
+                            "status": "deduped",
+                        },
+                    )
+                    if tool_call_id:
+                        with self.lock:
+                            entry = self.current_tool_calls.setdefault(tool_call_id, {})
+                            entry["deduped"] = True
+                            entry["cached_result"] = preview
+                            entry["dedup_from_agent"] = from_agent
+            except Exception as e:
+                logger.warning(f"dedup probe skipped: {e}")
+
         try:
             normalized_input = json.dumps(tool_input, sort_keys=True) if isinstance(tool_input, dict) else str(tool_input)
         except (TypeError, ValueError):
@@ -189,6 +350,8 @@ class ToolContextCapture:
         # Only reuse if the exact same tool with exact same input is already running
         with self.lock: # Use lock for concurrent access
             for existing_call_id, call_info in self.current_tool_calls.items():
+                if "input" not in call_info or "tool_name" not in call_info:
+                    continue
                 try:
                     normalized_existing_input = json.dumps(call_info['input'], sort_keys=True) if isinstance(call_info['input'], dict) else str(call_info['input'])
                 except (TypeError, ValueError):
@@ -207,8 +370,10 @@ class ToolContextCapture:
                         logger.warning(f"Found stale tool call for {tool_name} (age: {time_diff}s), creating new one")
         
         logger.info(f"TOOL CAPTURE: Capturing tool start: {tool_name} with ID {tool_call_id}")
-        # Store the tool call for completion later
-        self.current_tool_calls[tool_call_id] = {
+        # Preserve any dedup-flag fields stashed earlier in this method so the wrapper's
+        # short-circuit branch isn't blown away by this regular call-record write.
+        existing_entry = self.current_tool_calls.get(tool_call_id) or {}
+        new_entry = {
             "tool_name": tool_name,
             "input": tool_input,
             "start_time": datetime.now(),
@@ -216,8 +381,21 @@ class ToolContextCapture:
             "signature": tool_signature,
             "step_id": self._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
         }
+        for k in ("deduped", "cached_result", "dedup_from_agent", "dedup_consumed"):
+            if k in existing_entry:
+                new_entry[k] = existing_entry[k]
+        self.current_tool_calls[tool_call_id] = new_entry
         
         logger.info(f"Captured tool start: {tool_name} with ID {tool_call_id}")
+        self._emit_chat_event(
+            "tool_call_started",
+            {
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "input": tool_input if isinstance(tool_input, (dict, list, str, int, float, bool, type(None))) else str(tool_input),
+                "status": "running",
+            },
+        )
         return tool_call_id
     
     def capture_tool_end(self, tool_call_id: str, output: str, is_error: bool = False):
@@ -233,8 +411,33 @@ class ToolContextCapture:
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
-        
+
         self._record_step_end(tool_info.get("step_id"), output, is_error)
+        self._emit_chat_event(
+            "tool_call_result",
+            {
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "output": (output[:10240] if output else ""),
+                "status": "error" if is_error else "success",
+            },
+        )
+
+        # Cross-agent fingerprint dedup store (best-effort; only on success).
+        if not is_error and self.incident_id and isinstance(tool_input, dict):
+            try:
+                from ..orchestrator.dedup import compute_fingerprint, _store_sync
+                fingerprint = compute_fingerprint(tool_name, tool_input)
+                preview = output[:4096] if output else ""
+                value = {
+                    "tool_name": tool_name,
+                    "agent_id": self._effective_agent_id(),
+                    "result_preview": preview,
+                    "stored_at": datetime.now(timezone.utc).isoformat(),
+                }
+                _store_sync(self.incident_id, fingerprint, value, 3600)
+            except Exception as e:
+                logger.warning(f"dedup store skipped: {e}")
         
         logger.debug(f"Tool info: {tool_name}, input: {tool_input}, run_id: {run_id}")
         
@@ -344,6 +547,8 @@ class ToolContextCapture:
         with self.lock: # Use lock for concurrent access
             if tool_call_id in self.current_tool_calls:
                 tool_signature = self.current_tool_calls[tool_call_id]['signature']
+                if len(self.tool_execution_signatures) >= _MAX_TOOL_SIGNATURES_PER_CAPTURE:
+                    self.tool_execution_signatures.clear()
                 self.tool_execution_signatures.add(tool_signature)
                 # Mark as completed but keep in current_tool_calls for wrapper matching
                 self.current_tool_calls[tool_call_id]['completed'] = True
@@ -510,6 +715,18 @@ class ToolContextCapture:
         
         return external_messages
     
+    def flush(self) -> None:
+        try:
+            get_default_batcher().flush()
+        except Exception as e:
+            logger.warning(f"ToolContextCapture flush failed: {e}")
+
+    def __del__(self) -> None:
+        try:
+            get_default_batcher().flush()
+        except Exception:
+            pass
+
     def capture_agent_response(self, response_text: str):
         """Capture the final agent response after tool executions."""
         # REMOVED: This method was causing duplicate saves

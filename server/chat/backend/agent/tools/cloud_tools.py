@@ -867,7 +867,7 @@ from .mcp_tools import (
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
 
-def get_cloud_tools():
+def get_cloud_tools(agent_id: str = "main", parent_agent_id: Optional[str] = None):
     """Get all cloud management tools including both Aurora native tools and REAL MCP tools."""
     # Import required classes at function start to avoid scope issues
     from langchain_core.tools import StructuredTool
@@ -895,9 +895,9 @@ def get_cloud_tools():
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:agent={agent_id}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:agent={agent_id}"
     
     if user_id:
         current_time = time.time()
@@ -931,12 +931,18 @@ def get_cloud_tools():
         """Wrap a function to capture its execution for LLM context."""
         if not tool_capture:
             return func
-            
+
         @wraps(func)
         def wrapped_func(**kwargs):
             exec_lock = getattr(tool_capture, 'execution_lock', None)
             acquired = False
+            agent_id_tokens = None
             try:
+                try:
+                    from chat.backend.agent.utils.tool_context_capture import set_capture_agent_id
+                    agent_id_tokens = set_capture_agent_id(agent_id, parent_agent_id)
+                except Exception as e:
+                    logger.warning(f"Failed to set capture agent_id context: {e}")
                 if exec_lock:
                     exec_lock.acquire()
                     acquired = True
@@ -964,8 +970,26 @@ def get_cloud_tools():
                                 logging.info(f"Updated placeholder signature for {call_id} to {tool_signature}")
                                 break
                 
-                # Execute the original function
-                result = func(**kwargs)
+                # Cross-agent dedup short-circuit: capture_tool_start may have stashed a
+                # cached result from another sub-agent on this incident. If so, return
+                # the preview directly without re-executing the tool.
+                cached_result = None
+                if tool_capture:
+                    try:
+                        with tool_capture.lock:
+                            for _ci in tool_capture.current_tool_calls.values():
+                                if _ci.get("deduped") and _ci.get("tool_name") == tool_name and not _ci.get("dedup_consumed"):
+                                    cached_result = _ci.get("cached_result")
+                                    _ci["dedup_consumed"] = True
+                                    break
+                    except Exception as _e:
+                        logger.warning(f"dedup short-circuit check failed: {_e}")
+
+                if cached_result is not None:
+                    result = f"[deduped from another sub-agent on this incident]\n{cached_result}"
+                else:
+                    # Execute the original function
+                    result = func(**kwargs)
                 
                 # FIXED: Find the matching tool call ID by signature match instead of just "incomplete" status
                 matching_tool_call_id = None
@@ -1146,6 +1170,12 @@ def get_cloud_tools():
             finally:
                 if acquired and exec_lock:
                     exec_lock.release()
+                if agent_id_tokens is not None:
+                    try:
+                        from chat.backend.agent.utils.tool_context_capture import reset_capture_agent_id
+                        reset_capture_agent_id(agent_id_tokens)
+                    except Exception as e:
+                        logger.warning(f"Failed to reset capture agent_id context: {e}")
 
         return wrapped_func
     
