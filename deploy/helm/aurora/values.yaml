@@ -200,6 +200,14 @@ config:
   SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
+  # --- Multi-Agent RCA ---
+  ENABLE_MULTI_AGENT_RCA: "false"             # Master switch for orchestrator + sub-agent fan-out
+  ENABLE_POSTGRES_CHECKPOINTER: "false"       # Durable LangGraph checkpointer (recommended when multi-agent on)
+  MULTI_AGENT_BATCH_WRITES: "true"            # 1.5s batched writes for execution_steps + incident_thoughts
+  MULTI_AGENT_BATCH_MAX_QUEUE: "5000"         # Hard cap on the in-memory write buffer
+  RCA_PROVIDER_RPM_LIMIT: "100"               # Per-org per-provider request budget for orchestrator's primary call
+  SUBAGENT_RECURSION_LIMIT: "50"              # Max ReAct super-steps per sub-agent
+
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
