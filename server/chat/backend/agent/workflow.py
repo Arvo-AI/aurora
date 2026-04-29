@@ -2,6 +2,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
+from chat.backend.agent.utils.postgres_checkpointer import get_checkpointer
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.messages import AIMessageChunk, AIMessage, SystemMessage
 from chat.backend.agent.agent import Agent
@@ -66,7 +67,7 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
 class Workflow:
     def __init__(self, agent: Agent, session_id: str):
         self.agent = agent
-        self.memory = SafeMemorySaver()
+        self.memory = get_checkpointer()
         self.config = RunnableConfig({"configurable": {"thread_id": session_id}})
         self.app = self.get_compiled_workflow()
         self._last_state = None
@@ -1629,11 +1630,111 @@ class Workflow:
             logger.warning("Failed to inject RCA context updates: %s", exc)
         return ui_messages
     
+    def _emit_chat_events_for_messages(
+        self,
+        ui_messages: list,
+        session_id: str,
+        org_id: Optional[str],
+        agent_id: Optional[str] = None,
+    ) -> None:
+        if not session_id or not org_id or not ui_messages:
+            return
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import (
+                record_event,
+                upsert_message_projection,
+                ensure_message_id,
+            )
+
+            async def _emit_all():
+                for msg in ui_messages:
+                    sender = msg.get('sender')
+                    streaming = bool(msg.get('_streaming'))
+                    text = msg.get('text', '') or ''
+                    tool_calls = msg.get('toolCalls') or []
+                    mid = ensure_message_id(msg)
+
+                    if sender == 'user':
+                        await record_event(
+                            session_id=session_id,
+                            org_id=org_id,
+                            type='user_message',
+                            payload={'text': text},
+                            message_id=mid,
+                            agent_id=agent_id,
+                        )
+                        await upsert_message_projection(
+                            message_id=mid,
+                            session_id=session_id,
+                            org_id=org_id,
+                            role='user',
+                            status='complete',
+                            parts=[{'type': 'text', 'text': text}],
+                            agent_id=agent_id,
+                            finalized=True,
+                        )
+                    elif sender == 'bot':
+                        evt_type = 'assistant_chunk' if streaming else 'assistant_finalized'
+                        status = 'streaming' if streaming else 'complete'
+                        parts: list[dict] = []
+                        if text:
+                            parts.append({'type': 'text', 'text': text})
+                        for tc in tool_calls:
+                            parts.append({
+                                'type': 'tool_call',
+                                'tool_name': tc.get('tool_name'),
+                                'tool_call_id': tc.get('id'),
+                                'input': tc.get('input'),
+                                'output': tc.get('output'),
+                                'status': tc.get('status'),
+                            })
+                        await record_event(
+                            session_id=session_id,
+                            org_id=org_id,
+                            type=evt_type,
+                            payload={'text': text, 'tool_calls': tool_calls},
+                            message_id=mid,
+                            agent_id=agent_id,
+                        )
+                        await upsert_message_projection(
+                            message_id=mid,
+                            session_id=session_id,
+                            org_id=org_id,
+                            role='assistant',
+                            status=status,
+                            parts=parts,
+                            agent_id=agent_id,
+                            finalized=not streaming,
+                        )
+                        for tc in tool_calls:
+                            if tc.get('output') is not None:
+                                await record_event(
+                                    session_id=session_id,
+                                    org_id=org_id,
+                                    type='tool_call_result',
+                                    payload={
+                                        'tool_name': tc.get('tool_name'),
+                                        'tool_call_id': tc.get('id'),
+                                        'output': tc.get('output'),
+                                        'status': tc.get('status'),
+                                    },
+                                    message_id=mid,
+                                    agent_id=agent_id,
+                                )
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_emit_all())
+            except RuntimeError:
+                asyncio.run(_emit_all())
+        except Exception as e:
+            logger.warning("[chat_events:dual_write_failed] %s", e)
+
     def _save_ui_messages(self, session_id: str, user_id: str, ui_messages: list, ui_state: Optional[dict] = None) -> bool:
         """Save UI-formatted messages and UI state to the database."""
         try:
             from utils.db.connection_pool import db_pool
-            
+
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[Workflow:SaveMessages]"):
@@ -1657,11 +1758,17 @@ class Workflow:
                 if cursor.rowcount > 0:
                     conn.commit()
                     logger.info(f"Updated UI messages{' and state' if ui_state else ''} for session {session_id}")
+                    try:
+                        from utils.auth.stateless_auth import resolve_org_id
+                        org_id = resolve_org_id(user_id)
+                        self._emit_chat_events_for_messages(ui_messages, session_id, org_id)
+                    except Exception as e:
+                        logger.warning("[chat_events:dual_write_failed] %s", e)
                     return True
                 else:
                     logger.warning(f"No rows updated when saving UI messages for session {session_id} (RLS or missing session)")
                     return False
-                    
+
         except Exception as e:
             logger.error(f"Error saving UI messages: {e}")
             return False
@@ -1744,6 +1851,12 @@ class Workflow:
                     f"Appended {len(to_append)} UI messages (total {len(merged)}) "
                     f"for session {session_id}"
                 )
+                try:
+                    from utils.auth.stateless_auth import resolve_org_id
+                    org_id = resolve_org_id(user_id)
+                    self._emit_chat_events_for_messages(to_append, session_id, org_id)
+                except Exception as e:
+                    logger.warning("[chat_events:dual_write_failed] %s", e)
                 return True
 
         except Exception as e:

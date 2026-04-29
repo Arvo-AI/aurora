@@ -152,6 +152,29 @@ def _validate_ws_token(websocket) -> dict | None:
 def _normalize_mode(mode: Optional[str]) -> str:
     return (mode or "agent").strip().lower()
 
+
+async def _emit_direct_tool_result_event(
+    session_id: Optional[str],
+    user_id: Optional[str],
+    tool_name: str,
+    payload: dict,
+) -> None:
+    try:
+        if not session_id or session_id == 'unknown' or not user_id:
+            return
+        from chat.backend.agent.utils.persistence.chat_events import record_event
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return
+        await record_event(
+            session_id=session_id,
+            org_id=org_id,
+            type='tool_call_result',
+            payload={'tool_name': tool_name, **payload},
+        )
+    except Exception as e:
+        logger.warning("[chat_events:dual_write_failed] %s", e)
+
 # Note: Removed per-user concurrency limitation to enable true multi-session support
 # Concurrent sessions are now safely isolated via session-specific terraform directories
 
@@ -322,6 +345,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     workflow_timeout = 1800  # 30 minutes max for any workflow
     session_id = getattr(state, 'session_id', 'unknown')
 
+    from chat.backend.agent.utils.persistence.chat_events import (
+        set_active_ws_sender,
+        reset_active_ws_sender,
+    )
+    _ws_sender_for_events = None
+    if hasattr(wf, 'agent') and getattr(wf.agent, 'websocket_sender', None):
+        _ws_sender_for_events = wf.agent.websocket_sender
+    _ws_sender_token = set_active_ws_sender(_ws_sender_for_events)
+
     # Helper to save incident thoughts for background chats
     accumulated_thought = []
     last_save_time = [time.time()]  # Use list to allow mutation in nested function
@@ -364,26 +396,34 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 
                 if len(text_to_save) > 20:  # Lower minimum to save smaller chunks
                     try:
-                        from utils.db.connection_pool import db_pool
                         from datetime import datetime
+                        from chat.backend.agent.utils.write_batcher import (
+                            get_default_batcher,
+                            batching_enabled,
+                        )
                         cleaned_text = clean_markdown(text_to_save)
-                        
+
                         # Only save if cleaned text has substantial content
                         if len(cleaned_text) > 20:  # Lower threshold
-                            with db_pool.get_admin_connection() as conn:
-                                with conn.cursor() as cursor:
-                                    # No RLS needed — incident_thoughts not RLS-protected
-                                    cursor.execute(
-                                        "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
-                                        "VALUES (%s, %s, %s, %s)",
-                                        (incident_id, datetime.now(), cleaned_text, "analysis")
-                                    )
-                                conn.commit()
-                                logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
-                                accumulated_thought.clear()
-                                if remaining:
-                                    accumulated_thought.append(remaining)
-                                last_save_time[0] = current_time
+                            sql = (
+                                "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
+                                "VALUES (%s, %s, %s, %s)"
+                            )
+                            params = (incident_id, datetime.now(), cleaned_text, "analysis")
+                            if batching_enabled():
+                                get_default_batcher().enqueue(sql, params)
+                            else:
+                                from utils.db.connection_pool import db_pool
+                                with db_pool.get_admin_connection() as conn:
+                                    with conn.cursor() as cursor:
+                                        # No RLS needed — incident_thoughts not RLS-protected
+                                        cursor.execute(sql, params)
+                                    conn.commit()
+                            logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                            accumulated_thought.clear()
+                            if remaining:
+                                accumulated_thought.append(remaining)
+                            last_save_time[0] = current_time
                     except Exception as e:
                         logger.error(f"[BackgroundChat] Failed to save thought: {e}")
     
@@ -393,6 +433,81 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     is_background = getattr(state, 'is_background', False)
     accumulated_chat_msg = []
     last_chat_save_time = [time.time()]
+    streaming_message_id = [None]
+    org_id_for_events = getattr(state, 'org_id', None) or (get_org_id_for_user(user_id) if user_id else None)
+
+    def _streaming_message_id() -> str:
+        if not streaming_message_id[0]:
+            streaming_message_id[0] = str(uuid.uuid4())
+        return streaming_message_id[0]
+
+    async def _emit_streaming_event(
+        type_: str,
+        text: str,
+        *,
+        finalized: bool,
+        status: str,
+    ) -> None:
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import (
+                record_event,
+                upsert_message_projection,
+            )
+            if not session_id or session_id == 'unknown' or not org_id_for_events:
+                return
+            mid = _streaming_message_id()
+            await record_event(
+                session_id=session_id,
+                org_id=org_id_for_events,
+                type=type_,
+                payload={'text': text},
+                message_id=mid,
+            )
+            await upsert_message_projection(
+                message_id=mid,
+                session_id=session_id,
+                org_id=org_id_for_events,
+                role='assistant',
+                status=status,
+                parts=[{'type': 'text', 'text': text}] if text else [],
+                finalized=finalized,
+            )
+        except Exception as e:
+            logger.warning("[chat_events:dual_write_failed] %s", e)
+
+    def _schedule_streaming_event(type_: str, text: str, *, finalized: bool, status: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_emit_streaming_event(type_, text, finalized=finalized, status=status))
+        except RuntimeError:
+            try:
+                asyncio.run(_emit_streaming_event(type_, text, finalized=finalized, status=status))
+            except Exception as e:
+                logger.warning("[chat_events:dual_write_failed] %s", e)
+
+    async def _emit_tool_event(type_: str, payload: dict) -> None:
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import record_event
+            if not session_id or session_id == 'unknown' or not org_id_for_events:
+                return
+            await record_event(
+                session_id=session_id,
+                org_id=org_id_for_events,
+                type=type_,
+                payload=payload,
+            )
+        except Exception as e:
+            logger.warning("[chat_events:dual_write_failed] %s", e)
+
+    def _schedule_tool_event(type_: str, payload: dict) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_emit_tool_event(type_, payload))
+        except RuntimeError:
+            try:
+                asyncio.run(_emit_tool_event(type_, payload))
+            except Exception as e:
+                logger.warning("[chat_events:dual_write_failed] %s", e)
 
     def save_streaming_chat_message(content: str, force: bool = False):
         """Incrementally save the assistant's streaming response to chat_sessions.messages."""
@@ -455,6 +570,12 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 conn.commit()
                 last_chat_save_time[0] = current_time
                 logger.debug(f"[BackgroundChat] Saved streaming message for session {session_id}: {len(accumulated_text)} chars")
+                _schedule_streaming_event(
+                    'assistant_chunk',
+                    accumulated_text,
+                    finalized=False,
+                    status='streaming',
+                )
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
 
@@ -515,6 +636,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             f"[BackgroundChat] Finalized streaming messages for session {session_id} "
                             f"(remove={remove})"
                         )
+                        if not remove:
+                            final_text = "".join(accumulated_chat_msg)
+                            _schedule_streaming_event(
+                                'assistant_finalized',
+                                final_text,
+                                finalized=True,
+                                status='complete',
+                            )
+                            streaming_message_id[0] = None
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to finalize streaming chat message: {e}")
 
@@ -648,7 +778,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                             tool_call_msg["session_id"] = state.session_id
                                         await send_via_appropriate_sender(tool_call_msg)
                                         logger.debug(f"Sent tool call via streaming: {tool_name} (id: {tool_call_id})")
-                            
+                                        # NOTE: tool_call_started chat_events emission moved to ToolContextCapture
+                                        # (single source of truth, agent_id-aware, covers sub-agents).
+
                             # Send message content if present
                             chunk_content = getattr(msg_chunk, 'content', '')
                             logger.info(f"[STREAM DEBUG] Checking content: chunk_content length={len(str(chunk_content))}, empty={chunk_content == ''}, type={type(chunk_content)}")
@@ -748,6 +880,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                                         tool_call_msg["session_id"] = state.session_id
                                                     await send_via_appropriate_sender(tool_call_msg)
                                                     logger.debug(f"Sent tool call from values event: {tool_name} (id: {tool_call_id})")
+                                                    # NOTE: tool_call_started chat_events emission moved to ToolContextCapture
+                                                    # (single source of truth, agent_id-aware, covers sub-agents).
                                         
                                         # Send message content if present
                                         if hasattr(message, 'content') and message.content:
@@ -843,6 +977,8 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 error_msg["session_id"] = state.session_id
             await send_via_appropriate_sender(error_msg)
         await send_end_status("error")
+    finally:
+        reset_active_ws_sender(_ws_sender_token)
 
     # Handle API cost tracking - always execute regardless of WebSocket status
     if user_id:
@@ -1299,7 +1435,14 @@ async def handle_connection(websocket) -> None:
                                 "session_id": session_id
                             }
                         }))
-                        
+                        try:
+                            await _emit_direct_tool_result_event(
+                                session_id, user_id, tool_name,
+                                {'result': result, 'status': 'complete'},
+                            )
+                        except Exception as e:
+                            logger.warning("[chat_events:dual_write_failed] %s", e)
+
                         logger.info(f"Direct tool call completed: {tool_name}")
                         continue  # Skip normal AI processing
                         
@@ -1369,6 +1512,13 @@ async def handle_connection(websocket) -> None:
                                 "session_id": session_id
                             }
                         }))
+                        try:
+                            await _emit_direct_tool_result_event(
+                                session_id, user_id, 'iac_tool',
+                                {'result': result_payload, 'status': 'complete'},
+                            )
+                        except Exception as e:
+                            logger.warning("[chat_events:dual_write_failed] %s", e)
 
                         logger.info(f"Direct tool call completed: {tool_name}")
                         continue

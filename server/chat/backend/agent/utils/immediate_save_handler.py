@@ -1,12 +1,58 @@
 """Immediate save handler for user messages - keeps main_chatbot.py clean."""
 
+import asyncio
 import json
 import time
 import logging
+import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _dual_write_user_event(
+    session_id: str,
+    user_id: str,
+    text: str,
+    message_id: str,
+) -> None:
+    try:
+        from utils.auth.stateless_auth import resolve_org_id
+        from chat.backend.agent.utils.persistence.chat_events import (
+            record_event,
+            upsert_message_projection,
+        )
+
+        org_id = resolve_org_id(user_id)
+        if not org_id:
+            return
+
+        async def _emit():
+            await record_event(
+                session_id=session_id,
+                org_id=org_id,
+                type='user_message',
+                payload={'text': text},
+                message_id=message_id,
+            )
+            await upsert_message_projection(
+                message_id=message_id,
+                session_id=session_id,
+                org_id=org_id,
+                role='user',
+                status='complete',
+                parts=[{'type': 'text', 'text': text}],
+                finalized=True,
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_emit())
+        except RuntimeError:
+            asyncio.run(_emit())
+    except Exception as e:
+        logger.warning("[chat_events:dual_write_failed] %s", e)
 
 
 def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
@@ -25,8 +71,10 @@ def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
         # context save after processing.
 
         # Save UI-formatted message immediately (append-based, safe)
+        message_id = str(uuid.uuid4())
         ui_messages = [{
             'message_number': 1,
+            'id': message_id,
             'text': question,
             'sender': 'user',
             'isCompleted': True,
@@ -35,6 +83,9 @@ def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
 
         # Try to load existing UI messages and append
         ui_save_success = _save_ui_message(session_id, user_id, ui_messages)
+
+        if ui_save_success:
+            _dual_write_user_event(session_id, user_id, question, message_id)
 
         return ui_save_success
     except Exception as save_error:
