@@ -1561,23 +1561,35 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
         result = json.loads(result_json)
 
         if result.get("success"):
+            pr_url = None
+            pr_number = None
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT pr_url, pr_number FROM incident_suggestions WHERE id = %s",
+                        (suggestion_id_int,),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        pr_url = row[0] if isinstance(row[0], str) and row[0].startswith("https://github.com/") else None
+                        pr_number = int(row[1]) if row[1] is not None else None
+            except Exception:
+                logger.exception("[INCIDENTS] Failed to reload PR info for suggestion %s", sanitize(suggestion_id))
+
             logger.info(
                 "[INCIDENTS] Applied fix suggestion %s, PR: %s",
                 sanitize(suggestion_id),
-                result.get("pr_url"),
+                pr_url,
             )
             _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
-                                {"pr_url": result.get("pr_url")}, request)
-            safe_response = {
+                                {"pr_url": pr_url}, request)
+            return jsonify({
                 "success": True,
-                "message": result.get("message"),
-                "prUrl": result.get("prUrl") or result.get("pr_url"),
-                "prNumber": result.get("prNumber") or result.get("pr_number"),
-                "branch": result.get("branch"),
-                "repository": result.get("repository"),
-                "filePath": result.get("filePath") or result.get("file_path"),
-            }
-            return jsonify(safe_response), 200
+                "message": "PR created successfully",
+                "prUrl": pr_url,
+                "prNumber": pr_number,
+            }), 200
 
         logger.warning(
             "[INCIDENTS] Failed to apply fix suggestion %s: %s",

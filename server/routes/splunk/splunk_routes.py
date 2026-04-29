@@ -84,7 +84,7 @@ class SplunkClient:
             raise SplunkAPIError("Connection timed out. Check if Splunk is reachable and port 8089 is open.") from exc
         except requests.exceptions.SSLError as exc:
             # SSLError must come before ConnectionError (it's a subclass)
-            logger.error("[SPLUNK] %s %s SSL error: %s", method, url, type(exc).__name__)
+            logger.error("[SPLUNK] %s SSL error: %s", method, type(exc).__name__)
             raise SplunkAPIError("SSL/TLS error — check SPLUNK_SSL_VERIFY config") from exc
         except requests.exceptions.ConnectionError as exc:
             logger.error(f"[SPLUNK] {method} {url} connection error: {exc}")
