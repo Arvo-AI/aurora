@@ -198,7 +198,7 @@ def connect(user_id):
             auth_url = get_auth_url(state=state, products=products)
         except ValueError as exc:
             logger.error("[ATLASSIAN] OAuth config error: %s", exc)
-            return jsonify({"error": str(exc)}), 500
+            return jsonify({"error": "Atlassian OAuth is not configured"}), 500
         return jsonify({"authUrl": auth_url})
 
     # Step 2: exchange code for token

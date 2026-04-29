@@ -143,7 +143,7 @@ def connect(user_id):
         client.list_incidents(page_size=1)
     except IncidentioAPIError as exc:
         logger.warning("[INCIDENTIO] Connection validation failed: %s", exc.code)
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": "Incident.io connection validation failed"}), 502
 
     token_payload = {"api_key": api_key}
 

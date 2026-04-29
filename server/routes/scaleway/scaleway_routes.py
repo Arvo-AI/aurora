@@ -582,7 +582,7 @@ def save_scaleway_ssh_keys(user_id, server_id):
             success, error_msg, connected_as = validate_and_test_ssh(server_ip, ssh_username, private_key, timeout=30)
             
             if not success:
-                return jsonify({"error": error_msg}), 400
+                return jsonify({"error": "SSH validation failed. Check the key and server network settings."}), 400
         except Exception as e:
             logger.error(f"SSH validation failed unexpectedly: {e}", exc_info=True)
             return jsonify({"error": "SSH validation failed. The server may have become unavailable."}), 400

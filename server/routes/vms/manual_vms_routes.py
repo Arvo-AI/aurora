@@ -326,7 +326,7 @@ def check_manual_vm_connection(user_id):
             jump_command=ssh_jump_command,
         )
         if not success:
-            return jsonify({"success": False, "error": error_msg}), 400
+            return jsonify({"success": False, "error": "SSH validation failed"}), 400
         if vm_id is not None:
             try:
                 with db_pool.get_user_connection() as conn:

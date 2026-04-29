@@ -126,7 +126,8 @@ export default function GoogleChatSetupPage() {
     try {
       const response = await googleChatService.connect();
       if (response.oauth_url) {
-        if (!response.oauth_url.startsWith("https://accounts.google.com")) {
+        const oauthUrl = new URL(response.oauth_url);
+        if (oauthUrl.protocol !== "https:" || oauthUrl.hostname !== "accounts.google.com") {
           toast({
             title: "Connection Failed",
             description: "Received an unexpected OAuth URL. Please contact your administrator.",

@@ -1573,9 +1573,9 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
         logger.warning(
             "[INCIDENTS] Failed to apply fix suggestion %s: %s",
             sanitize(suggestion_id),
-            result.get("error"),
+            type(result.get("error")).__name__,
         )
-        return jsonify(result), 400
+        return jsonify({"success": False, "error": "Failed to apply fix suggestion"}), 400
 
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", suggestion_id)
