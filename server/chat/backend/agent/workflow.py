@@ -971,9 +971,17 @@ class Workflow:
         self._history_prefix_len = history_prefix_len
 
         # --- Input rail: check user message for prompt injection ---
+        # Background (webhook-triggered) RCA turns build their HumanMessage
+        # from an internally-constructed prompt based on an authenticated
+        # alert payload, not user input. Running prompt-injection detection
+        # on that synthetic text produces false positives and prevents the
+        # investigation from ever starting. Skip the rail for background
+        # turns; subsequent interactive follow-ups on the same session still
+        # run through the rail because they reset is_background=False.
         from guardrails.input_rail import check_input
         last_msg = input_state.messages[-1] if input_state.messages else None
-        if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
+        is_background = bool(getattr(input_state, "is_background", False))
+        if last_msg and hasattr(last_msg, "type") and last_msg.type == "human" and not is_background:
             # RCA chat turns may prepend internal routing instructions to the
             # HumanMessage so the agent calls trigger_rca. Guardrails and chat
             # persistence should evaluate the user's original text only.
