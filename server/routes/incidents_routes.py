@@ -9,7 +9,7 @@ from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import hash_for_log, sanitize
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -403,7 +403,7 @@ def get_incident(user_id, incident_id: str):
                     except (ValueError, TypeError):
                         logger.debug(
                             "[INCIDENTS] Skipping payload fetch for composite netdata alert_id: %s",
-                            source_alert_id,
+                            hash_for_log(source_alert_id),
                         )
                 elif source_type == "grafana":
                     # source_alert_id is grafana_alerts.id * 100 + alert_index.
@@ -1568,14 +1568,23 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
             )
             _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
                                 {"pr_url": result.get("pr_url")}, request)
-            return jsonify(result), 200
+            safe_response = {
+                "success": True,
+                "message": result.get("message"),
+                "prUrl": result.get("prUrl") or result.get("pr_url"),
+                "prNumber": result.get("prNumber") or result.get("pr_number"),
+                "branch": result.get("branch"),
+                "repository": result.get("repository"),
+                "filePath": result.get("filePath") or result.get("file_path"),
+            }
+            return jsonify(safe_response), 200
 
         logger.warning(
             "[INCIDENTS] Failed to apply fix suggestion %s: %s",
             sanitize(suggestion_id),
             result.get("error"),
         )
-        return jsonify(result), 400
+        return jsonify({"success": False, "error": "Failed to apply fix suggestion"}), 400
 
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", suggestion_id)
