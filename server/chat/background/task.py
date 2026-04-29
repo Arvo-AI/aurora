@@ -37,61 +37,128 @@ logger = logging.getLogger(__name__)
 
 
 def cancel_rca_for_incident(incident_id: str, user_id: str) -> bool:
-    """Cancel a running RCA for an incident by revoking its Celery task.
-    
-    This is the proper way to stop an RCA when an incident is merged.
-    It uses Celery's task revocation with SIGTERM to gracefully stop the task.
-    
-    Args:
-        incident_id: The incident ID whose RCA should be cancelled
-        user_id: User ID for RLS context
-        
-    Returns:
-        True if a task was found and revoked, False otherwise
+    """Cancel a running RCA for an incident.
+
+    Order of operations is critical:
+      1. Atomically flip aurora_status='cancelled' and clear
+         rca_celery_task_id. The DB row is the source of truth — if the
+         worker dies later (SIGTERM, OOM) the row is already consistent
+         and the Celery `finally` block, which never updates aurora_status,
+         can no longer leave it stuck on 'running' forever.
+      2. Best-effort write `assistant_interrupted` chat_event for any
+         active turn on this incident's session (idempotent via the
+         partial UNIQUE on chat_events terminal events).
+      3. Best-effort publish on chat:cancel:{session_id} so a cooperative
+         listener inside the running workflow can abort early.
+      4. Revoke the Celery task with SIGTERM. Celery is the cleanup path,
+         not the truth.
     """
+    task_id: Optional[str] = None
+    session_id: Optional[str] = None
+    org_id: Optional[str] = None
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:CancelRCA]")
+                # Atomic CTE: capture pre-flip task_id/session_id/org_id and flip
+                # status in one statement. Only rows currently 'running' are
+                # affected, so duplicate cancels are safe no-ops.
                 cursor.execute(
-                    "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
-                    (incident_id,)
+                    """
+                    WITH target AS (
+                        SELECT id, rca_celery_task_id, aurora_chat_session_id, org_id
+                        FROM incidents
+                        WHERE id = %s AND aurora_status = 'running'
+                        FOR UPDATE
+                    ), flipped AS (
+                        UPDATE incidents
+                        SET aurora_status = 'cancelled', rca_celery_task_id = NULL
+                        WHERE id IN (SELECT id FROM target)
+                        RETURNING id
+                    )
+                    SELECT rca_celery_task_id, aurora_chat_session_id, org_id FROM target;
+                    """,
+                    (incident_id,),
                 )
                 row = cursor.fetchone()
-                
                 if not row:
-                    logger.info(f"[RCA-CANCEL] Incident {incident_id} not found")
-                    return False
-                
-                task_id, aurora_status = row[0], row[1]
-                
-                if not task_id:
-                    logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
-                    return False
-                
-                # Only revoke if RCA is actually running
-                if aurora_status != 'running':
                     logger.info(
-                        f"[RCA-CANCEL] RCA for incident {incident_id} is not running (status={aurora_status}), skipping revocation"
+                        f"[RCA-CANCEL] Incident {incident_id} not found or not running"
                     )
                     return False
-                
-                # Revoke the task with SIGTERM for graceful shutdown
-                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                logger.info(f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}")
-                
-                # Clear the task ID from the database
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
-                    (incident_id,)
-                )
+                task_id, session_id, org_id = row[0], row[1], row[2]
                 conn.commit()
-                
-                return True
-                
+                logger.info(
+                    f"[RCA-CANCEL] Flipped aurora_status='cancelled' for incident {incident_id}"
+                )
     except Exception as e:
-        logger.error(f"[RCA-CANCEL] Failed to cancel RCA for incident {incident_id}: {e}")
+        logger.error(f"[RCA-CANCEL] Failed to flip status for incident {incident_id}: {e}")
         return False
+
+    # Best-effort: write assistant_interrupted for the active turn.
+    if session_id and org_id:
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import (
+                get_active_stream_id,
+                record_event,
+            )
+            async def _emit_interrupt():
+                active = await get_active_stream_id(
+                    session_id=str(session_id), org_id=str(org_id)
+                )
+                if not active or ":" not in active:
+                    return
+                _, msg_id = active.split(":", 1)
+                await record_event(
+                    session_id=str(session_id),
+                    org_id=str(org_id),
+                    type="assistant_interrupted",
+                    payload={"reason": "rca_cancelled", "incident_id": incident_id},
+                    message_id=msg_id,
+                    agent_id="main",
+                )
+            asyncio.run(_emit_interrupt())
+        except Exception as e:
+            logger.warning(f"[RCA-CANCEL] assistant_interrupted record failed: {e}")
+
+        # Best-effort: publish on the cooperative cancel channel.
+        try:
+            from utils.redis.redis_stream_bus import (
+                cancel_channel,
+                get_async_redis,
+                wake_channel,
+            )
+            async def _publish_cancel():
+                client = await get_async_redis()
+                if client is None:
+                    return
+                try:
+                    await client.publish(
+                        cancel_channel(str(session_id)),
+                        json.dumps({"incident_id": incident_id}),
+                    )
+                    await client.publish(wake_channel(str(session_id)), "1")
+                finally:
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        pass
+            asyncio.run(_publish_cancel())
+        except Exception as e:
+            logger.warning(f"[RCA-CANCEL] cancel publish failed: {e}")
+
+    # Finally, revoke the Celery task. Even if this fails, the DB row above
+    # already reflects 'cancelled'.
+    if task_id:
+        try:
+            celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+            logger.info(
+                f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}"
+            )
+        except Exception as e:
+            logger.warning(f"[RCA-CANCEL] Celery revoke failed for {task_id}: {e}")
+
+    return True
 
 
 def _extract_tool_calls_for_viz(
@@ -244,9 +311,9 @@ def _ensure_llm_context_history(
         if not rebuilt_messages:
             return []
 
-        # Bypass ContextManager.save_context_history's Redis dedup — a stale
-        # hash from the lost async save would cause this forced rewrite to
-        # no-op. We already know the DB column is empty, so write directly.
+        # Direct save (the public save_context_history is also dedup-free now,
+        # but going through the instance avoids re-entering the singleton path
+        # for what is already a recovery rewrite).
         saved = ContextManager._get_instance()._execute_actual_save(
             session_id, user_id, rebuilt_messages
         )
@@ -399,6 +466,12 @@ def run_background_chat(
     incident_id: Optional[str] = None,
     send_notifications: bool = True,
     mode: str = "ask",
+    message_id: Optional[str] = None,
+    model: Optional[str] = None,
+    selected_project_id: Optional[str] = None,
+    attachments: Optional[List[Any]] = None,
+    ui_state: Optional[Dict[str, Any]] = None,
+    is_interactive: bool = False,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -567,6 +640,12 @@ def run_background_chat(
                     provider_preference=provider_preference,
                     incident_id=incident_id,
                     mode=mode,
+                    message_id=message_id,
+                    model=model,
+                    selected_project_id=selected_project_id,
+                    attachments=attachments,
+                    ui_state=ui_state,
+                    is_interactive=is_interactive,
                 ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
@@ -1028,6 +1107,12 @@ async def _execute_background_chat(
     provider_preference: Optional[List[str]] = None,
     incident_id: Optional[str] = None,
     mode: str = "ask",
+    message_id: Optional[str] = None,
+    model: Optional[str] = None,
+    selected_project_id: Optional[str] = None,
+    attachments: Optional[List[Any]] = None,
+    ui_state: Optional[Dict[str, Any]] = None,
+    is_interactive: bool = False,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1088,47 +1173,113 @@ async def _execute_background_chat(
         # Import centralized model config
         from chat.backend.agent.llm import ModelConfig
 
-        # Create state with is_background=True and rca_context for system prompt
-        # Use centralized model configuration for RCA with provider mode awareness
+        # Interactive turns honor the user's selected model and allow
+        # confirmations (since there *is* a user listening on the SSE stream).
+        # Background runs (RCA / webhook) keep the existing is_background=True
+        # behavior so destructive operations are denied without prompting.
+        chosen_model = model or ModelConfig.RCA_MODEL
         state = State(
             user_id=user_id,
             session_id=session_id,
             incident_id=incident_id,
             provider_preference=provider_preference,
-            selected_project_id=None,
+            selected_project_id=selected_project_id,
             messages=[human_message],
             question=initial_message,
-            model=ModelConfig.RCA_MODEL,
+            model=chosen_model,
             mode=mode,
-            is_background=True,  # Key flag for background behavior
-            rca_context=rca_context,  # RCA context for prompt_builder
+            is_background=not is_interactive,
+            rca_context=rca_context,
+            attachments=attachments or None,
         )
-        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
-        
+        logger.info(
+            "[BackgroundChat] Created state interactive=%s, mode=%s, model=%s, rca_context=%s",
+            is_interactive, mode, state.model, "set" if rca_context else "None",
+        )
+
         # Set user context for tools (AFTER state is created so we can pass it)
         set_user_context(
             user_id=user_id,
             session_id=session_id,
             provider_preference=provider_preference,
-            selected_project_id=None,
+            selected_project_id=selected_project_id,
             mode=mode,
             state=state,  # Pass state so incident_id is available in context
             workflow=wf,  # Pass workflow so RCA context updates can be injected
         )
         logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
-        
+
         # Set UI state (preserve triggerMetadata so it persists when workflow saves)
-        wf._ui_state = {
+        wf._ui_state = ui_state or {
             "selectedMode": mode,
             "selectedProviders": provider_preference or [],
-            "isBackground": True,
+            "isBackground": not is_interactive,
         }
         if trigger_metadata:
             wf._trigger_metadata = trigger_metadata
             wf._ui_state["triggerMetadata"] = trigger_metadata
-        
-        # Run the workflow - this is the same function used by regular chats
-        await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
+
+        # If the SSE POST already allocated a message_id, seed it on the
+        # workflow so process_workflow_async emits chat_events under the same
+        # id the SSE stream is keyed on (and active_stream_id matches).
+        if message_id:
+            wf._active_message_id = message_id
+
+        # Spawn the SSE control listener so /api/chat/confirmations and
+        # /api/chat/direct-tool POSTs reach the in-process plumbing.
+        sse_listener_task: Optional[asyncio.Task] = None
+        sse_stop_event: Optional[asyncio.Event] = None
+        if is_interactive:
+            from chat.backend.agent.utils.sse_control_listener import (
+                listen_for_session_controls,
+            )
+            sse_stop_event = asyncio.Event()
+            sse_listener_task = asyncio.create_task(
+                listen_for_session_controls(
+                    session_id=session_id,
+                    user_id=user_id,
+                    stop_event=sse_stop_event,
+                    mode=mode,
+                    provider_preference=provider_preference,
+                    selected_project_id=selected_project_id,
+                )
+            )
+
+        try:
+            # Run the workflow - this is the same function used by regular chats
+            await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
+        finally:
+            # Drain any in-flight chat_event emits scheduled via create_task
+            # in process_workflow_async — without this, asyncio.run() teardown
+            # cancels them mid-await and the terminal projection write +
+            # active_stream_id clear silently fail.
+            pending_emits = getattr(wf, "_pending_emit_tasks", None)
+            if pending_emits:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*list(pending_emits), return_exceptions=True),
+                        timeout=10,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[BackgroundChat] timed out draining %d pending chat_event emits",
+                        len(pending_emits),
+                    )
+                except Exception as e:
+                    logger.warning("[BackgroundChat] pending emit drain error: %s", e)
+            if sse_stop_event is not None:
+                sse_stop_event.set()
+            if sse_listener_task is not None:
+                try:
+                    await asyncio.wait_for(sse_listener_task, timeout=5)
+                except asyncio.TimeoutError:
+                    sse_listener_task.cancel()
+                    try:
+                        await sse_listener_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                except Exception as e:
+                    logger.warning("[BackgroundChat] SSE listener teardown error: %s", e)
         
         # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
         # The workflow stream might complete, but tool calls could still be running
@@ -2403,6 +2554,8 @@ async def _run_multi_agent_graph(
             "provider": primary_provider,
         }
 
+    main_message_id = str(uuid.uuid4())
+
     initial_state = MainAgentState(
         question=initial_message,
         user_id=user_id,
@@ -2414,6 +2567,7 @@ async def _run_multi_agent_graph(
         mode="rca-multi",
         agent_id="main",
         delegate_level=0,
+        main_message_id=main_message_id,
     )
 
     if os.getenv("ENABLE_POSTGRES_CHECKPOINTER", "false").lower() in {"1", "true", "yes"}:
@@ -2426,6 +2580,23 @@ async def _run_multi_agent_graph(
         checkpointer = SafeMemorySaver()
     graph = build_main_agent_graph(checkpointer=checkpointer)
     config = {"configurable": {"thread_id": session_id}}
+
+    # Stamp active_stream_id BEFORE invoking the graph so an SSE client that
+    # reconnects mid-flight (or before the first event lands) can find the
+    # live writer. The clear-then-set ordering also handles the Vercel
+    # resumable-stream race: a fresh turn always wins over a stale slot.
+    try:
+        from chat.backend.agent.utils.persistence.chat_events import (
+            _set_active_stream_id_sync,
+        )
+        await asyncio.to_thread(
+            _set_active_stream_id_sync,
+            session_id=session_id,
+            org_id=org_id or "",
+            stream_id=f"{session_id}:{main_message_id}",
+        )
+    except Exception as e:
+        logger.warning(f"[MultiAgentRCA] failed to stamp active_stream_id: {e}")
 
     try:
         await record_event(
@@ -2441,11 +2612,45 @@ async def _run_multi_agent_graph(
     wallclock = caps["per_rca_wallclock_seconds"]
     final_state: Optional[Dict[str, Any]] = None
 
+    # Cooperative cancellation: a Redis pub/sub message on chat:cancel:{session}
+    # sets `cancel_event`. The drain loop checks it between graph chunks, which
+    # gives us roughly per-node cancellation latency — fine for RCA.
+    cancel_event = asyncio.Event()
+
     async def _drain_stream() -> Optional[Dict[str, Any]]:
         last: Optional[Dict[str, Any]] = None
         async for chunk in graph.astream(initial_state, config=config, subgraphs=True):
             last = chunk
+            if cancel_event.is_set():
+                break
         return last
+
+    async def _cancel_listener() -> None:
+        from utils.redis.redis_stream_bus import subscribe_cancel
+        pubsub = await subscribe_cancel(session_id)
+        if pubsub is None:
+            return
+        try:
+            while not cancel_event.is_set():
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
+                if msg and msg.get("type") == "message":
+                    cancel_event.set()
+                    logger.info(
+                        f"[MultiAgentRCA] cancel signal received for session {session_id}"
+                    )
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[MultiAgentRCA] cancel listener error: {e}")
+        finally:
+            try:
+                await pubsub.unsubscribe()
+                await pubsub.aclose()
+            except Exception:
+                pass
 
     usage_token = None
     try:
@@ -2457,9 +2662,31 @@ async def _run_multi_agent_graph(
     except ImportError:
         logger.info("[MultiAgentRCA] llm_usage_tracker ContextVar helpers unavailable; skipping")
 
+    listener_task = asyncio.create_task(_cancel_listener())
     try:
         try:
             final_state = await asyncio.wait_for(_drain_stream(), timeout=wallclock)
+            if cancel_event.is_set():
+                logger.info(
+                    f"[MultiAgentRCA] graph aborted by cancel for session {session_id}"
+                )
+                try:
+                    await record_event(
+                        session_id=session_id,
+                        org_id=org_id or "",
+                        type="assistant_interrupted",
+                        payload={"reason": "user_cancelled"},
+                        message_id=main_message_id,
+                        agent_id="main",
+                    )
+                except Exception as e:
+                    logger.warning(f"[chat_events:dual_write_failed] {e}")
+                return {
+                    "session_id": session_id,
+                    "incident_id": incident_id,
+                    "status": "cancelled",
+                    "mode": "rca-multi",
+                }
         except asyncio.TimeoutError:
             logger.warning(
                 f"[MultiAgentRCA] Wall-clock timeout ({wallclock}s) exceeded for session {session_id}"
@@ -2495,6 +2722,11 @@ async def _run_multi_agent_graph(
                 pass
             raise
     finally:
+        listener_task.cancel()
+        try:
+            await listener_task
+        except (asyncio.CancelledError, Exception):
+            pass
         if usage_token is not None:
             try:
                 from chat.backend.agent.utils.llm_usage_tracker import (
@@ -2503,6 +2735,21 @@ async def _run_multi_agent_graph(
                 reset_usage_incident_id_var(usage_token)
             except Exception as e:
                 logger.warning(f"[MultiAgentRCA] reset_usage_incident_id_var failed: {e}")
+        # Belt-and-suspenders: clear active_stream_id even if no terminal event
+        # was emitted (e.g. crash before record_event got there). record_event
+        # also clears it on terminal types, but a workflow crash bypasses that.
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import (
+                _clear_active_stream_id_sync,
+            )
+            await asyncio.to_thread(
+                _clear_active_stream_id_sync,
+                session_id=session_id,
+                org_id=org_id or "",
+                expected_stream_id=f"{session_id}:{main_message_id}",
+            )
+        except Exception as e:
+            logger.warning(f"[MultiAgentRCA] failed to clear active_stream_id: {e}")
 
     fallback_result = await _maybe_fallback_to_single_agent(
         user_id=user_id,

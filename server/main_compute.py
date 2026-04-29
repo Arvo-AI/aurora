@@ -551,8 +551,11 @@ app.register_blueprint(connector_status_bp)
 
 # --- Monitoring & Logging Routes ---
 from routes.chat_routes import chat_bp
+from routes.chat_sse import chat_sse_bp
 
 app.register_blueprint(chat_bp, url_prefix="/chat_api")
+# Phase 5B SSE transport — endpoints live at /api/chat/* (defined on the blueprint).
+app.register_blueprint(chat_sse_bp)
 
 # ============================================================================
 # Register Cloud Provider Blueprints (Organized Subpackages)
@@ -657,6 +660,49 @@ def initialize_app():
         logging.getLogger(__name__).info("Casbin RBAC enforcer initialized.")
     except Exception as e:
         logging.getLogger(__name__).warning("Casbin enforcer init deferred: %s", e)
+
+    # Phase 6: idle-timeout watchdog. Runs the async loop on a daemon thread
+    # because the Flask app is sync (Gunicorn sync workers).
+    _start_idle_watchdog_thread()
+
+
+def _start_idle_watchdog_thread() -> None:
+    import asyncio
+    import threading
+
+    log = logging.getLogger(__name__)
+    if os.getenv("CHAT_IDLE_WATCHDOG_ENABLED", "true").lower() in ("0", "false", "no"):
+        log.info("[idle_watchdog] disabled via CHAT_IDLE_WATCHDOG_ENABLED")
+        return
+
+    # Only start once per process — Gunicorn pre-fork imports this module per worker;
+    # we want exactly one watchdog loop per worker process.
+    if getattr(_start_idle_watchdog_thread, "_started", False):
+        return
+    _start_idle_watchdog_thread._started = True  # type: ignore[attr-defined]
+
+    def _runner() -> None:
+        try:
+            from chat.backend.agent.utils.idle_watchdog import idle_watchdog_loop
+        except Exception as e:
+            log.warning("[idle_watchdog] import failed, watchdog not started: %s", e)
+            return
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(idle_watchdog_loop())
+        except Exception as e:
+            log.warning("[idle_watchdog] thread exited: %s", e)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_runner, name="idle-watchdog", daemon=True)
+    t.start()
+    log.info("[idle_watchdog] background thread started")
+
 
 # Always run initialization when module is imported (for Gunicorn and direct execution)
 initialize_app()

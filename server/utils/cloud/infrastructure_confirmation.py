@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 # Lazy imports to avoid circular dependency with cloud_tools.py
 
 logger = logging.getLogger(__name__)
@@ -29,35 +29,101 @@ def _send_ws(payload: dict, tool_name: str):
         logger.error(f"Failed to send WebSocket confirmation: {e}")
 
 
+def resolve_confirmation(
+    confirmation_id: str,
+    decision: str,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> bool:
+    """Transport-neutral confirmation resolver.
+
+    Routes a user's approve/decline answer into the in-process pending-confirmation
+    map that ``wait_for_user_confirmation`` polls. Returns True if the
+    confirmation was found and resolved, False otherwise.
+
+    Idempotent: a duplicate decision for an already-resolved confirmation_id
+    is logged at INFO and dropped.
+    """
+    if not confirmation_id or not decision:
+        logger.error(
+            "resolve_confirmation: missing confirmation_id or decision (cid=%s decision=%s)",
+            confirmation_id, decision,
+        )
+        return False
+
+    # Refresh the workflow's WS context if we have a session_id and a WS-bound
+    # workflow exists. No-op for SSE-only sessions.
+    if session_id and user_id:
+        try:
+            from chat.backend.agent.tools.cloud_tools import update_workflow_websocket_context
+            update_workflow_websocket_context(user_id, session_id)
+        except Exception as e:
+            logger.debug(f"update_workflow_websocket_context skipped: {e}")
+
+    confirmation_data = _pending_confirmations.get(confirmation_id)
+    if confirmation_data is None:
+        logger.warning(
+            "resolve_confirmation: no pending confirmation for ID: %s",
+            confirmation_id,
+        )
+        return False
+
+    if confirmation_data.get('result') is not None:
+        logger.info(
+            "resolve_confirmation: confirmation %s already resolved (result=%s); dropping duplicate",
+            confirmation_id, confirmation_data.get('result'),
+        )
+        return False
+
+    confirmation_data['result'] = decision
+    logger.debug(
+        "resolve_confirmation: %s resolved with decision: %s",
+        confirmation_id, decision,
+    )
+    return True
+
+
+# SSE → WS decision mapping. The WS path uses execute/cancel (paired with the
+# UI button values); the SSE POST uses approve/decline. Normalize at the edge.
+_SSE_DECISION_MAP = {"approve": "execute", "decline": "cancel"}
+
+
+def normalize_decision(raw: str) -> Optional[str]:
+    """Map either WS or SSE decision strings onto the canonical execute/cancel
+    values that ``wait_for_user_confirmation`` checks. Returns None on bad input."""
+    if not raw:
+        return None
+    raw = str(raw).strip().lower()
+    if raw in {"execute", "cancel"}:
+        return raw
+    return _SSE_DECISION_MAP.get(raw)
+
+
 async def handle_websocket_confirmation_response(data: dict):
-    """Handle incoming WebSocket confirmation responses from the frontend."""
+    """WS-side adapter that unpacks the dict payload and delegates to
+    ``resolve_confirmation``. Kept so the WS path in main_chatbot.py is
+    unchanged."""
     try:
         confirmation_id = data.get('confirmation_id')
-        decision = data.get('decision')
+        decision = normalize_decision(data.get('decision'))
         user_id = data.get('user_id')
         session_id = data.get('session_id')
-        
+
         if not confirmation_id or not decision or not user_id:
             logger.error(f"Invalid confirmation response: {data}")
             return
-            
-        logger.debug(f"WEBSOCKET: Received confirmation response: user={user_id}, session={session_id}, confirmation_id={confirmation_id}, decision={decision}")
-        
-        # CRITICAL: Update the workflow's WebSocket context with the current active connection
-        # This handles the case where the user reconnected and the workflow is still using the old connection
-        if session_id:
-            # Lazy import to avoid circular dependency
-            from chat.backend.agent.tools.cloud_tools import update_workflow_websocket_context
-            update_workflow_websocket_context(user_id, session_id) # Logging is handled by the function
-        
-        # Find the pending confirmation
-        if confirmation_id in _pending_confirmations:
-            confirmation_data = _pending_confirmations[confirmation_id]
-            confirmation_data['result'] = decision
-            logger.debug(f"WEBSOCKET: Confirmation {confirmation_id} resolved with decision: {decision}")
-        else:
-            logger.warning(f"WEBSOCKET: No pending confirmation found for ID: {confirmation_id}")
-            
+
+        logger.debug(
+            "WEBSOCKET: Received confirmation response: user=%s, session=%s, confirmation_id=%s, decision=%s",
+            user_id, session_id, confirmation_id, decision,
+        )
+
+        resolve_confirmation(
+            confirmation_id=confirmation_id,
+            decision=decision,
+            user_id=user_id,
+            session_id=session_id,
+        )
     except Exception as e:
         logger.error(f"Error handling WebSocket confirmation response: {e}")
 
