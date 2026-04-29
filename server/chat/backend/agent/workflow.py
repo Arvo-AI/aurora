@@ -63,6 +63,13 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
     return str(content)
 
 
+def _get_input_rail_text(question: Any, message_content: Any) -> str:
+    """Return the user-authored text that should be evaluated by input rails."""
+    if isinstance(question, str):
+        return question
+    return _extract_text_from_content(message_content)
+
+
 class Workflow:
     def __init__(self, agent: Agent, session_id: str):
         self.agent = agent
@@ -967,7 +974,13 @@ class Workflow:
         from guardrails.input_rail import check_input
         last_msg = input_state.messages[-1] if input_state.messages else None
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
-            msg_text = _extract_text_from_content(last_msg.content)
+            # RCA chat turns may prepend internal routing instructions to the
+            # HumanMessage so the agent calls trigger_rca. Guardrails and chat
+            # persistence should evaluate the user's original text only.
+            msg_text = _get_input_rail_text(
+                getattr(input_state, "question", None),
+                last_msg.content,
+            )
             rail_result = await check_input(msg_text)
             if rail_result.blocked:
                 emit_block_event(
