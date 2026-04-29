@@ -31,6 +31,15 @@ import { useChatCancellation } from '@/hooks/useChatCancellation';
 import SessionUsagePanel from "@/components/SessionUsagePanel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
+import { useChatStream, type ChatRow } from '@/hooks/useChatStream';
+import { useChatControl } from '@/hooks/useChatControl';
+import type { TextPart, ToolPart } from '@/lib/chat-message-parts';
+import type { ToolCall as LegacyToolCall } from '../types';
+
+// Transport gate read at module load. `sse` routes through the SSE consumer +
+// /api/chat/messages POST; anything else (default `ws`) keeps the legacy
+// WebSocket path so a misconfig falls back to the safer transport.
+const CHAT_TRANSPORT = (process.env.NEXT_PUBLIC_CHAT_TRANSPORT === 'sse') ? 'sse' : 'ws';
 
 interface ChatClientProps {
   initialSessionId?: string;
@@ -194,10 +203,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   // Note: UI state is now saved by the backend with each message
   // No need for frontend auto-save anymore
 
-  // WebSocket integration
+  // WebSocket integration — only active in legacy `ws` transport mode.
   const chatWebSocket = useWebSocket({
-    url: getEnv('NEXT_PUBLIC_WEBSOCKET_URL') || '',
-    userId: userId,
+    url: CHAT_TRANSPORT === 'ws' ? (getEnv('NEXT_PUBLIC_WEBSOCKET_URL') || '') : '',
+    userId: CHAT_TRANSPORT === 'ws' ? userId : null,
     onMessage: handleWebSocketMessage,
     onConnect: () => {
       console.log('Connected to chatbot WebSocket');
@@ -208,8 +217,126 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     onError: (error) => {
       console.error('Chat WebSocket error:', error);
       setIsSending(false);
-    }
+    },
   });
+
+  // SSE transport. No-op when sessionId is null or the flag is `ws`.
+  const chatStream = useChatStream({
+    sessionId: currentSessionId,
+    enabled: CHAT_TRANSPORT === 'sse',
+  });
+  const chatControl = useChatControl();
+
+  // Bridge: when SSE is the active transport, mirror sseRows into the legacy
+  // Message[] surface so existing <MessageList /> keeps rendering. We collapse
+  // each row's text parts into a single text body and project tool parts into
+  // toolCalls. data-subagent / data-plan / reasoning parts are rendered by
+  // <MessagePartsRenderer /> in the incident <ThoughtsPanel /> — they are not
+  // surfaced in the chat MessageList yet (TODO: phase out MessageList).
+  useEffect(() => {
+    if (CHAT_TRANSPORT !== 'sse') return;
+    const rowToMessage = (row: ChatRow, idx: number): Message => {
+      const text = row.parts
+        .filter((p): p is TextPart => p.type === 'text')
+        .map((p) => p.text)
+        .join('');
+      const toolCalls: LegacyToolCall[] = row.parts
+        .filter((p): p is ToolPart => p.type.startsWith('tool-'))
+        .map((tp) => {
+          const toolName = tp.type.startsWith('tool-') ? tp.type.slice('tool-'.length) : tp.type;
+          let status: LegacyToolCall['status'];
+          switch (tp.state) {
+            case 'output-available': status = 'completed'; break;
+            case 'output-error': status = 'error'; break;
+            default: status = 'running';
+          }
+          return {
+            id: tp.toolCallId,
+            tool_name: toolName,
+            input: typeof tp.input === 'string' ? tp.input : JSON.stringify(tp.input ?? ''),
+            output: tp.output,
+            error: tp.errorText ?? null,
+            status,
+            timestamp: new Date().toISOString(),
+          };
+        });
+      // Negative id flags this Message as SSE-sourced so the bridge can
+      // distinguish it from session-loaded (positive id) and optimistic
+      // (Date.now() id) messages. Stable across re-renders because firstSeq
+      // is monotonic and unique per chat_events message.
+      const sseId = -1 * (row.firstSeq || (idx + 1));
+      return {
+        id: sseId,
+        sender: row.role === 'user' ? 'user' : 'bot',
+        text,
+        toolCalls: toolCalls.length ? toolCalls : undefined,
+        isStreaming: row.status === 'streaming',
+      };
+    };
+    const sseMessages = chatStream.rows.map(rowToMessage);
+    if (sseMessages.length === 0) return;
+
+    // Bridge SSE rows back into the legacy `messages` array.
+    //
+    // Keys to get right:
+    //   1. session-loaded history (positive ids) must stay in place.
+    //   2. the optimistic user message added by useChatSendHandlers
+    //      (id=Date.now()) is a positive id that should be replaced once SSE
+    //      delivers its own user_message row (negative id, same text).
+    //   3. SSE-sourced messages (negative ids) are the live state for the
+    //      current in-flight turn; we re-derive them from chatStream.rows on
+    //      every render, so we drop prior SSE messages before re-appending.
+    setMessages((prev) => {
+      const nonSse = prev.filter((m) => m.id >= 0);
+      const firstSseUser = sseMessages.find((m) => m.sender === 'user');
+      let base = nonSse;
+      if (firstSseUser) {
+        let lastOptimisticUserIdx = -1;
+        for (let i = nonSse.length - 1; i >= 0; i--) {
+          if (nonSse[i].sender === 'user' && nonSse[i].text === firstSseUser.text) {
+            lastOptimisticUserIdx = i;
+            break;
+          }
+        }
+        if (lastOptimisticUserIdx !== -1) {
+          base = [
+            ...nonSse.slice(0, lastOptimisticUserIdx),
+            ...nonSse.slice(lastOptimisticUserIdx + 1),
+          ];
+        }
+      }
+      return [...base, ...sseMessages];
+    });
+  }, [chatStream.rows]);
+
+  // Adapter: useChatSendHandlers expects a ChatWebSocket-shaped object. In
+  // SSE mode we proxy `send` through POST /api/chat/messages and treat the
+  // transport as always ready. This lets the rest of the send pipeline stay
+  // identical across transports.
+  const sseChatWebSocket = useMemo(() => ({
+    send: (payload: any) => {
+      if (!payload || payload.type !== 'message') return false;
+      chatControl.sendMessage({
+        session_id: payload.session_id,
+        query: payload.query,
+        mode: payload.mode,
+        attachments: payload.attachments,
+        model: payload.model,
+        provider_preference: Array.isArray(payload.provider_preference)
+          ? payload.provider_preference.join(',')
+          : payload.provider_preference,
+        ui_state: payload.ui_state,
+      }).catch((err) => {
+        console.error('[ChatClient] SSE sendMessage failed:', err);
+        setIsSending(false);
+      });
+      return true;
+    },
+    isReady: true,
+    isConnected: true,
+  }), [chatControl, setIsSending]);
+
+  const activeChatTransport = CHAT_TRANSPORT === 'sse' ? sseChatWebSocket : chatWebSocket;
 
   const [rcaActive, setRcaActive] = useState(false);
 
@@ -229,20 +356,20 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       }
     }
     
-    const sent = await handleSend(finalMessage || input, chatWebSocket, undefined, rcaActive ? { triggerRca: true } : undefined);
+    const sent = await handleSend(finalMessage || input, activeChatTransport, undefined, rcaActive ? { triggerRca: true } : undefined);
     if (sent) {
       setInput("");
       setImages([]);
       setRcaActive(false);
     }
-  }, [chatWebSocket, handleSend, input, activeIncidentContext, rcaActive]);
+  }, [activeChatTransport, handleSend, input, activeIncidentContext, rcaActive]);
 
   const handlePromptClickWithSocket = useCallback((prompt: string) => {
     setInput(prompt);
-    handlePromptClick(prompt, chatWebSocket);
-  }, [chatWebSocket, handlePromptClick]);
+    handlePromptClick(prompt, activeChatTransport);
+  }, [activeChatTransport, handlePromptClick]);
 
-  // Chat cancellation functionality
+  // Chat cancellation functionality (WebSocket only — in SSE mode, cancel is a control POST).
   const { cancelCurrentMessage } = useChatCancellation({
     userId,
     sessionId: currentSessionId,
@@ -256,7 +383,11 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   // Handle cancel button click
   const handleCancel = useCallback(async () => {
     try {
-      await cancelCurrentMessage();
+      if (CHAT_TRANSPORT === 'sse' && currentSessionId) {
+        await chatControl.cancel(currentSessionId);
+      } else {
+        await cancelCurrentMessage();
+      }
       setIsSending(false);
       sessionUsage.handleCancel();
       const finalMessage = finishStreamingMessage();
@@ -266,7 +397,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     } catch (error) {
       console.error('Error cancelling message:', error);
     }
-  }, [cancelCurrentMessage, finishStreamingMessage, onNewMessage, sessionUsage]);
+  }, [cancelCurrentMessage, chatControl, currentSessionId, finishStreamingMessage, onNewMessage, sessionUsage, setIsSending]);
 
   // Reset streaming/sending state when switching sessions to avoid stale in-flight UI
   const previousSessionIdRef = useRef<string | null>(null);
@@ -376,10 +507,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
   // Auto-send initial message from URL or sessionStorage (e.g., Next Steps execution)
   useEffect(() => {
-    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && !initialMessageSentRef.current) {
+    if (initialMessage && activeChatTransport.isReady && userId && !isLoadingSessionMessages && !isSending && !initialMessageSentRef.current) {
       initialMessageSentRef.current = true;
       const timer = setTimeout(() => {
-        handleSend(initialMessage, chatWebSocket).then((success) => {
+        handleSend(initialMessage, activeChatTransport).then((success) => {
           if (success) {
             sessionStorage.removeItem('pendingChatMessage');
             const sessionIdToUse = currentSessionId;
@@ -393,7 +524,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending]);
+  }, [initialMessage, activeChatTransport, activeChatTransport.isReady, userId, isLoadingSessionMessages, isSending]);
 
   // Memoized message list
   const memoizedMessages = useMemo(() => {
@@ -436,7 +567,19 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             <MessageList
               key={currentSessionId || "new"}
               messages={memoizedMessages} 
-              sendRaw={chatWebSocket.sendRaw}
+              sendRaw={CHAT_TRANSPORT === 'sse' ? ((data: string) => {
+                try {
+                  const parsed = JSON.parse(data);
+                  if (parsed?.direct_tool_call && currentSessionId) {
+                    chatControl.triggerDirectTool(currentSessionId, parsed.direct_tool_call)
+                      .catch((err) => console.error('[ChatClient] direct-tool failed:', err));
+                    return true;
+                  }
+                } catch (err) {
+                  console.error('[ChatClient] sendRaw parse failed:', err);
+                }
+                return false;
+              }) : chatWebSocket.sendRaw}
               onUpdateMessage={onUpdateMessage}
               sessionId={currentSessionId || undefined}
               userId={userId || undefined}

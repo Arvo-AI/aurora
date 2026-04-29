@@ -12,6 +12,11 @@ import {
 } from '@/lib/services/incidents';
 import { useQuery } from '@/lib/query';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { useChatStream } from '@/hooks/useChatStream';
+import MessagePartsRenderer from '@/components/chat/MessagePartsRenderer';
+import { MessagePart } from '@/lib/chat-message-parts';
+
+const CHAT_TRANSPORT = (process.env.NEXT_PUBLIC_CHAT_TRANSPORT === 'sse') ? 'sse' : 'ws';
 
 // Maximum length for short titles in incident chat tabs
 const TITLE_SHORT_MAX_LENGTH = 15;
@@ -93,6 +98,26 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     }
     return thoughts.filter((t) => t.agent_id === selectedAgentId);
   }, [thoughts, isMultiAgent, selectedAgentId]);
+
+  // Phase 5B: when multi-agent and SSE transport is enabled, subscribe to the
+  // chat stream for live parts[]. The 1s incident poll still feeds `thoughts`,
+  // but parts[] from SSE is the source of truth for tool calls + data parts.
+  const sseEnabled = CHAT_TRANSPORT === 'sse' && isMultiAgent && Boolean(incident.chatSessionId);
+  const { rows: sseRows } = useChatStream({
+    sessionId: sseEnabled ? incident.chatSessionId ?? null : null,
+    enabled: sseEnabled,
+  });
+
+  // Pick the agent-specific row for the main thoughts pane.
+  const partsForSelectedAgent: MessagePart[] = useMemo(() => {
+    if (!sseEnabled) return [];
+    const agentMatch = (r: { agent_id: string }) =>
+      selectedAgentId === 'main'
+        ? r.agent_id === 'main' || !r.agent_id
+        : r.agent_id === selectedAgentId;
+    // Concatenate parts across rows for the selected agent (preserves first-seen order).
+    return sseRows.filter(agentMatch).flatMap((r) => r.parts);
+  }, [sseEnabled, sseRows, selectedAgentId]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(
     (incident.chatSessions || []).filter((s: ChatSession) => s.id !== incident.chatSessionId)
   );
@@ -476,6 +501,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
           )}
           <div className={isMultiAgent ? 'absolute top-9 bottom-0 left-0 right-0 overflow-y-auto p-5 pb-32' : 'absolute inset-0 overflow-y-auto p-5 pb-32'}>
             <div className="space-y-4">
+              {sseEnabled && partsForSelectedAgent.length > 0 && (
+                <div className="pl-4 border-l-2 border-zinc-700">
+                  <MessagePartsRenderer parts={partsForSelectedAgent} />
+                </div>
+              )}
               {filteredThoughts.map((thought) => (
                 <div key={thought.id} className="pl-4 border-l-2 border-zinc-700 hover:border-orange-500/50 transition-colors">
                   <div className="text-xs text-zinc-500 mb-1">

@@ -5,7 +5,7 @@ export interface ToolCall {
   input: string;
   output?: any;
   error?: string | null;
-  status: "pending" | "running" | "completed" | "error" | "awaiting_confirmation" | "cancelled";
+  status: "pending" | "running" | "setting_up_environment" | "completed" | "error" | "awaiting_confirmation" | "cancelled";
   timestamp: string;
   confirmation_id?: string;
   confirmation_message?: string;

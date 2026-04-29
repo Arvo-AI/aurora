@@ -37,6 +37,10 @@ interface UseMessageHandlerProps {
   onSubAgentEvent?: (evt: SubAgentEvent) => void;
 }
 
+// Forward-compatible WebSocket message dispatcher.
+// All branches are explicit; unknown event types fall through to the default
+// no-op and never throw, so the server can ship new events without breaking
+// the client.
 export const useMessageHandler = ({
   streaming,
   onNewMessage,
@@ -44,387 +48,297 @@ export const useMessageHandler = ({
   onSendingStateChange,
   isSending,
   onUpdateAllMessages,
-  hasCreatedSession = false,
   justCreatedSessionRef,
   currentSessionId,
   onUsageUpdate,
   onUsageFinal,
   onSubAgentEvent,
 }: UseMessageHandlerProps) => {
-  // Store tool call message IDs for updates
+  // Tool-call message id map — survives across renders, cleared on session change.
   const toolCallMessageIds = useRef<Map<string, number>>(new Map());
-  
-  // Track whether we've already refreshed for this session
   const hasRefreshedForSessionRef = useRef<string | null>(null);
-  
-  // Get chat history refresh function
   const { refreshChatHistory } = useChatExpansion();
 
-  const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
-    // CRITICAL FIX: Filter messages by session_id to prevent cross-conversation leakage
-    // When a session is active, ONLY process messages that match the current session
-    if (currentSessionId) {
-      // Filter out messages without session_id OR with non-matching session_id
-      if (!message.session_id || message.session_id !== currentSessionId) {
-        // Log for debugging (only for mismatched sessions, not missing session_id)
-        if (message.session_id && message.session_id !== currentSessionId) {
-          console.debug('[useMessageHandler] Filtered message from different session:', {
-            messageSession: message.session_id,
-            currentSession: currentSessionId,
-            type: message.type
-          });
+  const finishStreamIfActive = useCallback(() => {
+    if (streaming.checkIsStreaming()) {
+      const finalMessage = streaming.finishStreamingMessage();
+      if (finalMessage) onNewMessage(finalMessage);
+    }
+  }, [streaming, onNewMessage]);
+
+  const handleToolStatus = useCallback((message: WebSocketMessage) => {
+    const status = message.data?.status;
+    if (status !== 'setting_up_environment' || !onUpdateAllMessages) return;
+    onUpdateAllMessages((prev) => {
+      const messages = [...prev];
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (!messages[i].toolCalls) continue;
+        let foundMatch = false;
+        const updatedToolCalls = messages[i].toolCalls!.map((tc) => {
+          if (tc.status === 'running' && !foundMatch) {
+            foundMatch = true;
+            return { ...tc, status: 'setting_up_environment' as const };
+          }
+          return tc;
+        });
+        if (foundMatch) {
+          messages[i] = { ...messages[i], toolCalls: updatedToolCalls };
+          break;
         }
-        return;
       }
-    }
+      return messages;
+    });
+  }, [onUpdateAllMessages]);
 
-    // Multi-agent lifecycle events — forward to optional subscriber.
-    // Unknown event types fall through harmlessly (forward-compatible).
-    const msgType = message.type as string;
-    if (
-      msgType === 'subagent_dispatched' ||
-      msgType === 'subagent_finished' ||
-      msgType === 'subagent_failed' ||
-      msgType === 'plan_committed'
-    ) {
-      if (onSubAgentEvent) {
-        onSubAgentEvent({
-          type: msgType as SubAgentEventType,
-          payload: (message.data ?? {}) as Record<string, unknown>,
-        });
-      }
-      return;
-    }
-
-    // Handle tool status updates (e.g., "setting_up_environment")
-    if (message.type === 'tool_status' && message.data) {
-      const status = message.data.status;
-      
-      if (status === 'setting_up_environment' && onUpdateAllMessages) {
-        // Find the most recent running tool call and update its status
-        onUpdateAllMessages(prev => {
-          const messages = [...prev];
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].toolCalls) {
-              let foundMatch = false;
-              const updatedToolCalls = messages[i].toolCalls!.map(tc => {
-                if (tc.status === 'running' && !foundMatch) {
-                  foundMatch = true;
-                  return {
-                    ...tc,
-                    status: 'setting_up_environment' as const
-                  };
-                }
-                return tc;
-              });
-              
-              if (foundMatch) {
-                messages[i] = { ...messages[i], toolCalls: updatedToolCalls };
-                break;
-              }
-            }
+  const handleExecutionConfirmation = useCallback((message: WebSocketMessage) => {
+    const toolName = message.data?.tool_name;
+    const confirmationId = message.data?.confirmation_id;
+    if (!toolName || !onUpdateAllMessages) return;
+    onUpdateAllMessages((prev) => {
+      const messages = [...prev];
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (!messages[i].toolCalls) continue;
+        let foundMatch = false;
+        const updatedToolCalls = messages[i].toolCalls!.map((tc) => {
+          if (tc.tool_name === toolName && tc.status === 'running' && !foundMatch) {
+            foundMatch = true;
+            return {
+              ...tc,
+              status: 'awaiting_confirmation' as const,
+              confirmation_id: confirmationId,
+              confirmation_message: message.data?.message,
+            };
           }
-          return messages;
+          return tc;
         });
+        if (foundMatch) {
+          messages[i] = { ...messages[i], toolCalls: updatedToolCalls };
+          break;
+        }
       }
-      return;
-    }
-    
-    // Handle execution confirmation requests
-    if (message.type === 'execution_confirmation' && message.data) {
-      const toolName = message.data.tool_name;
-      const confirmationId = message.data.confirmation_id;
-      
-      // Find the most recent running tool call for this tool and update its status
-      if (toolName && onUpdateAllMessages) {
-        onUpdateAllMessages(prev => {
-          // Find the last message with a matching running tool call
-          const messages = [...prev];
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].toolCalls) {
-              let foundMatch = false;
-              const updatedToolCalls = messages[i].toolCalls!.map(tc => {
-                if (tc.tool_name === toolName && tc.status === 'running' && !foundMatch) {
-                  foundMatch = true;
-                  return {
-                    ...tc,
-                    status: 'awaiting_confirmation' as const,
-                    confirmation_id: confirmationId,
-                    confirmation_message: message.data.message
-                  };
-                }
-                return tc;
-              });
-              
-              if (foundMatch) {
-                messages[i] = { ...messages[i], toolCalls: updatedToolCalls };
-                break;
-              }
-            }
-          }
-          return messages;
-        });
-      }
-      return;
-    }
+      return messages;
+    });
+  }, [onUpdateAllMessages]);
 
-    if (message.type === 'error' && message.data?.code === 'READ_ONLY_MODE') {
+  const handleError = useCallback((message: WebSocketMessage) => {
+    if (message.data?.code === 'READ_ONLY_MODE') {
       const errorText = message.data.text || 'This action is unavailable in read-only mode.';
-      onNewMessage({
-        id: generateNumericId(),
-        sender: 'bot',
-        text: errorText,
-      });
+      onNewMessage({ id: generateNumericId(), sender: 'bot', text: errorText });
       onSendingStateChange(false);
       return;
     }
+    finishStreamIfActive();
+    const errorText =
+      message.data?.text || message.data?.message || 'An unexpected error occurred.';
+    onNewMessage({
+      id: generateNumericId(),
+      sender: 'bot',
+      text: `⚠️ ${errorText}`,
+      severity: 'error',
+    });
+    onSendingStateChange(false);
+  }, [finishStreamIfActive, onNewMessage, onSendingStateChange]);
 
-    if (message.type === 'error' && message.data) {
-      if (streaming.checkIsStreaming()) {
-        const finalMessage = streaming.finishStreamingMessage();
-        if (finalMessage) {
-          onNewMessage(finalMessage);
-        }
-      }
-      const errorText = message.data.text || message.data.message || 'An unexpected error occurred.';
+  const handleToolCall = useCallback((message: WebSocketMessage) => {
+    if (!message.data) return;
+    finishStreamIfActive();
+    const toolCallId = message.data.tool_call_id || `tool-${generateUniqueId()}`;
+    const toolCall: ToolCall = {
+      id: toolCallId,
+      tool_name: message.data.tool_name,
+      input: message.data.input,
+      status: message.data.status || 'running',
+      timestamp: message.data.timestamp || new Date().toISOString(),
+    };
+    const messageId = generateNumericId();
+    toolCallMessageIds.current.set(toolCall.id, messageId);
+    onNewMessage({ id: messageId, sender: 'bot', text: '', toolCalls: [toolCall] });
+  }, [finishStreamIfActive, onNewMessage]);
+
+  const handleToolResult = useCallback((message: WebSocketMessage) => {
+    if (!message.data) return;
+    const toolCallId = message.data.tool_call_id;
+    const output = message.data.output;
+    const messageId = toolCallMessageIds.current.get(toolCallId);
+    if (!messageId) return;
+    onUpdateMessage(messageId, (msg) => ({
+      ...msg,
+      toolCalls:
+        msg.toolCalls?.map((tc) =>
+          tc.id === toolCallId ? { ...tc, output, status: 'completed' as const } : tc,
+        ) || [],
+    }));
+    toolCallMessageIds.current.delete(toolCallId);
+  }, [onUpdateMessage]);
+
+  const handleThinking = useCallback((message: WebSocketMessage) => {
+    if (!message.data) return;
+    const thinkingText = message.data.text || message.data;
+    const isChunk = message.data.is_chunk || false;
+    const isStreamingFlag = message.data.streaming || false;
+    if (isChunk || isStreamingFlag) {
+      if (!streaming.checkIsStreaming()) streaming.startStreamingMessage(true);
+      streaming.appendToStreamingMessage(thinkingText);
+      return;
+    }
+    if (streaming.checkIsStreaming()) {
+      streaming.appendToStreamingMessage(thinkingText);
+      const finalMessage = streaming.finishStreamingMessage();
+      if (finalMessage) onNewMessage({ ...finalMessage, isThinking: true });
+    } else {
       onNewMessage({
         id: generateNumericId(),
         sender: 'bot',
-        text: `⚠️ ${errorText}`,
-        severity: 'error',
+        text: thinkingText,
+        isThinking: true,
       });
-      onSendingStateChange(false);
-      return;
+    }
+  }, [streaming, onNewMessage]);
+
+  const handleAssistantMessage = useCallback((message: WebSocketMessage) => {
+    if (!message.data) return;
+    const messageText = message.data.text || message.data;
+    const isChunk = message.data.is_chunk || false;
+    const isComplete = message.data.is_complete || false;
+    const isStreamingFlag = message.data.streaming || false;
+
+    // Refresh chat history once per newly-created session, after first chunk arrives.
+    const newSessionId = justCreatedSessionRef?.current;
+    if (
+      isChunk &&
+      !streaming.checkIsStreaming() &&
+      messageText &&
+      newSessionId &&
+      hasRefreshedForSessionRef.current !== newSessionId
+    ) {
+      hasRefreshedForSessionRef.current = newSessionId;
+      setTimeout(() => refreshChatHistory(), 2000);
     }
 
-    // Handle tool calls - create a separate message immediately
-    if (message.type === 'tool_call' && message.data) {
-      //console.log('Tool call received:', message.data);
-      
-      // CRITICAL FIX: Finalize any streaming text BEFORE adding a new tool call
-      // This preserves chronological order when the agent sends text then invokes a tool
+    if (isChunk && !isComplete) {
+      if (!streaming.checkIsStreaming()) streaming.startStreamingMessage();
+      streaming.appendToStreamingMessage(messageText);
+      return;
+    }
+    if (isComplete) {
       if (streaming.checkIsStreaming()) {
+        streaming.appendToStreamingMessage(messageText);
         const finalMessage = streaming.finishStreamingMessage();
-        if (finalMessage) {
-          onNewMessage(finalMessage);
-        }
-      }
-      
-      // Use backend's tool_call_id if provided, otherwise generate a collision-resistant fallback
-      // The fallback ID should be echoed back if the backend accepts it
-      const toolCallId = message.data.tool_call_id || `tool-${generateUniqueId()}`;
-      
-      const toolCall: ToolCall = {
-        id: toolCallId,
-        tool_name: message.data.tool_name,
-        input: message.data.input,
-        status: message.data.status || 'running',
-        timestamp: message.data.timestamp || new Date().toISOString()
-      };
-      
-      // Create a separate message for tool calls immediately
-      // Use collision-resistant numeric ID instead of Date.now()
-      const messageId = generateNumericId();
-      const toolCallMessage: Message = {
-        id: messageId,
-        sender: "bot",
-        text: "", // Empty text for tool call messages
-        toolCalls: [toolCall]
-      };
-      
-      // Store the message ID for later updates using tool_call_id
-      toolCallMessageIds.current.set(toolCall.id, messageId);
-      
-      onNewMessage(toolCallMessage);
-    }
-    
-    // Handle tool results
-    if (message.type === 'tool_result' && message.data) {
-      //console.log('Tool result received:', message.data);
-      const toolCallId = message.data.tool_call_id;
-      const toolName = message.data.tool_name;
-      const output = message.data.output;
-      
-      // Find the message ID for this tool call using tool_call_id
-      const messageId = toolCallMessageIds.current.get(toolCallId);
-      if (messageId) {
-        // Update the existing message with the tool result
-        onUpdateMessage(messageId, (msg) => ({
-          ...msg,
-          toolCalls: msg.toolCalls?.map(toolCall => 
-            toolCall.id === toolCallId 
-              ? { ...toolCall, output, status: 'completed' as const }
-              : toolCall
-          ) || []
-        }));
-        
-        // Clean up the stored message ID
-        toolCallMessageIds.current.delete(toolCallId);
-      }
-    }
-    
-    // Handle thinking content from Gemini thinking models
-    // Thinking messages are streamed separately and displayed with distinct styling
-    if (message.type === 'thinking' && message.data) {
-      const thinkingText = message.data.text || message.data;
-      const isChunk = message.data.is_chunk || false;
-      const isStreamingFlag = message.data.streaming || false;
-      
-      // Stream thinking content just like regular messages but with thinking flag
-      if (isChunk || isStreamingFlag) {
-        if (!streaming.checkIsStreaming()) {
-          streaming.startStreamingMessage(true); // Pass true to indicate thinking content
-        }
-        streaming.appendToStreamingMessage(thinkingText);
+        if (finalMessage) onNewMessage(finalMessage);
       } else {
-        // Complete thinking message
-        if (streaming.checkIsStreaming()) {
-          streaming.appendToStreamingMessage(thinkingText);
-          const finalMessage = streaming.finishStreamingMessage();
-          if (finalMessage) {
-            onNewMessage({ ...finalMessage, isThinking: true });
-          }
-        } else {
-          onNewMessage({
-            id: generateNumericId(),
-            sender: "bot",
-            text: thinkingText,
-            isThinking: true, // Mark as thinking content for special display
-          });
-        }
-      }
-      return;
-    }
-    
-    // Handle different message types for proper streaming
-    if (message.type === 'message' && message.data) {
-      const messageText = message.data.text || message.data;
-      const isChunk = message.data.is_chunk || false;
-      const isComplete = message.data.is_complete || false;
-      const isStreamingFlag = message.data.streaming || false;
-      
-      // Trigger refresh ONLY on the FIRST message of a NEW chat session
-      // Check if: 1) This is a chunk, 2) Not currently streaming, 3) Session was just created
-      const currentSessionId = justCreatedSessionRef?.current;
-      const shouldRefresh = isChunk && 
-                           !streaming.checkIsStreaming() && 
-                           messageText && 
-                           currentSessionId && 
-                           hasRefreshedForSessionRef.current !== currentSessionId;
-      
-      if (shouldRefresh) {
-        hasRefreshedForSessionRef.current = currentSessionId;
-        setTimeout(() => {
-          refreshChatHistory();
-        }, 2000); // Delay to ensure backend has finished all updates
-      }
-      
-      // Pattern 1: Explicit chunk/complete flags
-      if (isChunk && !isComplete) {
-        if (!streaming.checkIsStreaming()) {
-          streaming.startStreamingMessage();
-        }
-        streaming.appendToStreamingMessage(messageText);
-      } 
-      else if (isComplete) {
-        if (streaming.checkIsStreaming()) {
-          streaming.appendToStreamingMessage(messageText);
-          const finalMessage = streaming.finishStreamingMessage();
-          if (finalMessage) {
-            onNewMessage(finalMessage);
-          }
-        } else {
-          // Complete message received without streaming
-          const completeMessage: Message = {
-            id: generateNumericId(),
-            sender: "bot",
-            text: messageText,
-          };
-          onNewMessage(completeMessage);
-          onSendingStateChange(false);
-        }
-      }
-      // Pattern 2: Streaming flag
-      else if (isStreamingFlag) {
-        if (!streaming.checkIsStreaming()) {
-          streaming.startStreamingMessage();
-        }
-        streaming.appendToStreamingMessage(messageText);
-      }
-      // Pattern 3: Auto-detect streaming by message length/content
-      else if (typeof messageText === 'string' && messageText.length < 50 && messageText.length > 0) {
-        // Likely a streaming chunk (short text)
-        if (!streaming.checkIsStreaming() && isSending) {
-          streaming.startStreamingMessage();
-        }
-        if (streaming.checkIsStreaming()) {
-          streaming.appendToStreamingMessage(messageText);
-        } else {
-          // Complete short message
-          onNewMessage({
-            id: generateNumericId(),
-            sender: "bot",
-            text: messageText,
-          });
-          onSendingStateChange(false);
-        }
-      }
-      // Pattern 4: Complete message (default)
-      else {
-        // Finish any streaming message first
-        if (streaming.checkIsStreaming()) {
-          const finalMessage = streaming.finishStreamingMessage();
-          if (finalMessage) {
-            onNewMessage(finalMessage);
-          }
-        }
-        
-        const newMessage: Message = {
-          id: generateNumericId(),
-          sender: "bot",
-          text: messageText,
-        };
-        onNewMessage(newMessage);
+        onNewMessage({ id: generateNumericId(), sender: 'bot', text: messageText });
         onSendingStateChange(false);
       }
+      return;
     }
-    
-    // Handle usage streaming updates
-    if ((message.type as string) === 'usage_update' && message.data && onUsageUpdate) {
-      onUsageUpdate(message.data);
+    if (isStreamingFlag) {
+      if (!streaming.checkIsStreaming()) streaming.startStreamingMessage();
+      streaming.appendToStreamingMessage(messageText);
+      return;
     }
-
-    if ((message.type as string) === 'usage_final' && message.data && onUsageFinal) {
-      onUsageFinal(message.data);
-    }
-
-    // Handle special completion signal
-    // Note: 'status' messages can be START or END, so we check for isComplete or END status
-    const isCompletionSignal = 
-      (message.type as string) === 'complete' || 
-      (message.type as string) === 'finished' ||
-      (message.type as string) === 'usage_info' ||
-      ((message.type as string) === 'status' && (message.isComplete || message.data?.status === 'END'));
-    
-    if (isCompletionSignal) {
-      // Finish any streaming message first
+    // Auto-detect short streaming chunk
+    if (typeof messageText === 'string' && messageText.length < 50 && messageText.length > 0) {
+      if (!streaming.checkIsStreaming() && isSending) streaming.startStreamingMessage();
       if (streaming.checkIsStreaming()) {
-        const finalMessage = streaming.finishStreamingMessage();
-        if (finalMessage) {
-          onNewMessage(finalMessage);
-        }
+        streaming.appendToStreamingMessage(messageText);
+      } else {
+        onNewMessage({ id: generateNumericId(), sender: 'bot', text: messageText });
+        onSendingStateChange(false);
       }
-      // Always clear the sending state when we receive any completion signal
-      onSendingStateChange(false);
+      return;
     }
-  }, [streaming, onNewMessage, onUpdateMessage, onSendingStateChange, isSending, refreshChatHistory, justCreatedSessionRef, currentSessionId, onUsageUpdate, onUsageFinal, onSubAgentEvent]);
+    finishStreamIfActive();
+    onNewMessage({ id: generateNumericId(), sender: 'bot', text: messageText });
+    onSendingStateChange(false);
+  }, [streaming, justCreatedSessionRef, refreshChatHistory, isSending, onNewMessage, onSendingStateChange, finishStreamIfActive]);
 
-  // Clear tool call message IDs when switching sessions to prevent cross-session contamination
+  const handleCompletion = useCallback(() => {
+    finishStreamIfActive();
+    onSendingStateChange(false);
+  }, [finishStreamIfActive, onSendingStateChange]);
+
+  const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
+    // Cross-session leakage guard.
+    if (currentSessionId && message.session_id && message.session_id !== currentSessionId) {
+      console.debug('[useMessageHandler] Filtered cross-session message', {
+        messageSession: message.session_id,
+        currentSession: currentSessionId,
+        type: message.type,
+      });
+      return;
+    }
+    if (currentSessionId && !message.session_id) return;
+
+    const type = message.type as string;
+
+    // Multi-agent lifecycle (optional subscriber).
+    if (
+      type === 'subagent_dispatched' ||
+      type === 'subagent_finished' ||
+      type === 'subagent_failed' ||
+      type === 'plan_committed'
+    ) {
+      onSubAgentEvent?.({
+        type: type as SubAgentEventType,
+        payload: (message.data ?? {}) as Record<string, unknown>,
+      });
+      return;
+    }
+
+    // Completion signals — handled before the main switch because `status` has
+    // a special END semantic.
+    const isCompletionSignal =
+      type === 'complete' ||
+      type === 'finished' ||
+      type === 'usage_info' ||
+      (type === 'status' && (message.isComplete || message.data?.status === 'END'));
+    if (isCompletionSignal) {
+      handleCompletion();
+      return;
+    }
+
+    switch (type) {
+      case 'tool_status':
+        handleToolStatus(message);
+        return;
+      case 'execution_confirmation':
+        handleExecutionConfirmation(message);
+        return;
+      case 'error':
+        handleError(message);
+        return;
+      case 'tool_call':
+        handleToolCall(message);
+        return;
+      case 'tool_result':
+        handleToolResult(message);
+        return;
+      case 'thinking':
+        handleThinking(message);
+        return;
+      case 'message':
+        handleAssistantMessage(message);
+        return;
+      case 'usage_update':
+        if (message.data) onUsageUpdate?.(message.data);
+        return;
+      case 'usage_final':
+        if (message.data) onUsageFinal?.(message.data);
+        return;
+      default:
+        // Forward-compatible: unknown types are ignored.
+        return;
+    }
+  }, [
+    currentSessionId, onSubAgentEvent, handleCompletion, handleToolStatus,
+    handleExecutionConfirmation, handleError, handleToolCall, handleToolResult,
+    handleThinking, handleAssistantMessage, onUsageUpdate, onUsageFinal,
+  ]);
+
+  // Clear tool call message IDs when switching sessions to prevent cross-session contamination.
   useEffect(() => {
     toolCallMessageIds.current.clear();
   }, [currentSessionId]);
 
-  return {
-    handleWebSocketMessage
-  };
+  return { handleWebSocketMessage };
 };

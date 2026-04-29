@@ -724,3 +724,34 @@ export async function fetchSubAgentTranscript(
   );
 }
 
+// AI SDK 5 chat_messages projection. Returns one row per (message_id, agent_id)
+// with parts[] already shaped per the AI SDK 5 UIMessage spec.
+//
+// TODO(backend): the corresponding Flask GET /api/chat/messages endpoint is
+// being delivered by the parallel agent. Until then this returns [] and the
+// client relies on SSE replay (Last-Event-ID) for hydration.
+export interface ChatMessageRow {
+  message_id: string;
+  session_id: string;
+  agent_id: string;
+  parent_agent_id: string | null;
+  role: 'user' | 'assistant';
+  parts: unknown[];
+  last_seq: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function getChatMessages(sessionId: string): Promise<ChatMessageRow[]> {
+  try {
+    const data = await apiGet<{ messages: ChatMessageRow[] }>(
+      `/api/chat/messages?session_id=${encodeURIComponent(sessionId)}`,
+    );
+    return data.messages ?? [];
+  } catch (error) {
+    if ((error as ApiError).status === 404) return [];
+    console.error('Error fetching chat messages:', error);
+    return [];
+  }
+}
+
