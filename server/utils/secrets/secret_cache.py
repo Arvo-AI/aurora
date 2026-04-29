@@ -41,7 +41,7 @@ def update_secret_cache(secret_name: str, secret_value: str, ttl_seconds: Option
         
         cache_key = f"secret:{secret_name}"
         redis_client.setex(cache_key, ttl_seconds, secret_value)
-        logger.info("Cached requested secret with TTL %ss", ttl_seconds)
+        logger.info("Cached requested secret")
     except Exception as e:
         logger.warning(f"Redis set failed: {e}")
 
