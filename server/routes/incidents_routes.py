@@ -1517,6 +1517,32 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
         return jsonify({"error": "Failed to mark suggestion"}), 500
 
 
+def _reload_applied_pr_info(suggestion_id_int: int, suggestion_id_raw: str) -> tuple[Optional[str], Optional[int]]:
+    """Reload the stored PR url/number for a successfully applied suggestion.
+
+    Re-reading from the DB (instead of trusting the return value of
+    github_apply_fix) breaks any taint flow from MCP exception text into
+    the response body.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pr_url, pr_number FROM incident_suggestions WHERE id = %s",
+                (suggestion_id_int,),
+            )
+            row = cursor.fetchone()
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to reload PR info for suggestion %s", sanitize(suggestion_id_raw))
+        return None, None
+
+    if not row:
+        return None, None
+    pr_url = row[0] if isinstance(row[0], str) and row[0].startswith("https://github.com/") else None
+    pr_number = int(row[1]) if row[1] is not None else None
+    return pr_url, pr_number
+
+
 @incidents_bp.route(
     "/api/incidents/suggestions/<suggestion_id>/apply", methods=["POST"]
 )
@@ -1561,22 +1587,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
         result = json.loads(result_json)
 
         if result.get("success"):
-            pr_url = None
-            pr_number = None
-            try:
-                with db_pool.get_admin_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "SELECT pr_url, pr_number FROM incident_suggestions WHERE id = %s",
-                        (suggestion_id_int,),
-                    )
-                    row = cursor.fetchone()
-                    if row:
-                        pr_url = row[0] if isinstance(row[0], str) and row[0].startswith("https://github.com/") else None
-                        pr_number = int(row[1]) if row[1] is not None else None
-            except Exception:
-                logger.exception("[INCIDENTS] Failed to reload PR info for suggestion %s", sanitize(suggestion_id))
-
+            pr_url, pr_number = _reload_applied_pr_info(suggestion_id_int, suggestion_id)
             logger.info(
                 "[INCIDENTS] Applied fix suggestion %s, PR: %s",
                 sanitize(suggestion_id),
@@ -1599,7 +1610,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
         return jsonify({"success": False, "error": "Failed to apply fix suggestion"}), 400
 
     except Exception as exc:
-        logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", suggestion_id)
+        logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", sanitize(suggestion_id))
         return jsonify({"error": "Failed to apply fix suggestion"}), 500
 
 
