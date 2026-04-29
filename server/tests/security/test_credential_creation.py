@@ -132,13 +132,17 @@ class TestEnvSanitization:
         """Stub transitive imports so terminal_exec_tool can load in CI
         without Flask, werkzeug, psycopg2, etc."""
         stubs = {}
-        for mod_name in (
-            "utils.terminal.terminal_run",
-            "chat.backend.agent.tools.cloud_exec_tool",
-            "chat.backend.agent.tools.iac_tool",
-        ):
+        stub_attrs = {
+            "utils.terminal.terminal_run": {"terminal_run": None},
+            "chat.backend.agent.tools.cloud_exec_tool": {"cloud_exec": None},
+            "chat.backend.agent.tools.iac_tool": {"run_iac_tool": None},
+        }
+        for mod_name, attrs in stub_attrs.items():
             if mod_name not in sys.modules:
-                stubs[mod_name] = types.ModuleType(mod_name)
+                mod = types.ModuleType(mod_name)
+                for attr, val in attrs.items():
+                    setattr(mod, attr, val)
+                stubs[mod_name] = mod
         return stubs
 
     def test_safe_env_keys_excludes_secrets(self):
