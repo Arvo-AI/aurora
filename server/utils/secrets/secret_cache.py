@@ -2,7 +2,6 @@
 import logging
 from typing import Optional
 from utils.cache.redis_client import get_redis_client
-from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +18,10 @@ def get_cached_secret(secret_name: str) -> Optional[str]:
     try:
         cache_key = f"secret:{secret_name}"
         value = redis_client.get(cache_key)
-        secret_fp = hash_for_log(secret_name)
         if value:
-            logger.debug("Cache HIT for secret fp=%s", secret_fp)
+            logger.debug("Cache HIT for requested secret")
         else:
-            logger.debug("Cache MISS for secret fp=%s", secret_fp)
+            logger.debug("Cache MISS for requested secret")
         return value
     except Exception as e:
         logger.warning(f"Redis get failed: {e}")
@@ -43,7 +41,7 @@ def update_secret_cache(secret_name: str, secret_value: str, ttl_seconds: Option
         
         cache_key = f"secret:{secret_name}"
         redis_client.setex(cache_key, ttl_seconds, secret_value)
-        logger.info("Cached secret fp=%s with TTL %ss", hash_for_log(secret_name), ttl_seconds)
+        logger.info("Cached requested secret with TTL %ss", ttl_seconds)
     except Exception as e:
         logger.warning(f"Redis set failed: {e}")
 
