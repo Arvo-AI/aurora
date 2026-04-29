@@ -308,9 +308,17 @@ async def _run_react_loop(
     model_id: str,
 ) -> dict[str, Any]:
     from langchain.agents import create_agent
-    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.messages import AIMessage, HumanMessage
 
     from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.utils.persistence.chat_events import (
+        append_message_part,
+        extend_text_part,
+        finalize_message,
+        record_event,
+        update_tool_part,
+    )
+    from chat.backend.agent.utils.persistence.incident_thoughts import IncidentThoughtAccumulator
 
     model_name = f"{provider}/{model_id}" if "/" not in model_id else model_id
     llm = create_chat_model(model_name, temperature=0.2)
@@ -332,18 +340,150 @@ async def _run_react_loop(
 
     _check_token_budget_or_cancel(state, token_budget)
 
+    # Streaming projection setup — every event lands in chat_events + chat_messages.parts[]
+    # so the UI sees this sub-agent's tool calls and reasoning as they happen.
+    message_id = state.message_id or str(uuid.uuid4())
+    session_id = state.session_id or ""
+    org_id = state.org_id or ""
+    has_streaming_target = bool(message_id and session_id and org_id)
+    thought_buffer = IncidentThoughtAccumulator(state.incident_id, agent_id=state.agent_id)
+
+    if has_streaming_target:
+        try:
+            await record_event(
+                session_id=session_id, org_id=org_id, type="assistant_started",
+                payload={"agent_id": state.agent_id, "purpose": state.purpose},
+                message_id=message_id, agent_id=state.agent_id,
+                parent_agent_id=state.parent_agent_id,
+            )
+        except Exception as e:
+            logger.warning("[subagent] assistant_started emit failed: %s", e)
+
     messages: list = []
+    tools_used: list[str] = []
+    evidence: list[dict] = []
+    final_text = ""
     transcript_ref: Optional[str] = None
+    finalize_status = "complete"
+
+    async def _consume_event(ev: dict) -> None:
+        nonlocal final_text
+        kind = ev.get("event")
+        data = ev.get("data") or {}
+        name = ev.get("name")
+
+        if kind == "on_chat_model_stream":
+            chunk = data.get("chunk")
+            delta = ""
+            if chunk is not None:
+                content = getattr(chunk, "content", None)
+                if isinstance(content, str):
+                    delta = content
+                elif isinstance(content, list):
+                    delta = "".join(
+                        p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+                    )
+            if not delta:
+                return
+            final_text = (final_text + delta) if final_text else delta
+            if has_streaming_target:
+                await record_event(
+                    session_id=session_id, org_id=org_id, type="assistant_chunk",
+                    payload={"text": delta},
+                    message_id=message_id, agent_id=state.agent_id,
+                    parent_agent_id=state.parent_agent_id,
+                )
+                await extend_text_part(
+                    message_id=message_id, session_id=session_id, org_id=org_id,
+                    role="assistant", agent_id=state.agent_id, delta=delta,
+                )
+            thought_buffer.push(delta)
+
+        elif kind == "on_tool_start":
+            tool_call_id = (data.get("run_id") or ev.get("run_id") or str(uuid.uuid4()))
+            tool_name = name or "unknown_tool"
+            tool_input = data.get("input")
+            if tool_name not in tools_used:
+                tools_used.append(tool_name)
+            if has_streaming_target:
+                await record_event(
+                    session_id=session_id, org_id=org_id, type="tool_call_started",
+                    payload={
+                        "tool_name": tool_name,
+                        "tool_call_id": str(tool_call_id),
+                        "input": tool_input,
+                    },
+                    message_id=message_id, agent_id=state.agent_id,
+                    parent_agent_id=state.parent_agent_id,
+                )
+                await append_message_part(
+                    message_id=message_id, session_id=session_id, org_id=org_id,
+                    role="assistant", agent_id=state.agent_id,
+                    part={
+                        "type": f"tool-{tool_name}",
+                        "toolCallId": str(tool_call_id),
+                        "state": "input-available",
+                        "input": tool_input,
+                    },
+                )
+            thought_buffer.push(f"Calling {tool_name}…", force=True)
+
+        elif kind == "on_tool_end":
+            tool_call_id = (data.get("run_id") or ev.get("run_id") or "")
+            output = data.get("output")
+            output_str = (
+                output if isinstance(output, str)
+                else getattr(output, "content", None) if output is not None
+                else None
+            )
+            if isinstance(output_str, str) and len(output_str) > 800:
+                output_str = output_str[:800] + "...[truncated]"
+            evidence.append({
+                "text": f"{name or 'tool'}: {output_str or ''}",
+                "citation": str(tool_call_id) or (name or ""),
+            })
+            if has_streaming_target:
+                await record_event(
+                    session_id=session_id, org_id=org_id, type="tool_call_result",
+                    payload={
+                        "tool_call_id": str(tool_call_id),
+                        "output": output_str,
+                    },
+                    message_id=message_id, agent_id=state.agent_id,
+                    parent_agent_id=state.parent_agent_id,
+                )
+                await update_tool_part(
+                    message_id=message_id, session_id=session_id, org_id=org_id,
+                    tool_call_id=str(tool_call_id),
+                    state="output-available", output=output_str,
+                )
+
     try:
-        result = await asyncio.wait_for(
-            agent_graph.ainvoke(
+        async def _stream_drain() -> list:
+            collected: list = []
+            async for ev in agent_graph.astream_events(
                 {"messages": [user_message]},
+                version="v2",
                 config={"recursion_limit": recursion_limit},
-            ),
-            timeout=wallclock_cap,
-        )
-        messages = result.get("messages", []) if isinstance(result, dict) else []
+            ):
+                try:
+                    await _consume_event(ev)
+                except Exception as inner:
+                    logger.warning("[subagent] event handler error: %s", inner)
+                # Capture the model's accumulated message list at chain end so we can
+                # reconstruct messages even if astream_events returns no final state.
+                if ev.get("event") == "on_chain_end" and ev.get("name") == "agent":
+                    out = (ev.get("data") or {}).get("output") or {}
+                    collected = out.get("messages") if isinstance(out, dict) else []
+            return collected or []
+
+        try:
+            messages = await asyncio.wait_for(_stream_drain(), timeout=wallclock_cap)
+        except asyncio.TimeoutError:
+            finalize_status = "interrupted"
+            raise
     finally:
+        thought_buffer.flush()
         try:
             transcript_ref = _persist_transcript(
                 org_id=state.org_id,
@@ -355,34 +495,35 @@ async def _run_react_loop(
         except Exception as e:
             logger.warning("[subagent] transcript persistence skipped: %s", e)
             transcript_ref = None
-
-    tools_used: list[str] = []
-    evidence: list[dict] = []
-    final_text = ""
-
-    for msg in messages:
-        if isinstance(msg, AIMessage):
-            tool_calls = getattr(msg, "tool_calls", None) or []
-            for tc in tool_calls:
-                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-                if name and name not in tools_used:
-                    tools_used.append(name)
-            content = msg.content
-            if isinstance(content, list):
-                content = " ".join(
-                    p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        if has_streaming_target:
+            try:
+                await finalize_message(
+                    message_id=message_id, session_id=session_id, org_id=org_id,
+                    status=finalize_status,
                 )
-            if isinstance(content, str) and content.strip():
-                final_text = content.strip()
-        elif isinstance(msg, ToolMessage):
-            tool_name = getattr(msg, "name", "unknown_tool")
-            obs = msg.content if isinstance(msg.content, str) else str(msg.content)
-            if len(obs) > 800:
-                obs = obs[:800] + "...[truncated]"
-            evidence.append({
-                "text": f"{tool_name}: {obs}",
-                "citation": getattr(msg, "tool_call_id", "") or tool_name,
-            })
+                await record_event(
+                    session_id=session_id, org_id=org_id,
+                    type="assistant_finalized" if finalize_status == "complete"
+                         else ("assistant_interrupted" if finalize_status == "interrupted" else "assistant_failed"),
+                    payload={"agent_id": state.agent_id},
+                    message_id=message_id, agent_id=state.agent_id,
+                    parent_agent_id=state.parent_agent_id,
+                )
+            except Exception as e:
+                logger.warning("[subagent] finalize emit failed: %s", e)
+
+    # If the stream didn't surface intermediate AIMessage/ToolMessage rows, still
+    # extract any final AIMessage content from the captured messages list.
+    if not final_text:
+        for msg in messages:
+            if isinstance(msg, AIMessage):
+                content = msg.content
+                if isinstance(content, list):
+                    content = " ".join(
+                        p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+                    )
+                if isinstance(content, str) and content.strip():
+                    final_text = content.strip()
 
     summary, reasoning, ruled_out = _split_final_response(final_text)
 
@@ -457,6 +598,24 @@ async def _setup_node(state: SubAgentState) -> dict[str, Any]:
         agent_id=effective_state.agent_id,
         parent_agent_id=state.parent_agent_id,
     )
+
+    if state.parent_message_id and state.session_id and state.org_id:
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import upsert_data_part
+            await upsert_data_part(
+                message_id=state.parent_message_id,
+                session_id=state.session_id, org_id=state.org_id,
+                data_type="subagent",
+                match_key="agent_id", match_value=effective_state.agent_id,
+                patch={
+                    "agent_id": effective_state.agent_id,
+                    "purpose": state.purpose,
+                    "model": model_used,
+                    "status": "running",
+                },
+            )
+        except Exception as e:
+            logger.warning("[subagent] data-subagent dispatch part failed: %s", e)
 
     return updates
 
@@ -577,6 +736,24 @@ async def _write_findings_node(state: SubAgentState) -> dict[str, Any]:
         agent_id=state.agent_id,
         parent_agent_id=state.parent_agent_id,
     )
+
+    if state.parent_message_id and state.session_id and state.org_id:
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import upsert_data_part
+            await upsert_data_part(
+                message_id=state.parent_message_id,
+                session_id=state.session_id, org_id=state.org_id,
+                data_type="subagent",
+                match_key="agent_id", match_value=state.agent_id,
+                patch={
+                    "status": status,
+                    "tools_used": list(state.tools_used or []),
+                    "artifact_ref": artifact_ref,
+                    "error": state.error if status in ("failed", "cancelled") else None,
+                },
+            )
+        except Exception as e:
+            logger.warning("[subagent] data-subagent finish part failed: %s", e)
 
     result = SubAgentResult(
         agent_id=state.agent_id,

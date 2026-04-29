@@ -1463,9 +1463,6 @@ class Workflow:
                 
             if 'Human' in msg_type:
                 content = str(getattr(msg, 'content', ''))
-                # Do not include our special cancellation message in the UI
-                if '[URGENT CANCELLATION]' in content:
-                    continue
 
                 # Strip context wrapper — backend wraps user questions in
                 # <user_message> tags for the LLM; store only the raw question.
@@ -1646,12 +1643,21 @@ class Workflow:
                 ensure_message_id,
             )
 
+            # Honor a pre-allocated message_id (e.g. SSE POST set wf._active_message_id
+                # before enqueuing this run) so chat_events under the assistant turn share
+                # one id across chunks + finalize. Without this, each ui_message is given a
+                # fresh uuid via ensure_message_id, splitting events across multiple
+                # chat_messages rows and breaking parts[] accumulation on the SSE consumer.
+            active_mid = getattr(self, '_active_message_id', None)
+
             async def _emit_all():
                 for msg in ui_messages:
                     sender = msg.get('sender')
                     streaming = bool(msg.get('_streaming'))
                     text = msg.get('text', '') or ''
                     tool_calls = msg.get('toolCalls') or []
+                    if sender == 'bot' and active_mid:
+                        msg['id'] = active_mid
                     mid = ensure_message_id(msg)
 
                     if sender == 'user':

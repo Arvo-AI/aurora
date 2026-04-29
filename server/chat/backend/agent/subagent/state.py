@@ -18,6 +18,8 @@ class SubAgentState(BaseModel):
     org_id: Optional[str] = None
     session_id: Optional[str] = None
     incident_id: Optional[str] = None
+    message_id: Optional[str] = None
+    parent_message_id: Optional[str] = None
     delegate_level: int = 1
     tools_used: list[str] = Field(default_factory=list)
     findings_artifact_ref: Optional[str] = None

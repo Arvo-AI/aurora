@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from langchain_core.messages import AIMessage
@@ -134,7 +133,7 @@ def _load_multi_agent_config(org_id: Optional[str]) -> dict[str, Any]:
 
 
 def _get_token_spend_for_incident(
-    incident_id: Optional[str], org_id: Optional[str], user_id: Optional[str]
+    incident_id: Optional[str], org_id: Optional[str]
 ) -> int:
     if not incident_id:
         return 0
@@ -205,7 +204,7 @@ def _check_monthly_token_cap(state: MainAgentState) -> tuple[bool, Optional[int]
 def _check_token_budget(state: MainAgentState) -> tuple[bool, int, int]:
     cfg = state.multi_agent_config or {}
     budget = int(cfg.get("per_rca_token_budget") or _MULTI_AGENT_CONFIG_DEFAULTS["per_rca_token_budget"])
-    spent = _get_token_spend_for_incident(state.incident_id, state.org_id, state.user_id)
+    spent = _get_token_spend_for_incident(state.incident_id, state.org_id)
     return (spent < budget, spent, budget)
 
 
@@ -546,10 +545,26 @@ async def _triage_llm(state: MainAgentState) -> dict[str, Any]:
 
 
 async def triage_node(state: MainAgentState) -> dict[str, Any]:
+    from chat.backend.agent.utils.persistence.chat_events import (
+        append_message_part,
+        record_event,
+    )
+
     cfg = _load_multi_agent_config(state.org_id)
     if not state.multi_agent_config:
         state.multi_agent_config = cfg
     kb_text = _fetch_kb_memory(state.user_id)
+
+    if state.main_message_id and state.session_id and state.org_id:
+        try:
+            await record_event(
+                session_id=state.session_id, org_id=state.org_id,
+                type="assistant_started",
+                payload={"agent_id": "main", "stage": "triage"},
+                message_id=state.main_message_id, agent_id="main",
+            )
+        except Exception as e:
+            logger.warning("[orchestrator.triage] assistant_started emit failed: %s", e)
 
     pre = _heuristic_pre_triage(state)
     if pre == "trivial":
@@ -559,20 +574,36 @@ async def triage_node(state: MainAgentState) -> dict[str, Any]:
 
     decision = await _triage_llm(state)
     complexity = decision.get("complexity") or "fan_out_warranted"
+    rationale = (decision.get("rationale") or "").strip()
     logger.info(
         "[orchestrator.triage] complexity=%s (llm) suggested=%s rationale=%s",
         complexity,
         decision.get("suggested_count"),
-        (decision.get("rationale") or "")[:160],
+        rationale[:160],
     )
     _ensure_main_run_row(state)
+
+    if rationale and state.main_message_id and state.session_id and state.org_id:
+        try:
+            await append_message_part(
+                message_id=state.main_message_id,
+                session_id=state.session_id, org_id=state.org_id,
+                role="assistant", agent_id="main",
+                part={"type": "reasoning", "text": rationale, "state": "done"},
+            )
+        except Exception as e:
+            logger.warning("[orchestrator.triage] reasoning part failed: %s", e)
+
     if complexity == "fan_out_warranted" and state.incident_id:
         _mark_incident_multi_agent(state.incident_id, state.user_id)
     return {"complexity": complexity, "multi_agent_config": cfg, "kb_memory": kb_text}
 
 
 async def plan_node(state: MainAgentState) -> dict[str, Any]:
-    from chat.backend.agent.utils.persistence.chat_events import record_event
+    from chat.backend.agent.utils.persistence.chat_events import (
+        append_message_part,
+        record_event,
+    )
 
     max_parallel = int((state.multi_agent_config or {}).get("max_parallel_subagents", 3))
     catalog = get_enabled_catalog(state.org_id or "")
@@ -640,8 +671,26 @@ async def plan_node(state: MainAgentState) -> dict[str, Any]:
                 "memory_hints_used": plan_dict["memory_hints_used"],
                 "status": "committed",
             },
+            message_id=state.main_message_id or None,
             agent_id="main",
         )
+        if state.main_message_id and state.session_id and state.org_id:
+            try:
+                await append_message_part(
+                    message_id=state.main_message_id,
+                    session_id=state.session_id, org_id=state.org_id,
+                    role="assistant", agent_id="main",
+                    part={
+                        "type": "data-plan",
+                        "data": {
+                            "selected": plan_dict["selected"],
+                            "rationale": plan_dict["rationale"],
+                            "memory_hints_used": plan_dict["memory_hints_used"],
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.warning("[orchestrator.plan] data-plan part failed: %s", e)
         logger.info("[orchestrator.plan] selected=%d sub-agents", len(plan_dict["selected"]))
     except Exception as e:
         logger.warning("[orchestrator:plan] planner failed: %s", e)
@@ -664,6 +713,7 @@ def _build_subagent_sends(state: MainAgentState) -> list[Send]:
     sends: list[Send] = []
     for entry in (state.plan or {}).get("selected") or []:
         agent_id = f"sub-{uuid.uuid4().hex[:8]}"
+        message_id = str(uuid.uuid4())
         branch_state = {
             "agent_id": agent_id,
             "parent_agent_id": state.agent_id or "main",
@@ -675,6 +725,8 @@ def _build_subagent_sends(state: MainAgentState) -> list[Send]:
             "org_id": state.org_id,
             "session_id": state.session_id,
             "incident_id": state.incident_id,
+            "message_id": message_id,
+            "parent_message_id": state.main_message_id or None,
             "delegate_level": (state.delegate_level or 0) + 1,
             "tools_used": [],
             "status": "running",
@@ -1041,69 +1093,65 @@ def _persist_cited_artifact(state: MainAgentState) -> None:
         logger.warning("[orchestrator:_persist_cited_artifact] %s", e)
 
 
-def _persist_chat_messages(state: MainAgentState) -> None:
-    """Append the user question + synthesized assistant reply to the legacy
-    chat_sessions.messages JSONB so the chat UI surfaces the multi-agent run."""
-    if not state.session_id or not state.user_id:
-        return
-    assistant_text = ""
-    for msg in reversed(state.messages or []):
-        content = getattr(msg, "content", None)
-        role = getattr(msg, "type", None) or getattr(msg, "role", None)
-        if role in ("ai", "assistant") and isinstance(content, str) and content.strip():
-            assistant_text = content
-            break
-    user_text = state.refined_question or state.question or ""
-    if not assistant_text and not user_text:
-        return
-    try:
-        import json as _json
-        from utils.auth.stateless_auth import set_rls_context
-        from utils.db.connection_pool import db_pool
-
-        now_iso = datetime.now(timezone.utc).isoformat()
-        new_messages = []
-        if user_text:
-            new_messages.append({
-                "id": str(uuid.uuid4()),
-                "sender": "user",
-                "text": user_text,
-                "timestamp": now_iso,
-            })
-        if assistant_text:
-            new_messages.append({
-                "id": str(uuid.uuid4()),
-                "sender": "bot",
-                "text": assistant_text,
-                "timestamp": now_iso,
-            })
-        if not new_messages:
-            return
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                if not set_rls_context(
-                    cursor, conn, state.user_id, log_prefix="[orchestrator:_persist_chat_messages]"
-                ):
-                    return
-                cursor.execute(
-                    "UPDATE chat_sessions "
-                    "SET messages = COALESCE(messages, '[]'::jsonb) || %s::jsonb, "
-                    "    status = 'completed', updated_at = NOW() "
-                    "WHERE id = %s",
-                    (_json.dumps(new_messages), state.session_id),
-                )
-                conn.commit()
-    except Exception as e:
-        logger.warning("[orchestrator:_persist_chat_messages] %s", e)
-
-
 async def finalize_node(state: MainAgentState) -> dict[str, Any]:
-    from chat.backend.agent.utils.persistence.chat_events import record_event
+    from chat.backend.agent.utils.persistence.chat_events import (
+        append_message_part,
+        finalize_message,
+        record_event,
+    )
+    from chat.backend.agent.utils.persistence.incident_thoughts import save_incident_thought
 
     model_used = (state.plan or {}).get("_model_used") if isinstance(state.plan, dict) else None
     _mark_main_run_succeeded(state, model_used)
     _persist_cited_artifact(state)
-    _persist_chat_messages(state)
+
+    # Pull final synthesized text from the latest AIMessage on state.messages.
+    final_text = ""
+    for msg in reversed(state.messages or []):
+        content = getattr(msg, "content", None)
+        role = getattr(msg, "type", None) or getattr(msg, "role", None)
+        if role in ("ai", "assistant"):
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+                )
+            if isinstance(content, str) and content.strip():
+                final_text = content.strip()
+                break
+
+    if state.main_message_id and state.session_id and state.org_id:
+        if final_text:
+            try:
+                await record_event(
+                    session_id=state.session_id, org_id=state.org_id,
+                    type="assistant_chunk",
+                    payload={"text": final_text, "stage": "synthesis"},
+                    message_id=state.main_message_id, agent_id="main",
+                )
+                await append_message_part(
+                    message_id=state.main_message_id,
+                    session_id=state.session_id, org_id=state.org_id,
+                    role="assistant", agent_id="main",
+                    part={"type": "text", "text": final_text, "state": "done"},
+                )
+            except Exception as e:
+                logger.warning("[orchestrator.finalize] synth append failed: %s", e)
+        try:
+            await finalize_message(
+                message_id=state.main_message_id,
+                session_id=state.session_id, org_id=state.org_id,
+                status="complete",
+            )
+        except Exception as e:
+            logger.warning("[orchestrator.finalize] finalize_message failed: %s", e)
+
+    if state.incident_id and final_text:
+        try:
+            save_incident_thought(
+                incident_id=state.incident_id, content=final_text, agent_id="main"
+            )
+        except Exception as e:
+            logger.warning("[orchestrator.finalize] incident_thoughts write failed: %s", e)
 
     try:
         await record_event(
@@ -1115,6 +1163,7 @@ async def finalize_node(state: MainAgentState) -> dict[str, Any]:
                 "subagent_count": len(state.subagent_results or []),
                 "model_used": model_used,
             },
+            message_id=state.main_message_id or None,
             agent_id="main",
         )
     except Exception as e:

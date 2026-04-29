@@ -27,6 +27,7 @@ class MainAgentState(State):
     org_id: Annotated[Optional[str], _keep_existing] = None
     session_id: Annotated[Optional[str], _keep_existing] = None
     incident_id: Annotated[Optional[str], _keep_existing] = None
+    main_message_id: Annotated[str, _keep_existing] = ""
     kb_memory: Annotated[str, _keep_existing] = ""
     active_subagents: list[str] = []
     subagent_results: Annotated[list, operator.add] = []
