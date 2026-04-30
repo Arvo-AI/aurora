@@ -24,6 +24,10 @@ interface ChatSendHandlerParams {
   justCreatedSessionRef: MutableRefObject<string | null>;
   onSessionCreated?: (sessionId: string) => void;
   images?: Array<{file: File, preview: string}>;
+  // SSE delivers user_message back via the stream, so adding an optimistic
+  // bubble would just duplicate what the bridge will render once the POST
+  // returns. WS has no echo path, so it still relies on the optimistic add.
+  skipOptimisticUserMessage?: boolean;
 }
 
 interface ChatSendHandlerResult {
@@ -61,6 +65,7 @@ export function useChatSendHandlers({
   justCreatedSessionRef,
   onSessionCreated,
   images = [],
+  skipOptimisticUserMessage = false,
 }: ChatSendHandlerParams): ChatSendHandlerResult {
   const { toast } = useToast();
   const { providerIds, isProviderConnected } = useConnectedAccounts();
@@ -211,7 +216,9 @@ export function useChatSendHandlers({
       }
     }
 
-    onNewMessage(userMessage);
+    if (!skipOptimisticUserMessage) {
+      onNewMessage(userMessage);
+    }
 
     // Convert images to attachments
     const attachments = await Promise.all(
@@ -246,8 +253,9 @@ export function useChatSendHandlers({
   }, [
     createSession, currentSessionId, hasCreatedSession, justCreatedSessionRef,
     onNewMessage, router, selectedMode, selectedModel, selectedProviders,
-    syncProvidersWithMode, toast, userId, setCurrentSessionId, 
-    setHasCreatedSession, isSending, getConnectedProviders, images
+    syncProvidersWithMode, toast, userId, setCurrentSessionId,
+    setHasCreatedSession, isSending, getConnectedProviders, images,
+    skipOptimisticUserMessage,
   ]);
 
   const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string, options?: { triggerRca?: boolean }) => {

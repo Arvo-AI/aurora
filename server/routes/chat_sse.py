@@ -416,36 +416,44 @@ def post_message(user_id: str):
     # chat_sessions.active_stream_id = "{session_id}:{message_id}" via
     # record_event, which is the row the SSE GET endpoint reads to bind to
     # the stream the worker will write to.
+    async def _persist() -> None:
+        # Both writes share the same session_id and message_id so they can
+        # land in either seq order; the SSE consumer materializes user vs
+        # assistant rows independently. Run in parallel — saves one DB
+        # round-trip on the POST handler's wall clock.
+        await asyncio.gather(
+            record_event(
+                session_id=session_id,
+                org_id=org_id,
+                type="user_message",
+                payload={"text": query, "mode": mode},
+                message_id=message_id,
+                agent_id="user",
+            ),
+            record_event(
+                session_id=session_id,
+                org_id=org_id,
+                type="assistant_started",
+                payload={
+                    "mode": mode,
+                    "model": model,
+                    "provider_preference": provider_preference,
+                },
+                message_id=message_id,
+                agent_id="main",
+            ),
+        )
+
     try:
         loop = asyncio.new_event_loop()
         try:
-            # Both writes share the same session_id and message_id so they can
-            # land in either seq order; the SSE consumer materializes user vs
-            # assistant rows independently. Run in parallel — saves one DB
-            # round-trip on the POST handler's wall clock.
-            loop.run_until_complete(asyncio.gather(
-                record_event(
-                    session_id=session_id,
-                    org_id=org_id,
-                    type="user_message",
-                    payload={"text": query, "mode": mode},
-                    message_id=message_id,
-                    agent_id="user",
-                ),
-                record_event(
-                    session_id=session_id,
-                    org_id=org_id,
-                    type="assistant_started",
-                    payload={
-                        "mode": mode,
-                        "model": model,
-                        "provider_preference": provider_preference,
-                    },
-                    message_id=message_id,
-                    agent_id="main",
-                ),
-            ))
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_persist())
         finally:
+            try:
+                asyncio.set_event_loop(None)
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         logger.warning("[chat_sse] post_message: persist failed: %s", e)

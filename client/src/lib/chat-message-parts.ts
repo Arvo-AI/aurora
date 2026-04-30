@@ -105,11 +105,21 @@ function appendToText(parts: MessagePart[], delta: string): MessagePart[] {
   return [...parts, { type: 'text', text: delta, state: 'streaming' }];
 }
 
-function finalizeStreamingText(parts: MessagePart[]): MessagePart[] {
+// `finalText` carries assistant_finalized.payload.text. When the LLM emits
+// coarse chunks (one early chunk + finalized with the full body), the chunked
+// text alone leaves the bubble truncated, so upgrade to the longer string
+// before marking done. Falls back to chunked text if finalText is absent.
+function finalizeStreamingText(parts: MessagePart[], finalText?: string): MessagePart[] {
   const idx = findTrailingStreaming(parts, 'text');
-  if (idx < 0) return parts;
+  if (idx < 0) {
+    if (finalText) {
+      return [...parts, { type: 'text', text: finalText, state: 'done' }];
+    }
+    return parts;
+  }
   const cur = parts[idx] as TextPart;
-  return parts.with(idx, { ...cur, state: 'done' });
+  const text = finalText && finalText.length > cur.text.length ? finalText : cur.text;
+  return parts.with(idx, { ...cur, text, state: 'done' });
 }
 
 function upsertToolPart(
@@ -161,7 +171,7 @@ export function reduceParts(parts: MessagePart[], evt: ChatStreamEvent): Message
     case 'assistant_finalized':
     case 'assistant_interrupted':
     case 'assistant_failed':
-      return finalizeStreamingText(parts);
+      return finalizeStreamingText(parts, typeof p.text === 'string' ? p.text : undefined);
 
     case 'tool_call_started': {
       const toolCallId = (p.tool_call_id as string) || (p.id as string) || '';

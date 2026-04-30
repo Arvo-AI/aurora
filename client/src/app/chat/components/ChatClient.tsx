@@ -33,6 +33,7 @@ import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
 import { useChatStream, type ChatRow } from '@/hooks/useChatStream';
 import { useChatControl } from '@/hooks/useChatControl';
+import { useToast } from '@/hooks/use-toast';
 import type { TextPart, ToolPart } from '@/lib/chat-message-parts';
 import type { ToolCall as LegacyToolCall } from '../types';
 
@@ -53,6 +54,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const { user, isLoaded } = useUser();
   const { role } = useAuth();
   const router = useRouter();
+  const { toast } = useToast();
   
   // Resolve initial message from prop (URL) or sessionStorage (long commands).
   // We only read sessionStorage here; removal happens after the message is sent
@@ -149,6 +151,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     justCreatedSessionRef,
     onSessionCreated: refreshChatHistory,
     images,
+    // Optimistic bubble bridges the ~200–500ms gap between POST kickoff and
+    // SSE delivering user_message; the bridge collapses it on match.
+    skipOptimisticUserMessage: false,
   });
 
   const onSendingStateChange = useCallback((sending: boolean) => {
@@ -221,9 +226,15 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   });
 
   // SSE transport. No-op when sessionId is null or the flag is `ws`.
+  // onMetaCompleted clears isSending: SSE has no equivalent of the WS END
+  // status that useMessageHandler hooks into, so without this the input
+  // stays disabled after the first reply.
   const chatStream = useChatStream({
     sessionId: currentSessionId,
     enabled: CHAT_TRANSPORT === 'sse',
+    onMetaCompleted: useCallback(() => {
+      setIsSending(false);
+    }, []),
   });
   const chatControl = useChatControl();
 
@@ -273,39 +284,49 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         isStreaming: row.status === 'streaming',
       };
     };
-    const sseMessages = chatStream.rows.map(rowToMessage);
+    // Backend emits two user_message events per turn (chat_sse POST and the
+    // workflow's immediate_save_handler under a fresh message_id), so collapse
+    // same-text user rows down to the first occurrence.
+    const seenUserText = new Set<string>();
+    const sseMessages = chatStream.rows
+      .map(rowToMessage)
+      .filter((m) => {
+        if (m.sender !== 'user') return true;
+        if (seenUserText.has(m.text)) return false;
+        seenUserText.add(m.text);
+        return true;
+      });
     if (sseMessages.length === 0) return;
 
-    // Bridge SSE rows back into the legacy `messages` array.
-    //
-    // Keys to get right:
-    //   1. session-loaded history (positive ids) must stay in place.
-    //   2. the optimistic user message added by useChatSendHandlers
-    //      (id=Date.now()) is a positive id that should be replaced once SSE
-    //      delivers its own user_message row (negative id, same text).
-    //   3. SSE-sourced messages (negative ids) are the live state for the
-    //      current in-flight turn; we re-derive them from chatStream.rows on
-    //      every render, so we drop prior SSE messages before re-appending.
+    // SSE rows carry negative numeric ids; positive numeric ids are the
+    // optimistic Date.now() bubble; strings are session-loaded UUIDs. Drop
+    // the prior SSE batch, swap out any optimistic that the SSE user_message
+    // now matches, and re-append the freshly-derived rows.
     setMessages((prev) => {
-      const nonSse = prev.filter((m) => m.id >= 0);
-      const firstSseUser = sseMessages.find((m) => m.sender === 'user');
-      let base = nonSse;
-      if (firstSseUser) {
-        let lastOptimisticUserIdx = -1;
+      let nonSse = prev.filter((m) => typeof m.id !== 'number' || m.id >= 0);
+      for (const sseUser of sseMessages) {
+        if (sseUser.sender !== 'user') continue;
+        let optimisticIdx = -1;
         for (let i = nonSse.length - 1; i >= 0; i--) {
-          if (nonSse[i].sender === 'user' && nonSse[i].text === firstSseUser.text) {
-            lastOptimisticUserIdx = i;
+          const m = nonSse[i];
+          if (
+            typeof m.id === 'number' &&
+            m.id > 0 &&
+            m.sender === 'user' &&
+            m.text === sseUser.text
+          ) {
+            optimisticIdx = i;
             break;
           }
         }
-        if (lastOptimisticUserIdx !== -1) {
-          base = [
-            ...nonSse.slice(0, lastOptimisticUserIdx),
-            ...nonSse.slice(lastOptimisticUserIdx + 1),
+        if (optimisticIdx !== -1) {
+          nonSse = [
+            ...nonSse.slice(0, optimisticIdx),
+            ...nonSse.slice(optimisticIdx + 1),
           ];
         }
       }
-      return [...base, ...sseMessages];
+      return [...nonSse, ...sseMessages];
     });
   }, [chatStream.rows]);
 
@@ -329,12 +350,36 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       }).catch((err) => {
         console.error('[ChatClient] SSE sendMessage failed:', err);
         setIsSending(false);
+        // POST failed so the SSE bridge will never see a matching
+        // user_message; drop the orphan optimistic so it doesn't strand at
+        // the top of the list while later turns get appended below.
+        const failedQuery: string | undefined = payload?.query;
+        if (typeof failedQuery === 'string') {
+          setMessages((prev) => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const m = prev[i];
+              if (
+                typeof m.id === 'number' &&
+                m.id > 0 &&
+                m.sender === 'user' &&
+                m.text === failedQuery
+              ) {
+                return [...prev.slice(0, i), ...prev.slice(i + 1)];
+              }
+            }
+            return prev;
+          });
+        }
+        toast({
+          description: "Couldn't send your message. Please try again.",
+          variant: "destructive",
+        });
       });
       return true;
     },
     isReady: true,
     isConnected: true,
-  }), [chatControl, setIsSending]);
+  }), [chatControl, setIsSending, toast]);
 
   const activeChatTransport = CHAT_TRANSPORT === 'sse' ? sseChatWebSocket : chatWebSocket;
 

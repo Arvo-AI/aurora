@@ -337,11 +337,15 @@ export const useWebSocket = (config: WebSocketConfig) => {
     }
   }, [config.userId, trackedUserId, state.isConnected, state.isConnecting, connect]);
 
-  // Auto-connect when user is available
+  // Auto-connect when user is available. An empty config.url means the caller
+  // disabled this transport (e.g. SSE chat mode wires an inert WebSocket to
+  // keep the legacy hook tree intact); skip the token fetch + reconnect loop
+  // entirely in that case so we don't pound /api/ws-token forever.
   useEffect(() => {
     const hasUserId = user?.id;
-    
-    if (hasUserId && !state.isConnected && !state.isConnecting) {
+    const hasUrl = !!configRef.current.url;
+
+    if (hasUserId && hasUrl && !state.isConnected && !state.isConnecting) {
       shouldReconnectRef.current = true;
       // Add a small delay to prevent race conditions in React StrictMode
       const timer = setTimeout(() => {
@@ -349,10 +353,10 @@ export const useWebSocket = (config: WebSocketConfig) => {
           connect();
         }
       }, 100);
-      
+
       return () => clearTimeout(timer);
     }
-  }, [user?.id, configRef.current.userId, state.isConnected, state.isConnecting, connect]);
+  }, [user?.id, configRef.current.userId, configRef.current.url, state.isConnected, state.isConnecting, connect]);
 
   return {
     ...state,

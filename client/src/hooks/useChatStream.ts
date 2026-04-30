@@ -23,14 +23,11 @@ interface State {
   rows: ChatRow[];
   byKey: Record<string, number>; // `${message_id}:${agent_id}` → index in rows
   lastSeq: number;
-  // Per-message high-water-mark seq. The server's per-message Redis stream is
-  // strictly monotonic, but resume-across-tabs and the durable replay path can
-  // both surface the same seq twice (once from chat_events backlog, once from
-  // the live stream). Drop any event with seq <= lastSeenSeqByMessage[mid] to
-  // guarantee no duplicate part is ever applied to chat_messages.parts[].
-  // Map mutated in-place by the reducer. Held inside state so a fresh `state`
-  // reference still triggers React's rerender on every accepted event, but we
-  // skip the per-event Record spread (cost was O(message count) allocations).
+  // Per-message high-water-mark seq. Drop any event with
+  // seq <= lastSeenSeqByMessage[mid] — the durable backlog and live tail can
+  // both replay the same seq, so this dedup is what guarantees no duplicate
+  // part lands in chat_messages.parts[]. Must be cloned (not mutated) on each
+  // write — see the reducer note below for the StrictMode trap.
   lastSeenSeqByMessage: Map<string, number>;
 }
 
@@ -47,16 +44,15 @@ function applyEvent(state: State, evt: ChatStreamEvent): State {
   const key = rowKey(evt.message_id, agent_id);
   const existingIdx = state.byKey[key];
 
-  // Per-message dedup: drop any event we've already applied for this message.
-  // chat_events.seq is unique per session, and within a single message it is
-  // strictly monotonic; reseeing seq <= high-water-mark means the server's
-  // replay path or the redis-stream tail re-delivered an event we already have.
+  // Reducer must stay pure (StrictMode double-invokes it in dev): mutating
+  // state.lastSeenSeqByMessage in place lets the second invocation observe
+  // seq <= lastSeenForMsg and silently drop every accepted event.
   const lastSeenForMsg = state.lastSeenSeqByMessage.get(evt.message_id) ?? 0;
   if (evt.seq <= lastSeenForMsg) {
     return { ...state, lastSeq: Math.max(state.lastSeq, evt.seq) };
   }
-  state.lastSeenSeqByMessage.set(evt.message_id, evt.seq);
-  const nextLastSeenByMessage = state.lastSeenSeqByMessage;
+  const nextLastSeenByMessage = new Map(state.lastSeenSeqByMessage);
+  nextLastSeenByMessage.set(evt.message_id, evt.seq);
 
   // user_message lays down a user-role row directly from payload.text.
   if (evt.type === 'user_message') {
@@ -244,6 +240,12 @@ export interface UseChatStreamResult {
 const MAX_RETRIES = 10;
 const BASE_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 5_000;
+// Idle reconnect cadence between turns: backend returns 204 when no turn is
+// active. Picked to balance "next send shows up promptly" vs. "don't slam
+// Flask with one GET per stream every second." With multiple tabs open each
+// polling on its own session, lower values measurably starved POST handlers
+// of threads and the proxy started timing out.
+const IDLE_POLL_MS = 4_000;
 
 export function useChatStream({
   sessionId,
@@ -311,10 +313,12 @@ export function useChatStream({
           );
 
           if (res.status === 204) {
-            // Nothing in flight — wait briefly, then retry.
+            // No active turn — idle poll. Don't burn the retry budget here;
+            // 204 is the steady state between turns in the same session, so
+            // counting it against MAX_RETRIES would silently kill the
+            // consumer after ~10 idle ticks and break follow-up sends.
             setConnected(false);
-            await sleep(backoff(retries));
-            retries += 1;
+            await sleep(IDLE_POLL_MS);
             continue;
           }
           if (!res.ok || !res.body) {
@@ -346,9 +350,13 @@ export function useChatStream({
             }
           }
 
-          // Stream ended cleanly — likely after meta:completed; stop reconnecting.
+          // Stream ended cleanly — meta:completed for this turn. Keep the
+          // consumer alive: a follow-up message in the same session needs the
+          // next SSE GET to deliver its events. Without resetting retries the
+          // 204-backoff path would trip MAX_RETRIES and silently quit.
           setConnected(false);
-          return;
+          retries = 0;
+          continue;
         } catch (err) {
           if (cancelled || (err as Error)?.name === 'AbortError') return;
           setConnected(false);
