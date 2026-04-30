@@ -16,7 +16,6 @@ from pathlib import Path
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
-from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
@@ -45,77 +44,6 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
     return LLMUsageTracker.count_tokens(text, model)
 
-# --------------------------------------------------------------------------------------
-# Common verb sets used across providers
-# --------------------------------------------------------------------------------------
-_READ_ONLY_VERBS: set[str] = {
-    "list", "describe", "get", "show", "config", "version", "info", "view", "read", "status",
-}
-# A non-exhaustive but conservative set of verbs considered to CHANGE state
-_ACTION_VERBS: set[str] = {
-    "create", "delete", "update", "apply", "destroy", "terminate", "start", "stop",
-    "restart", "attach", "detach", "enable", "disable", "put", "remove",
-}
-
-
-def summarize_cloud_command(cmd: str) -> str:
-    """Return a short description of what the CLI command (gcloud/az/aws) intends to do."""
-
-    try:
-        tokens = shlex.split(cmd)
-    except Exception:
-        tokens = cmd.split()
-
-    action = None
-    resource_type = None
-    resource_name = None
-    zone_or_region = None
-
-    # Tokens representing the CLI executable that we should skip when searching
-    cli_tokens = {"gcloud", "az", "aws", "kubectl", "gsutil", "bq", "scw", "ovh"}
-
-    for i, tok in enumerate(tokens):
-        low = tok.lower()
-
-        # Detect action verb
-        if low in _ACTION_VERBS.union(_READ_ONLY_VERBS):
-            action = low
-
-            # Try to infer resource type – walk backwards until we find a token
-            # that is not a flag or CLI executable.
-            j = i - 1
-            while j >= 0 and (tokens[j].lower() in cli_tokens or tokens[j].startswith("-")):
-                j -= 1
-            if j >= 0:
-                resource_type = tokens[j]
-
-            # Resource name usually follows the action verb (unless it's a flag)
-            k = i + 1
-            while k < len(tokens) and tokens[k].startswith("-"):
-                k += 1
-            if k < len(tokens):
-                resource_name = tokens[k]
-
-        # Capture location / region / zone flags for common CLIs
-        if low.startswith("--zone="):
-            zone_or_region = tok.split("=", 1)[1]
-        elif low == "--zone" and i + 1 < len(tokens):
-            zone_or_region = tokens[i + 1]
-        elif low.startswith("--region=") or low.startswith("--location="):
-            zone_or_region = tok.split("=", 1)[1]
-        elif low in {"--region", "--location", "-r", "-l"} and i + 1 < len(tokens):
-            zone_or_region = tokens[i + 1]
-
-    parts: list[str] = []
-    if action and resource_type:
-        parts.append(f"The command will {action} {resource_type}")
-    if resource_name and not resource_name.startswith("--"):
-        parts.append(f"named '{resource_name}'")
-    if zone_or_region:
-        parts.append(f"in {zone_or_region}")
-
-    summary_core = " ".join(parts) if parts else cmd
-    return f"{summary_core}.\n\n"
 
 logger = logging.getLogger(__name__)
 
@@ -1228,25 +1156,21 @@ def _cloud_exec_aws_multi_account(
             "provider": "aws",
         })
 
-    if not is_read_only_command(command):
-        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
-        from .cloud_tools import get_state_context
-        summary_msg = summarize_cloud_command(command)
-        state_context = get_state_context()
-        context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-        if not wait_for_user_confirmation(
-            user_id=user_id,
-            message=f"[ALL {len(connections)} accounts] {summary_msg}",
-            tool_name="cloud_exec",
-            session_id=context_session_id,
-        ):
-            return json.dumps({
-                "success": False,
-                "error": "User declined multi-account command execution",
-                "multi_account": True,
-                "command": command,
-                "provider": "aws",
-            })
+    # One gate check for the fan-out (signature + org policy + LLM judge + HITL).
+    # Each per-account invocation is the same command text, so gating once up
+    # front matches the previous single-prompt UX and avoids N prompts.
+    from utils.auth.command_gate import gate_command
+    _gated = command if command.strip().startswith("aws") else f"aws {command}"
+    _gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=_gated)
+    if not _gate.allowed:
+        return json.dumps({
+            "success": False,
+            "error": _gate.block_reason,
+            "code": _gate.code,
+            "multi_account": True,
+            "command": command,
+            "provider": "aws",
+        })
 
     def _run_on_account(conn: dict) -> dict:
         account_id = conn.get("account_id", "unknown")
@@ -1831,42 +1755,10 @@ Security & Compliance
             })
 
 
-        # If command is potentially action, ask for confirmation first (after command processing)
-        if not is_read_only_command(command):
-            summary_msg = summarize_cloud_command(command)
-            # Get session_id from context for state saving
-            from .cloud_tools import get_state_context
-            state_context = get_state_context()
-            context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-            
-            if not wait_for_user_confirmation(
-                user_id=user_id, 
-                message=summary_msg, 
-                tool_name="cloud_exec",
-                session_id=context_session_id
-            ):
-                # Capture the cancellation result in the tool capture system
-                tool_capture = get_tool_capture()
-                current_tool_call_id = get_current_tool_call_id(
-                    tool_name="cloud_exec",
-                    tool_kwargs={'provider': original_provider, 'command': original_command}
-                )
-                
-                cancellation_result = json.dumps({
-                    "status": "cancelled",
-                    "message": "cloud_exec command cancelled by user",
-                    "chat_output": "Command cancelled.",
-                    "user_cancelled": True,
-                    "final_command": command,  # Now includes the processed command with all prefixes and flags
-                })
-                
-                # Capture the cancellation result if we have a tool capture and current tool call ID
-                if tool_capture and current_tool_call_id:
-                    logger.info(f"Capturing cancellation result for tool call {current_tool_call_id}")
-                    tool_capture.capture_tool_end(current_tool_call_id, cancellation_result, is_error=False)
-                
-                return cancellation_result
-        
+        # Destructive-command confirmation is handled by the unified command
+        # gate earlier in this function (signature + org policy + LLM judge +
+        # HITL). Org policy is the source of truth for what requires approval.
+
         # Check if CLI tool is available before attempting to execute
         if not check_cli_availability(cli_tool):
             logger.error(f"CLI tool '{cli_tool}' is not available")

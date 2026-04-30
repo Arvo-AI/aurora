@@ -1,7 +1,20 @@
 """Command-execution gate — unified policy + safety enforcement with HITL.
 
-Centralizes the four-layer defense-in-depth check that every shell tool must
-run before execution:
+Two entry points, one confirmation surface:
+
+* :func:`gate_command` — shell-command path. Runs the four-layer
+  defense-in-depth check (signature, org allow/deny, LLM judge, session
+  taint) and prompts on any block.
+* :func:`gate_action` — structured-action path for tools with no shell
+  command (Terraform apply/destroy, Bitbucket PR merges, Notion column
+  deletes, destructive MCP tools, etc). Always prompts in foreground,
+  denies in background. No policy/Yes-Always (there is no regex to
+  persist).
+
+Both funnel into the same ``_prompt_user`` helper, WS message, React
+panel, and DB-backed live state.
+
+Layers evaluated by :func:`gate_command`:
 
     1. Signature match  (utils/security/signature_match.py via command_safety)
     2. Org allow/deny   (utils/auth/command_policy.py)
@@ -133,6 +146,46 @@ def gate_command(
                           cmd_hash=cmd_hash)
     finally:
         _gate_inflight_command.reset(token)
+
+
+def gate_action(
+    *,
+    user_id: Optional[str],
+    tool_name: str,
+    summary: str,
+) -> GateDecision:
+    """Human-in-the-loop gate for structured tool actions (no shell command).
+
+    Foreground: prompts the user Yes / No with *summary* as the rendered
+    action. Background: denies (no interactive user). There is no
+    Yes-Always here -- these actions are not regex-addressable, so we
+    cannot persist an allow rule; org policy does not apply.
+
+    Returns the same :class:`GateDecision` shape as :func:`gate_command`
+    so callers can treat both gates uniformly.
+    """
+    if not user_id:
+        # Preserve prior behavior of wait_for_user_confirmation helpers,
+        # which required a user and otherwise denied.
+        return _block("USER_DECLINED", "Tool call not allowed by user")
+
+    if not _is_foreground():
+        return _block("USER_DECLINED", "Tool call not allowed by user")
+
+    decision = _prompt_user(
+        user_id=user_id,
+        session_id=_session_id(),
+        tool_name=tool_name,
+        command=summary,
+        block_code="ACTION_CONFIRM",
+        block_reason=summary,
+        block_layer="destructive_action",
+        allow_yes_always=False,
+        yes_always_changes=[],
+        org_id=None,
+        cmd_hash="",
+    )
+    return decision
 
 
 def is_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> bool:

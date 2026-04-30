@@ -145,13 +145,6 @@ def build_success_response(**kwargs) -> str:
     return json.dumps(result, default=str)
 
 
-def get_session_id():
-    """Get session_id from the current agent state context."""
-    from chat.backend.agent.tools.cloud_tools import get_state_context
-
-    return getattr(get_state_context(), "session_id", None)
-
-
 def build_cancelled_response() -> str:
     """Build the standard cancellation response for a rejected confirmation."""
     return build_success_response(message="Operation cancelled by user", cancelled=True)
@@ -160,19 +153,13 @@ def build_cancelled_response() -> str:
 def confirm_or_cancel(user_id: str, message: str, tool_name: str) -> Optional[str]:
     """Request human approval for a destructive action.
 
-    Retrieves the session ID automatically and prompts the user for
-    confirmation. Returns ``None`` if approved, or a JSON cancellation
-    response string if the user declines.
+    Returns ``None`` if approved, or a JSON cancellation response string
+    if the user declines. Delegates to the unified command gate so
+    Bitbucket confirmations share the same UI/WS/taint plumbing as the
+    shell-command gate.
     """
-    from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+    from utils.auth.command_gate import gate_action
 
-    session_id = get_session_id()
-    approved = wait_for_user_confirmation(
-        user_id=user_id,
-        message=message,
-        tool_name=tool_name,
-        session_id=session_id,
-    )
-    if not approved:
-        return build_cancelled_response()
-    return None
+    if gate_action(user_id=user_id, tool_name=tool_name, summary=message).allowed:
+        return None
+    return build_cancelled_response()
