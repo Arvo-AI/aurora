@@ -517,6 +517,23 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
 
+    async def flush_streaming_chat_message_awaited():
+        # Awaited (vs save_streaming_chat_message's fire-and-forget) so the
+        # assistant_chunk's seq is allocated before any tool event scheduled
+        # next; the reset opens a fresh text segment for the next AIMessage.
+        if accumulated_chat_msg:
+            total_len = sum(len(s) for s in accumulated_chat_msg)
+            if total_len > last_emitted_len[0]:
+                full_text = "".join(accumulated_chat_msg)
+                delta = full_text[last_emitted_len[0]:]
+                await _emit_streaming_event(
+                    'assistant_chunk', delta, full_text,
+                    finalized=False, status='streaming',
+                )
+            accumulated_chat_msg.clear()
+            last_emitted_len[0] = 0
+        last_chat_save_time[0] = time.time()
+
     def finalize_streaming_chat_message(remove: bool = False):
         """Finalize the running assistant message.
 
@@ -667,11 +684,14 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 }
                                 if hasattr(state, 'session_id') and state.session_id:
                                     msg_response["session_id"] = state.session_id
-                                
+
                                 await send_via_appropriate_sender(msg_response)
                                 # Save tokens incrementally to incident thoughts
                                 save_incident_thought(token_text, force=False)
                                 save_streaming_chat_message(token_text, force=False)
+
+                    elif event_type == "flush_accumulator":
+                        await flush_streaming_chat_message_awaited()
 
                     elif event_type == "values":
                         # Stub: skip complete-state "values" events.

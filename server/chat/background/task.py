@@ -1245,10 +1245,28 @@ async def _execute_background_chat(
                 )
             )
 
+        message_id_token = None
+        if message_id:
+            try:
+                from chat.backend.agent.utils.tool_context_capture import (
+                    set_capture_message_id,
+                )
+                message_id_token = set_capture_message_id(message_id)
+            except Exception as e:
+                logger.warning("[BackgroundChat] set_capture_message_id failed: %s", e)
+
         try:
             # Run the workflow - this is the same function used by regular chats
             await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
         finally:
+            if message_id_token is not None:
+                try:
+                    from chat.backend.agent.utils.tool_context_capture import (
+                        reset_capture_message_id,
+                    )
+                    reset_capture_message_id(message_id_token)
+                except Exception:
+                    pass
             # Drain any in-flight chat_event emits scheduled via create_task
             # in process_workflow_async — without this, asyncio.run() teardown
             # cancels them mid-await and the terminal projection write +

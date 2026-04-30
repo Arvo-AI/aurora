@@ -47,6 +47,14 @@ _capture_agent_id_var: contextvars.ContextVar[Optional[str]] = contextvars.Conte
 _capture_parent_agent_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "capture_parent_agent_id", default=None
 )
+# Holds the active assistant message_id so cloud_tools._emit_event can stamp
+# tool_call_started/result events with it. Without this, those events land in
+# chat_events with message_id=NULL, skip the per-message Redis Stream publish
+# in record_event, and the SSE consumer never sees them — only post-refresh
+# (DB projection) renders them.
+_capture_message_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "capture_message_id", default=None
+)
 
 
 def set_capture_agent_id(agent_id: Optional[str], parent_agent_id: Optional[str] = None) -> tuple:
@@ -61,6 +69,17 @@ def reset_capture_agent_id(tokens: tuple) -> None:
     try:
         _capture_agent_id_var.reset(tokens[0])
         _capture_parent_agent_id_var.reset(tokens[1])
+    except Exception:
+        pass
+
+
+def set_capture_message_id(message_id: Optional[str]) -> contextvars.Token:
+    return _capture_message_id_var.set(message_id)
+
+
+def reset_capture_message_id(token: contextvars.Token) -> None:
+    try:
+        _capture_message_id_var.reset(token)
     except Exception:
         pass
 
@@ -162,6 +181,7 @@ class ToolContextCapture:
             from .persistence.chat_events import record_event
             agent_id = self._effective_agent_id()
             parent_agent_id = self._effective_parent_agent_id()
+            message_id = _capture_message_id_var.get()
             coro = record_event(
                 session_id=self.session_id,
                 org_id=self.org_id,
@@ -169,6 +189,7 @@ class ToolContextCapture:
                 payload=payload,
                 agent_id=agent_id,
                 parent_agent_id=parent_agent_id,
+                message_id=message_id,
             )
             try:
                 loop = asyncio.get_running_loop()

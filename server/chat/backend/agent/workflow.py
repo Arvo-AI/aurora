@@ -1089,6 +1089,11 @@ class Workflow:
                         has_tool_calls = getattr(output, 'tool_calls', None)
                         has_raw_tool_calls = getattr(output, 'additional_kwargs', {}).get('tool_calls')
                         if has_tool_calls or has_raw_tool_calls:
+                            # Order this AIMessage's tail text ahead of the tool
+                            # boundary on the SSE consumer; the consumer's
+                            # awaited flush allocates the chunk's seq before
+                            # _process_tool_calls_from_chunk schedules tool_call_started.
+                            yield ("flush_accumulator", None)
                             self._process_tool_calls_from_chunk(output, tool_capture)
                             logger.debug(f"[WORKFLOW STREAM] Detected tool calls (lc={bool(has_tool_calls)}, raw={bool(has_raw_tool_calls)})")
 

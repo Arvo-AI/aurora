@@ -258,11 +258,13 @@ def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
     from chat.backend.agent.utils.persistence.chat_events import record_event
     from chat.backend.agent.utils.tool_context_capture import (
         _capture_agent_id_var,
+        _capture_message_id_var,
         _capture_parent_agent_id_var,
     )
 
     agent_id = _capture_agent_id_var.get()
     parent_agent_id = _capture_parent_agent_id_var.get()
+    message_id = _capture_message_id_var.get()
 
     coro = record_event(
         session_id=session_id,
@@ -271,6 +273,7 @@ def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
         payload=payload,
         agent_id=agent_id,
         parent_agent_id=parent_agent_id,
+        message_id=message_id,
     )
 
     try:

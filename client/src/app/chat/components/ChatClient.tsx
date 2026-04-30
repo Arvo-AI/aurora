@@ -239,57 +239,89 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const chatControl = useChatControl();
 
   // Bridge: when SSE is the active transport, mirror sseRows into the legacy
-  // Message[] surface so existing <MessageList /> keeps rendering. We collapse
-  // each row's text parts into a single text body and project tool parts into
-  // toolCalls. data-subagent / data-plan / reasoning parts are rendered by
-  // <MessagePartsRenderer /> in the incident <ThoughtsPanel /> — they are not
-  // surfaced in the chat MessageList yet (TODO: phase out MessageList).
+  // Message[] surface so existing <MessageList /> keeps rendering. Each
+  // assistant row is split at tool-call boundaries into one Message per text
+  // segment, matching how chat_messages persists pre-tool/post-tool text as
+  // separate rows on refresh; tool parts attach as toolCalls to the segment
+  // they followed. data-subagent / data-plan / reasoning parts are rendered
+  // by <MessagePartsRenderer /> in the incident <ThoughtsPanel />.
   useEffect(() => {
     if (CHAT_TRANSPORT !== 'sse') return;
-    const rowToMessage = (row: ChatRow, idx: number): Message => {
-      const text = row.parts
-        .filter((p): p is TextPart => p.type === 'text')
-        .map((p) => p.text)
-        .join('');
-      const toolCalls: LegacyToolCall[] = row.parts
-        .filter((p): p is ToolPart => p.type.startsWith('tool-'))
-        .map((tp) => {
-          const toolName = tp.type.startsWith('tool-') ? tp.type.slice('tool-'.length) : tp.type;
-          let status: LegacyToolCall['status'];
-          switch (tp.state) {
-            case 'output-available': status = 'completed'; break;
-            case 'output-error': status = 'error'; break;
-            default: status = 'running';
-          }
-          return {
-            id: tp.toolCallId,
-            tool_name: toolName,
-            input: typeof tp.input === 'string' ? tp.input : JSON.stringify(tp.input ?? ''),
-            output: tp.output,
-            error: tp.errorText ?? null,
-            status,
-            timestamp: new Date().toISOString(),
-          };
-        });
-      // Negative id flags this Message as SSE-sourced so the bridge can
-      // distinguish it from session-loaded (positive id) and optimistic
-      // (Date.now() id) messages. Stable across re-renders because firstSeq
-      // is monotonic and unique per chat_events message.
-      const sseId = -1 * (row.firstSeq || (idx + 1));
+    const toolPartToLegacy = (tp: ToolPart): LegacyToolCall => {
+      const toolName = tp.type.startsWith('tool-') ? tp.type.slice('tool-'.length) : tp.type;
+      let status: LegacyToolCall['status'];
+      switch (tp.state) {
+        case 'output-available': status = 'completed'; break;
+        case 'output-error': status = 'error'; break;
+        default: status = 'running';
+      }
       return {
-        id: sseId,
-        sender: row.role === 'user' ? 'user' : 'bot',
-        text,
-        toolCalls: toolCalls.length ? toolCalls : undefined,
-        isStreaming: row.status === 'streaming',
+        id: tp.toolCallId,
+        tool_name: toolName,
+        input: typeof tp.input === 'string' ? tp.input : JSON.stringify(tp.input ?? ''),
+        output: tp.output,
+        error: tp.errorText ?? null,
+        status,
+        timestamp: new Date().toISOString(),
       };
+    };
+    // Negative ids flag SSE-sourced rows so the bridge can distinguish them
+    // from session-loaded (string UUIDs) and optimistic (positive Date.now())
+    // messages. firstSeq is monotonic and unique per chat_events message;
+    // segments within a single row stay stable by offsetting from firstSeq.
+    const rowToMessages = (row: ChatRow, idx: number): Message[] => {
+      const baseId = -1 * (row.firstSeq || (idx + 1));
+      const sender = row.role === 'user' ? 'user' : 'bot';
+      const isStreaming = row.status === 'streaming';
+      if (sender === 'user') {
+        const text = row.parts
+          .filter((p): p is TextPart => p.type === 'text')
+          .map((p) => p.text)
+          .join('');
+        return [{ id: baseId, sender, text, isStreaming }];
+      }
+      const segments: Message[] = [];
+      let currentText = '';
+      let pendingTools: LegacyToolCall[] = [];
+      let segmentIdx = 0;
+      const flush = () => {
+        if (!currentText && pendingTools.length === 0) return;
+        segments.push({
+          id: baseId - segmentIdx,
+          sender,
+          text: currentText,
+          toolCalls: pendingTools.length ? pendingTools : undefined,
+          isStreaming,
+        });
+        segmentIdx += 1;
+        currentText = '';
+        pendingTools = [];
+      };
+      // Split at every tool-call boundary so each text run between tools is
+      // its own bubble. Pre-refresh boundary lands wherever the LLM stream
+      // happened to be (often mid-word, since tool calls fire mid-token);
+      // post-refresh splits at AIMessage boundaries which the raw stream
+      // doesn't expose, so the two views can differ on the exact byte break.
+      for (const part of row.parts) {
+        if (part.type === 'text') {
+          if (pendingTools.length && currentText) flush();
+          currentText += part.text;
+        } else if (part.type.startsWith('tool-')) {
+          pendingTools.push(toolPartToLegacy(part as ToolPart));
+        }
+      }
+      flush();
+      if (segments.length === 0) {
+        segments.push({ id: baseId, sender, text: '', isStreaming });
+      }
+      return segments;
     };
     // Backend emits two user_message events per turn (chat_sse POST and the
     // workflow's immediate_save_handler under a fresh message_id), so collapse
     // same-text user rows down to the first occurrence.
     const seenUserText = new Set<string>();
     const sseMessages = chatStream.rows
-      .map(rowToMessage)
+      .flatMap(rowToMessages)
       .filter((m) => {
         if (m.sender !== 'user') return true;
         if (seenUserText.has(m.text)) return false;
