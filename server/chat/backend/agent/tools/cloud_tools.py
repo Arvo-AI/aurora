@@ -362,7 +362,10 @@ def _apply_output_redaction(
     if not findings:
         return text
     latency_ms = (time.perf_counter() - t0) * 1000.0
-    for f in findings:
+    # Emit per-call scan latency only on the first finding in the batch;
+    # remaining events carry latency_ms=0 so a dashboard summing the field
+    # reflects actual scan cost rather than N*cost for N findings.
+    for idx, f in enumerate(findings):
         try:
             _emit_redaction(
                 user_id=user_id or "",
@@ -371,7 +374,7 @@ def _apply_output_redaction(
                 value_hash=f.value_hash,
                 location="tool_completion",
                 tool=tool_name,
-                latency_ms=latency_ms,
+                latency_ms=latency_ms if idx == 0 else 0.0,
             )
         except Exception as audit_err:
             logging.warning(
@@ -591,6 +594,20 @@ def send_tool_error(tool_name: str, error_msg: str, tool_call_id: Optional[str] 
         state_context = get_state_context()
         session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
 
+        # Output redaction: tool exceptions routinely echo the failing
+        # command (kubectl/aws/subprocess) which can carry auth flags or
+        # environment-injected credentials, so the error path needs the
+        # same Hook 1 scrub as the success path.
+        if _guardrails_config.enabled:
+            try:
+                cleaned_error = _apply_output_redaction(
+                    tool_name, cleaned_error, user_id, session_id
+                )
+            except Exception as redact_err:
+                logging.warning(
+                    f"Output-redaction on error path failed open for {tool_name}: {redact_err}"
+                )
+
         result_data = {
             "type": "tool_error",
             "data": {
@@ -748,11 +765,22 @@ def with_completion_notification(func):
             # are gated by GUARDRAILS_ENABLED so disabling the feature is a
             # true no-op (dict/list results still flow through as-is).
             if _guardrails_config.enabled:
+                # Context retrieval is best-effort metadata for the audit
+                # event; a failure here must not skip the redaction scan
+                # itself, or secrets leak downstream on any ctx hiccup.
+                _uid = None
+                _sid = None
                 try:
                     ctx = get_user_context()
                     _uid = ctx.get('user_id') if isinstance(ctx, dict) else ctx
                     _sctx = get_state_context()
                     _sid = _sctx.session_id if _sctx and hasattr(_sctx, 'session_id') else None
+                except Exception as ctx_err:
+                    logging.warning(
+                        f"Output-redaction context lookup failed for {tool_name}: {ctx_err}; "
+                        "scanning with empty user/session metadata"
+                    )
+                try:
                     if isinstance(result, (dict, list)):
                         try:
                             result = json.dumps(result, ensure_ascii=False, default=str)

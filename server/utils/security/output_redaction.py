@@ -57,15 +57,19 @@ _REDACTION_SCAN = re.compile(r"\[REDACTED:[a-z0-9][a-z0-9-]{0,64}\]")
 
 # Upstream callers (e.g. ``send_tool_completion``) already cap tool output at
 # ~10 KB for the WebSocket path, but the redaction pass also runs in the
-# decorator site before that cap is applied. Bound the scanner input so
-# worst-case regex runtime stays linear in a small constant even if a caller
-# forgets to truncate. Values above the cap are scanned up to the cap; content
-# beyond it is passed through unmodified. Measured in code points (Python
-# ``len``), not bytes; for UTF-8 that is within a 4x factor of bytes, which
-# is fine for a coarse runtime bound. The cap is deliberately generous: real
-# credentials are short and nearly always appear near the top of a tool
-# result (headers, env dumps, YAML manifests).
-MAX_SCAN_CHARS = 256 * 1024
+# decorator site before that cap is applied, and ``cap_tool_output``
+# (``chat/backend/agent/utils/tool_output_cap.py``) ships raw tool output
+# up to ``MAX_SUMMARIZATION_INPUT_CHARS`` (400 KB) to a summarization LLM
+# as-is. The scan cap must exceed that threshold or secrets in the
+# 256KB-400KB tail leak to the summarization model before Hook 2 ever
+# runs. Bound at 512 KB (comfortably above the 400 KB summarization cap
+# plus any small headroom) so worst-case regex runtime stays linear in a
+# small constant even if a caller forgets to truncate. Values above the
+# cap are scanned up to the cap; content beyond it is passed through
+# unmodified. Measured in code points (Python ``len``), not bytes; for
+# UTF-8 that is within a 4x factor of bytes, which is fine for a coarse
+# runtime bound.
+MAX_SCAN_CHARS = 512 * 1024
 # Extra chars scanned past ``MAX_SCAN_CHARS`` so a credential whose body
 # straddles the cut is still caught. 512 comfortably exceeds the longest
 # shipped rule capture (AWS session tokens, JWTs, long PEM lines).
@@ -243,7 +247,7 @@ def _is_fully_redacted(text: str) -> bool:
     url-safe run long enough to plausibly carry a secret.
 
     Threshold rationale: the shortest capture lengths in the shipped ruleset
-    are 14 chars (``sumologic-access-id``: ``su[A-Za-z0-9]{12}``) and
+    are 14 chars (``sumologic-access-id``: ``su[a-zA-Z0-9]{12}``) and
     16 chars (``confluent-access-token``). Using 14 keeps those rules in the
     scan path when a new secret is appended to a post-Hook-1 transcript.
     A handful of rules match shorter values (e.g. ``slack-legacy-*`` 8-char
@@ -251,8 +255,12 @@ def _is_fully_redacted(text: str) -> bool:
     in exchange for the hot-path speedup on the dominant case of fully
     redacted inputs. When in doubt return False and let the full scanner
     decide.
+
+    The character class intentionally includes ``.`` so a dotted JWT-shaped
+    payload (``eyJ...``) whose individual base64url segments are each under
+    the 14-char threshold still trips the fast-path and forces a full scan.
     """
     if not _REDACTION_SCAN.search(text):
         return False
     stripped = _REDACTION_SCAN.sub("", text)
-    return not re.search(r"[A-Za-z0-9_\-+/=]{14,}", stripped)
+    return not re.search(r"[A-Za-z0-9_.\-+/=]{14,}", stripped)

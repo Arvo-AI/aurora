@@ -1584,8 +1584,16 @@ class Workflow:
                         break
                 if already_present:
                     continue
+
+                # Output redaction (Hook 3): RCA context payloads come from
+                # PagerDuty incident bodies which can carry tokens. Every
+                # other writer to tool_call['output'] in this file runs
+                # through _redact_for_ui; skipping it here would let raw
+                # secrets land in chat_sessions.messages unredacted.
+                redacted_content = self._redact_for_ui(
+                    content, tool_name="rca_context_update"
+                )
                 
-                # Create a new bot message for the context update
                 context_update_message = {
                     "message_number": len(ui_messages) + 1,
                     "text": "",
@@ -1601,7 +1609,7 @@ class Workflow:
                             "source": update.get("source", "pagerduty"),
                             "injected_at": injected_at,
                         }),
-                        "output": content,
+                        "output": redacted_content,
                         "status": "completed",
                         "timestamp": injected_at or datetime.now().isoformat(),
                     }],
@@ -1781,7 +1789,7 @@ class Workflow:
                     "Output redaction (ui_message): user_id unavailable; defaulting user_id='': %s",
                     e,
                 )
-            for f in findings:
+            for idx, f in enumerate(findings):
                 try:
                     _emit_redaction(
                         user_id=user_id,
@@ -1790,13 +1798,16 @@ class Workflow:
                         value_hash=f.value_hash,
                         location="ui_message",
                         tool=tool_name,
-                        latency_ms=latency_ms,
+                        # Per-call scan latency only on the first finding;
+                        # remaining events report 0 so dashboards summing
+                        # the field do not overcount by a factor of N.
+                        latency_ms=latency_ms if idx == 0 else 0.0,
                     )
                 except Exception as audit_err:
                     # Audit emit is best-effort: never let a logger/transport
                     # failure escape and trigger the outer fail-open, which
                     # would return the un-redacted text.
-                    logger.info(
+                    logger.warning(
                         "output-redaction ui_message audit emit failed for %s: %s",
                         tool_name,
                         audit_err,

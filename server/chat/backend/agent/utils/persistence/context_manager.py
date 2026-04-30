@@ -42,7 +42,7 @@ def _redact_tool_messages_impl(messages, *, user_id: str, session_id: str):
                 out.append(msg)
                 continue
             latency_ms = (time.perf_counter() - t0) * 1000.0
-            for f in findings:
+            for idx, f in enumerate(findings):
                 try:
                     _emit_redaction(
                         user_id=user_id or "",
@@ -50,10 +50,13 @@ def _redact_tool_messages_impl(messages, *, user_id: str, session_id: str):
                         rule_id=f.rule_id,
                         value_hash=f.value_hash,
                         location="db_save",
-                        latency_ms=latency_ms,
+                        # Per-call scan latency only on the first finding in
+                        # the batch; remaining events carry 0 so dashboards
+                        # summing latency do not overcount by a factor of N.
+                        latency_ms=latency_ms if idx == 0 else 0.0,
                     )
                 except Exception as audit_err:
-                    logger.info("output-redaction db_save audit emit failed: %s", audit_err)
+                    logger.warning("output-redaction db_save audit emit failed: %s", audit_err)
             # Preserve every ToolMessage field (name, id, additional_kwargs,
             # response_metadata, artifact, status, ...) by copying the model
             # with only ``content`` replaced. Constructing a fresh ToolMessage
