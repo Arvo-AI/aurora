@@ -31,16 +31,18 @@
 
 ### What's New
 
-- **AI-Suggested Code Fixes** — Aurora can now generate pull requests with remediation code
-- **Infrastructure Knowledge Graph** — Memgraph-powered dependency mapping across all cloud providers
-- **Postmortem Export** — One-click export to Confluence with full timeline and root cause
-- **OVH & Scaleway Support** — New cloud connectors for European providers
+- **New Relic, OpsGenie, incident.io Connectors** — Ingest alerts and query telemetry from three more monitoring platforms
+- **Notion & SharePoint** — Export RCAs and postmortems to Notion pages or SharePoint sites
+- **Google Chat** — Receive incident notifications and interact with Aurora from Google Workspace
+- **SigmaHQ Guardrails** — Community threat detection rules (37 SigmaHQ signatures) protect the agent's command execution
+- **NeMo Input Rail** — Prompt injection detection on every turn using NVIDIA NeMo Guardrails
+- **Org-level Command Policies** — Admins can configure per-org allowlists and denylists for agent commands
 
 See the full [CHANGELOG](CHANGELOG.md) for all releases.
 
 ---
 
-Aurora is an open-source (Apache 2.0) AI-powered incident management platform for SRE teams. When a monitoring tool fires an alert, Aurora's LangGraph-orchestrated AI agents **autonomously investigate** the incident — querying infrastructure across AWS, Azure, GCP, OVH, Scaleway, and Kubernetes, correlating data from 22+ tools, and delivering a structured root cause analysis with remediation recommendations.
+Aurora is an open-source (Apache 2.0) AI-powered incident management platform for SRE teams. When a monitoring tool fires an alert, Aurora's LangGraph-orchestrated AI agents **autonomously investigate** the incident — querying infrastructure across AWS, Azure, GCP, OVH, Scaleway, and Kubernetes, correlating data from 30+ tools, and delivering a structured root cause analysis with remediation recommendations.
 
 Unlike traditional tools that automate workflows (Slack channels, paging, runbooks), Aurora automates the **investigation itself**.
 
@@ -66,7 +68,7 @@ Aurora's AI agents dynamically select from 30+ tools to investigate incidents. T
 
 ### Incident Dashboard
 
-Track all incidents in a single dashboard. Aurora ingests alerts from PagerDuty, Datadog, Grafana, and other monitoring tools via webhooks, automatically triggering background investigations.
+Track all incidents in a single dashboard. Aurora ingests alerts from PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io, and other monitoring tools via webhooks, automatically triggering background investigations.
 
 <p align="center">
   <img src=".github/assets/incidents-dashboard.png" alt="Aurora incidents dashboard showing active incidents with severity levels" width="800" />
@@ -99,7 +101,7 @@ Aurora doesn't just find the root cause — it suggests code fixes and can gener
 ### Additional Capabilities
 
 - **Knowledge Base RAG** — Weaviate-powered vector search over your runbooks, past postmortems, and documentation
-- **Multi-Cloud Native** — AWS (STS AssumeRole), Azure (Service Principal), GCP (OAuth), OVH, Scaleway, Kubernetes
+- **Multi-Cloud Native** — AWS (STS AssumeRole + IRSA), Azure (Service Principal), GCP (OAuth + Service Account), OVH, Scaleway, Cloudflare, Kubernetes
 - **Any LLM Provider** — OpenAI, Anthropic, Google, or local models via Ollama for air-gapped deployments
 - **Terraform/IaC Analysis** — Understands your infrastructure-as-code state
 - **Self-Hosted** — Docker Compose or Helm chart. HashiCorp Vault for secrets management
@@ -108,7 +110,7 @@ Aurora doesn't just find the root cause — it suggests code fixes and can gener
 ## How It Works
 
 ```text
-Alert fires (PagerDuty, Datadog, Grafana, etc.)
+Alert fires (PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io, etc.)
         │
         ▼
    Aurora receives webhook
@@ -116,9 +118,10 @@ Alert fires (PagerDuty, Datadog, Grafana, etc.)
         ▼
    AI agent selects tools (from 30+)
         │
-        ├── Queries cloud APIs (AWS, Azure, GCP)
+        ├── Queries cloud APIs (AWS, Azure, GCP, Cloudflare)
         ├── Runs CLI commands in sandboxed pods
         ├── Checks Kubernetes cluster status
+        ├── Queries logs (Splunk, Datadog, New Relic)
         ├── Searches knowledge base (RAG)
         └── Traverses infrastructure dependency graph
                 │
@@ -129,24 +132,26 @@ Alert fires (PagerDuty, Datadog, Grafana, etc.)
         ├── Impact assessment & blast radius
         ├── Remediation recommendations
         ├── Code fix suggestions (with PRs)
-        └── Postmortem exported to Confluence
+        └── Postmortem exported to Confluence/Notion
 ```
 
 ## Integrations
 
-Aurora integrates with 22+ tools across your stack:
+Aurora integrates with 30+ tools across your stack:
 
 | Category | Tools |
 |----------|-------|
-| **Monitoring** | PagerDuty, Datadog, Grafana, Netdata, Dynatrace, Coroot, ThousandEyes, BigPanda |
-| **Cloud Providers** | AWS, Azure, GCP, OVH, Scaleway |
-| **Infrastructure** | Kubernetes, Terraform, Docker |
+| **Monitoring & Alerting** | PagerDuty, Datadog, Grafana, New Relic, OpsGenie, Netdata, Dynatrace, Coroot, ThousandEyes, BigPanda, incident.io |
+| **Cloud Providers** | AWS, Azure, GCP, OVH, Scaleway, Cloudflare |
+| **Infrastructure** | Kubernetes, Terraform, Docker, Tailscale |
+| **CI/CD** | Jenkins, Spinnaker, CloudBees |
+| **Log Management** | Splunk |
 | **AI Assistants** | [MCP server](website/docs/integrations/mcp.md) for Cursor, Claude Desktop, Windsurf |
-| **Communication** | Slack |
-| **Code & Docs** | GitHub, Bitbucket, Confluence |
+| **Communication** | Slack, Google Chat |
+| **Code & Docs** | GitHub, Bitbucket, Jira, Confluence, Notion, SharePoint |
 | **Search** | Self-hosted SearXNG |
 | **Data Stores** | Memgraph (graph), Weaviate (vector), PostgreSQL |
-| **Secrets** | HashiCorp Vault |
+| **Secrets** | HashiCorp Vault, AWS Secrets Manager |
 
 ### Supported LLM Providers
 
@@ -302,7 +307,7 @@ Aurora is fully self-hosted — **your incident data never leaves your environme
 
 - All data stays on your infrastructure (Docker Compose or Kubernetes)
 - No telemetry or usage data sent to Arvo AI
-- Secrets stored in HashiCorp Vault with encryption at rest
+- Secrets stored in HashiCorp Vault or AWS Secrets Manager with encryption at rest
 - LLM API calls go directly from your infrastructure to your chosen provider
 - Use Ollama for local LLM inference to avoid LLM provider API calls (note: web search, cloud integrations, and Terraform registry still require network access)
 - RBAC enforced at both API and UI layers
