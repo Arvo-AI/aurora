@@ -21,6 +21,7 @@ from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+from utils.log_sanitizer import hash_for_log
 
 
 def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
@@ -1810,7 +1811,7 @@ Security & Compliance
                             tokens.insert(idx + 2, sa_email)
                             command = ' '.join(tokens)
                             break
-                logger.info(f"Injected impersonation flag for gsutil: {sa_email}")
+                logger.info("Injected impersonation flag for gsutil: %s", hash_for_log(sa_email))
                 # Add --quiet flag for deletion commands to avoid prompts
                 if 'delete' in command and '--quiet' not in command and '-q' not in command:
                     command += " --quiet"

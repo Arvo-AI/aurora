@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.cache.redis_client import get_redis_client
+from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,8 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
             region = selected_region if selected_region in regions else regions[0]
         else:
             region = selected_region or 'us-east-1'
-        logger.info(f"Using AWS region: {region}")
+        safe_region = hash_for_log(region)
+        logger.info("Using AWS region: %s", safe_region)
 
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
@@ -114,7 +116,7 @@ def setup_aws_credentials_cached(user_id: str, selected_region: Optional[str] = 
         key = _cache_key(user_id, access_key_id, region)
         cached = _cache_get(key)
         if cached:
-            logger.info(f"AWS setup cache HIT for user={user_id} region={region}")
+            logger.info("AWS setup cache HIT for user=%s region=%s", hash_for_log(user_id), safe_region)
             return True, region, "access_key", isolated_env
 
         # STS validation - use a botocore session with config/credentials files
