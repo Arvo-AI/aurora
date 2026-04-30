@@ -48,7 +48,7 @@ WORKDIR /app
 # Optimize Docker layer caching by copying package files and installing dependencies first
 COPY package.json bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install
+    bun install --frozen-lockfile --ignore-scripts
 
 # Copy the entire project after installing dependencies
 COPY . .
