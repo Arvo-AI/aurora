@@ -23,6 +23,7 @@ export interface SendMessageResult {
   session_id: string;
 }
 
+// Plain fetch — proxy's safe-fetch already enforces a Promise.race timeout.
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',

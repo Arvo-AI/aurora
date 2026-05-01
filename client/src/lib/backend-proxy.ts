@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
 import { env } from '@/lib/server-env';
+import { safeFetch, isSafeFetchTimeout } from '@/lib/safe-fetch';
 
 const METHODS_WITHOUT_BODY = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -102,24 +103,21 @@ export async function forwardRequest(
       ({ body, useDuplex } = await prepareBody(request, headers));
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
+    // safeFetch (Promise.race) — Bun stale-socket hang; AbortController alone
+    // is unreliable here. See safe-fetch.ts.
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await safeFetch(url, {
         method,
         headers,
         body,
         credentials: 'include',
         cache: 'no-store',
-        signal: controller.signal,
+        timeoutMs,
         ...(useDuplex ? { duplex: 'half' as const } : {}),
-      } as RequestInit);
-      clearTimeout(timeoutId);
+      } as RequestInit & { timeoutMs?: number });
     } catch (fetchErr: unknown) {
-      clearTimeout(timeoutId);
-      if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+      if (isSafeFetchTimeout(fetchErr)) {
         return NextResponse.json({ error: `Request timeout for ${errorLabel}` }, { status: 504 });
       }
       throw fetchErr;
