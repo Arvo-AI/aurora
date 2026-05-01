@@ -996,13 +996,17 @@ class Workflow:
                     reason=rail_result.reason,
                     latency_ms=rail_result.latency_ms,
                 )
+                from guardrails.input_rail import _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
+                _RAIL_USER_MESSAGES = {
+                    _BLOCKED_REASON: "Your message was blocked by our safety system. Please rephrase your request.",
+                    _FAIL_CLOSED_AUTH: "There is an issue with the AI service configuration. Please try again later.",
+                    _FAIL_CLOSED_CONNECTIVITY: "The AI service is temporarily unavailable. Please try again in a moment.",
+                }
                 # Background chats have no interactive user: hard block stays.
-                # Foreground chats: taint the session so every subsequent tool
-                # call goes through the command gate's Yes/No prompt. The user
-                # gets no special UI for this block -- it surfaces only when
-                # the agent next tries to run a tool.
-                if getattr(input_state, "is_background", False):
-                    yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
+                # Foreground chats that were genuinely blocked: taint the session
+                # so every subsequent tool call goes through the command gate.
+                if getattr(input_state, "is_background", False) or rail_result.reason != _BLOCKED_REASON:
+                    yield ("token", _RAIL_USER_MESSAGES.get(rail_result.reason, "Something went wrong. Please try again."))
                     return
                 from utils.auth.command_gate import mark_session_tainted
                 mark_session_tainted(

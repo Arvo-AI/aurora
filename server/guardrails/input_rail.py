@@ -37,6 +37,8 @@ _last_init_failure_ts: float = 0.0
 _INIT_FAILURE_BACKOFF_S = 30.0
 
 _FAIL_CLOSED_REASON = "input rail unavailable"
+_FAIL_CLOSED_AUTH = "input rail auth error"
+_FAIL_CLOSED_CONNECTIVITY = "input rail connectivity error"
 _BLOCKED_REASON = "input flagged by safety policy"
 
 
@@ -195,6 +197,24 @@ def _triggered_rail_name(result) -> str:
     return ""
 
 
+def _classify_failure(exc: Exception) -> str:
+    """Bucket a rail failure into auth / connectivity / generic."""
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (401, 403):
+        return _FAIL_CLOSED_AUTH
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return _FAIL_CLOSED_CONNECTIVITY
+    # SDK-specific types that don't subclass the builtins
+    type_name = type(exc).__qualname__
+    for parent in type(exc).__mro__:
+        name = parent.__qualname__
+        if "Auth" in name or "Permission" in name or "Forbidden" in name:
+            return _FAIL_CLOSED_AUTH
+        if "Connect" in name or "Timeout" in name:
+            return _FAIL_CLOSED_CONNECTIVITY
+    return _FAIL_CLOSED_REASON
+
+
 async def check_input(user_message: str) -> InputRailResult:
     """Run the NeMo input rail. Returns ``blocked=True`` on unsafe input.
 
@@ -216,10 +236,11 @@ async def check_input(user_message: str) -> InputRailResult:
                 "output_vars": ["triggered_input_rail"],
             },
         )
-    except Exception:
+    except Exception as exc:
         latency_ms = (time.perf_counter() - t0) * 1000
         logger.exception("[Guardrails:InputRail] Error running input rail; failing closed")
-        return InputRailResult(blocked=True, reason=_FAIL_CLOSED_REASON, latency_ms=latency_ms)
+        reason = _classify_failure(exc)
+        return InputRailResult(blocked=True, reason=reason, latency_ms=latency_ms)
 
     latency_ms = (time.perf_counter() - t0) * 1000
     triggered = _triggered_rail_name(result)
