@@ -144,7 +144,7 @@ def register():
                     from utils.auth.command_policy import seed_default_command_policy
                     seed_default_command_policy(org_id, user_id)
                 except Exception as policy_err:
-                    logging.warning(f"Failed to seed command policy for org {org_id}: {policy_err}")
+                    logging.warning("Failed to seed command policy for org %s", org_id, exc_info=policy_err)
 
                 record_audit_event(org_id, user_id, "register", "organization", org_id,
                                    {"email": email}, request)
@@ -257,13 +257,13 @@ def setup_org(user_id):
                 except Exception as casbin_err:
                     logging.warning(f"Failed to assign Casbin role for {user_id}: {casbin_err}")
 
-                logging.info(f"User {user_id} created org {org_id} ({org_name})")
-
                 try:
                     from utils.auth.command_policy import seed_default_command_policy
                     seed_default_command_policy(org_id, user_id)
                 except Exception as policy_err:
-                    logging.warning(f"Failed to seed command policy for org {org_id}: {policy_err}")
+                    logging.warning("Failed to seed command policy for org %s", org_id, exc_info=policy_err)
+
+                logging.info(f"User {user_id} created org {org_id} ({org_name})")
 
                 record_audit_event(org_id, user_id, "setup_org", "organization", org_id,
                                    {"org_name": org_name}, request)

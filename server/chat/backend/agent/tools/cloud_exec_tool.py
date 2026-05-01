@@ -1156,22 +1156,6 @@ def _cloud_exec_aws_multi_account(
             "provider": "aws",
         })
 
-    # One gate check for the fan-out (signature + org policy + LLM judge + HITL).
-    # Each per-account invocation is the same command text, so gating once up
-    # front matches the previous single-prompt UX and avoids N prompts.
-    from utils.auth.command_gate import gate_command
-    _gated = command if command.strip().startswith("aws") else f"aws {command}"
-    _gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=_gated)
-    if not _gate.allowed:
-        return json.dumps({
-            "success": False,
-            "error": _gate.block_reason,
-            "code": _gate.code,
-            "multi_account": True,
-            "command": command,
-            "provider": "aws",
-        })
-
     def _run_on_account(conn: dict) -> dict:
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
@@ -1337,7 +1321,7 @@ Security & Compliance
         # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
         # the subcommand without the provider prefix, e.g. "ecs list-clusters").
         _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud"}
+                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale"}
         prefix = _CLI_PREFIX.get(provider.lower(), "")
         gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
         from utils.auth.command_gate import gate_command

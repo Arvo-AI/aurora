@@ -18,6 +18,7 @@ org is protected from day one without any admin action.
 Fail-open on DB error: if rules cannot be fetched, commands are allowed.
 """
 
+import collections
 import logging
 import re
 import shlex
@@ -30,6 +31,7 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL = 30  # seconds
+_CACHE_MAX = 512  # max orgs in cache before LRU eviction
 
 _CacheEntry = Tuple[
     List["PolicyRule"],  # allow rules
@@ -37,7 +39,7 @@ _CacheEntry = Tuple[
     "ListStates",
     float,               # monotonic timestamp
 ]
-_cache: Dict[str, _CacheEntry] = {}
+_cache: "collections.OrderedDict[str, _CacheEntry]" = collections.OrderedDict()
 
 
 @dataclass(frozen=True)
@@ -128,10 +130,14 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
     if entry is not None:
         allow, deny, states, ts = entry
         if time.monotonic() - ts < _CACHE_TTL:
+            _cache.move_to_end(org_id)
             return allow, deny, states
 
     allow, deny, states = _fetch(org_id)
     _cache[org_id] = (allow, deny, states, time.monotonic())
+    _cache.move_to_end(org_id)
+    if len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)  # evict LRU
     return allow, deny, states
 
 
@@ -309,8 +315,16 @@ def evaluate_compound_command(
     return last_verdict
 
 
+_REDOS_RE = re.compile(r"(\(.*\+.*\)[\+\*]|(\.\*){3,}|\(\?:.*\)[\+\*]{2})")
+_PATTERN_MAX_LEN = 500
+
+
 def validate_pattern(pattern: str) -> Optional[str]:
-    """Return an error string if *pattern* is not valid regex, else None."""
+    """Return an error string if *pattern* is not a safe, valid regex, else None."""
+    if len(pattern) > _PATTERN_MAX_LEN:
+        return f"pattern too long (max {_PATTERN_MAX_LEN} chars)"
+    if _REDOS_RE.search(pattern):
+        return "pattern contains nested quantifiers that could cause ReDoS"
     try:
         re.compile(pattern)
         return None
@@ -319,7 +333,7 @@ def validate_pattern(pattern: str) -> Optional[str]:
 
 
 # Leading `VAR=value` env assignments the user didn't intend as the "command".
-_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 
 # Shell keywords / operators that mean "the first token is not a CLI name".
 # When we see one of these at position 0 (after stripping sudo / env assigns),
@@ -348,6 +362,7 @@ def derive_pattern_from_command(command: str) -> str:
 
     Examples:
         "sudo kubectl delete pod foo"            -> ^kubectl delete pod\\b
+        "sudo -u root aws ec2 terminate"         -> ^aws ec2 terminate\\b
         "KUBECONFIG=/x kubectl get pods"         -> ^kubectl get pods\\b
         "aws ec2 terminate-instances --id"       -> ^aws ec2 terminate-instances\\b
         "for i in {1..10}; do echo $i; done"     -> ^for i in \\{1\\.\\.10\\}; do echo \\$i; done$
@@ -357,8 +372,21 @@ def derive_pattern_from_command(command: str) -> str:
         tokens = shlex.split(stripped, posix=True)
     except ValueError:
         tokens = stripped.split()
-    while tokens and (tokens[0] == "sudo" or _ENV_ASSIGN_RE.match(tokens[0])):
+    # Strip leading env assignments (VAR=value) and sudo with its flags/values.
+    while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
         tokens.pop(0)
+    if tokens and tokens[0] == "sudo":
+        tokens.pop(0)
+        # Consume sudo's own flags (e.g. -u root, -E, --user=root) until we
+        # reach the actual CLI token.
+        while tokens and tokens[0].startswith("-"):
+            flag = tokens.pop(0)
+            # Flags without embedded '=' consume the next token as a value.
+            if "=" not in flag and tokens and not tokens[0].startswith("-"):
+                tokens.pop(0)
+        # Strip any remaining env assignments set after sudo (sudo VAR=val cmd).
+        while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
+            tokens.pop(0)
     if not tokens or tokens[0] in _SHELL_NON_CLI_LEADERS:
         return r"^" + re.escape(stripped) + r"$"
     parts = [tokens[0]]
@@ -803,7 +831,9 @@ def seed_default_command_policy(org_id: str, created_by: str) -> None:
     from utils.db.connection_pool import db_pool
     from utils.auth.stateless_auth import store_org_preference
 
-    tpl = get_policy_templates()[0]  # observability_only
+    tpl = next((t for t in get_policy_templates() if t["id"] == "observability_only"), None)
+    if tpl is None:
+        raise ValueError("observability_only policy template not found")
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:

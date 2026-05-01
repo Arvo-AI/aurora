@@ -233,7 +233,7 @@ export function useChatHistory(): UseChatHistoryReturn {
       // call so the user sees the prompt immediately on reload. The card is
       // driven entirely by chat_sessions.pending_turn -- history remains
       // append-only and contains no mid-turn snapshot.
-      const pending = data.pending_turn;
+      const pending = data.is_own ? data.pending_turn : null;
       const messagesWithPending: ChatMessage[] = pending && pending.confirmation_id
         ? [
             ...(cleanedMessages as ChatMessage[]),

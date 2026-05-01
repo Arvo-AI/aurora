@@ -85,7 +85,8 @@ def guardrails_approved_hash() -> Optional[str]:
 class GateDecision:
     allowed: bool
     code: str = ""           # "" on allow, otherwise POLICY_DENIED / SAFETY_BLOCKED /
-                             # SIGNATURE_MATCHED / USER_DECLINED
+                             # SIGNATURE_MATCHED / USER_DECLINED / BACKGROUND_DENIED /
+                             # TOOL_NOT_ALLOWED
     block_reason: str = ""
 
 
@@ -96,25 +97,16 @@ def _block(code: str, reason: str) -> GateDecision:
     return GateDecision(allowed=False, code=code, block_reason=reason)
 
 
-def _is_foreground() -> bool:
-    """Return True iff the current execution is a foreground (interactive) chat."""
+def _get_context() -> tuple[bool, Optional[str]]:
+    """Return (is_foreground, session_id) from the current execution state."""
     try:
         from utils.cloud.cloud_utils import get_state_context
         state = get_state_context()
         if state is None:
-            return False
-        return not bool(getattr(state, "is_background", False))
+            return False, None
+        return not bool(getattr(state, "is_background", False)), getattr(state, "session_id", None)
     except Exception:
-        return False
-
-
-def _session_id() -> Optional[str]:
-    try:
-        from utils.cloud.cloud_utils import get_state_context
-        state = get_state_context()
-        return getattr(state, "session_id", None) if state else None
-    except Exception:
-        return None
+        return False, None
 
 
 def gate_command(
@@ -141,11 +133,13 @@ def gate_command(
         return _ALLOWED
 
     token = _gate_inflight_command.set(cmd_hash)
+    approved_token = _guardrails_approved_command.set(None)
     try:
         return _gate_impl(user_id=user_id, tool_name=tool_name, command=command,
                           cmd_hash=cmd_hash)
     finally:
         _gate_inflight_command.reset(token)
+        _guardrails_approved_command.reset(approved_token)
 
 
 def gate_action(
@@ -167,14 +161,15 @@ def gate_action(
     if not user_id:
         # Preserve prior behavior of wait_for_user_confirmation helpers,
         # which required a user and otherwise denied.
-        return _block("USER_DECLINED", "Tool call not allowed by user")
+        return _block("TOOL_NOT_ALLOWED", "Tool call not allowed: no user context")
 
-    if not _is_foreground():
-        return _block("USER_DECLINED", "Tool call not allowed by user")
+    foreground, session_id = _get_context()
+    if not foreground:
+        return _block("BACKGROUND_DENIED", "Tool call not allowed in background context")
 
     decision = _prompt_user(
         user_id=user_id,
-        session_id=_session_id(),
+        session_id=session_id,
         tool_name=tool_name,
         command=summary,
         block_code="ACTION_CONFIRM",
@@ -245,8 +240,7 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     from utils.security.command_safety import evaluate_command as safety_evaluate
 
     org_id = get_org_id_for_user(user_id)
-    foreground = _is_foreground()
-    session_id = _session_id()
+    foreground, session_id = _get_context()
 
     # Evaluate all layers unconditionally so we can report the combined
     # block state to the user. The previous short-circuit (return on first
@@ -281,8 +275,10 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
         else None
     )
     layers = [l for l in (safety_layer, policy_layer) if l]
-    if not layers and tainted:
-        layers = ["session_taint"]
+    if tainted:
+        layers.append("session_taint")
+    if not layers:
+        layers = ["unknown"]
     block_layer = "+".join(layers)
 
     code = safety_code or ("POLICY_DENIED" if policy_blocked else "SESSION_TAINTED")
@@ -294,7 +290,7 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
             "organization policy: "
             + (policy_verdict.rule_description or "matched organization policy")[:200]
         )
-    if not reasons and tainted:
+    if tainted:
         reasons.append("session flagged by input safety check; approval required")
     block_reason = "Command blocked by " + "; ".join(reasons)
 

@@ -143,8 +143,8 @@ def cancel_pending_confirmations_for_session(session_id: str) -> int:
         return 0
 
     cancelled_count = 0
-    for confirmation_id, confirmation_data in _pending_confirmations.items():
-        if confirmation_data.get('result') is None:
+    for confirmation_id, confirmation_data in list(_pending_confirmations.items()):
+        if confirmation_data.get('session_id') == session_id and confirmation_data.get('result') is None:
             confirmation_data['result'] = 'cancel'
             cancelled_count += 1
             logger.info(f"Cancelled pending confirmation {confirmation_id} for session {session_id}")
@@ -217,6 +217,7 @@ def wait_for_user_confirmation_ex(
     _pending_confirmations[confirmation_id] = {
         'result': None,
         'user_id': user_id,
+        'session_id': session_id,
         'timestamp': time.time(),
     }
     # Register the waiter before sending so a fast client response can never
