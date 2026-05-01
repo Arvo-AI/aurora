@@ -1741,8 +1741,13 @@ class Workflow:
         except Exception as e:
             logger.warning("[chat_events:dual_write_failed] %s", e)
 
-    def _save_ui_messages(self, session_id: str, user_id: str, ui_messages: list, ui_state: Optional[dict] = None) -> bool:
-        """Save UI-formatted messages and UI state to the database."""
+    def _save_ui_messages(self, session_id: str, user_id: str, ui_messages: list, ui_state: Optional[dict] = None, *, emit_chat_events: bool = True) -> bool:
+        """Save UI-formatted messages and UI state to the database.
+
+        ``emit_chat_events=False`` is used by the awaiting-confirmation save —
+        the dedicated execution_confirmation chat_event handles that state and
+        re-emitting here would surface as a duplicate text segment in SSE.
+        """
         try:
             from utils.db.connection_pool import db_pool
 
@@ -1750,31 +1755,32 @@ class Workflow:
                 cursor = conn.cursor()
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[Workflow:SaveMessages]"):
                     return False
-                
+
                 # Update the messages field (UI format) and ui_state in the existing session
                 if ui_state is not None:
                     cursor.execute("""
-                        UPDATE chat_sessions 
+                        UPDATE chat_sessions
                         SET messages = %s, ui_state = %s, updated_at = %s
                         WHERE id = %s AND user_id = %s
                     """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id, user_id))
                 else:
                     # Fallback to only updating messages if no UI state provided
                     cursor.execute("""
-                        UPDATE chat_sessions 
+                        UPDATE chat_sessions
                         SET messages = %s, updated_at = %s
                         WHERE id = %s AND user_id = %s
                     """, (json.dumps(ui_messages), datetime.now(), session_id, user_id))
-                
+
                 if cursor.rowcount > 0:
                     conn.commit()
                     logger.info(f"Updated UI messages{' and state' if ui_state else ''} for session {session_id}")
-                    try:
-                        from utils.auth.stateless_auth import resolve_org_id
-                        org_id = resolve_org_id(user_id)
-                        self._emit_chat_events_for_messages(ui_messages, session_id, org_id)
-                    except Exception as e:
-                        logger.warning("[chat_events:dual_write_failed] %s", e)
+                    if emit_chat_events:
+                        try:
+                            from utils.auth.stateless_auth import resolve_org_id
+                            org_id = resolve_org_id(user_id)
+                            self._emit_chat_events_for_messages(ui_messages, session_id, org_id)
+                        except Exception as e:
+                            logger.warning("[chat_events:dual_write_failed] %s", e)
                     return True
                 else:
                     logger.warning(f"No rows updated when saving UI messages for session {session_id} (RLS or missing session)")
@@ -1822,15 +1828,33 @@ class Workflow:
                 if not isinstance(existing, list):
                     existing = []
 
+                # Strip transient awaiting-confirmation bots; real completed
+                # bot for the same tool_call comes in to_append.
+                existing = [
+                    m for m in existing
+                    if not (
+                        m.get('sender') == 'bot'
+                        and any(
+                            (tc or {}).get('status') == 'awaiting_confirmation'
+                            for tc in (m.get('toolCalls') or [])
+                        )
+                    )
+                ]
+
                 to_append = list(turn_ui_messages)
+                # Dedup leading user against any prior user with same text —
+                # checking only existing[-1] misses cases where a bot was
+                # inserted between (e.g. by the awaiting-confirmation save).
                 if (
                     to_append
                     and existing
                     and to_append[0].get('sender') == 'user'
-                    and existing[-1].get('sender') == 'user'
-                    and (existing[-1].get('text') or '') == (to_append[0].get('text') or '')
                 ):
-                    to_append = to_append[1:]
+                    leading_text = (to_append[0].get('text') or '')
+                    for prior in existing:
+                        if prior.get('sender') == 'user' and (prior.get('text') or '') == leading_text:
+                            to_append = to_append[1:]
+                            break
 
                 next_num = len(existing) + 1
                 for m in to_append:

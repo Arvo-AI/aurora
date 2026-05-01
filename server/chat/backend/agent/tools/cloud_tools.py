@@ -294,9 +294,24 @@ def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
             return
         except Exception as e:
             logger.warning("emit_event run_coroutine_threadsafe failed type=%s err=%s", event_type, e)
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return
 
-    logger.warning("emit_event dropped (no event loop) type=%s", event_type)
-    coro.close()
+    # SSE Celery sync path: no running loop, no captured request loop. Spin a
+    # short-lived loop — the caller is about to block on time.sleep anyway.
+    try:
+        asyncio.run(coro)
+        logger.info("emit_event sync-run completed type=%s", event_type)
+        return
+    except Exception as e:
+        logger.warning("emit_event sync-run failed type=%s err=%s", event_type, e)
+        try:
+            coro.close()
+        except Exception:
+            pass
 
 
 def _send_raw_envelope(envelope: Dict[str, Any]) -> None:
@@ -351,12 +366,12 @@ def send_websocket_message(message_data: Dict[str, Any], tool_name: str, fallbac
         return
     _send_raw_envelope(message_data)
 
-def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None):
+def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None, *, emit_chat_event: bool = True):
     """Emit a tool completion event through chat_events.record_event.
 
-    Public signature preserved (mcp_tools, rag_indexer_tool depend on it). The
-    body now writes a single domain event; record_event handles the WS + SSE
-    broadcast.
+    Public signature preserved (mcp_tools, rag_indexer_tool depend on it).
+    `emit_chat_event=False` skips the chat_events emit (still runs side-effects)
+    so the decorator can dedup against ToolContextCapture's emission.
     """
     try:
         # Trigger visualization update every 30s for incident RCAs (independent of emit path)
@@ -414,14 +429,20 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
         }
         if tool_input is not None:
             payload["tool_input"] = tool_input
-        _emit_event("tool_call_result", payload)
+        if emit_chat_event:
+            _emit_event("tool_call_result", payload)
     except Exception as e:
         logger.error("Error in send_tool_completion for %s: %s", tool_name, e)
 
 
-def send_tool_start(tool_name: str, input_data: Any = None, tool_call_id: Optional[str] = None):
-    """Emit a tool start event through chat_events.record_event."""
+def send_tool_start(tool_name: str, input_data: Any = None, tool_call_id: Optional[str] = None, *, emit_chat_event: bool = True):
+    """Emit a tool start event through chat_events.record_event.
+
+    `emit_chat_event=False` lets the decorator dedup against ToolContextCapture.
+    """
     try:
+        if not emit_chat_event:
+            return
         cleaned_input: Any = None
         if input_data is not None:
             try:
@@ -599,21 +620,30 @@ def with_completion_notification(func):
         signature_hash = hashlib.sha256(signature.encode()).hexdigest()[:16]
         signature_id = f"{tool_name}_{signature_hash}"
         
+        # ToolContextCapture emits tool_call_started/result under the LLM's
+        # tool_call_id; this decorator's signature_id would create a duplicate
+        # widget. Side-effects still run.
+        try:
+            _capture_for_dedup = get_tool_capture()
+        except Exception:
+            _capture_for_dedup = None
+        suppress_decorator_chat_events = _capture_for_dedup is not None
+
         # Only send start notification if no stop request
         try:
             logging.info(f"🔍 TOOL START: {tool_name} with signature_id: {signature_id}, input: {tool_input_data}")
-            send_tool_start(tool_name, input_repr, signature_id)
+            send_tool_start(tool_name, input_repr, signature_id, emit_chat_event=not suppress_decorator_chat_events)
         except Exception as start_notify_err:
             logging.warning(f"Failed to send start notification for {tool_name}: {start_notify_err}")
-        
+
         try:
             # Execute the original function
             result = func(*args, **kwargs)
-            
+
             # Only send completion notification if no stop request
             try:
                 logging.info(f"🔍 TOOL COMPLETION: {tool_name} with signature_id: {signature_id}, input: {tool_input_data}")
-                send_tool_completion(tool_name, result, "completed", signature_id, tool_input_data)
+                send_tool_completion(tool_name, result, "completed", signature_id, tool_input_data, emit_chat_event=not suppress_decorator_chat_events)
                 
                 # Handle post-completion actions (like GitHub commit flow)
                 if tool_name == "iac_tool":

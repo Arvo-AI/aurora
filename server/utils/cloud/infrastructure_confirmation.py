@@ -130,21 +130,22 @@ async def handle_websocket_confirmation_response(data: dict):
 
 def cancel_pending_confirmations_for_session(session_id: str) -> int:
     """Cancel all pending confirmations for a given session.
-    
+
     Called when user cancels from chat input to unblock waiting confirmation threads.
     Returns the number of confirmations cancelled.
     """
     if not session_id:
         return 0
-    
+
     cancelled_count = 0
     for confirmation_id, confirmation_data in _pending_confirmations.items():
-        # Only cancel if not already resolved
+        if confirmation_data.get('session_id') != session_id:
+            continue
         if confirmation_data.get('result') is None:
             confirmation_data['result'] = 'cancel'
             cancelled_count += 1
             logger.info(f"Cancelled pending confirmation {confirmation_id} for session {session_id}")
-    
+
     return cancelled_count
 
 
@@ -221,13 +222,36 @@ def wait_for_user_confirmation(
     elif session_id and user_id:
         logger.warning(f"No workflow instance available for UI message saving - skipping confirmation UI update")
     
-    # Send confirmation prompt via WebSocket
     _send_ws(payload, tool_name)
 
-    # Store the confirmation request (without asyncio.Event for simplicity)
+    try:
+        tool_call_id = None
+        from chat.backend.agent.tools.cloud_tools import get_tool_capture
+        tool_capture = get_tool_capture()
+        if tool_capture is not None and hasattr(tool_capture, 'current_tool_calls'):
+            for _, tool_info in tool_capture.current_tool_calls.items():
+                if tool_info.get('tool_name') == tool_name:
+                    tool_call_id = tool_info.get('call_id')
+                    break
+
+        sse_payload = dict(payload["data"])
+        if tool_call_id:
+            sse_payload["tool_call_id"] = tool_call_id
+
+        from chat.backend.agent.tools.cloud_tools import _emit_event
+        logger.info(
+            "[infra_confirm] emitting execution_confirmation cid=%s tool=%s tool_call_id=%s session=%s",
+            confirmation_id, tool_name, tool_call_id, session_id,
+        )
+        _emit_event("execution_confirmation", sse_payload)
+    except Exception as e:
+        logger.error(f"Failed to record execution_confirmation chat_event: {e}")
+
+    # session_id is for cancel_pending_confirmations_for_session to filter on.
     _pending_confirmations[confirmation_id] = {
         'result': None,
         'user_id': user_id,
+        'session_id': session_id,
         'timestamp': time.time()
     }
 
@@ -260,6 +284,47 @@ def wait_for_user_confirmation(
 
     logger.debug(f"WEBSOCKET: Decision for {confirmation_id}: {decision}")
     return decision == "execute"
+
+
+def _merge_confirmation_messages(existing: list, ui_messages: list, target_tool_call_id: Optional[str]) -> list:
+    """Merge the awaiting-confirmation snapshot with existing chat_sessions.messages.
+    Preserves user bubbles; updates the matching tool_call in place or appends new bots.
+    """
+    if not ui_messages:
+        return existing or []
+    if not isinstance(existing, list) or not existing:
+        return ui_messages
+
+    if target_tool_call_id:
+        for msg in existing:
+            if msg.get('sender') != 'bot':
+                continue
+            for tc in (msg.get('toolCalls') or []):
+                if tc.get('id') == target_tool_call_id:
+                    new_tc = _find_tool_call(ui_messages, target_tool_call_id)
+                    if new_tc:
+                        tc.update(new_tc)
+                    return existing
+
+    last_existing = existing[-1] if existing else None
+    new_tail = ui_messages[-1] if ui_messages else None
+    if (
+        last_existing and new_tail
+        and last_existing.get('sender') == 'bot'
+        and new_tail.get('sender') == 'bot'
+    ):
+        existing[-1] = new_tail
+        return existing
+
+    return existing + [m for m in ui_messages if m.get('sender') == 'bot']
+
+
+def _find_tool_call(ui_messages: list, tool_call_id: str) -> Optional[dict]:
+    for msg in ui_messages:
+        for tc in (msg.get('toolCalls') or []):
+            if tc.get('id') == tool_call_id:
+                return tc
+    return None
 
 
 def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_id: str, user_id: str, tool_name: str, message: str, confirmation_id: str) -> bool:
@@ -322,9 +387,30 @@ def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_
             logger.warning(f"No tool call found for {tool_name} in current tool calls")
             logger.debug(f"Available tool calls: {list(tool_capture.current_tool_calls.keys())}")
         
-        # Use workflow's _save_ui_messages method to save the updated messages
-        logger.debug(f"Saving {len(ui_messages)} UI messages")
-        return workflow_instance._save_ui_messages(session_id, user_id, ui_messages)
+        # Merge instead of overwrite — handle_immediate_save persisted the user
+        # bubble; overwriting with [bot] alone would wipe it on mid-confirm reload.
+        try:
+            from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
+            existing: list = []
+            with db_pool.get_user_connection() as conn:
+                cursor = conn.cursor()
+                if set_rls_context(cursor, conn, user_id, log_prefix="[Workflow:ConfMerge]"):
+                    cursor.execute(
+                        "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
+                        (session_id, user_id),
+                    )
+                    row = cursor.fetchone()
+                    if row and isinstance(row[0], list):
+                        existing = row[0]
+            ui_messages = _merge_confirmation_messages(existing, ui_messages, target_tool_call)
+        except Exception as e:
+            logger.warning(f"Failed to merge with existing chat_sessions.messages: {e}")
+
+        logger.debug(f"Saving {len(ui_messages)} UI messages (chat_events suppressed for confirmation pause)")
+        return workflow_instance._save_ui_messages(
+            session_id, user_id, ui_messages, emit_chat_events=False
+        )
             
     except Exception as e:
         logger.error(f"Error saving UI messages with confirmation: {e}")

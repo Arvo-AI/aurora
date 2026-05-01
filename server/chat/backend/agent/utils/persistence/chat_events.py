@@ -62,6 +62,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "assistant_finalized",
     "assistant_interrupted",
     "assistant_failed",
+    # Not in _WS_BROADCAST_EVENT_TYPES — WS uses infrastructure_confirmation._send_ws.
+    "execution_confirmation",
 })
 
 _MAX_SEQ_RETRIES = 5
