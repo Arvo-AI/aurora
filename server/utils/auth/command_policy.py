@@ -11,7 +11,10 @@ Compound shell expressions (;, &&, ||, |, subshells) are decomposed and each
 atomic command is evaluated independently. One denied sub-command blocks the
 entire expression.
 
-Default for new orgs: both lists OFF (no enforcement until configured).
+Default for new orgs: both lists enabled, seeded with the Observability Only
+template (read-only cloud/k8s/git/system commands allowed; universal deny
+rules for dangerous patterns). Seeding happens at org creation time so every
+org is protected from day one without any admin action.
 Fail-open on DB error: if rules cannot be fetched, commands are allowed.
 """
 
@@ -786,3 +789,52 @@ def get_policy_templates() -> List[dict]:
 
 def invalidate_cache(org_id: str) -> None:
     _cache.pop(org_id, None)
+
+
+def seed_default_command_policy(org_id: str, created_by: str) -> None:
+    """Insert the Observability Only template and enable both lists for a new org.
+
+    Called immediately after org creation so every org is protected from day
+    one without requiring any admin action. Uses an independent admin
+    connection (the org INSERT has already committed by the time this runs).
+    Idempotent: skips insertion if the org already has policy rows (e.g.
+    retried registration).
+    """
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import store_org_preference
+
+    tpl = get_policy_templates()[0]  # observability_only
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                # Skip if rules already exist (idempotency).
+                cur.execute(
+                    "SELECT 1 FROM org_command_policies WHERE org_id = %s LIMIT 1",
+                    (org_id,),
+                )
+                if cur.fetchone():
+                    return
+
+                cur.execute("SET myapp.current_org_id = %s", (org_id,))
+                for mode_key in ("allow", "deny"):
+                    for rule in tpl[mode_key]:
+                        cur.execute(
+                            "INSERT INTO org_command_policies "
+                            "(org_id, mode, pattern, description, priority, updated_by, source) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, 'template')",
+                            (org_id, mode_key, rule["pattern"],
+                             rule["description"], rule["priority"], created_by),
+                        )
+                store_org_preference(org_id, "command_policy_allowlist", "on", cursor=cur)
+                store_org_preference(org_id, "command_policy_denylist", "on", cursor=cur)
+                store_org_preference(org_id, "command_policy_active_template", tpl["id"], cursor=cur)
+            conn.commit()
+        logger.info(
+            "Seeded default command policy (observability_only) for new org %s", org_id
+        )
+    except Exception:
+        # Non-fatal: org was created successfully; policy can be applied
+        # manually via Settings > Security. Log and continue.
+        logger.exception(
+            "Failed to seed default command policy for org %s; org creation continues", org_id
+        )
