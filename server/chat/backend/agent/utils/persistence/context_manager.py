@@ -4,12 +4,68 @@ import asyncio
 import json
 import hashlib
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from .redis_cache import RedisCache
 from .async_save_queue import AsyncSaveQueue
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_tool_messages_impl(messages, *, user_id: str, session_id: str):
+    """Module-level Hook 2 implementation: redact ``ToolMessage.content`` and
+    emit per-finding audit events. Kept stateless so tests can exercise the
+    exact persistence path without standing up a full ``ContextManager``.
+
+    Per-message fail-open: if the redactor or audit emit raises, the original
+    message is kept and processing continues. Dropping the whole context save
+    because one message tripped the engine would defeat the entire backstop.
+    """
+    if not messages or not _guardrails_config.enabled:
+        return messages
+
+    from langchain_core.messages import ToolMessage
+
+    out = []
+    for msg in messages:
+        if not isinstance(msg, ToolMessage) or not isinstance(msg.content, str):
+            out.append(msg)
+            continue
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _redact(msg.content)
+            if not findings:
+                out.append(msg)
+                continue
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            for idx, f in enumerate(findings):
+                try:
+                    _emit_redaction(
+                        user_id=user_id or "",
+                        session_id=session_id or "",
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="db_save",
+                        # Per-call scan latency only on the first finding in
+                        # the batch; remaining events carry 0 so dashboards
+                        # summing latency do not overcount by a factor of N.
+                        latency_ms=latency_ms if idx == 0 else 0.0,
+                    )
+                except Exception as audit_err:
+                    logger.warning("output-redaction db_save audit emit failed: %s", audit_err)
+            # Preserve every ToolMessage field (name, id, additional_kwargs,
+            # response_metadata, artifact, status, ...) by copying the model
+            # with only ``content`` replaced. Constructing a fresh ToolMessage
+            # would silently drop any field LangGraph/LangChain adds later.
+            out.append(msg.model_copy(update={"content": redacted}))
+        except Exception as redact_err:
+            logger.warning("output-redaction db_save failed open for message: %s", redact_err)
+            out.append(msg)
+    return out
 
 
 class ContextManager:
@@ -111,6 +167,9 @@ class ContextManager:
             logger.info(f"Saving context for session {session_id}: {len(messages)} messages")
             
             processed_messages = self._apply_summarization(messages, tool_capture)
+            processed_messages = self._redact_tool_messages(
+                processed_messages, user_id=user_id, session_id=session_id,
+            )
             serialized_messages = self._serialize_messages(processed_messages)
             
             with db_pool.get_user_connection() as conn:
@@ -153,6 +212,21 @@ class ContextManager:
             else:
                 processed.append(msg)
         return processed
+
+    def _redact_tool_messages(self, messages, *, user_id: str, session_id: str):
+        """Output redaction (Hook 2): belt-and-suspenders pass on tool output
+        before persistence.
+
+        Hook 1 redacts at ``send_tool_completion``; this is the authoritative
+        guarantee for the DB and covers paths that bypass Hook 1 (background
+        chats, directly-constructed ToolMessages, summarization rewrites). The
+        engine is idempotent so already-redacted content is a near-no-op.
+        A non-zero rate of ``location=db_save`` audit events is an operational
+        signal that an upstream path is bypassing Hook 1.
+        """
+        return _redact_tool_messages_impl(
+            messages, user_id=user_id, session_id=session_id,
+        )
 
     def _serialize_messages(self, processed_messages):
         """Serialize messages, using cache when possible."""

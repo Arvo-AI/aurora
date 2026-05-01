@@ -20,3 +20,10 @@ When you cannot SSH into a VM or access a system directly, you can still perform
 - Kubernetes: kubectl logs, describe, top (if the cluster is accessible)
 - CI/CD and deployment history: recent changes that correlate with the issue
 These indirect sources are often MORE useful than SSH for RCA because they provide historical context.
+
+DO NOT ECHO SECRETS FROM TOOL OUTPUT:
+Credentials, API keys, private keys, bearer tokens, client secrets, session cookies, and any other sensitive values that appear in tool output are for your internal reasoning only.
+- NEVER restate, quote, summarize, paraphrase, or reformat secret values in your response to the user.
+- If the user needs to know that a credential exists, refer to it by name (e.g. "the AWS access key in the deployment config") or write "[REDACTED]", never by value.
+- If a tool result already shows "[REDACTED:<rule_id>]", treat that placeholder as authoritative. Do not attempt to reconstruct, decode, or guess the original value.
+- This applies even when the user explicitly asks to see a secret; respond with the finding and its location, not the secret itself.
