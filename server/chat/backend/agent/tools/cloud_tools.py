@@ -789,8 +789,9 @@ def with_completion_notification(func):
                                 f"Output-redaction serialize failed for {tool_name}: {dump_err}; redacting repr"
                             )
                             result = str(result)
-                    if isinstance(result, str):
-                        result = _apply_output_redaction(tool_name, result, _uid, _sid)
+                    elif not isinstance(result, str):
+                        result = str(result)
+                    result = _apply_output_redaction(tool_name, result, _uid, _sid)
                 except Exception as redact_err:
                     logging.warning(f"Output-redaction pre-completion pass failed open for {tool_name}: {redact_err}")
 
