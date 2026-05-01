@@ -72,4 +72,4 @@ To update to a newer SigmaHQ release:
 2. Filter `rules/linux/process_creation/` for `level: high` or `critical`
 3. Replace the `.yml` files in this directory
 4. Update the `VERSION` file with the new release tag
-5. Run `pytest tests/test_sigma_canary.py` to verify no false positives
+5. Run `pytest tests/architectural/test_sigma_canary.py` to verify no false positives
