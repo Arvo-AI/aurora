@@ -8,7 +8,7 @@ import logging
 import shlex
 from typing import Any, Dict, Optional
 
-from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+from utils.auth.command_gate import gate_action
 
 # Import core execution utilities
 from .iac_execution_core import (
@@ -235,21 +235,11 @@ def iac_apply(
 
         plan_summary_msg = summarize_plan(plan_result.get("stdout", ""))
 
-        from ..cloud_tools import get_state_context
-
-        state_context = get_state_context()
-        context_session_id = (
-            state_context.session_id
-            if state_context and hasattr(state_context, "session_id")
-            else None
-        )
-
-        if not wait_for_user_confirmation(
-            user_id=user_id,
-            message=plan_summary_msg,
+        if not gate_action(
+            user_id=user_id or "",
             tool_name="iac_tool",
-            session_id=context_session_id,
-        ):
+            summary=plan_summary_msg,
+        ).allowed:
             tool_capture = get_tool_capture()
             current_tool_call_id = get_current_tool_call_id(
                 tool_name="iac_tool",
@@ -541,21 +531,11 @@ def iac_destroy(
 
         plan_summary_msg = summarize_plan(destroy_plan_result.get("stdout", ""))
 
-        from ..cloud_tools import get_state_context
-
-        state_context = get_state_context()
-        context_session_id = (
-            state_context.session_id
-            if state_context and hasattr(state_context, "session_id")
-            else None
-        )
-
-        if not wait_for_user_confirmation(
-            user_id=user_id,
-            message=plan_summary_msg,
+        if not gate_action(
+            user_id=user_id or "",
             tool_name="iac_tool",
-            session_id=context_session_id,
-        ):
+            summary=plan_summary_msg,
+        ).allowed:
             tool_capture = get_tool_capture()
             current_tool_call_id = get_current_tool_call_id(
                 tool_name="iac_tool",

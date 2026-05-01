@@ -104,7 +104,8 @@ function AddRuleForm({
         <Button
           size="sm"
           className="h-6 text-xs"
-          onClick={() => { if (pattern.trim()) onAdd(pattern.trim(), desc.trim()); }}
+          disabled={!pattern.trim() || !desc.trim()}
+          onClick={() => { if (pattern.trim() && desc.trim()) onAdd(pattern.trim(), desc.trim()); }}
         >
           Add
         </Button>

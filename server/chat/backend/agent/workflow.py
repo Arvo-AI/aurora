@@ -996,8 +996,19 @@ class Workflow:
                     reason=rail_result.reason,
                     latency_ms=rail_result.latency_ms,
                 )
-                yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
-                return
+                # Background chats have no interactive user: hard block stays.
+                # Foreground chats: taint the session so every subsequent tool
+                # call goes through the command gate's Yes/No prompt. The user
+                # gets no special UI for this block -- it surfaces only when
+                # the agent next tries to run a tool.
+                if getattr(input_state, "is_background", False):
+                    yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
+                    return
+                from utils.auth.command_gate import mark_session_tainted
+                mark_session_tainted(
+                    getattr(input_state, "session_id", None),
+                    getattr(input_state, "user_id", None),
+                )
 
             # Rail passed: NOW it's safe to persist the user message.
             # Kept inside the rail gate so blocked messages never touch
