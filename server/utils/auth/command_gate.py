@@ -242,17 +242,26 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     org_id = get_org_id_for_user(user_id)
     foreground, session_id = _get_context()
 
-    # Evaluate all layers unconditionally so we can report the combined
-    # block state to the user. The previous short-circuit (return on first
-    # safety block) prevented Always from showing when the policy layer
-    # would have also fired.
-    safety_decision = safety_evaluate(
-        command, tool=tool_name, user_id=user_id, session_id=session_id,
-    )
     policy_verdict: CommandVerdict = evaluate_compound_command(org_id, command)
-
-    safety_blocked = safety_decision.blocked
     policy_blocked = not policy_verdict.allowed
+
+    # An explicit allowlist match is a trust signal from the org admin — skip
+    # the safety judge so approved patterns don't generate spurious prompts.
+    # "Policy lists are disabled" / None means default-allow, not an explicit
+    # rule hit, so we still run the safety judge in those cases.
+    explicitly_allowed = (
+        policy_verdict.allowed
+        and policy_verdict.rule_description not in (None, "Policy lists are disabled")
+    )
+    if not explicitly_allowed:
+        safety_decision = safety_evaluate(
+            command, tool=tool_name, user_id=user_id, session_id=session_id,
+        )
+        safety_blocked = safety_decision.blocked
+    else:
+        safety_decision = None
+        safety_blocked = False
+
     tainted = foreground and is_session_tainted(session_id, user_id)
 
     if not (safety_blocked or policy_blocked or tainted):
