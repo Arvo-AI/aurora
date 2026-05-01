@@ -315,15 +315,46 @@ def evaluate_compound_command(
     return last_verdict
 
 
-_REDOS_RE = re.compile(r"(\(.*\+.*\)[\+\*]|(\.\*){3,}|\(\?:.*\)[\+\*]{2})")
 _PATTERN_MAX_LEN = 500
+
+
+def _has_nested_quantifiers(pattern: str) -> bool:
+    """Character-scan heuristic for (X+)+ style ReDoS patterns.
+
+    Walks the pattern without running any regex on user data (avoids the
+    CodeQL "polynomial regex on uncontrolled input" warning). Tracks open
+    groups and flags when a quantifier follows a closing group that itself
+    contained a quantifier.
+    """
+    group_has_quant: list[bool] = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            i += 2  # skip escaped char
+            continue
+        if ch == "(":
+            group_has_quant.append(False)
+        elif ch == ")":
+            if group_has_quant:
+                had = group_has_quant.pop()
+                j = i + 1
+                # skip non-greedy modifier
+                if j < len(pattern) and pattern[j] == "?":
+                    j += 1
+                if had and j < len(pattern) and pattern[j] in "+*":
+                    return True
+        elif ch in "+*{" and group_has_quant:
+            group_has_quant[-1] = True
+        i += 1
+    return False
 
 
 def validate_pattern(pattern: str) -> Optional[str]:
     """Return an error string if *pattern* is not a safe, valid regex, else None."""
     if len(pattern) > _PATTERN_MAX_LEN:
         return f"pattern too long (max {_PATTERN_MAX_LEN} chars)"
-    if _REDOS_RE.search(pattern):
+    if _has_nested_quantifiers(pattern):
         return "pattern contains nested quantifiers that could cause ReDoS"
     try:
         re.compile(pattern)
