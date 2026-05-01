@@ -253,6 +253,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       switch (tp.state) {
         case 'output-available': status = 'completed'; break;
         case 'output-error': status = 'error'; break;
+        case 'awaiting-confirmation': status = 'awaiting_confirmation'; break;
         default: status = 'running';
       }
       return {
@@ -263,6 +264,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         error: tp.errorText ?? null,
         status,
         timestamp: new Date().toISOString(),
+        confirmation_id: tp.confirmationId,
+        confirmation_message: tp.confirmationMessage,
       };
     };
     // Negative ids flag SSE-sourced rows so the bridge can distinguish them
@@ -414,6 +417,24 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   }), [chatControl, setIsSending, toast]);
 
   const activeChatTransport = CHAT_TRANSPORT === 'sse' ? sseChatWebSocket : chatWebSocket;
+
+  // SSE Confirm/Decline → POST /api/chat/confirmations. WS mode leaves this
+  // undefined so the widget falls back to its sendRaw frame.
+  const onSseConfirm = useCallback(
+    async (confirmationId: string, decision: 'approve' | 'decline') => {
+      if (!currentSessionId) return;
+      try {
+        await chatControl.respondToConfirmation(currentSessionId, confirmationId, decision);
+      } catch (err) {
+        console.error('[ChatClient] respondToConfirmation failed:', err);
+        toast({
+          description: "Couldn't send your response. Please try again.",
+          variant: 'destructive',
+        });
+      }
+    },
+    [chatControl, currentSessionId, toast],
+  );
 
   const [rcaActive, setRcaActive] = useState(false);
 
@@ -660,6 +681,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               onUpdateMessage={onUpdateMessage}
               sessionId={currentSessionId || undefined}
               userId={userId || undefined}
+              onConfirm={CHAT_TRANSPORT === 'sse' ? onSseConfirm : undefined}
             />
         </div>
 

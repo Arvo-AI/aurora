@@ -20,7 +20,8 @@ export type ToolPartState =
   | 'input-streaming'
   | 'input-available'
   | 'output-available'
-  | 'output-error';
+  | 'output-error'
+  | 'awaiting-confirmation';
 
 export type ToolPart = {
   // AI SDK 5 convention: `tool-<TOOLNAME>`
@@ -30,6 +31,8 @@ export type ToolPart = {
   input?: unknown;
   output?: unknown;
   errorText?: string;
+  confirmationId?: string;
+  confirmationMessage?: string;
 };
 
 export type DataSubAgentPart = {
@@ -105,10 +108,10 @@ function appendToText(parts: MessagePart[], delta: string): MessagePart[] {
   return [...parts, { type: 'text', text: delta, state: 'streaming' }];
 }
 
-// `finalText` carries assistant_finalized.payload.text. When the LLM emits
-// coarse chunks (one early chunk + finalized with the full body), the chunked
-// text alone leaves the bubble truncated, so upgrade to the longer string
-// before marking done. Falls back to chunked text if finalText is absent.
+// finalText carries the LLM's first AIMessage text. In tool-using flows the
+// trailing streaming text comes from a later iteration, so only upgrade to
+// finalText when no tool part precedes it (otherwise it'd clobber post-tool
+// content with the pre-tool intro and surface as a duplicate segment).
 function finalizeStreamingText(parts: MessagePart[], finalText?: string): MessagePart[] {
   const idx = findTrailingStreaming(parts, 'text');
   if (idx < 0) {
@@ -117,8 +120,10 @@ function finalizeStreamingText(parts: MessagePart[], finalText?: string): Messag
     }
     return parts;
   }
+  const hasToolBefore = parts.slice(0, idx).some((p) => p.type.startsWith('tool-'));
   const cur = parts[idx] as TextPart;
-  const text = finalText && finalText.length > cur.text.length ? finalText : cur.text;
+  const canUpgrade = !hasToolBefore && finalText && finalText.length > cur.text.length;
+  const text = canUpgrade ? (finalText as string) : cur.text;
   return parts.with(idx, { ...cur, text, state: 'done' });
 }
 
@@ -248,6 +253,43 @@ export function reduceParts(parts: MessagePart[], evt: ChatStreamEvent): Message
       // user_message events seed a user-row's parts; consumers normally
       // create the row at send time, so this is a no-op for the live mirror.
       return parts;
+
+    case 'execution_confirmation': {
+      // Match by tool_call_id; fall back to the last tool part with the same name.
+      const explicitId = (p.tool_call_id as string) || '';
+      const toolName = (p.tool_name as string) || '';
+      const confirmationId = (p.confirmation_id as string) || '';
+      const confirmationMessage =
+        typeof p.message === 'string' ? (p.message as string) : undefined;
+      if (!confirmationId) return parts;
+
+      let idx = -1;
+      if (explicitId) {
+        idx = parts.findIndex(
+          (pp) =>
+            pp.type.startsWith('tool-') &&
+            (pp as ToolPart).toolCallId === explicitId,
+        );
+      }
+      if (idx < 0 && toolName) {
+        const expectedType = `tool-${toolName}`;
+        for (let i = parts.length - 1; i >= 0; i--) {
+          const pp = parts[i];
+          if (pp.type === expectedType) {
+            idx = i;
+            break;
+          }
+        }
+      }
+      if (idx < 0) return parts;
+      const cur = parts[idx] as ToolPart;
+      return parts.with(idx, {
+        ...cur,
+        state: 'awaiting-confirmation',
+        confirmationId,
+        confirmationMessage,
+      });
+    }
 
     default:
       return parts;

@@ -51,9 +51,11 @@ interface ToolExecutionWidgetProps {
   onToolUpdate?: (updatedTool: Partial<ToolCall>) => void
   sessionId?: string
   userId?: string
+  // SSE: POST /api/chat/confirmations. WS leaves it undefined → sendRaw fallback.
+  onConfirm?: (confirmationId: string, decision: 'approve' | 'decline') => void | Promise<void>
 }
 
-const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpdate, sessionId, userId }: ToolExecutionWidgetProps) => {
+const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpdate, sessionId, userId, onConfirm }: ToolExecutionWidgetProps) => {
   const [isTerminalFocused] = React.useState(false)
   const { theme } = useTheme()
   const [editedContent, setEditedContent] = React.useState<string | null>(null)
@@ -477,16 +479,24 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                     className="h-6 px-2 text-xs font-medium hover:bg-background"
                     onClick={() => {
                       const confirmationId = (tool as any).confirmation_id
-                      if (!confirmationId || !sendRaw || !userId) return
-                      
-                      sendRaw(JSON.stringify({
-                        type: 'confirmation_response',
-                        confirmation_id: confirmationId,
-                        decision: 'cancel',
-                        user_id: userId,
-                        session_id: sessionId,
-                      }))
-                      
+                      if (!confirmationId) return
+
+                      if (onConfirm) {
+                        Promise.resolve(onConfirm(confirmationId, 'decline')).catch((err) =>
+                          console.error('[ToolExecutionWidget] decline failed:', err),
+                        )
+                      } else if (sendRaw && userId) {
+                        sendRaw(JSON.stringify({
+                          type: 'confirmation_response',
+                          confirmation_id: confirmationId,
+                          decision: 'cancel',
+                          user_id: userId,
+                          session_id: sessionId,
+                        }))
+                      } else {
+                        return
+                      }
+
                       onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
                     }}
                   >
@@ -498,16 +508,24 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                     className="h-6 px-2 text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     onClick={() => {
                       const confirmationId = (tool as any).confirmation_id
-                      if (!confirmationId || !sendRaw || !userId) return
-                      
-                      sendRaw(JSON.stringify({
-                        type: 'confirmation_response',
-                        confirmation_id: confirmationId,
-                        decision: 'execute',
-                        user_id: userId,
-                        session_id: sessionId,
-                      }))
-                      
+                      if (!confirmationId) return
+
+                      if (onConfirm) {
+                        Promise.resolve(onConfirm(confirmationId, 'approve')).catch((err) =>
+                          console.error('[ToolExecutionWidget] approve failed:', err),
+                        )
+                      } else if (sendRaw && userId) {
+                        sendRaw(JSON.stringify({
+                          type: 'confirmation_response',
+                          confirmation_id: confirmationId,
+                          decision: 'execute',
+                          user_id: userId,
+                          session_id: sessionId,
+                        }))
+                      } else {
+                        return
+                      }
+
                       onToolUpdate?.({ status: 'running' })
                     }}
                   >

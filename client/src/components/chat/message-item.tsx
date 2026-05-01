@@ -18,9 +18,10 @@ interface MessageItemProps {
   userId?: string;
   allMessages?: Message[];
   messageIndex?: number;
+  onConfirm?: (confirmationId: string, decision: 'approve' | 'decline') => void | Promise<void>;
 }
 
-export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sessionId, userId, allMessages, messageIndex }: MessageItemProps) => {
+export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sessionId, userId, allMessages, messageIndex, onConfirm }: MessageItemProps) => {
   const [copied, setCopied] = useState(false);
 
   // Helper to sort tool calls by timestamp
@@ -136,12 +137,13 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
           {sortedToolCalls
             .filter(toolCall => toolCall.tool_name !== 'unknown' || (toolCall.input && toolCall.input !== '{}' && JSON.stringify(toolCall.input) !== '{}'))
             .map((toolCall, index) => (
-            <ToolCallWidget 
+            <ToolCallWidget
               key={toolCall.id || `tool-${index}`}
               tool={toolCall}
               sendRaw={sendRaw}
               sessionId={sessionId}
               userId={userId}
+              onConfirm={onConfirm}
               onToolUpdate={(updates) => {
                 // Update this specific tool call in the message
                 onUpdateMessage?.(message.id, (msg) => ({

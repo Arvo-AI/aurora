@@ -10,9 +10,10 @@ interface MessageListProps {
   onUpdateMessage?: (messageId: number, updater: (message: Message) => Message) => void;
   sessionId?: string;
   userId?: string;
+  onConfirm?: (confirmationId: string, decision: 'approve' | 'decline') => void | Promise<void>;
 }
 
-export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId }: MessageListProps) {
+export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId, onConfirm }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -94,6 +95,7 @@ export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, use
             userId={userId}
             allMessages={messages}
             messageIndex={index}
+            onConfirm={onConfirm}
           />
         </div>
       ))}
