@@ -177,6 +177,7 @@ async def _record_event_safe(
     payload: dict,
     agent_id: Optional[str],
     parent_agent_id: Optional[str],
+    message_id: Optional[str] = None,
 ) -> None:
     if not session_id or not org_id:
         return
@@ -189,6 +190,7 @@ async def _record_event_safe(
             payload=payload,
             agent_id=agent_id,
             parent_agent_id=parent_agent_id,
+            message_id=message_id,
         )
     except Exception as e:
         logger.warning(f"[subagent] record_event(type={type_}) failed: {e}")
@@ -597,6 +599,7 @@ async def _setup_node(state: SubAgentState) -> dict[str, Any]:
         },
         agent_id=effective_state.agent_id,
         parent_agent_id=state.parent_agent_id,
+        message_id=state.parent_message_id,
     )
 
     if state.parent_message_id and state.session_id and state.org_id:
@@ -735,6 +738,7 @@ async def _write_findings_node(state: SubAgentState) -> dict[str, Any]:
         },
         agent_id=state.agent_id,
         parent_agent_id=state.parent_agent_id,
+        message_id=state.parent_message_id,
     )
 
     if state.parent_message_id and state.session_id and state.org_id:

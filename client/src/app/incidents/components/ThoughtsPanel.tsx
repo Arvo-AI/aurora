@@ -112,10 +112,10 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   const [selectedAgentId, setSelectedAgentId] = useState<string>('main');
 
   // Fetch sub-agent runs; on error/empty -> single-tab fallback (no tab strip).
-  const { data: subAgentRuns } = useQuery<SubAgentRun[]>(
+  const { data: subAgentRuns, mutate: refetchSubAgents } = useQuery<SubAgentRun[]>(
     `incident-subagents:${incident.id}`,
     (_key, _signal) => fetchIncidentSubAgents(incident.id),
-    { staleTime: 15_000 },
+    { staleTime: 3_000 },
   );
   const subAgents = useMemo<SubAgentRun[]>(
     () => (subAgentRuns ?? []).filter((r) => r.role !== 'main'),
@@ -131,14 +131,30 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     return thoughts.filter((t) => t.agent_id === selectedAgentId);
   }, [thoughts, isMultiAgent, selectedAgentId]);
 
-  // Phase 5B: when multi-agent and SSE transport is enabled, subscribe to the
-  // chat stream for live parts[]. The 1s incident poll still feeds `thoughts`,
-  // but parts[] from SSE is the source of truth for tool calls + data parts.
-  const sseEnabled = CHAT_TRANSPORT === 'sse' && isMultiAgent && Boolean(incident.chatSessionId);
+  // SSE subscription for live parts[]. Reducer keys rows by (message_id, agent_id)
+  // and coerces null agent_id to 'main', so single-agent RCAs work the same way.
+  const sseEnabled = CHAT_TRANSPORT === 'sse' && Boolean(incident.chatSessionId);
   const { rows: sseRows } = useChatStream({
     sessionId: sseEnabled ? incident.chatSessionId ?? null : null,
     enabled: sseEnabled,
   });
+
+  // When a sub-agent appears in SSE rows that we don't yet have a tab for,
+  // refetch the run list so the per-agent tab strip catches up immediately
+  // instead of waiting for staleTime to elapse.
+  const knownAgentIds = useMemo(
+    () => new Set(subAgents.map((r) => r.agent_id)),
+    [subAgents],
+  );
+  useEffect(() => {
+    if (!sseEnabled) return;
+    for (const r of sseRows) {
+      if (r.agent_id && r.agent_id !== 'main' && !knownAgentIds.has(r.agent_id)) {
+        refetchSubAgents();
+        return;
+      }
+    }
+  }, [sseEnabled, sseRows, knownAgentIds, refetchSubAgents]);
 
   // Pick the agent-specific row for the main thoughts pane.
   const partsForSelectedAgent: MessagePart[] = useMemo(() => {
