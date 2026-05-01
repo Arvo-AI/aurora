@@ -46,7 +46,7 @@ Aurora uses S3-compatible object storage via `server/utils/storage/storage.py`. 
 
 ## New Connector Checklist
 
-Every new connector (or connector route file) **must** satisfy all of the following before merge. CI enforces RBAC via `tests/architectural/test_connector_rbac.py`.
+Every new connector (or connector route file) **must** satisfy all of the following before merge. CI enforces RBAC via `server/tests/architectural/test_connector_rbac.py`.
 
 ### RBAC (mandatory — CI-enforced)
 - [ ] Every route function decorated with `@require_permission("connectors", "read")` (GET/status) or `@require_permission("connectors", "write")` (POST/connect/disconnect)
@@ -79,7 +79,7 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 
 ### Blueprint Registration
 - [ ] Blueprint registered in `server/main_compute.py` with appropriate `url_prefix`
-- [ ] Connector directory added to `CONNECTOR_DIRS` in `tests/architectural/test_connector_rbac.py`
+- [ ] Connector directory added to `CONNECTOR_DIRS` in `server/tests/architectural/test_connector_rbac.py`
 
 ## Security Invariants
 

@@ -57,12 +57,15 @@ def fresh_pool(monkeypatch):
     monkeypatch.delenv("POSTGRES_SSLMODE", raising=False)
     monkeypatch.delenv("POSTGRES_SSLROOTCERT", raising=False)
 
+    original_instance = DatabaseConnectionPool._instance
     DatabaseConnectionPool._instance = None
     pool_factory = MagicMock(name="ThreadedConnectionPool")
     monkeypatch.setattr("psycopg2.pool.ThreadedConnectionPool", pool_factory)
 
-    yield DatabaseConnectionPool(), pool_factory
-    DatabaseConnectionPool._instance = None
+    try:
+        yield DatabaseConnectionPool(), pool_factory
+    finally:
+        DatabaseConnectionPool._instance = original_instance
 
 
 @pytest.fixture()
@@ -182,13 +185,18 @@ class TestGetConnectionCleanup:
         connection, cursor = _make_conn()
         factory.return_value.getconn.return_value = connection
 
+        saw_runtime_error = False
         with flask_app.test_request_context(
             "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"},
         ):
-            with pytest.raises(RuntimeError, match="caller-bug"):
+            try:
                 with pool.get_connection():
                     raise RuntimeError("caller-bug")
+            except RuntimeError as exc:
+                assert str(exc) == "caller-bug"
+                saw_runtime_error = True
 
+        assert saw_runtime_error
         assert _RESET_SQL in _executed_sql(cursor)
         connection.rollback.assert_called()
         factory.return_value.putconn.assert_called_once_with(connection)
