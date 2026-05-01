@@ -312,7 +312,7 @@ def process_netdata_alert(
                                     )
 
                                     # Build simple RCA prompt with Aurora Learn context injection
-                                    rca_prompt = build_netdata_rca_prompt(
+                                    rca_prompt, rail_text = build_netdata_rca_prompt(
                                         data, user_id=user_id
                                     )
 
@@ -331,6 +331,7 @@ def process_netdata_alert(
                                         incident_id=str(incident_id)
                                         if incident_id
                                         else None,
+                                        rail_text=rail_text,
                                     )
                                     
                                     # Store Celery task ID immediately for cancellation support
