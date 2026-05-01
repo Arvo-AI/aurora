@@ -36,26 +36,33 @@ def send_github_connection_toast(user_id: str) -> None:
     Used after successful IaC deployments to encourage CI/CD setup.
     """
     try:
-        from ..cloud_tools import get_websocket_context, send_websocket_message
+        from ..cloud_tools import (
+            _emit_event,
+            get_websocket_context,
+            send_websocket_message,
+        )
+
+        toast_payload = {
+            "title": "Connect GitHub for CI/CD",
+            "description": "Connect your GitHub account to Aurora to automatically push IaC changes to your repository for CI/CD workflows.",
+            "variant": "default",
+            "duration": 12000,
+            "action": {
+                "label": "Connect GitHub",
+                "onClick": "open_connectors",
+            },
+            "timestamp": str(time.time()),
+        }
 
         websocket_sender, event_loop = get_websocket_context()
         if websocket_sender and event_loop:
-            message_data = {
-                "type": "toast_notification",
-                "data": {
-                    "title": "Connect GitHub for CI/CD",
-                    "description": "Connect your GitHub account to Aurora to automatically push IaC changes to your repository for CI/CD workflows.",
-                    "variant": "default",
-                    "duration": 12000,
-                    "action": {
-                        "label": "Connect GitHub",
-                        "onClick": "open_connectors",
-                    },
-                    "timestamp": str(time.time()),
-                },
-            }
-            send_websocket_message(message_data, "toast_notification")
-            logger.info(f"Sent GitHub connection toast notification to user {user_id}")
+            send_websocket_message(
+                {"type": "toast_notification", "data": toast_payload},
+                "toast_notification",
+            )
+
+        _emit_event("toast_notification", toast_payload)
+        logger.info(f"Sent GitHub connection toast notification to user {user_id}")
     except Exception as e:
         logger.warning(f"Failed to send GitHub connection toast notification: {e}")
 

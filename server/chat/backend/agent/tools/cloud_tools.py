@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import os
 import time
+import uuid
 import shutil
 from contextlib import asynccontextmanager
 from threading import local
@@ -663,25 +664,42 @@ def with_completion_notification(func):
                             actions = result_data["post_completion_actions"]
                             if "send_github_commit_flow" in actions:
                                 github_flow = actions["send_github_commit_flow"]
-                                
+
                                 # Add delay to ensure message order
                                 time.sleep(1.0)
-                                
-                                # Then send the tool call
-                                tool_call_data = {
-                                    "type": "tool_call",
-                                    "data": {
-                                        "tool_name": "github_commit",
-                                        "status": "awaiting_confirmation",
-                                        "input": json.dumps({
-                                            "repo": github_flow.get('repo', 'user/repository'),
-                                            "commit_message": github_flow.get('commit_message', 'Apply Terraform changes'),
-                                            "branch": github_flow.get('branch', 'main')
-                                        }),
-                                        "timestamp": str(time.time())
-                                    }
+
+                                github_input = {
+                                    "repo": github_flow.get('repo', 'user/repository'),
+                                    "commit_message": github_flow.get('commit_message', 'Apply Terraform changes'),
+                                    "branch": github_flow.get('branch', 'main'),
                                 }
-                                send_websocket_message(tool_call_data, "github_commit_tool")
+                                github_tool_call_id = f"github_commit_{uuid.uuid4().hex[:8]}"
+
+                                # Dual-emit during SSE migration. The two transports
+                                # carry different envelopes (WS uses `tool_call`+
+                                # status='awaiting_confirmation' so handleToolCall
+                                # creates the row; SSE uses `tool_call_started` so
+                                # the parts reducer creates the github_commit part
+                                # that ToolExecutionWidget renders by tool_name).
+                                send_websocket_message(
+                                    {
+                                        "type": "tool_call",
+                                        "data": {
+                                            "tool_name": "github_commit",
+                                            "tool_call_id": github_tool_call_id,
+                                            "status": "awaiting_confirmation",
+                                            "input": json.dumps(github_input),
+                                            "timestamp": str(time.time()),
+                                        },
+                                    },
+                                    "github_commit_tool",
+                                )
+                                _emit_event("tool_call_started", {
+                                    "tool_name": "github_commit",
+                                    "tool_call_id": github_tool_call_id,
+                                    "input": github_input,
+                                    "status": "awaiting_confirmation",
+                                })
                                 logging.info(f"Sent GitHub commit flow for repo: {github_flow.get('repo')}")
                     except Exception as post_action_error:
                         logging.warning(f"Failed to handle post-completion actions for {tool_name}: {post_action_error}")

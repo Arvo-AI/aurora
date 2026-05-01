@@ -374,7 +374,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                     throw new Error('Failed to send commit request to backend')
                   }
                 } else {
-                  throw new Error('Unable to send commit request - no WebSocket connection')
+                  throw new Error('Unable to send commit request — no live chat connection')
                 }
               }}
               onPush={async () => {

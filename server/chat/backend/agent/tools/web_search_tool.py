@@ -584,27 +584,32 @@ class WebSearchTool:
         event_loop: Optional[Any],
         is_complete: bool = False
     ) -> None:
-        """Send status update via websocket"""
+        """Send status update via websocket + chat_events (SSE)."""
+        status = "complete" if is_complete else "in_progress"
+        status_payload = {
+            "tool": "web_search",
+            "status": status,
+            "message": message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            from .cloud_tools import _emit_event
+            _emit_event("tool_status", status_payload)
+        except Exception as e:
+            logger.warning(f"web_search _emit_event(tool_status) failed: {e}")
+
         if not websocket_sender or not event_loop:
             return
-            
+
         try:
-            status_message = {
-                "type": "tool_status",
-                "tool": "web_search",
-                "status": "complete" if is_complete else "in_progress",
-                "message": message,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            
-            # Send via websocket
+            ws_message = {"type": "tool_status", **status_payload}
             if asyncio.iscoroutinefunction(websocket_sender):
-                await websocket_sender(json.dumps(status_message))
+                await websocket_sender(json.dumps(ws_message))
             else:
-                # Handle sync websocket sender
                 event_loop.call_soon_threadsafe(
                     lambda: asyncio.create_task(
-                        websocket_sender(json.dumps(status_message))
+                        websocket_sender(json.dumps(ws_message))
                     )
                 )
         except Exception as e:

@@ -34,6 +34,7 @@ import { useChatSendHandlers } from "./useChatSendHandlers";
 import { useChatStream, type ChatRow } from '@/hooks/useChatStream';
 import { useChatControl } from '@/hooks/useChatControl';
 import { useToast } from '@/hooks/use-toast';
+import { ToastAction } from '@/components/ui/toast';
 import type { TextPart, ToolPart } from '@/lib/chat-message-parts';
 import type { ToolCall as LegacyToolCall } from '../types';
 
@@ -235,6 +236,30 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     onMetaCompleted: useCallback(() => {
       setIsSending(false);
     }, []),
+    onToast: useCallback((payload: Record<string, unknown>) => {
+      const action = payload.action as { label?: string; onClick?: string } | undefined;
+      const variant = (payload.variant as 'default' | 'destructive' | undefined) ?? 'default';
+      const duration = typeof payload.duration === 'number' ? payload.duration : undefined;
+      // The backend speaks in symbolic onClick handles (e.g. "open_connectors")
+      // because the toast envelope crosses the wire. Resolve known handles to
+      // a router.push; unknown handles fall through with no action button.
+      let toastAction: React.ReactElement<typeof ToastAction> | undefined;
+      if (action?.label && action?.onClick === 'open_connectors') {
+        const label = action.label;
+        toastAction = (
+          <ToastAction altText={label} onClick={() => router.push('/connectors')}>
+            {label}
+          </ToastAction>
+        );
+      }
+      toast({
+        title: typeof payload.title === 'string' ? payload.title : undefined,
+        description: typeof payload.description === 'string' ? payload.description : undefined,
+        variant,
+        duration,
+        ...(toastAction ? { action: toastAction } : {}),
+      });
+    }, [toast, router]),
   });
   const chatControl = useChatControl();
 
@@ -254,6 +279,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         case 'output-available': status = 'completed'; break;
         case 'output-error': status = 'error'; break;
         case 'awaiting-confirmation': status = 'awaiting_confirmation'; break;
+        case 'setting-up-environment': status = 'setting_up_environment'; break;
         default: status = 'running';
       }
       return {

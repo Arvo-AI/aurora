@@ -21,7 +21,8 @@ export type ToolPartState =
   | 'input-available'
   | 'output-available'
   | 'output-error'
-  | 'awaiting-confirmation';
+  | 'awaiting-confirmation'
+  | 'setting-up-environment';
 
 export type ToolPart = {
   // AI SDK 5 convention: `tool-<TOOLNAME>`
@@ -253,6 +254,24 @@ export function reduceParts(parts: MessagePart[], evt: ChatStreamEvent): Message
       // user_message events seed a user-row's parts; consumers normally
       // create the row at send time, so this is a no-op for the live mirror.
       return parts;
+
+    case 'tool_status': {
+      // Only `setting_up_environment` has UI today; web_search progress
+      // statuses are recorded for durability but render no-op.
+      if ((p.status as string) !== 'setting_up_environment') return parts;
+      // Mirrors the WS handler walk-back: the spinner attaches to the most
+      // recent in-flight tool call.
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const pp = parts[i];
+        if (!pp.type.startsWith('tool-')) continue;
+        const tool = pp as ToolPart;
+        if (tool.state !== 'input-streaming' && tool.state !== 'input-available') {
+          continue;
+        }
+        return parts.with(i, { ...tool, state: 'setting-up-environment' });
+      }
+      return parts;
+    }
 
     case 'execution_confirmation': {
       // Match by tool_call_id; fall back to the last tool part with the same name.

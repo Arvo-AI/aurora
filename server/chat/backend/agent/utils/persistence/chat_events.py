@@ -64,6 +64,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "assistant_failed",
     # Not in _WS_BROADCAST_EVENT_TYPES — WS uses infrastructure_confirmation._send_ws.
     "execution_confirmation",
+    # UI signals — surfaced over SSE; WS path uses send_websocket_message directly.
+    "tool_status",
+    "toast_notification",
 })
 
 _MAX_SEQ_RETRIES = 5

@@ -102,11 +102,14 @@ export default auth((req) => {
 
   const backendOrigin = process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || ''
   const wsOrigin = process.env.PUBLIC_WS_URL || process.env.NEXT_PUBLIC_WEBSOCKET_URL || ''
+  // SSE rides over the same backend origin, so only emit the WS origin (and the
+  // implicit ws:// upgrade for backendOrigin) when chat actually uses WS.
+  const isWsTransport = process.env.NEXT_PUBLIC_CHAT_TRANSPORT !== 'sse'
   const connectSrc = [
     "'self'",
     backendOrigin,
-    wsOrigin,
-    backendOrigin ? backendOrigin.replace(/^http/, 'ws') : '',
+    isWsTransport ? wsOrigin : '',
+    isWsTransport && backendOrigin ? backendOrigin.replace(/^http/, 'ws') : '',
   ].filter(Boolean).join(' ')
 
   response.headers.set('Content-Security-Policy', [
