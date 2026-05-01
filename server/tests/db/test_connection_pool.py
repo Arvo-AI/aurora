@@ -172,8 +172,8 @@ class TestGetConnectionCleanup:
         with flask_app.test_request_context(
             "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"},
         ):
-            with pool.get_connection():
-                pass
+            with pool.get_connection() as conn:
+                assert conn is connection
 
         assert _RESET_SQL in _executed_sql(cursor)
         connection.commit.assert_called()
@@ -207,8 +207,8 @@ class TestGetConnectionCleanup:
         connection, cursor = _make_conn()
         factory.return_value.getconn.return_value = connection
 
-        with pool.get_connection():
-            pass
+        with pool.get_connection() as conn:
+            assert conn is connection
 
         assert _RESET_SQL in _executed_sql(cursor)
         factory.return_value.putconn.assert_called_once_with(connection)
@@ -223,8 +223,8 @@ class TestGetConnectionCleanup:
         with flask_app.test_request_context(
             "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"},
         ):
-            with pool.get_connection():
-                pass
+            with pool.get_connection() as conn:
+                assert conn is connection
 
         assert _RESET_SQL in _executed_sql(cursor)
         factory.return_value.putconn.assert_called_once_with(connection)
@@ -236,8 +236,8 @@ class TestGetConnectionCleanup:
         factory.return_value.getconn.return_value = connection
         factory.return_value.putconn.side_effect = Exception("pool down")
 
-        with pool.get_connection():
-            pass
+        with pool.get_connection() as conn:
+            assert conn is connection
 
         factory.return_value.putconn.assert_called_once_with(connection)
 
