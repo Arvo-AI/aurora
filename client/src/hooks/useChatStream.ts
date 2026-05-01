@@ -229,9 +229,11 @@ export interface UseChatStreamOptions {
   onMetaCompleted?: () => void;
   onMetaResumed?: () => void;
   // Side-channel for transient UI signals that don't belong on a message
-  // (e.g. toast_notification). Fires per matching event; the parts reducer
-  // does not observe these.
+  // (e.g. toast_notification, usage_update, usage_final). Fires per matching
+  // event; the parts reducer does not observe these.
   onToast?: (payload: Record<string, unknown>) => void;
+  onUsageUpdate?: (payload: Record<string, unknown>) => void;
+  onUsageFinal?: (payload: Record<string, unknown>) => void;
 }
 
 export interface UseChatStreamResult {
@@ -257,6 +259,8 @@ export function useChatStream({
   onMetaCompleted,
   onMetaResumed,
   onToast,
+  onUsageUpdate,
+  onUsageFinal,
 }: UseChatStreamOptions): UseChatStreamResult {
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const [connected, setConnected] = useState(false);
@@ -265,11 +269,15 @@ export function useChatStream({
   const onCompletedRef = useRef(onMetaCompleted);
   const onResumedRef = useRef(onMetaResumed);
   const onToastRef = useRef(onToast);
+  const onUsageUpdateRef = useRef(onUsageUpdate);
+  const onUsageFinalRef = useRef(onUsageFinal);
   useEffect(() => {
     onCompletedRef.current = onMetaCompleted;
     onResumedRef.current = onMetaResumed;
     onToastRef.current = onToast;
-  }, [onMetaCompleted, onMetaResumed, onToast]);
+    onUsageUpdateRef.current = onUsageUpdate;
+    onUsageFinalRef.current = onUsageFinal;
+  }, [onMetaCompleted, onMetaResumed, onToast, onUsageUpdate, onUsageFinal]);
 
   // Track lastSeq via ref so reconnect logic always reads the latest.
   const lastSeqRef = useRef<number>(0);
@@ -403,15 +411,21 @@ export function useChatStream({
         seq: Number.isFinite(seqFromId) ? seqFromId : parsed.seq,
         type: parsed.type ?? evType,
       };
-      // Toasts are transient UI signals — fire and skip dispatch so they
-      // don't create empty assistant rows. We still advance lastSeqRef
-      // (mirroring the meta:completed branch) so a reconnect with
-      // Last-Event-ID doesn't redeliver the toast from the durable stream.
-      if (evt.type === 'toast_notification') {
+      // Transient signals — fire side-channel, skip parts dispatch (they don't
+      // belong on a message). Advance lastSeqRef so a reconnect with
+      // Last-Event-ID doesn't redeliver them from the durable stream.
+      if (
+        evt.type === 'toast_notification' ||
+        evt.type === 'usage_update' ||
+        evt.type === 'usage_final'
+      ) {
         if (Number.isFinite(seqFromId)) {
           lastSeqRef.current = Math.max(lastSeqRef.current, seqFromId);
         }
-        onToastRef.current?.(evt.payload || {});
+        const payload = evt.payload || {};
+        if (evt.type === 'toast_notification') onToastRef.current?.(payload);
+        else if (evt.type === 'usage_update') onUsageUpdateRef.current?.(payload);
+        else onUsageFinalRef.current?.(payload);
         return;
       }
       dispatch({ kind: 'event', evt });

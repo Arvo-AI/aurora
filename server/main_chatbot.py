@@ -434,6 +434,24 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
             except Exception as e:
                 logger.warning("[chat_events:dual_write_failed] %s", e)
 
+    async def _emit_usage_event(type_: str, payload: dict) -> None:
+        # message_id pin: SSE bridge tails chat_events:{session_id}:{message_id};
+        # without the pin the redis fan-out is skipped and the meter never updates.
+        try:
+            from chat.backend.agent.utils.persistence.chat_events import record_event
+            mid = streaming_message_id[0]
+            if not session_id or session_id == 'unknown' or not org_id_for_events or not mid:
+                return
+            await record_event(
+                session_id=session_id,
+                org_id=org_id_for_events,
+                type=type_,
+                payload=payload,
+                message_id=mid,
+            )
+        except Exception as e:
+            logger.warning("[chat_events:dual_write_failed] %s", e)
+
     def save_streaming_chat_message(content: str, force: bool = False):
         """Persist incremental assistant tokens. ALWAYS emits an `assistant_chunk`
         chat_event so SSE consumers see live streaming. The legacy chat_sessions.messages
@@ -885,6 +903,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             if hasattr(state, 'session_id') and state.session_id:
                                 usage_msg["session_id"] = state.session_id
                             await send_via_appropriate_sender(usage_msg)
+                        await _emit_usage_event("usage_update", event_data)
 
                     elif event_type == "usage_final":
                         if websocket_connected:
@@ -895,6 +914,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                             if hasattr(state, 'session_id') and state.session_id:
                                 usage_msg["session_id"] = state.session_id
                             await send_via_appropriate_sender(usage_msg)
+                        await _emit_usage_event("usage_final", event_data)
                         logger.info(
                             f"[USAGE FINAL] {event_data.get('model')}: "
                             f"{event_data.get('input_tokens', 0)}+{event_data.get('output_tokens', 0)} tokens, "

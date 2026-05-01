@@ -14,7 +14,8 @@ import { useQuery } from '@/lib/query';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { useChatStream } from '@/hooks/useChatStream';
 import MessagePartsRenderer from '@/components/chat/MessagePartsRenderer';
-import { MessagePart } from '@/lib/chat-message-parts';
+import { MessagePart, TextPart } from '@/lib/chat-message-parts';
+import type { ChatRow } from '@/hooks/useChatStream';
 
 const CHAT_TRANSPORT = (process.env.NEXT_PUBLIC_CHAT_TRANSPORT === 'sse') ? 'sse' : 'ws';
 
@@ -71,6 +72,37 @@ function generateShortTitle(question: string): string {
  */
 function stripIncidentPrefix(title: string): string {
   return title.replace(/^Incident:\s*/i, '');
+}
+
+// Backend emits two user_message events per turn (chat_sse POST + workflow's
+// immediate_save_handler under a fresh message_id), so collapse same-text user
+// rows down to the first occurrence — same dedup ChatClient does.
+function rowsToChatMessages(rows: ChatRow[]): ChatMessage[] {
+  const seenUserText = new Set<string>();
+  const out: ChatMessage[] = [];
+  for (const row of rows) {
+    const text = row.parts
+      .filter((p): p is TextPart => p.type === 'text')
+      .map((p) => p.text)
+      .join('');
+    const role: 'user' | 'assistant' = row.role === 'user' ? 'user' : 'assistant';
+    const content = role === 'user' ? extractUserMessage(text) : text;
+    if (!content.trim()) continue;
+    if (role === 'user') {
+      if (seenUserText.has(content)) continue;
+      seenUserText.add(content);
+    }
+    out.push({ id: `sse-${row.firstSeq}`, role, content });
+  }
+  return out;
+}
+
+function sameMessages(a: ChatMessage[], b: ChatMessage[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].content !== b[i].content) return false;
+  }
+  return true;
 }
 
 export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true }: ThoughtsPanelProps) {
@@ -220,6 +252,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       // response arrives from the server via polling.  We keep the local user
       // messages and append/update any server-side assistant messages.
       setCurrentMessages((prev: ChatMessage[]) => {
+        // SSE drives currentMessages from the live stream; skip server-merge
+        // so a parent-incident-poll refresh doesn't clobber the streamed view.
+        if (CHAT_TRANSPORT === 'sse' && pollingSessionId === activeTab) {
+          return prev;
+        }
         if (pollingSessionId === activeTab && prev.length > 0) {
           const serverUserMessages = messages.filter((m: ChatMessage) => m.role === 'user');
           const localUserMessages = prev.filter((m: ChatMessage) => m.role === 'user');
@@ -260,17 +297,39 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     }
   }, [activeTab, chatSessions]);
 
-  // Poll for session updates when a session is in progress
+  const reconcileFinalSession = useCallback(async (sid: string, signal?: AbortSignal) => {
+    try {
+      const resp = await fetch(`/api/chat-sessions/${sid}`, { signal });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+        s.id === sid
+          ? { ...s, messages: data.messages || [], status: data.status }
+          : s
+      ));
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'AbortError')) {
+        console.error('Error reconciling session:', error);
+      }
+    } finally {
+      setPollingSessionId(null);
+      setIsLoading(false);
+      creatingSessionIds.current.delete(sid);
+    }
+  }, []);
+
+  // WS-only: SSE path uses the useChatStream subscription below.
   useEffect(() => {
     if (!pollingSessionId) return;
+    if (CHAT_TRANSPORT === 'sse') return;
 
     let isCancelled = false;
     const abortController = new AbortController();
-    const sessionIdToFetch = pollingSessionId; // Capture value to avoid stale closure
+    const sessionIdToFetch = pollingSessionId;
 
     const pollInterval = setInterval(async () => {
       if (isCancelled) return;
-      
+
       try {
         const sessionResp = await fetch(`/api/chat-sessions/${sessionIdToFetch}`, {
           signal: abortController.signal,
@@ -279,22 +338,19 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
         const sessionData = await sessionResp.json();
         if (isCancelled) return;
-        
-        // Update the session in our local state
-        setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) => 
-          s.id === sessionIdToFetch 
+
+        setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+          s.id === sessionIdToFetch
             ? { ...s, messages: sessionData.messages || [], status: sessionData.status }
             : s
         ));
 
-        // If completed or failed, stop polling and remove from creating set
         if (sessionData.status === 'completed' || sessionData.status === 'failed') {
           setPollingSessionId(null);
           setIsLoading(false);
           creatingSessionIds.current.delete(sessionIdToFetch);
         }
       } catch (error) {
-        // Only log real errors (not expected aborts or cancelled requests)
         if (!isCancelled && !(error instanceof Error && error.name === 'AbortError')) {
           console.error('Error polling session:', error);
         }
@@ -307,6 +363,30 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       clearInterval(pollInterval);
     };
   }, [pollingSessionId]);
+
+  const sseChatTabEnabled =
+    CHAT_TRANSPORT === 'sse' &&
+    Boolean(pollingSessionId) &&
+    activeTab === pollingSessionId;
+  const sseChatTabSessionId = sseChatTabEnabled ? pollingSessionId : null;
+  const { rows: chatTabRows } = useChatStream({
+    sessionId: sseChatTabSessionId,
+    enabled: sseChatTabEnabled,
+    onMetaCompleted: useCallback(() => {
+      if (sseChatTabSessionId) {
+        reconcileFinalSession(sseChatTabSessionId);
+      }
+    }, [sseChatTabSessionId, reconcileFinalSession]),
+  });
+
+  useEffect(() => {
+    if (!sseChatTabEnabled || chatTabRows.length === 0) return;
+    const sseMessages = rowsToChatMessages(chatTabRows);
+    if (sseMessages.length === 0) return;
+    // setState is on the per-token hot path; bail when nothing changed so we
+    // don't re-render the whole MessageList + MarkdownRenderer per chunk.
+    setCurrentMessages((prev) => (sameMessages(prev, sseMessages) ? prev : sseMessages));
+  }, [chatTabRows, sseChatTabEnabled]);
 
   // Handler to update active tab and persist to backend
   const handleTabChange = useCallback((tabId: string) => {

@@ -67,6 +67,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # UI signals — surfaced over SSE; WS path uses send_websocket_message directly.
     "tool_status",
     "toast_notification",
+    "usage_update",
+    "usage_final",
 })
 
 _MAX_SEQ_RETRIES = 5

@@ -236,6 +236,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     onMetaCompleted: useCallback(() => {
       setIsSending(false);
     }, []),
+    onUsageUpdate: sessionUsage.handleUsageUpdate,
+    onUsageFinal: sessionUsage.handleUsageFinal,
     onToast: useCallback((payload: Record<string, unknown>) => {
       const action = payload.action as { label?: string; onClick?: string } | undefined;
       const variant = (payload.variant as 'default' | 'destructive' | undefined) ?? 'default';
