@@ -24,6 +24,12 @@ from .service_accounts import (
     GCP_AUTH_TYPE_OAUTH,
     GCP_AUTH_TYPE_SA,
 )
+from .wif import (
+    GCP_AUTH_TYPE_WIF,
+    get_wif_access_token,
+    verify_wif_access,
+    write_credential_config_file,
+)
 from ..gcp.projects import (
     get_project_list,
 )
@@ -46,6 +52,11 @@ __all__ = [
     'get_gcp_auth_type',
     'GCP_AUTH_TYPE_OAUTH',
     'GCP_AUTH_TYPE_SA',
+    # WIF
+    'GCP_AUTH_TYPE_WIF',
+    'get_wif_access_token',
+    'verify_wif_access',
+    'write_credential_config_file',
     # Project functions
     'get_project_list',
 ]

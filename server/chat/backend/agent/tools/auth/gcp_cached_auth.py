@@ -7,9 +7,9 @@ from typing import Dict, Literal, Optional, Tuple
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.cloud.cloud_utils import get_mode_from_context
 from utils.cache.redis_client import get_redis_client
-from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA
+from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF
 
-GcpAuthMethod = Literal["impersonated", "service_account"]
+GcpAuthMethod = Literal["impersonated", "service_account", "wif"]
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,7 @@ def clear_gcp_cache_for_user(user_id: str) -> None:
             os.path.join(temp_dir, 'gcp_credentials_*.json'),
             os.path.join(temp_dir, 'gcp_sa_credentials_*.json'),
             os.path.join(temp_dir, 'gcp_sa_adc_*.json'),
+            os.path.join(temp_dir, 'gcp_wif_cred_*.json'),
         ]
         cred_files: list[str] = []
         for pattern in patterns:
@@ -185,13 +186,13 @@ def _build_gcp_env(
     project_id: Optional[str],
     sa_email: Optional[str],
     is_sa_mode: bool,
+    is_wif_mode: bool = False,
 ) -> Dict[str, str]:
     """Build an isolated GCP env dict.
 
     In SA mode, impersonation vars are NOT set: the uploaded SA IS the working
-    identity, and telling gcloud to impersonate it against itself requires a
-    non-default iam.serviceAccounts.getAccessToken binding on self -- fails in
-    the common case. The access token alone is sufficient.
+    identity.  WIF mode also skips impersonation: the federated token already
+    represents the customer's SA.
     """
     env: Dict[str, str] = {
         "PATH": os.environ.get("PATH", ""),
@@ -203,7 +204,7 @@ def _build_gcp_env(
         env["CLOUDSDK_AUTH_ACCESS_TOKEN"] = access_token
     if project_id:
         env["GOOGLE_CLOUD_PROJECT"] = project_id
-    if not is_sa_mode and sa_email:
+    if not is_sa_mode and not is_wif_mode and sa_email:
         env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
         env["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
     return env
@@ -231,13 +232,16 @@ def setup_gcp_impersonation_cached(
         if cached:
             logger.info("GCP setup cache HIT")
             cached_is_sa = cached.get("auth_type") == GCP_AUTH_TYPE_SA
+            cached_is_wif = cached.get("auth_type") == GCP_AUTH_TYPE_WIF
             isolated_env = _build_gcp_env(
                 cached.get("access_token"),
                 cached.get("project_id"),
                 cached.get("sa_email"),
                 is_sa_mode=cached_is_sa,
+                is_wif_mode=cached_is_wif,
             )
-            return True, cached.get("project_id"), ("service_account" if cached_is_sa else "impersonated"), isolated_env
+            method: GcpAuthMethod = "wif" if cached_is_wif else ("service_account" if cached_is_sa else "impersonated")
+            return True, cached.get("project_id"), method, isolated_env
 
         token_start = time.perf_counter()
         token_resp = generate_contextual_access_token(
@@ -251,9 +255,10 @@ def setup_gcp_impersonation_cached(
         project_id = token_resp["project_id"]
         sa_email = token_resp["service_account_email"]
         is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
-        auth_method: GcpAuthMethod = "service_account" if is_sa_mode else "impersonated"
+        is_wif_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_WIF
+        auth_method: GcpAuthMethod = "wif" if is_wif_mode else ("service_account" if is_sa_mode else "impersonated")
 
-        isolated_env = _build_gcp_env(access_token, project_id, sa_email, is_sa_mode=is_sa_mode)
+        isolated_env = _build_gcp_env(access_token, project_id, sa_email, is_sa_mode=is_sa_mode, is_wif_mode=is_wif_mode)
 
         try:
             _cache_set(key, {

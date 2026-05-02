@@ -4,5 +4,6 @@ from .auth import gcp_auth_bp as bp  # Main auth blueprint for backward compatib
 # Additional GCP blueprints can be imported directly
 from .projects import gcp_projects_bp
 from .billing import gcp_billing_bp
+from .wif import gcp_wif_bp
 
-__all__ = ['bp', 'gcp_projects_bp', 'gcp_billing_bp']
+__all__ = ['bp', 'gcp_projects_bp', 'gcp_billing_bp', 'gcp_wif_bp']

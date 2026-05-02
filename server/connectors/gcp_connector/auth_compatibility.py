@@ -26,6 +26,14 @@ from connectors.gcp_connector.auth.service_accounts import (
     create_local_credentials_file,
 )
 
+# WIF
+from connectors.gcp_connector.auth.wif import (
+    GCP_AUTH_TYPE_WIF,
+    get_wif_access_token,
+    verify_wif_access,
+    write_credential_config_file,
+)
+
 # GCP Projects
 from connectors.gcp_connector.gcp.projects import (
     get_project_list,

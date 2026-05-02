@@ -26,8 +26,10 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
 
   const { accounts } = useConnectedAccounts();
   const rawAuthType = (accounts.gcp as { authType?: string } | undefined)?.authType;
-  const authType: 'oauth' | 'service_account' | null =
-    rawAuthType === 'service_account' || rawAuthType === 'oauth' ? rawAuthType : null;
+  const authType: 'oauth' | 'service_account' | 'wif' | null =
+    rawAuthType === 'service_account' || rawAuthType === 'oauth' || rawAuthType === 'wif'
+      ? rawAuthType
+      : null;
 
   // Fetch user ID on mount
   useEffect(() => {
@@ -193,13 +195,25 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
 
   return (
     <div className="space-y-4">
+      {authType === 'oauth' && (
+        <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 p-3 text-sm">
+          <span className="shrink-0 text-blue-600 dark:text-blue-400">Upgrade available</span>
+          <span className="text-muted-foreground">
+            Switch to Workload Identity Federation for more reliable, keyless access.
+          </span>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
             <h3 className="text-lg font-semibold">GCP Projects</h3>
             {authType && (
               <Badge variant="secondary" className="text-xs">
-                {authType === 'service_account' ? 'Service Account' : 'OAuth'}
+                {authType === 'wif'
+                  ? 'WIF'
+                  : authType === 'service_account'
+                    ? 'Service Account'
+                    : 'OAuth'}
               </Badge>
             )}
           </div>

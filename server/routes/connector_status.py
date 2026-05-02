@@ -628,9 +628,9 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
     """GCP credential-existence check that also surfaces the auth mode
-    (OAuth vs service-account) so the frontend can label the connection.
+    (OAuth vs service-account vs WIF) so the frontend can label the connection.
     """
-    from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+    from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF, get_gcp_auth_type
 
     auth_type = get_gcp_auth_type(creds)
     response: Dict[str, Any] = {"connected": True, "authType": auth_type}
@@ -639,6 +639,10 @@ def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
             response["clientEmail"] = creds["client_email"]
         if creds.get("default_project_id"):
             response["defaultProjectId"] = creds["default_project_id"]
+    elif auth_type == GCP_AUTH_TYPE_WIF:
+        wif_config = creds.get("wif_config") or {}
+        response["clientEmail"] = wif_config.get("sa_email", creds.get("email", ""))
+        response["defaultProjectId"] = wif_config.get("project_id", creds.get("default_project_id", ""))
     return response
 
 

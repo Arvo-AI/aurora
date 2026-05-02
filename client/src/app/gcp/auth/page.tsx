@@ -10,6 +10,7 @@ import { Loader2 } from "lucide-react";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { GcpServiceAccountForm } from "@/components/connectors/GcpServiceAccountForm";
+import { GcpWifForm } from "@/components/connectors/GcpWifForm";
 
 export default function GcpAuthPage() {
   const router = useRouter();
@@ -44,7 +45,7 @@ export default function GcpAuthPage() {
     }
   };
 
-  const handleServiceAccountSuccess = () => {
+  const handleSuccess = () => {
     void fetchConnectedAccounts(true).catch(() => {});
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -74,18 +75,28 @@ export default function GcpAuthPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="oauth" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="oauth">OAuth</TabsTrigger>
+          <Tabs defaultValue="wif" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="wif">Workload Identity</TabsTrigger>
               <TabsTrigger value="service-account">Service Account</TabsTrigger>
+              <TabsTrigger value="oauth">OAuth (Legacy)</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="wif" className="mt-6">
+              <GcpWifForm onSuccess={handleSuccess} />
+            </TabsContent>
+
+            <TabsContent value="service-account" className="mt-6">
+              <GcpServiceAccountForm onSuccess={handleSuccess} />
+            </TabsContent>
 
             <TabsContent value="oauth" className="mt-6 space-y-4">
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
                   Sign in with your Google account. Aurora will use your OAuth
-                  consent to access the projects you select. Best for individual
-                  users and quick setup.
+                  consent to access the projects you select. Best for quick
+                  evaluation. For production use, Workload Identity Federation
+                  is recommended.
                 </p>
                 <p>You&apos;ll be redirected to Google to grant consent.</p>
               </div>
@@ -103,10 +114,6 @@ export default function GcpAuthPage() {
                   "Connect with Google"
                 )}
               </Button>
-            </TabsContent>
-
-            <TabsContent value="service-account" className="mt-6">
-              <GcpServiceAccountForm onSuccess={handleServiceAccountSuccess} />
             </TabsContent>
           </Tabs>
         </CardContent>

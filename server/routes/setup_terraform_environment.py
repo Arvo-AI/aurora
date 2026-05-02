@@ -216,12 +216,14 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
             from connectors.gcp_connector.auth import (
                 create_local_credentials_file,
                 GCP_AUTH_TYPE_SA,
+                GCP_AUTH_TYPE_WIF,
             )
             token_data = get_token_data(user_id, "gcp")
-            # SA mode uses service_account_json; OAuth mode uses refresh_token.
-            # create_local_credentials_file handles both.
+            # SA mode uses service_account_json; OAuth mode uses refresh_token;
+            # WIF mode uses wif_config.  create_local_credentials_file handles all three.
             has_creds = token_data and (
                 token_data.get("auth_type") == GCP_AUTH_TYPE_SA
+                or token_data.get("auth_type") == GCP_AUTH_TYPE_WIF
                 or token_data.get("refresh_token")
             )
             if has_creds:

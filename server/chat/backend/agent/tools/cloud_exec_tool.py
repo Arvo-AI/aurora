@@ -497,7 +497,8 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         sa_email = token_resp["service_account_email"]
         from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA
         is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
-        auth_method = "service_account" if is_sa_mode else "impersonated"
+        is_wif_mode = token_resp.get("auth_type") == "wif"
+        auth_method = "wif" if is_wif_mode else ("service_account" if is_sa_mode else "impersonated")
 
         # Per-user gcloud config directory so concurrent users don't race on
         # the same gcloud config/cache files and leak auth state between
@@ -530,6 +531,19 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             adc_file = _get_sa_adc_file(user_id)
             if adc_file:
                 isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = adc_file
+        elif is_wif_mode:
+            # WIF mode: write an external_account credential config file.
+            # The access token is already set above; the credential config
+            # enables gcloud/client-libraries to self-refresh via STS.
+            try:
+                from connectors.gcp_connector.auth.wif import write_credential_config_file
+                from utils.auth.token_management import get_token_data as _get_td
+                td = _get_td(user_id, "gcp")
+                if td:
+                    cred_file = write_credential_config_file(td, target_dir=cloudsdk_config_dir)
+                    isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = cred_file
+            except Exception as wif_err:
+                logger.warning("Could not write WIF credential config (error_type=%s)", type(wif_err).__name__)
         else:
             # OAuth mode: set gcloud to impersonate Aurora's per-user SA so
             # API calls run as that SA identity. SA mode skips this because

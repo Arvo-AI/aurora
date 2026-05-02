@@ -26,12 +26,18 @@ logger = logging.getLogger(__name__)
 # by the cached-auth/isolated-env setup helpers.
 GCP_AUTH_TYPE_OAUTH = "oauth"
 GCP_AUTH_TYPE_SA = "service_account"
+GCP_AUTH_TYPE_WIF = "wif"
 
 
 def get_gcp_auth_type(token_data: Optional[Dict]) -> str:
     """Return the auth-type discriminator for a stored GCP token payload."""
-    if token_data and token_data.get("auth_type") == GCP_AUTH_TYPE_SA:
+    if not token_data:
+        return GCP_AUTH_TYPE_OAUTH
+    at = token_data.get("auth_type")
+    if at == GCP_AUTH_TYPE_SA:
         return GCP_AUTH_TYPE_SA
+    if at == GCP_AUTH_TYPE_WIF:
+        return GCP_AUTH_TYPE_WIF
     return GCP_AUTH_TYPE_OAUTH
 
 
@@ -427,6 +433,11 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
     if not token_data:
         raise ValueError("No GCP token data for user")
 
+    # WIF branch: exchange Aurora's identity for a federated token.
+    if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_WIF:
+        from connectors.gcp_connector.auth.wif import get_wif_access_token
+        return get_wif_access_token(token_data, scopes, selected_project_id, mode=normalized_mode or "agent")
+
     # Service account branch: skip the per-user Aurora SA impersonation chain
     # entirely. The uploaded SA key IS the working identity, so we just refresh
     # it and return its own access token bound to the default project.
@@ -677,6 +688,11 @@ def create_local_credentials_file(token_data, project_id: str) -> str:
         str: Path to the credentials file
     """
     from connectors.gcp_connector.auth.oauth import refresh_token_if_needed, CLIENT_ID, CLIENT_SECRET, TOKEN_URL
+
+    # WIF branch: write an external_account credential config file.
+    if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_WIF:
+        from connectors.gcp_connector.auth.wif import write_credential_config_file
+        return write_credential_config_file(token_data)
 
     # Service account branch: the uploaded SA key IS already a complete
     # google-auth-compatible credentials file.
