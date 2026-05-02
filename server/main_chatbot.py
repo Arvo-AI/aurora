@@ -1178,9 +1178,8 @@ async def handle_connection(websocket) -> None:
                             row = cur.fetchone()
                     if row and row[0]:
                         _rbac_incident_id = str(row[0])
-                        from utils.auth.enforcer import get_enforcer
-                        enforcer = get_enforcer()
-                        if not enforcer.enforce(user_id, org_id, "incidents", "write"):
+                        from utils.auth.enforcer import enforce_with_reload
+                        if not enforce_with_reload(user_id, org_id, "incidents", "write"):
                             logger.warning(
                                 "RBAC denied: viewer user=%s tried to chat in incident session=%s",
                                 user_id, session_id,
