@@ -25,7 +25,16 @@ export async function safeFetch(
     }
   }
 
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Track whether OUR timer fired so an AbortError from the underlying fetch
+  // can be reclassified as a timeout (vs. a caller-cancel). Without this the
+  // Promise.race is genuinely racy — sometimes the timeout message wins,
+  // sometimes the fetch's AbortError lands first — and downstream isSafeFetchTimeout
+  // misclassifies the latter.
+  let didTimeOut = false;
+  const timer = setTimeout(() => {
+    didTimeOut = true;
+    controller.abort();
+  }, timeoutMs);
   let innerTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Strip our additions from `init` before spreading so we don't leak `timeoutMs`.
@@ -34,7 +43,14 @@ export async function safeFetch(
   void _ignoredSignal;
 
   try {
-    const fetchPromise = fetch(input, { ...rest, signal: controller.signal });
+    const fetchPromise = fetch(input, { ...rest, signal: controller.signal }).catch(
+      (err: unknown) => {
+        if (didTimeOut && err instanceof Error && err.name === 'AbortError') {
+          throw new Error(`safeFetch timeout after ${timeoutMs}ms`);
+        }
+        throw err;
+      },
+    );
     const timeoutPromise = new Promise<never>((_, reject) => {
       // Tiny offset so the AbortController fires first on well-behaved fetches;
       // this Promise.race is the hard guarantee for stuck Bun sockets.

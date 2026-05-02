@@ -96,6 +96,14 @@ export async function forwardRequest(
     if (env.INTERNAL_API_SECRET) {
       headers['X-Internal-Secret'] = env.INTERNAL_API_SECRET;
     }
+    // Bun's keepalive pool can wedge the second chat POST on a stale socket.
+    // Scoped to /api/chat/* so non-chat writes keep their connection reuse.
+    if (
+      method.toUpperCase() !== 'GET' &&
+      backendPath.startsWith('/api/chat/')
+    ) {
+      headers['Connection'] = 'close';
+    }
 
     let body: BodyInit | undefined;
     let useDuplex = false;

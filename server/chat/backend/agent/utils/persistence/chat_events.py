@@ -290,6 +290,19 @@ def _clear_active_stream_id_sync(
             conn.commit()
 
 
+def parse_active_stream_id(active: Optional[str]) -> Optional[str]:
+    """Extract message_id from a `{session_id}:{message_id}` composite key.
+    Returns None for malformed input — callers fall back to no live stream.
+    """
+    if not active:
+        return None
+    try:
+        _, message_id = active.split(":", 1)
+    except ValueError:
+        return None
+    return message_id or None
+
+
 async def get_active_stream_id(*, session_id: str, org_id: str) -> Optional[str]:
     """Read chat_sessions.active_stream_id. Returns None if NULL or on error."""
     if not session_id or not org_id:

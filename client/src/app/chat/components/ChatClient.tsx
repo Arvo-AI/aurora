@@ -38,10 +38,12 @@ import { ToastAction } from '@/components/ui/toast';
 import type { TextPart, ToolPart } from '@/lib/chat-message-parts';
 import type { ToolCall as LegacyToolCall } from '../types';
 
-// Transport gate read at module load. `sse` routes through the SSE consumer +
-// /api/chat/messages POST; anything else (default `ws`) keeps the legacy
-// WebSocket path so a misconfig falls back to the safer transport.
-const CHAT_TRANSPORT = (process.env.NEXT_PUBLIC_CHAT_TRANSPORT === 'sse') ? 'sse' : 'ws';
+// Read at runtime via window.__ENV so prebuilt Docker images respect a
+// flipped NEXT_PUBLIC_CHAT_TRANSPORT at container restart. Defaults to `ws`
+// so a misconfig falls back to the safer legacy WebSocket path.
+function resolveChatTransport(): 'sse' | 'ws' {
+  return getEnv('NEXT_PUBLIC_CHAT_TRANSPORT') === 'sse' ? 'sse' : 'ws';
+}
 
 interface ChatClientProps {
   initialSessionId?: string;
@@ -56,6 +58,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const { role } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
+  // Resolved per-render via window.__ENV → process.env so a container
+  // restart with a flipped NEXT_PUBLIC_CHAT_TRANSPORT actually takes effect.
+  const CHAT_TRANSPORT = resolveChatTransport();
   
   // Resolve initial message from prop (URL) or sessionStorage (long commands).
   // We only read sessionStorage here; removal happens after the message is sent
@@ -265,6 +270,11 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   });
   const chatControl = useChatControl();
 
+  // Live ref so the send-error catch handler can read the latest rows
+  // without re-creating the handler on every chatStream change.
+  const chatStreamRef = useRef(chatStream);
+  chatStreamRef.current = chatStream;
+
   // Bridge: when SSE is the active transport, mirror sseRows into the legacy
   // Message[] surface so existing <MessageList /> keeps rendering. Each
   // assistant row is split at tool-call boundaries into one Message per text
@@ -361,35 +371,32 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       });
     if (sseMessages.length === 0) return;
 
-    // SSE rows carry negative numeric ids; positive numeric ids are the
-    // optimistic Date.now() bubble; strings are session-loaded UUIDs. Drop
-    // the prior SSE batch, swap out any optimistic that the SSE user_message
-    // now matches, and re-append the freshly-derived rows.
+    // Three id flavors here: SSE rows have negative numeric ids (firstSeq-
+    // ordered), session-loaded history rows have string UUIDs, and the
+    // optimistic just-clicked-Send bubble has a positive Date.now() numeric
+    // id. Historical rows belong before SSE; the current-turn optimistic
+    // belongs *after* SSE (otherwise an in-flight Send for turn N visually
+    // jumps above turn N-1's assistant chunks until SSE echoes a matching
+    // user_message). Drop optimistics whose text now matches an SSE row.
     setMessages((prev) => {
-      let nonSse = prev.filter((m) => typeof m.id !== 'number' || m.id >= 0);
+      const historical: Message[] = [];
+      let optimistic: Message[] = [];
+      for (const m of prev) {
+        if (typeof m.id === 'number' && m.id < 0) continue; // drop prior SSE batch
+        if (typeof m.id !== 'number') historical.push(m);
+        else optimistic.push(m);
+      }
+      // Drop any optimistic whose text now matches an SSE-echoed user_message.
       for (const sseUser of sseMessages) {
         if (sseUser.sender !== 'user') continue;
-        let optimisticIdx = -1;
-        for (let i = nonSse.length - 1; i >= 0; i--) {
-          const m = nonSse[i];
-          if (
-            typeof m.id === 'number' &&
-            m.id > 0 &&
-            m.sender === 'user' &&
-            m.text === sseUser.text
-          ) {
-            optimisticIdx = i;
-            break;
-          }
-        }
-        if (optimisticIdx !== -1) {
-          nonSse = [
-            ...nonSse.slice(0, optimisticIdx),
-            ...nonSse.slice(optimisticIdx + 1),
-          ];
+        const idx = optimistic.findIndex(
+          (m) => m.sender === 'user' && m.text === sseUser.text,
+        );
+        if (idx !== -1) {
+          optimistic = [...optimistic.slice(0, idx), ...optimistic.slice(idx + 1)];
         }
       }
-      return [...nonSse, ...sseMessages];
+      return [...historical, ...sseMessages, ...optimistic];
     });
   }, [chatStream.rows]);
 
@@ -406,17 +413,44 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         mode: payload.mode,
         attachments: payload.attachments,
         model: payload.model,
-        provider_preference: Array.isArray(payload.provider_preference)
-          ? payload.provider_preference.join(',')
-          : payload.provider_preference,
+        // Pass the array through verbatim; chat_sse.py handles both list and
+        // string. Joining here would collapse multi-provider selections into
+        // a single mangled entry on the SSE path only.
+        provider_preference: payload.provider_preference,
         ui_state: payload.ui_state,
+        // Forward the RCA toggle so the SSE path matches WS behavior.
+        ...(payload.trigger_rca ? { trigger_rca: true } : {}),
       }).catch((err) => {
         console.error('[ChatClient] SSE sendMessage failed:', err);
-        setIsSending(false);
-        // POST failed so the SSE bridge will never see a matching
-        // user_message; drop the orphan optimistic so it doesn't strand at
-        // the top of the list while later turns get appended below.
         const failedQuery: string | undefined = payload?.query;
+        // The proxy can return 504/500 because the POST ack timed out
+        // (long tool-heavy chats), even though the backend accepted the
+        // turn and the SSE stream is delivering chunks. If the live stream
+        // already shows this turn — either an echoed user_message matching
+        // the query, or an assistant row currently streaming — leave the
+        // optimistic bubble + isSending flag in place so chunks keep rendering.
+        const rows = chatStreamRef.current?.rows ?? [];
+        const hasLiveActivity = rows.some((r) => {
+          if (r.role === 'user' && typeof failedQuery === 'string') {
+            const text = r.parts
+              .filter((p): p is TextPart => p.type === 'text')
+              .map((p) => p.text)
+              .join('');
+            if (text === failedQuery) return true;
+          }
+          return r.role === 'assistant' && r.status === 'streaming';
+        });
+        if (hasLiveActivity) {
+          toast({
+            description: 'Slow response — keeping connection open.',
+            variant: 'default',
+          });
+          return;
+        }
+        setIsSending(false);
+        // No live SSE activity for this turn, so the backend never started.
+        // Drop the orphan optimistic so it doesn't strand at the top of the
+        // list while later turns get appended below.
         if (typeof failedQuery === 'string') {
           setMessages((prev) => {
             for (let i = prev.length - 1; i >= 0; i--) {

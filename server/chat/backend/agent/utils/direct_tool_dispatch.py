@@ -146,7 +146,11 @@ async def _emit_tool_call_result(
 ) -> None:
     """Emit the SSE-visible ``tool_call_result`` chat_event for a direct tool run."""
     try:
-        from chat.backend.agent.utils.persistence.chat_events import record_event
+        from chat.backend.agent.utils.persistence.chat_events import (
+            get_active_stream_id,
+            parse_active_stream_id,
+            record_event,
+        )
         from utils.auth.stateless_auth import get_org_id_for_user
 
         # get_org_id_for_user is a sync DB lookup; offload off the event loop.
@@ -158,11 +162,16 @@ async def _emit_tool_call_result(
                 bool(org_id), bool(session_id), user_id,
             )
             return
+        # Bind to the session's active message_id so record_event's Redis
+        # publish (gated on message_id) reaches the SSE listener live;
+        # otherwise the result lands only in Postgres.
+        active = await get_active_stream_id(session_id=session_id, org_id=org_id)
         await record_event(
             session_id=session_id,
             org_id=org_id,
             type="tool_call_result",
             payload={"tool_name": tool_name, "result": result, "status": "complete"},
+            message_id=parse_active_stream_id(active),
         )
     except Exception as e:
         logger.warning("[chat_events:dual_write_failed] %s", e)

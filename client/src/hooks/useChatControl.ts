@@ -11,10 +11,17 @@ export interface SendMessageInput {
   mode?: string;
   attachments?: unknown[];
   model?: string;
-  provider_preference?: string;
+  // The Flask handler accepts both shapes; arrays preserve multi-provider
+  // selection. Joining to a comma-string here would land as a single bogus
+  // entry like ["aws,gcp"] in chat_sse.py:403-407.
+  provider_preference?: string | string[];
   selected_project_id?: string;
   direct_tool_call?: unknown;
   ui_state?: Record<string, unknown>;
+  // True when the user hit the RCA toggle before sending. The WS path picks
+  // this up via main_chatbot data.get('trigger_rca'); SSE forwards it to
+  // chat_sse.post_message which threads it into State.trigger_rca_requested.
+  trigger_rca?: boolean;
 }
 
 export interface SendMessageResult {
@@ -23,16 +30,33 @@ export interface SendMessageResult {
   session_id: string;
 }
 
-// Plain fetch — proxy's safe-fetch already enforces a Promise.race timeout.
-async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    cache: 'no-store',
-  });
+// Plain fetch with a single transparent retry on Bun's stale-keepalive hang.
+// The hang surfaces either as a client-side AbortError (when our local fetch
+// times out) or as a proxy 504 with body "Request timeout for ..." (when the
+// proxy → Flask leg wedges on a stale pooled socket). Either way, retrying
+// forces Bun to open a fresh connection and the second write succeeds. The
+// proxy adds `Connection: close` for non-GET to make this rare in practice.
+async function postJson<T>(url: string, body: unknown, retried = false): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+  } catch (err) {
+    if (!retried && (err as Error)?.name === 'AbortError') {
+      return postJson<T>(url, body, true);
+    }
+    throw err;
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (!retried && res.status === 504 && text.includes('Request timeout')) {
+      return postJson<T>(url, body, true);
+    }
     throw new Error(text || `Request failed: ${res.status}`);
   }
   if (res.status === 204) return undefined as unknown as T;

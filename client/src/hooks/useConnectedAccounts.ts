@@ -1,3 +1,4 @@
+import { useCallback, useMemo } from 'react';
 import { isOvhEnabled } from '@/lib/feature-flags';
 import { useQuery } from '@/lib/query';
 import {
@@ -24,6 +25,11 @@ const INFRA_PROVIDERS: Record<string, { name: string; icon: string }> = {
   onprem: { name: 'Instances SSH Access', icon: '/cloud-server-svgrepo-com.svg' },
 };
 
+// Stable fallbacks: a fresh `[]`/`{}` on every render cascaded new identities
+// through downstream useCallback deps and triggered Maximum-update-depth loops.
+const EMPTY_IDS: string[] = [];
+const EMPTY_ACCOUNTS: ConnectedAccountsData['accounts'] = {};
+
 /**
  * Single hook for all connected-accounts data.
  *
@@ -45,23 +51,36 @@ export function useConnectedAccounts() {
     },
   );
 
-  const providerIds = data?.providerIds ?? [];
-  const accounts = data?.accounts ?? {};
+  // Stabilize providerIds reference for downstream useCallback/useMemo deps.
+  const rawIds = data?.providerIds ?? EMPTY_IDS;
+  const providerIds = useMemo(
+    () => (rawIds === EMPTY_IDS ? EMPTY_IDS : [...rawIds]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawIds.join('|')],
+  );
 
-  const isProviderConnected = (id: string) =>
-    providerIds.includes(id.toLowerCase());
+  const accounts = data?.accounts ?? EMPTY_ACCOUNTS;
 
-  const infraProviders: ConnectedProvider[] = providerIds
-    .filter(id => {
-      if (!(id in INFRA_PROVIDERS)) return false;
-      if (id === 'ovh' && !isOvhEnabled()) return false;
-      return true;
-    })
-    .map(id => ({
-      id,
-      name: INFRA_PROVIDERS[id].name,
-      icon: INFRA_PROVIDERS[id].icon,
-    }));
+  const isProviderConnected = useCallback(
+    (id: string) => providerIds.includes(id.toLowerCase()),
+    [providerIds],
+  );
+
+  const infraProviders = useMemo<ConnectedProvider[]>(
+    () =>
+      providerIds
+        .filter(id => {
+          if (!(id in INFRA_PROVIDERS)) return false;
+          if (id === 'ovh' && !isOvhEnabled()) return false;
+          return true;
+        })
+        .map(id => ({
+          id,
+          name: INFRA_PROVIDERS[id].name,
+          icon: INFRA_PROVIDERS[id].icon,
+        })),
+    [providerIds],
+  );
 
   return {
     accounts,

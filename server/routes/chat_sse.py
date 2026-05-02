@@ -43,6 +43,7 @@ from chat.backend.agent.utils.persistence.chat_events import (
 )
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.rate_limit.chat_rate import is_allowed as chat_rate_is_allowed
 from utils.redis.redis_stream_bus import (
     cancel_channel,
     get_async_redis,
@@ -267,7 +268,15 @@ def _drive_sse(*, loop: asyncio.AbstractEventLoop, session_id: str,
     except Exception as e:
         logger.warning("[chat_sse] redis replay failed: %s", e)
         replay_entries = []
+    # Track the highest entry_id we've seen so XREAD can resume from there
+    # rather than `$`. Using `$` here would lose any event XADD'd between
+    # replay returning and XREAD being registered — including a possibly
+    # terminal assistant_finalized — leaving the SSE stuck on heartbeats.
+    replay_max_entry_id: Optional[str] = None
     for entry in replay_entries:
+        eid = entry.get("entry_id")
+        if eid:
+            replay_max_entry_id = eid
         if entry["seq"] <= last_seq or entry["type"] not in EVENT_TYPES:
             continue
         yield _format_frame(
@@ -293,7 +302,11 @@ def _drive_sse(*, loop: asyncio.AbstractEventLoop, session_id: str,
     # The Redis client is built ONCE here and reused — building per-iteration
     # cost a connect/ping/close every TAIL_BLOCK_MS for every open SSE stream.
     TAIL_BLOCK_MS = 2_000
-    cursor = "$"
+    # Resume from the last replay entry_id (XREAD returns events strictly after
+    # the cursor) so we don't drop anything XADD'd during the replay→tail gap.
+    # If the replay was empty, "0-0" makes XREAD return everything in the stream
+    # on the first call — _xread_once below filters by seq <= last_seq anyway.
+    cursor = replay_max_entry_id or "0-0"
     last_heartbeat = time.monotonic()
     from utils.redis.redis_stream_bus import get_async_redis, stream_key
     stream_redis_key = stream_key(session_id, message_id)
@@ -350,6 +363,12 @@ def _drive_sse(*, loop: asyncio.AbstractEventLoop, session_id: str,
                 cursor = entry_id
                 if entry["type"] not in EVENT_TYPES:
                     continue
+                # Belt-and-suspenders: when cursor seeded from "0-0" the first
+                # XREAD can replay entries already delivered via the DB or
+                # Redis backlog above. Skip anything <= last_seq so the client
+                # never sees duplicate parts.
+                if entry["seq"] <= last_seq:
+                    continue
                 yield _format_frame(
                     entry["type"],
                     _wire_data(
@@ -393,6 +412,14 @@ def post_message(user_id: str):
     if not org_id:
         return jsonify({"error": "no org context"}), 403
 
+    # Same Redis-backed per-user limit the WS receive loop enforces
+    # (main_chatbot.py:1106). Without this, SSE was a free path for
+    # unbounded Celery enqueue. Fail-open inside is_allowed() if Redis
+    # is unreachable.
+    if not chat_rate_is_allowed(user_id):
+        logger.warning("[chat_sse] rate limit exceeded for user")
+        return jsonify({"error": "rate_limited"}), 429
+
     message_id = str(uuid.uuid4())
     mode = body.get("mode") or "ask"
     model = body.get("model")
@@ -410,6 +437,9 @@ def post_message(user_id: str):
     selected_project_id = body.get("selected_project_id")
     attachments = body.get("attachments") or []
     ui_state = body.get("ui_state")
+    # The RCA toggle sets trigger_rca=True; main_chatbot reads the same field
+    # on the WS path. Coerce to bool so a stray "true" string doesn't slip in.
+    trigger_rca = body.get("trigger_rca") is True
 
     # Persist user_message + assistant_started so SSE has something to replay
     # immediately after this POST returns. assistant_started also stamps
@@ -479,6 +509,7 @@ def post_message(user_id: str):
             attachments=attachments,
             ui_state=ui_state,
             is_interactive=True,
+            trigger_rca=trigger_rca,
         )
     except Exception as e:
         logger.error("[chat_sse] post_message: enqueue failed: %s", e)

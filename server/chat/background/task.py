@@ -472,6 +472,7 @@ def run_background_chat(
     attachments: Optional[List[Any]] = None,
     ui_state: Optional[Dict[str, Any]] = None,
     is_interactive: bool = False,
+    trigger_rca: bool = False,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -646,6 +647,7 @@ def run_background_chat(
                     attachments=attachments,
                     ui_state=ui_state,
                     is_interactive=is_interactive,
+                    trigger_rca=trigger_rca,
                 ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
@@ -1113,6 +1115,7 @@ async def _execute_background_chat(
     attachments: Optional[List[Any]] = None,
     ui_state: Optional[Dict[str, Any]] = None,
     is_interactive: bool = False,
+    trigger_rca: bool = False,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1191,6 +1194,7 @@ async def _execute_background_chat(
             is_background=not is_interactive,
             rca_context=rca_context,
             attachments=attachments,
+            trigger_rca_requested=trigger_rca,
         )
         logger.info(
             "[BackgroundChat] Created state interactive=%s, mode=%s, model=%s, rca_context=%s",
