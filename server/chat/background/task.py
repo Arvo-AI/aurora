@@ -2077,7 +2077,7 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
     if result.state in ('FAILURE', 'REVOKED'):
         return True
     if result.state == 'PENDING' and result.result is None:
-        return True
+        return bool(last_activity and last_activity < threshold)
     if result.state == 'STARTED' and last_activity and last_activity < threshold:
         if cursor and incident_id:
             cursor.execute("""
