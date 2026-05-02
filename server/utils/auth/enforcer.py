@@ -21,7 +21,7 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 _enforcer: casbin.Enforcer | None = None
-_lock = threading.Lock()
+_lock = threading.RLock()
 _last_reload: float = 0.0
 _RELOAD_INTERVAL = 300.0
 
