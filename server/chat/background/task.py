@@ -2048,6 +2048,41 @@ def create_background_chat_session(
     
     return session_id
 
+def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
+    """Mark investigations left in 'running' state by a previous process as failed.
+
+    Intended to be called once on process startup (chatbot or worker).
+    Returns the number of incidents cleaned.
+    """
+    cleaned = 0
+    try:
+        from datetime import timedelta
+        threshold = datetime.now() - timedelta(minutes=threshold_minutes)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+                for uid, org_id in cursor.fetchall():
+                    set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]")
+                    cursor.execute("""
+                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW()
+                        WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
+                        RETURNING id
+                    """, (threshold, uid))
+                    stale_incidents = cursor.fetchall()
+                    cursor.execute("""
+                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
+                    """, (threshold, uid))
+                    conn.commit()
+                    if stale_incidents:
+                        ids = [str(r[0]) for r in stale_incidents]
+                        cleaned += len(ids)
+                        logger.info(f"[StartupCleanup] Marked {len(ids)} orphaned investigations as error for user {uid}: {ids}")
+    except Exception as e:
+        logger.error(f"[StartupCleanup] Failed to clean orphaned investigations: {e}")
+    return cleaned
+
+
 @celery_app.task(name="chat.background.cleanup_stale_sessions")
 def cleanup_stale_background_chats() -> Dict[str, Any]:
     """Cleanup background chat sessions stuck in 'in_progress' and incidents
