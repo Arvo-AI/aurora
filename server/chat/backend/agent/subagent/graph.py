@@ -484,6 +484,11 @@ async def _run_react_loop(
         except asyncio.TimeoutError:
             finalize_status = "interrupted"
             raise
+        except Exception:
+            # Any non-timeout exception means the stream did not complete cleanly;
+            # mark the message as failed so the wrong terminal event isn't emitted.
+            finalize_status = "failed"
+            raise
     finally:
         thought_buffer.flush()
         try:

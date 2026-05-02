@@ -289,7 +289,11 @@ export function useChatStream({
   const reset = useCallback(() => {
     dispatch({ kind: 'reset', lastSeq: 0 });
     if (sessionId) {
-      try { window.localStorage.removeItem(lastSeqKey(sessionId)); } catch { /* ignore */ }
+      try {
+        window.localStorage.removeItem(lastSeqKey(sessionId));
+        // Drop the touch timestamp too so GC sees a fully cleared entry.
+        window.localStorage.removeItem(lastSeqTouchKey(sessionId));
+      } catch { /* ignore */ }
     }
   }, [sessionId]);
 
@@ -419,8 +423,11 @@ export function useChatStream({
         evt.type === 'usage_update' ||
         evt.type === 'usage_final'
       ) {
-        if (Number.isFinite(seqFromId)) {
-          lastSeqRef.current = Math.max(lastSeqRef.current, seqFromId);
+        // Prefer the SSE frame's id; fall back to the seq inside the envelope
+        // so transients without a wire-level id still bump lastSeqRef.
+        const seq = Number.isFinite(seqFromId) ? seqFromId : Number(evt.seq);
+        if (Number.isFinite(seq)) {
+          lastSeqRef.current = Math.max(lastSeqRef.current, seq);
         }
         const payload = evt.payload || {};
         if (evt.type === 'toast_notification') onToastRef.current?.(payload);

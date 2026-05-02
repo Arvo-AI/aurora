@@ -131,7 +131,7 @@ class TerminalPodManager:
             # Send "setting up environment" status to frontend (WS + SSE).
             try:
                 from chat.backend.agent.tools.cloud_tools import (
-                    _emit_event,
+                    emit_event,
                     send_websocket_message,
                 )
                 status_payload = {
@@ -142,7 +142,7 @@ class TerminalPodManager:
                     "type": "tool_status",
                     "data": status_payload,
                 }, "terminal_pod_manager")
-                _emit_event("tool_status", status_payload)
+                emit_event("tool_status", status_payload)
             except Exception as e:
                 logger.debug(f"Failed to send setup status: {e}")
             

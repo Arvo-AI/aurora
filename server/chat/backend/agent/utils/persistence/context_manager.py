@@ -47,6 +47,10 @@ class ContextManager:
         """
         instance = cls._get_instance()
         if not session_id or not user_id:
+            logger.warning(
+                "[ContextManager:save] missing ids — session_id=%s user_id=%s",
+                bool(session_id), bool(user_id),
+            )
             return False
         try:
             return instance._execute_actual_save(

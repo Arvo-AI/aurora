@@ -291,7 +291,19 @@ def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
     request_loop = _capture_request_loop()
     if request_loop is not None:
         try:
-            asyncio.run_coroutine_threadsafe(coro, request_loop)
+            fut = asyncio.run_coroutine_threadsafe(coro, request_loop)
+            # Capture exceptions from the scheduled coroutine so silent failures
+            # in record_event are visible.
+            def _log_emit_event_exc(f, _t=event_type):
+                if f.cancelled():
+                    return
+                exc = f.exception()
+                if exc is not None:
+                    logger.warning(
+                        "emit_event scheduled coroutine raised type=%s err=%s",
+                        _t, exc,
+                    )
+            fut.add_done_callback(_log_emit_event_exc)
             return
         except Exception as e:
             logger.warning("emit_event run_coroutine_threadsafe failed type=%s err=%s", event_type, e)
@@ -313,6 +325,12 @@ def _emit_event(event_type: str, payload: Dict[str, Any]) -> None:
             coro.close()
         except Exception:
             pass
+
+
+# Public alias for cross-module callers (terminal_pod_manager, web_search_tool).
+# The underscore-prefixed name is preserved to avoid churn in existing internal
+# call sites; new external callers should use `emit_event`.
+emit_event = _emit_event
 
 
 def _send_raw_envelope(envelope: Dict[str, Any]) -> None:
@@ -345,7 +363,14 @@ def _send_raw_envelope(envelope: Dict[str, Any]) -> None:
     request_loop = _capture_request_loop()
     if request_loop is not None:
         try:
-            asyncio.run_coroutine_threadsafe(coro, request_loop)
+            fut = asyncio.run_coroutine_threadsafe(coro, request_loop)
+            def _log_send_raw_exc(f):
+                if f.cancelled():
+                    return
+                exc = f.exception()
+                if exc is not None:
+                    logger.warning("send_raw_envelope scheduled coroutine raised: %s", exc)
+            fut.add_done_callback(_log_send_raw_exc)
             return
         except Exception as e:
             logger.warning("send_raw_envelope run_coroutine_threadsafe failed: %s", e)

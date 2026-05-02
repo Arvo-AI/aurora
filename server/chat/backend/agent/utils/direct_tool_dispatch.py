@@ -80,12 +80,20 @@ async def dispatch_direct_tool_call(
                 error="github_commit is not available in Ask mode. Switch to Agent mode to push changes.",
                 code="READ_ONLY_MODE",
             )
+        repo = parameters.get("repo")
+        commit_message = parameters.get("commit_message")
+        if not repo or not commit_message:
+            return DirectToolOutcome(
+                status="error",
+                tool_name=tool_name,
+                error="github_commit requires non-empty 'repo' and 'commit_message'",
+            )
         try:
             from chat.backend.agent.tools.github_commit_tool import github_commit
             result = await asyncio.to_thread(
                 github_commit,
-                repo=parameters.get("repo"),
-                commit_message=parameters.get("commit_message"),
+                repo=repo,
+                commit_message=commit_message,
                 branch=parameters.get("branch", "main"),
                 push=parameters.get("push", True),
                 user_id=user_id,
@@ -141,8 +149,14 @@ async def _emit_tool_call_result(
         from chat.backend.agent.utils.persistence.chat_events import record_event
         from utils.auth.stateless_auth import get_org_id_for_user
 
-        org_id = get_org_id_for_user(user_id)
+        # get_org_id_for_user is a sync DB lookup; offload off the event loop.
+        org_id = await asyncio.to_thread(get_org_id_for_user, user_id)
         if not org_id or not session_id:
+            logger.debug(
+                "[direct_tool_dispatch] skipping tool_call_result emit "
+                "(org_id=%s session_id=%s user=%s)",
+                bool(org_id), bool(session_id), user_id,
+            )
             return
         await record_event(
             session_id=session_id,

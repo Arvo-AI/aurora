@@ -441,6 +441,12 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
             from chat.backend.agent.utils.persistence.chat_events import record_event
             mid = streaming_message_id[0]
             if not session_id or session_id == 'unknown' or not org_id_for_events or not mid:
+                # Surface the drop so missing-message-id usage events are diagnosable.
+                logger.debug(
+                    "[chat_events:usage] dropping %s (session=%s org=%s mid=%s)",
+                    type_, bool(session_id and session_id != 'unknown'),
+                    bool(org_id_for_events), bool(mid),
+                )
                 return
             await record_event(
                 session_id=session_id,

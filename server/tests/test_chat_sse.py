@@ -111,7 +111,9 @@ def test_drive_sse_replays_backlog_and_closes_on_terminal(monkeypatch):
     monkeypatch.setattr(chat_sse, "fetch_events_after", _fake_fetch)
 
     import asyncio
+    prev_loop = asyncio.get_event_loop_policy().get_event_loop() if False else None
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         frames = list(
             chat_sse._drive_sse(
@@ -122,6 +124,7 @@ def test_drive_sse_replays_backlog_and_closes_on_terminal(monkeypatch):
             )
         )
     finally:
+        asyncio.set_event_loop(prev_loop)
         loop.close()
 
     decoded = b"".join(frames).decode("utf-8")

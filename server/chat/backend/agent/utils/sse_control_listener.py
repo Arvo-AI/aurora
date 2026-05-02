@@ -176,16 +176,19 @@ async def _handle_confirmation(
         )
         return
 
-    seen.add(confirmation_id)
     resolved = resolve_confirmation(
         confirmation_id=confirmation_id,
         decision=decision,
         user_id=user_id,
         session_id=session_id,
     )
-    if not resolved:
+    if resolved:
+        # Only mark seen on success so transient failures (e.g. workflow not yet
+        # waiting on this confirmation_id) can be retried by a duplicate publish.
+        seen.add(confirmation_id)
+    else:
         logger.info(
-            "[sse_control_listener] resolve_confirmation returned False (cid=%s)",
+            "[sse_control_listener] resolve_confirmation returned False (cid=%s); not marking seen",
             confirmation_id,
         )
 

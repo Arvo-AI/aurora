@@ -1190,7 +1190,7 @@ async def _execute_background_chat(
             mode=mode,
             is_background=not is_interactive,
             rca_context=rca_context,
-            attachments=attachments or None,
+            attachments=attachments,
         )
         logger.info(
             "[BackgroundChat] Created state interactive=%s, mode=%s, model=%s, rca_context=%s",

@@ -88,7 +88,7 @@ def resolve_confirmation(
 _SSE_DECISION_MAP = {"approve": "execute", "decline": "cancel"}
 
 
-def normalize_decision(raw: str) -> Optional[str]:
+def normalize_decision(raw: Optional[str]) -> Optional[str]:
     """Map either WS or SSE decision strings onto the canonical execute/cancel
     values that ``wait_for_user_confirmation`` checks. Returns None on bad input."""
     if not raw:

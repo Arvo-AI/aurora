@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from utils.text.text_utils import clean_markdown
@@ -32,7 +33,7 @@ def _persist_row(*, incident_id: str, content: str, agent_id: Optional[str]) -> 
         "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type, agent_id) "
         "VALUES (%s, %s, %s, %s, %s)"
     )
-    params = (incident_id, datetime.now(), content, "analysis", agent_id)
+    params = (incident_id, datetime.now(timezone.utc), content, "analysis", agent_id)
     try:
         from chat.backend.agent.utils.write_batcher import (
             batching_enabled,
@@ -60,60 +61,68 @@ class IncidentThoughtAccumulator:
         self.agent_id = agent_id
         self._buf: list[str] = []
         self._last_save = time.time()
+        # Buffer mutations happen from both async streaming code and the final
+        # flush() call. The lock is cheap and prevents interleaved appends/clears
+        # under shared accumulators.
+        self._lock = threading.Lock()
 
     def push(self, content: str, *, force: bool = False) -> None:
         if not self.incident_id:
             return
-        if content:
-            self._buf.append(content)
+        with self._lock:
+            if content:
+                self._buf.append(content)
 
-        text = "".join(self._buf)
-        now = time.time()
-        elapsed = now - self._last_save
-        should_check = force or elapsed >= _PERIODIC_FLUSH_SECONDS or len(text) >= _PERIODIC_FLUSH_CHARS
-        if not should_check:
-            return
-        # On force=True we save whatever's buffered, even if it's shorter than
-        # _MIN_CHUNK_CHARS — otherwise tail-end short fragments are dropped.
-        if not force and len(text) <= _MIN_CHUNK_CHARS:
-            return
+            text = "".join(self._buf)
+            now = time.time()
+            elapsed = now - self._last_save
+            should_check = force or elapsed >= _PERIODIC_FLUSH_SECONDS or len(text) >= _PERIODIC_FLUSH_CHARS
+            if not should_check:
+                return
+            # On force=True we save whatever's buffered, even if it's shorter than
+            # _MIN_CHUNK_CHARS — otherwise tail-end short fragments are dropped.
+            if not force and len(text) <= _MIN_CHUNK_CHARS:
+                return
 
-        matches = list(_SENTENCE_BOUNDARY.finditer(text))
-        if not matches and not force:
-            return
+            matches = list(_SENTENCE_BOUNDARY.finditer(text))
+            if not matches and not force:
+                return
 
-        if force and not matches:
-            to_save, remaining = text, ""
-        else:
-            split_pos = matches[-1].end()
-            to_save = text[:split_pos].strip()
-            remaining = text[split_pos:].strip()
+            if force and not matches:
+                to_save, remaining = text, ""
+            else:
+                split_pos = matches[-1].end()
+                to_save = text[:split_pos].strip()
+                remaining = text[split_pos:].strip()
 
-        if len(to_save) <= _MIN_CHUNK_CHARS:
-            return
+            if not force and len(to_save) <= _MIN_CHUNK_CHARS:
+                return
 
-        cleaned = clean_markdown(to_save)
-        if len(cleaned) <= _MIN_CHUNK_CHARS:
-            return
+            cleaned = clean_markdown(to_save)
+            if not force and len(cleaned) <= _MIN_CHUNK_CHARS:
+                return
+            if not cleaned:
+                # Even on force, don't write an empty row.
+                return
 
-        try:
-            _persist_row(
-                incident_id=self.incident_id,
-                content=cleaned,
-                agent_id=self.agent_id,
-            )
-            logger.info(
-                "[incident_thoughts] saved %d chars for incident=%s agent=%s",
-                len(cleaned), self.incident_id, self.agent_id or "(none)",
-            )
-        except Exception as e:
-            logger.error("[incident_thoughts] save failed: %s", e)
-            return
+            try:
+                _persist_row(
+                    incident_id=self.incident_id,
+                    content=cleaned,
+                    agent_id=self.agent_id,
+                )
+                logger.info(
+                    "[incident_thoughts] saved %d chars for incident=%s agent=%s",
+                    len(cleaned), self.incident_id, self.agent_id or "(none)",
+                )
+            except Exception as e:
+                logger.error("[incident_thoughts] save failed: %s", e)
+                return
 
-        self._buf.clear()
-        if remaining:
-            self._buf.append(remaining)
-        self._last_save = now
+            self._buf.clear()
+            if remaining:
+                self._buf.append(remaining)
+            self._last_save = now
 
     def flush(self) -> None:
         self.push("", force=True)

@@ -676,10 +676,17 @@ def _start_idle_watchdog_thread() -> None:
         return
 
     # Only start once per process — Gunicorn pre-fork imports this module per worker;
-    # we want exactly one watchdog loop per worker process.
-    if getattr(_start_idle_watchdog_thread, "_started", False):
-        return
-    _start_idle_watchdog_thread._started = True  # type: ignore[attr-defined]
+    # we want exactly one watchdog loop per worker process. The check-and-set
+    # must be atomic under a lock so two simultaneous initialize_app() calls
+    # don't both spawn a thread.
+    lock = getattr(_start_idle_watchdog_thread, "_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        _start_idle_watchdog_thread._lock = lock  # type: ignore[attr-defined]
+    with lock:
+        if getattr(_start_idle_watchdog_thread, "_started", False):
+            return
+        _start_idle_watchdog_thread._started = True  # type: ignore[attr-defined]
 
     def _runner() -> None:
         try:

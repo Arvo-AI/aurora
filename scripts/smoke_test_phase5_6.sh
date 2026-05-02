@@ -277,10 +277,12 @@ section "10. Multi-agent RCA live trigger"
 TRIGGER_SCRIPT="$(dirname "$0")/trigger_multi_agent_rca.sh"
 if [[ -x "$TRIGGER_SCRIPT" ]]; then
   echo "  Running $TRIGGER_SCRIPT (best-effort, no fail on error)..."
+  # Best-effort: don't fail the whole smoke if the trigger script blips, since
+  # this section depends on a live LLM round-trip outside our control.
   if bash "$TRIGGER_SCRIPT" 2>&1 | tail -20; then
     pass "trigger_multi_agent_rca.sh ran"
   else
-    fail "trigger_multi_agent_rca.sh failed"
+    echo "  NOTE: trigger_multi_agent_rca.sh exited non-zero (continuing — best-effort)."
   fi
 else
   echo "  TODO: scripts/trigger_multi_agent_rca.sh not present yet (multi-agent agent pending)."

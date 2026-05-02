@@ -1,6 +1,7 @@
 """Orchestrator nodes: triage, plan, fan_out, synthesize_or_replan, finalize."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, Literal, Optional
@@ -1147,8 +1148,10 @@ async def finalize_node(state: MainAgentState) -> dict[str, Any]:
 
     if state.incident_id and final_text:
         try:
-            save_incident_thought(
-                incident_id=state.incident_id, content=final_text, agent_id="main"
+            # save_incident_thought is sync DB I/O — don't block the loop.
+            await asyncio.to_thread(
+                save_incident_thought,
+                incident_id=state.incident_id, content=final_text, agent_id="main",
             )
         except Exception as e:
             logger.warning("[orchestrator.finalize] incident_thoughts write failed: %s", e)

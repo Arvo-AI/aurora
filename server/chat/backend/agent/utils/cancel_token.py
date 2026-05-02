@@ -21,16 +21,21 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-from typing import Optional
+import threading
+from typing import Optional, Union
 
 logger = logging.getLogger(__name__)
 
-_cancel_token_var: contextvars.ContextVar[Optional[asyncio.Event]] = contextvars.ContextVar(
+# The ContextVar can carry either an asyncio.Event (for async callers) or a
+# threading.Event (which IS thread-safe per its API) for cross-thread access.
+CancelEvent = Union[asyncio.Event, threading.Event]
+
+_cancel_token_var: contextvars.ContextVar[Optional[CancelEvent]] = contextvars.ContextVar(
     "cancel_token", default=None
 )
 
 
-def set_cancel_token(event: Optional[asyncio.Event]) -> contextvars.Token:
+def set_cancel_token(event: Optional[CancelEvent]) -> contextvars.Token:
     """Bind ``event`` to the current context. Returns a token for ``reset_cancel_token``."""
     return _cancel_token_var.set(event)
 
@@ -45,13 +50,15 @@ def reset_cancel_token(token: contextvars.Token) -> None:
         _cancel_token_var.set(None)
 
 
-def get_cancel_token() -> Optional[asyncio.Event]:
+def get_cancel_token() -> Optional[CancelEvent]:
     """Return the current cancel token, or None if no run is active."""
     return _cancel_token_var.get()
 
 
 def is_cancelled() -> bool:
-    """Thread-safe check used inside sync tool bodies and connectors."""
+    """Read the current cancel-token's is_set(). Thread-safe ONLY when callers
+    install a threading.Event (asyncio.Event.is_set() is not documented as
+    thread-safe per Python's asyncio docs)."""
     ev = _cancel_token_var.get()
     return ev is not None and ev.is_set()
 

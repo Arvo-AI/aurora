@@ -6,13 +6,20 @@ Keyed on user_id (not WebSocket id) so the limit applies across transports
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _BUCKET_SECONDS = 60
 _KEY_PREFIX = "chat:rate"
+
+
+def _safe_user_token(user_id: str) -> str:
+    """Hashed prefix of the user_id for log lines — avoids logging raw PII."""
+    if not user_id:
+        return "<empty>"
+    return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:8]
 
 
 def is_allowed(user_id: str, limit_per_minute: int = 60) -> bool:
@@ -24,6 +31,12 @@ def is_allowed(user_id: str, limit_per_minute: int = 60) -> bool:
     if not user_id:
         return True
 
+    if limit_per_minute <= 0:
+        logger.warning(
+            "rate_limit: invalid limit_per_minute=%s; fail-open", limit_per_minute,
+        )
+        return True
+
     try:
         from utils.cache.redis_client import get_redis_client
         client = get_redis_client()
@@ -32,7 +45,10 @@ def is_allowed(user_id: str, limit_per_minute: int = 60) -> bool:
         return True
 
     if client is None:
-        logger.warning("rate_limit: redis unavailable; fail-open for user=%s", user_id)
+        logger.warning(
+            "rate_limit: redis unavailable; fail-open for user=%s",
+            _safe_user_token(user_id),
+        )
         return True
 
     key = f"{_KEY_PREFIX}:{user_id}"
@@ -53,7 +69,7 @@ def is_allowed(user_id: str, limit_per_minute: int = 60) -> bool:
     except (TypeError, ValueError) as e:
         logger.warning(
             "rate_limit: incr returned non-int %r for user=%s (%s); fail-open",
-            count, user_id, e,
+            count, _safe_user_token(user_id), e,
         )
         return True
 

@@ -482,22 +482,28 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                       if (!confirmationId) return
 
                       if (onConfirm) {
-                        Promise.resolve(onConfirm(confirmationId, 'decline')).catch((err) =>
-                          console.error('[ToolExecutionWidget] decline failed:', err),
-                        )
+                        Promise.resolve()
+                          .then(() => onConfirm(confirmationId, 'decline'))
+                          .then(() => {
+                            onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
+                          })
+                          .catch((err) =>
+                            console.error('[ToolExecutionWidget] decline failed:', err),
+                          )
                       } else if (sendRaw && userId) {
-                        sendRaw(JSON.stringify({
-                          type: 'confirmation_response',
-                          confirmation_id: confirmationId,
-                          decision: 'cancel',
-                          user_id: userId,
-                          session_id: sessionId,
-                        }))
-                      } else {
-                        return
+                        try {
+                          sendRaw(JSON.stringify({
+                            type: 'confirmation_response',
+                            confirmation_id: confirmationId,
+                            decision: 'cancel',
+                            user_id: userId,
+                            session_id: sessionId,
+                          }))
+                          onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
+                        } catch (err) {
+                          console.error('[ToolExecutionWidget] sendRaw decline failed:', err)
+                        }
                       }
-
-                      onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
                     }}
                   >
                     <X className="h-3 w-3 mr-1" />
@@ -511,22 +517,28 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                       if (!confirmationId) return
 
                       if (onConfirm) {
-                        Promise.resolve(onConfirm(confirmationId, 'approve')).catch((err) =>
-                          console.error('[ToolExecutionWidget] approve failed:', err),
-                        )
+                        Promise.resolve()
+                          .then(() => onConfirm(confirmationId, 'approve'))
+                          .then(() => {
+                            onToolUpdate?.({ status: 'running' })
+                          })
+                          .catch((err) =>
+                            console.error('[ToolExecutionWidget] approve failed:', err),
+                          )
                       } else if (sendRaw && userId) {
-                        sendRaw(JSON.stringify({
-                          type: 'confirmation_response',
-                          confirmation_id: confirmationId,
-                          decision: 'execute',
-                          user_id: userId,
-                          session_id: sessionId,
-                        }))
-                      } else {
-                        return
+                        try {
+                          sendRaw(JSON.stringify({
+                            type: 'confirmation_response',
+                            confirmation_id: confirmationId,
+                            decision: 'execute',
+                            user_id: userId,
+                            session_id: sessionId,
+                          }))
+                          onToolUpdate?.({ status: 'running' })
+                        } catch (err) {
+                          console.error('[ToolExecutionWidget] sendRaw approve failed:', err)
+                        }
                       }
-
-                      onToolUpdate?.({ status: 'running' })
                     }}
                   >
                     <Check className="h-3 w-3 mr-1" />

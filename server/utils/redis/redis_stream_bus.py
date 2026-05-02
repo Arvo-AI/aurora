@@ -55,6 +55,7 @@ async def get_async_redis() -> Optional[Any]:
 
     Returns None if Redis is unreachable.
     """
+    client = None
     try:
         from utils.cache.redis_client import get_redis_ssl_kwargs
         ra = _import_redis_async()
@@ -67,6 +68,13 @@ async def get_async_redis() -> Optional[Any]:
         return client
     except Exception as e:
         logger.warning("[redis_stream_bus] connect failed: %s", e)
+        # If from_url succeeded but ping() raised, the client is already
+        # holding a connection pool we need to release.
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
         return None
 
 
