@@ -2067,16 +2067,34 @@ def _record_rca_error(cursor, conn, incident_id: str, user_id: str) -> None:
         logger.debug("[Cleanup] Failed to record rca_error for incident %s: %s", incident_id, e)
 
 
-def _is_task_dead(task_id: str, last_activity, threshold) -> bool:
-    """Check whether a Celery task is no longer running."""
+def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_id=None) -> bool:
+    """Check whether a Celery task is no longer running.
+
+    For STARTED tasks, optionally checks execution_steps for active tool calls
+    when cursor and incident_id are provided.
+    """
     result = celery_app.AsyncResult(task_id)
     if result.state in ('FAILURE', 'REVOKED'):
         return True
     if result.state == 'PENDING' and result.result is None:
         return True
     if result.state == 'STARTED' and last_activity and last_activity < threshold:
+        if cursor and incident_id:
+            cursor.execute("""
+                SELECT 1 FROM execution_steps
+                WHERE incident_id = %s AND status = 'running' AND started_at > %s
+                LIMIT 1
+            """, (incident_id, threshold))
+            if cursor.fetchone():
+                return False
         return True
     return False
+
+
+def _iter_rls_users(cursor, conn):
+    """Return (user_id, org_id) pairs. users table is not RLS-protected."""
+    cursor.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+    return cursor.fetchall()
 
 
 def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
@@ -2091,36 +2109,33 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT i.id, i.user_id, i.rca_celery_task_id,
-                           COALESCE(cs.updated_at, i.updated_at) as last_activity
-                    FROM incidents i
-                    LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
-                    WHERE i.aurora_status = 'running' AND i.updated_at < %s
-                """, (threshold,))
-                candidates = cursor.fetchall()
-
-                for inc_id, uid, task_id, last_activity in candidates:
-                    if task_id and not _is_task_dead(task_id, last_activity, threshold):
-                        continue
+                for uid, org_id in _iter_rls_users(cursor, conn):
                     set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]")
                     cursor.execute("""
-                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
-                               rca_celery_task_id = NULL, updated_at = NOW()
-                        WHERE id = %s AND aurora_status = 'running'
-                        RETURNING id
-                    """, (inc_id,))
-                    if cursor.fetchone():
-                        _record_rca_error(cursor, conn, str(inc_id), uid)
-                        cleaned += 1
+                        SELECT id, rca_celery_task_id,
+                               COALESCE((SELECT cs.updated_at FROM chat_sessions cs
+                                         WHERE cs.id::text = i.aurora_chat_session_id::text), i.updated_at)
+                        FROM incidents i
+                        WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
+                    """, (threshold, uid))
+                    for inc_id, task_id, last_activity in cursor.fetchall():
+                        if task_id and not _is_task_dead(task_id, last_activity, threshold,
+                                                         cursor=cursor, incident_id=inc_id):
+                            continue
+                        cursor.execute("""
+                            UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
+                                   rca_celery_task_id = NULL, updated_at = NOW()
+                            WHERE id = %s AND aurora_status = 'running' RETURNING id
+                        """, (inc_id,))
+                        if cursor.fetchone():
+                            _record_rca_error(cursor, conn, str(inc_id), uid)
+                            cleaned += 1
+                        conn.commit()
+                    cursor.execute("""
+                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
+                    """, (threshold, uid))
                     conn.commit()
-
-                # Fail any orphaned in-progress sessions older than threshold
-                cursor.execute("""
-                    UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
-                    WHERE status = 'in_progress' AND updated_at < %s
-                """, (threshold,))
-                conn.commit()
 
         if cleaned:
             logger.info(f"[StartupCleanup] Marked {cleaned} orphaned investigations as error")
@@ -2133,122 +2148,95 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
 def cleanup_stale_background_chats() -> Dict[str, Any]:
     """Cleanup background chat sessions stuck in 'in_progress' and incidents
     whose Celery task is no longer alive. Runs every 5 minutes.
-    """    
+    """
     stale_threshold = datetime.now() - timedelta(minutes=20)
     dead_task_threshold = datetime.now() - timedelta(minutes=3)
 
     try:
         with db_pool.get_admin_connection() as conn:
-            # --- 1. Stale sessions (>20 min with no update) ---
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT cs.id, cs.user_id, i.id as incident_id
-                    FROM chat_sessions cs
-                    LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
-                    WHERE cs.status = 'in_progress' AND cs.updated_at < %s
-                """, (stale_threshold,))
-                stale_sessions = cursor.fetchall()
-
-            if not stale_sessions:
-                logger.info("[BackgroundChat:Cleanup] No stale sessions found")
-
-            actually_failed_ids = set()
-            for session_id, user_id, incident_id in stale_sessions:
-                with conn.cursor() as cursor:
-                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Cleanup]")
-                    cursor.execute("""
-                        UPDATE chat_sessions SET status = 'failed', updated_at = %s
-                        WHERE id = %s AND status = 'in_progress' RETURNING id
-                    """, (datetime.now(), session_id))
-                    if cursor.fetchone():
-                        actually_failed_ids.add(str(session_id))
-                    if incident_id and str(session_id) in actually_failed_ids:
-                        cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
-                            (datetime.now(), incident_id)
-                        )
-                        _record_rca_error(cursor, conn, str(incident_id), user_id)
-                    conn.commit()
-
-            for session_id, user_id, incident_id in stale_sessions:
-                if str(session_id) in actually_failed_ids:
-                    _propagate_suggestion_status(str(session_id), 'failed')
-
-            cleaned_count = len(actually_failed_ids)
-            logger.info(f"[BackgroundChat:Cleanup] Marked {cleaned_count} stale sessions as failed")
-
-            # --- 2. Dead Celery tasks (task no longer alive in broker) ---
+            cleaned_count = 0
             dead_task_count = 0
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT i.id, i.user_id, i.rca_celery_task_id, i.aurora_chat_session_id,
-                           COALESCE(cs.updated_at, i.updated_at) as last_activity
-                    FROM incidents i
-                    LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
-                    WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
-                      AND i.updated_at < %s
-                """, (dead_task_threshold,))
-                running_incidents = cursor.fetchall()
-
-            for inc_id, uid, task_id, session_id, last_activity in running_incidents:
-                is_dead = _is_task_dead(task_id, last_activity, dead_task_threshold)
-                if not is_dead:
-                    continue
-                # For STARTED tasks, also check execution_steps
-                result_state = celery_app.AsyncResult(task_id).state
-                if result_state == 'STARTED':
-                    with conn.cursor() as cursor:
-                        set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
-                        cursor.execute("""
-                            SELECT 1 FROM execution_steps
-                            WHERE incident_id = %s AND status = 'running' AND started_at > %s
-                            LIMIT 1
-                        """, (inc_id, dead_task_threshold))
-                        if cursor.fetchone():
-                            continue
-                with conn.cursor() as cursor:
-                    set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
-                    cursor.execute(
-                        "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = %s WHERE id = %s AND aurora_status = 'running'",
-                        (datetime.now(), inc_id)
-                    )
-                    if session_id:
-                        cursor.execute(
-                            "UPDATE chat_sessions SET status = 'failed', updated_at = %s WHERE id = %s AND status = 'in_progress'",
-                            (datetime.now(), str(session_id))
-                        )
-                    _record_rca_error(cursor, conn, str(inc_id), uid)
-                    conn.commit()
-                dead_task_count += 1
-                logger.info(f"[BackgroundChat:Cleanup] Dead Celery task {task_id} for incident {inc_id} (state={result_state})")
-
-            # --- 3. Orphaned incidents (running but no in-progress session) ---
             orphaned_count = 0
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT i.id, i.user_id FROM incidents i
-                    WHERE i.aurora_status = 'running' AND i.updated_at < %s
-                      AND NOT EXISTS (
-                          SELECT 1 FROM chat_sessions cs
-                          WHERE cs.id::text = i.aurora_chat_session_id::text
-                            AND cs.status = 'in_progress'
-                      )
-                """, (stale_threshold,))
-                for inc_id, uid in cursor.fetchall():
-                    set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
-                    cursor.execute(
-                        "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s AND aurora_status = 'running' RETURNING id",
-                        (datetime.now(), inc_id)
-                    )
-                    if cursor.fetchone():
-                        _record_rca_error(cursor, conn, str(inc_id), uid)
-                        orphaned_count += 1
-                    conn.commit()
-                if orphaned_count:
-                    logger.info(f"[BackgroundChat:Cleanup] Marked {orphaned_count} orphaned incidents as error")
 
+            with conn.cursor() as cursor:
+                for uid, org_id in _iter_rls_users(cursor, conn):
+                    set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
+
+                    # --- 1. Stale sessions (>20 min with no update) ---
+                    cursor.execute("""
+                        SELECT cs.id, i.id as incident_id
+                        FROM chat_sessions cs
+                        LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
+                        WHERE cs.status = 'in_progress' AND cs.updated_at < %s AND cs.user_id = %s
+                    """, (stale_threshold, uid))
+                    for session_id, incident_id in cursor.fetchall():
+                        cursor.execute("""
+                            UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                            WHERE id = %s AND status = 'in_progress' RETURNING id
+                        """, (session_id,))
+                        if not cursor.fetchone():
+                            continue
+                        cleaned_count += 1
+                        _propagate_suggestion_status(str(session_id), 'failed')
+                        if incident_id:
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW() WHERE id = %s",
+                                (incident_id,)
+                            )
+                            _record_rca_error(cursor, conn, str(incident_id), uid)
+                        conn.commit()
+
+                    # --- 2. Dead Celery tasks (task no longer alive in broker) ---
+                    cursor.execute("""
+                        SELECT i.id, i.rca_celery_task_id, i.aurora_chat_session_id,
+                               COALESCE(cs.updated_at, i.updated_at) as last_activity
+                        FROM incidents i
+                        LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
+                        WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
+                          AND i.updated_at < %s AND i.user_id = %s
+                    """, (dead_task_threshold, uid))
+                    for inc_id, task_id, session_id, last_activity in cursor.fetchall():
+                        if not _is_task_dead(task_id, last_activity, dead_task_threshold,
+                                             cursor=cursor, incident_id=inc_id):
+                            continue
+                        cursor.execute(
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running'",
+                            (inc_id,)
+                        )
+                        if session_id:
+                            cursor.execute(
+                                "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress'",
+                                (str(session_id),)
+                            )
+                        _record_rca_error(cursor, conn, str(inc_id), uid)
+                        conn.commit()
+                        dead_task_count += 1
+
+                    # --- 3. Orphaned incidents (running but no in-progress session) ---
+                    cursor.execute("""
+                        SELECT i.id FROM incidents i
+                        WHERE i.aurora_status = 'running' AND i.updated_at < %s AND i.user_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM chat_sessions cs
+                              WHERE cs.id::text = i.aurora_chat_session_id::text
+                                AND cs.status = 'in_progress'
+                          )
+                    """, (stale_threshold, uid))
+                    for (inc_id,) in cursor.fetchall():
+                        cursor.execute(
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW() WHERE id = %s AND aurora_status = 'running' RETURNING id",
+                            (inc_id,)
+                        )
+                        if cursor.fetchone():
+                            _record_rca_error(cursor, conn, str(inc_id), uid)
+                            orphaned_count += 1
+                        conn.commit()
+
+            if cleaned_count or dead_task_count or orphaned_count:
+                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d",
+                            cleaned_count, dead_task_count, orphaned_count)
             return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count}
-            
+
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
         return {"error": str(e), "cleaned": 0}
