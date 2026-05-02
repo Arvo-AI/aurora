@@ -38,12 +38,21 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest
+        # pytest                       -> test runner
+        # Flask                        -> imported by utils.db.connection_pool and the
+        #                                 connection-pool test (Flask request context)
+        # psycopg2-binary              -> connection_pool.py imports psycopg2 at module
+        #                                 import time even though the pool is mocked
+        # python-dotenv                -> connection_pool.py calls load_dotenv() on import
+        run: pip install pytest Flask psycopg2-binary python-dotenv
 
-      - name: Run static analysis tests
+      - name: Run static analysis & unit tests
         working-directory: server
         run: |
-          tests=(tests/architectural/test_connector_rbac.py)
+          tests=(
+            tests/architectural/test_connector_rbac.py
+            tests/db/test_connection_pool.py
+          )
           if [ -f tests/architectural/test_rls_coverage.py ]; then
             tests+=(tests/architectural/test_rls_coverage.py)
           else
