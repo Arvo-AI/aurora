@@ -223,6 +223,7 @@ _OPEN_PREFIXES = (
     "/aws/setup-role",
     "/aws/setup-script-ps1",
     "/aws/setup-role-ps1",
+    "/webhooks/change-intercept/",
 )
 
 @app.before_request
@@ -437,6 +438,11 @@ app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
 from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
 import routes.opsgenie.tasks  # noqa: F401
 app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
+
+# --- Change-Intercept (PR Risk Assessment) Routes ---
+from routes.change_intercept import bp as change_intercept_bp  # noqa: F401
+import routes.change_intercept.tasks  # noqa: F401
+app.register_blueprint(change_intercept_bp, url_prefix="/webhooks/change-intercept")
 
 # --- Knowledge Base Routes ---
 from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401

@@ -1296,6 +1296,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
 
+    # In change_intercept mode the investigator works off a stored snapshot
+    # and must not call back to the change vendor (GitHub) during the run.
+    _CHANGE_INTERCEPT_EXCLUDED = frozenset({
+        "github_rca", "github_commit", "github_fix",
+        "github_apply_fix", "get_connected_repos",
+    })
+    if mode_suffix == "change_intercept":
+        tool_functions = [
+            (fn, name) for fn, name in tool_functions
+            if name not in _CHANGE_INTERCEPT_EXCLUDED
+        ]
+
     # Only include trigger_rca when the user explicitly requested it via the UI button
     if state_context and getattr(state_context, 'trigger_rca_requested', False):
         tool_functions.append((trigger_rca, "trigger_rca"))

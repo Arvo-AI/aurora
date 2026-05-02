@@ -1170,6 +1170,82 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
                 """,
+                "github_app_installations": """
+                    CREATE TABLE IF NOT EXISTS github_app_installations (
+                        installation_id BIGINT PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL,
+                        github_account_login TEXT NOT NULL,
+                        repos JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        review_config JSONB DEFAULT '{}'::jsonb,
+                        installed_at TIMESTAMPTZ DEFAULT now(),
+                        suspended_at TIMESTAMPTZ,
+                        UNIQUE (org_id, github_account_login)
+                    );
+                """,
+                "change_events": """
+                    CREATE TABLE IF NOT EXISTS change_events (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        vendor VARCHAR(32) NOT NULL,
+                        kind VARCHAR(32) NOT NULL,
+                        external_id TEXT NOT NULL,
+                        dedup_key TEXT NOT NULL,
+                        repo TEXT,
+                        ref TEXT,
+                        commit_sha TEXT,
+                        actor TEXT,
+                        target_env VARCHAR(32),
+                        change_body TEXT,
+                        change_diff TEXT,
+                        change_files JSONB,
+                        change_commits JSONB,
+                        follow_up_comment TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMPTZ DEFAULT now()
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_change_events_dedup
+                    ON change_events(org_id, vendor, external_id, commit_sha, kind);
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_change_events_dedup_key
+                    ON change_events(org_id, dedup_key, kind);
+
+                    CREATE INDEX IF NOT EXISTS idx_change_events_org_received
+                    ON change_events(org_id, received_at DESC);
+                """,
+                "change_investigations": """
+                    CREATE TABLE IF NOT EXISTS change_investigations (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        change_event_id UUID NOT NULL REFERENCES change_events(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        parent_investigation_id UUID REFERENCES change_investigations(id),
+                        verdict VARCHAR(16) NOT NULL,
+                        rationale TEXT NOT NULL,
+                        intent_alignment VARCHAR(16),
+                        intent_notes TEXT,
+                        cited_findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        tool_call_count INT NOT NULL DEFAULT 0,
+                        duration_ms INT NOT NULL DEFAULT 0,
+                        llm_model TEXT NOT NULL,
+                        external_verdict_id TEXT,
+                        chat_session_id UUID,
+                        dry_run BOOLEAN NOT NULL DEFAULT false,
+                        investigated_at TIMESTAMPTZ DEFAULT now()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_change_investigations_event
+                    ON change_investigations(change_event_id, investigated_at DESC);
+                """,
+                "risk_outcomes": """
+                    CREATE TABLE IF NOT EXISTS risk_outcomes (
+                        change_investigation_id UUID PRIMARY KEY
+                            REFERENCES change_investigations(id) ON DELETE CASCADE,
+                        caused_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
+                        feedback_source VARCHAR(32),
+                        labeled_at TIMESTAMPTZ DEFAULT now()
+                    );
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1236,6 +1312,9 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("github_app_installations")
+            rls_tables.append("change_events")
+            rls_tables.append("change_investigations")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

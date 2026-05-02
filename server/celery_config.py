@@ -94,6 +94,7 @@ celery_app.conf.update(
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.github.github_repo_metadata',
+        'routes.change_intercept.tasks',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -213,6 +214,12 @@ try:
     logging.info("GitHub repo metadata task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
+
+try:
+    import routes.change_intercept.tasks  # noqa: F401
+    logging.info("Change-intercept tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import change-intercept tasks: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):

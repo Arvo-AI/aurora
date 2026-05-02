@@ -13,6 +13,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -1301,3 +1302,126 @@ def build_incidentio_rca_prompt(
     }
 
     return build_rca_prompt('incidentio', alert_details, providers, user_id)
+
+
+# ------------------------------------------------------------------
+# Change-intercept prompt builder
+# ------------------------------------------------------------------
+
+_TICKET_PATTERN = re.compile(
+    r"(?:(?:[A-Z][A-Z0-9]+-\d+)|(?:#\d+))",
+)
+
+
+def _extract_ticket_refs(*texts: str | None) -> list[str]:
+    refs: set[str] = set()
+    for text in texts:
+        if text:
+            refs.update(_TICKET_PATTERN.findall(text))
+    return sorted(refs)
+
+
+def build_change_intercept_prompt(
+    change_event: Dict[str, Any],
+    prior_investigation: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build the initial message for a change-intercept investigation.
+
+    Args:
+        change_event: Row from the ``change_events`` table (dict).
+        prior_investigation: For follow-ups, the row from
+            ``change_investigations`` that the engineer is responding to.
+    """
+    repo = change_event.get("repo") or "unknown"
+    ref = change_event.get("ref") or "unknown"
+    actor = change_event.get("actor") or "unknown"
+    target_env = change_event.get("target_env") or "unknown"
+    body = change_event.get("change_body") or ""
+    diff = change_event.get("change_diff") or ""
+    files = change_event.get("change_files") or []
+    commits = change_event.get("change_commits") or []
+    follow_up_comment = change_event.get("follow_up_comment") or ""
+
+    commit_messages = "\n".join(
+        f"- {c.get('message', '').splitlines()[0]}" for c in commits if c.get("message")
+    )
+
+    file_summary = "\n".join(
+        f"- {f.get('filename') or f.get('path', '?')} "
+        f"(+{f.get('additions', 0)}/-{f.get('deletions', 0)})"
+        for f in files
+    )
+
+    ticket_refs = _extract_ticket_refs(body, commit_messages)
+    ticket_section = (
+        f"\n**Linked tickets:** {', '.join(ticket_refs)}" if ticket_refs else ""
+    )
+
+    sections = [
+        "You are Aurora, an SRE risk-assessment agent. A change has been "
+        "staged and you must assess whether merging it poses a meaningful "
+        "risk to production.",
+        f"**Repository:** {repo}",
+        f"**Target branch:** {ref}  |  **Environment:** {target_env}",
+        f"**Author:** {actor}",
+    ]
+
+    if body:
+        sections.append(
+            f"**Author's stated reason (change description):**\n"
+            f"```\n{body}\n```"
+        )
+    if ticket_section:
+        sections.append(ticket_section)
+    if commit_messages:
+        sections.append(f"**Commits:**\n{commit_messages}")
+    if file_summary:
+        sections.append(f"**Changed files:**\n{file_summary}")
+    if diff:
+        sections.append(f"**Unified diff:**\n```diff\n{diff}\n```")
+
+    sections.append(
+        "\n---\n"
+        "**Your task:**\n"
+        "1. Compare what the diff actually does against the author's stated "
+        "reason. Flag mismatches.\n"
+        "2. Use your tools (Datadog, topology graph, past postmortems, "
+        "recent deploys) to assess whether this change could disrupt "
+        "production.\n"
+        "3. Only flag as high risk if you find **concrete evidence**. "
+        "Do not speculate.\n"
+        "4. Aim for ~15 tool calls. Investigate as deeply as the change "
+        "warrants.\n"
+        "\n"
+        "**Output a single JSON block** with this exact schema:\n"
+        "```json\n"
+        "{\n"
+        '  "verdict": "approve" | "request_changes",\n'
+        '  "rationale": "1-3 sentences",\n'
+        '  "intent_alignment": "matches" | "partial" | "mismatch",\n'
+        '  "intent_notes": "short note if partial/mismatch, else null",\n'
+        '  "cited_findings": [\n'
+        '    {"tool": "...", "call_id": "...", "summary": "..."}\n'
+        "  ]\n"
+        "}\n"
+        "```\n"
+        "A `request_changes` verdict **must** include at least one cited "
+        "finding from a real tool call. If you cannot cite evidence, "
+        "verdict must be `approve`."
+    )
+
+    if prior_investigation and follow_up_comment:
+        prior_verdict = prior_investigation.get("verdict", "?")
+        prior_rationale = prior_investigation.get("rationale", "")
+        sections.append(
+            "\n---\n"
+            "**This is a follow-up investigation.** The engineer replied "
+            "to your previous review.\n"
+            f"**Your previous verdict:** {prior_verdict}\n"
+            f"**Your previous rationale:** {prior_rationale}\n"
+            f"**Engineer's reply:**\n```\n{follow_up_comment}\n```\n"
+            "Re-evaluate with this new context. You may confirm or revise "
+            "your verdict; either way, cite evidence."
+        )
+
+    return "\n\n".join(sections)
