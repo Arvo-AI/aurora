@@ -301,7 +301,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     // messages. firstSeq is monotonic and unique per chat_events message;
     // segments within a single row stay stable by offsetting from firstSeq.
     const rowToMessages = (row: ChatRow, idx: number): Message[] => {
-      const baseId = -1 * (row.firstSeq || (idx + 1));
+      const baseId = -1 * (row.firstSeq ?? (idx + 1));
       const sender = row.role === 'user' ? 'user' : 'bot';
       const isStreaming = row.status === 'streaming';
       if (sender === 'user') {

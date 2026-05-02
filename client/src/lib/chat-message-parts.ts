@@ -215,17 +215,20 @@ export function reduceParts(parts: MessagePart[], evt: ChatStreamEvent): Message
     }
 
     case 'plan_committed': {
-      return [
-        ...parts,
-        {
-          type: 'data-plan',
-          data: {
-            selected: p.selected,
-            rationale: p.rationale as string | undefined,
-            memory_hints_used: p.memory_hints_used,
-          },
+      const newPlan = {
+        type: 'data-plan' as const,
+        data: {
+          selected: p.selected,
+          rationale: p.rationale as string | undefined,
+          memory_hints_used: p.memory_hints_used,
         },
-      ];
+      };
+      // Upsert so event replay doesn't accumulate duplicate plan parts.
+      const existingIdx = parts.findIndex((part) => part.type === 'data-plan');
+      if (existingIdx === -1) return [...parts, newPlan];
+      const next = parts.slice();
+      next[existingIdx] = newPlan;
+      return next;
     }
 
     case 'subagent_dispatched':

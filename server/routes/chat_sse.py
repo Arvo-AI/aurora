@@ -636,10 +636,10 @@ def post_confirmation(user_id: str):
     # The actual confirmation resolution (mapping confirmation_id → execute|cancel)
     # is owned by infrastructure_confirmation.resolve_confirmation. Here we just
     # publish to the per-session pub/sub so the workflow's listener picks it up.
-    async def _publish_confirmation():
+    async def _publish_confirmation() -> bool:
         client = await get_async_redis()
         if client is None:
-            return
+            return False
         try:
             payload = json.dumps({
                 "confirmation_id": confirmation_id,
@@ -647,21 +647,25 @@ def post_confirmation(user_id: str):
             })
             await client.publish(f"chat:confirm:{session_id}", payload)
             await client.publish(wake_channel(session_id), "1")
+            return True
         finally:
             try:
                 await client.aclose()
             except Exception:
                 pass
 
+    published = False
     try:
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(_publish_confirmation())
+            published = loop.run_until_complete(_publish_confirmation())
         finally:
             loop.close()
     except Exception as e:
         logger.warning("[chat_sse] confirmations: publish failed: %s", e)
 
+    if not published:
+        return jsonify({"error": "confirmation bus unavailable"}), 503
     return jsonify({"status": "accepted"}), 202
 
 
@@ -686,31 +690,35 @@ def post_direct_tool(user_id: str):
     # Direct-tool execution is dispatched via the Redis bus to whichever worker
     # owns this session's runtime; the executor lives in
     # chat.backend.agent.utils.direct_tool_dispatch.dispatch_direct_tool_call.
-    async def _publish_direct_tool():
+    async def _publish_direct_tool() -> bool:
         client = await get_async_redis()
         if client is None:
-            return
+            return False
         try:
             await client.publish(
                 f"chat:direct_tool:{session_id}",
                 json.dumps(tool_call_payload, default=str),
             )
             await client.publish(wake_channel(session_id), "1")
+            return True
         finally:
             try:
                 await client.aclose()
             except Exception:
                 pass
 
+    published = False
     try:
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(_publish_direct_tool())
+            published = loop.run_until_complete(_publish_direct_tool())
         finally:
             loop.close()
     except Exception as e:
         logger.warning("[chat_sse] direct-tool: publish failed: %s", e)
 
+    if not published:
+        return jsonify({"error": "direct-tool bus unavailable"}), 503
     return jsonify({"status": "accepted"}), 202
 
 

@@ -16,6 +16,7 @@ This module owns:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -81,7 +82,8 @@ async def dispatch_direct_tool_call(
             )
         try:
             from chat.backend.agent.tools.github_commit_tool import github_commit
-            result = github_commit(
+            result = await asyncio.to_thread(
+                github_commit,
                 repo=parameters.get("repo"),
                 commit_message=parameters.get("commit_message"),
                 branch=parameters.get("branch", "main"),
@@ -107,7 +109,8 @@ async def dispatch_direct_tool_call(
             )
         try:
             from chat.backend.agent.tools.iac_tool import run_iac_tool
-            result = run_iac_tool(
+            result = await asyncio.to_thread(
+                run_iac_tool,
                 action=action,
                 path=parameters.get("path"),
                 content=parameters.get("content"),

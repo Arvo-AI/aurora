@@ -711,7 +711,7 @@ if __name__ == "__main__":
     # Development mode: run Flask's built-in server
     # Port configurable via FLASK_PORT env var (set in .env file)
     # Note: Default is 5080 to avoid conflict with macOS AirPlay Receiver (port 5000)
-    port = int(os.getenv("FLASK_PORT"))
+    port = int(os.getenv("FLASK_PORT", "5080"))
     # threaded=True so a long-lived SSE generator (chat stream) can't block a
     # concurrent POST /api/chat/messages on the same Flask thread; without it,
     # rapid follow-up sends would 504 and silently drop the user's turn.

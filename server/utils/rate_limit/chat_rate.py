@@ -40,13 +40,21 @@ def is_allowed(user_id: str, limit_per_minute: int = 60) -> bool:
         count = client.incr(key)
         if count == 1:
             client.expire(key, _BUCKET_SECONDS)
+        elif client.ttl(key) == -1:
+            # Self-heal: a previous EXPIRE failed, so the key has no TTL and
+            # would otherwise grow unbounded. Reset the bucket window.
+            client.expire(key, _BUCKET_SECONDS)
     except Exception as e:
         logger.warning("rate_limit: redis incr/expire failed (%s); fail-open", e)
         return True
 
     try:
         count_int = int(count)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.warning(
+            "rate_limit: incr returned non-int %r for user=%s (%s); fail-open",
+            count, user_id, e,
+        )
         return True
 
     return count_int <= limit_per_minute

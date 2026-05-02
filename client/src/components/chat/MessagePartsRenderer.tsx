@@ -42,7 +42,11 @@ function toolPartToLegacyToolCall(part: ToolPart): ToolCall {
       status = 'running';
   }
   const inputStr =
-    typeof part.input === 'string' ? part.input : JSON.stringify(part.input ?? '');
+    part.input == null
+      ? ''
+      : typeof part.input === 'string'
+        ? part.input
+        : JSON.stringify(part.input);
   return {
     id: part.toolCallId,
     tool_name: toolName,
@@ -50,7 +54,9 @@ function toolPartToLegacyToolCall(part: ToolPart): ToolCall {
     output: part.output,
     error: part.errorText ?? null,
     status,
-    timestamp: new Date().toISOString(),
+    // ToolPart has no timestamp; the widget doesn't render it, so leave blank
+    // rather than generating a fresh Date on every render (would drift).
+    timestamp: '',
   };
 }
 

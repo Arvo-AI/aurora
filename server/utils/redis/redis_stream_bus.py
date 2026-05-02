@@ -219,9 +219,11 @@ async def tail_stream(
         await _close(client)
 
 
-async def subscribe_wake(session_id: str) -> Optional[Any]:
-    """Subscribe to the per-session wake channel. Caller must close() the PubSub
-    AND its underlying connection.
+async def subscribe_wake(session_id: str) -> Optional[tuple[Any, Any]]:
+    """Subscribe to the per-session wake channel. Returns (pubsub, client) so
+    the caller can close BOTH after use; closing only the pubsub leaks the
+    underlying connection pool because get_async_redis() builds a fresh client
+    per call.
     """
     client = await get_async_redis()
     if client is None:
@@ -229,22 +231,24 @@ async def subscribe_wake(session_id: str) -> Optional[Any]:
     try:
         pubsub = client.pubsub()
         await pubsub.subscribe(wake_channel(session_id))
-        return pubsub
+        return pubsub, client
     except Exception as e:
         logger.warning("[redis_stream_bus] subscribe failed (session=%s): %s", session_id, e)
         await _close(client)
         return None
 
 
-async def subscribe_cancel(session_id: str) -> Optional[Any]:
-    """Subscribe to the per-session cancel channel. Caller must close()."""
+async def subscribe_cancel(session_id: str) -> Optional[tuple[Any, Any]]:
+    """Subscribe to the per-session cancel channel. Returns (pubsub, client) so
+    the caller can close BOTH after use.
+    """
     client = await get_async_redis()
     if client is None:
         return None
     try:
         pubsub = client.pubsub()
         await pubsub.subscribe(cancel_channel(session_id))
-        return pubsub
+        return pubsub, client
     except Exception as e:
         logger.warning(
             "[redis_stream_bus] subscribe_cancel failed (session=%s): %s",

@@ -26,6 +26,7 @@ export async function safeFetch(
   }
 
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let innerTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Strip our additions from `init` before spreading so we don't leak `timeoutMs`.
   const { timeoutMs: _ignored, signal: _ignoredSignal, ...rest } = init ?? {};
@@ -37,7 +38,7 @@ export async function safeFetch(
     const timeoutPromise = new Promise<never>((_, reject) => {
       // Tiny offset so the AbortController fires first on well-behaved fetches;
       // this Promise.race is the hard guarantee for stuck Bun sockets.
-      setTimeout(
+      innerTimer = setTimeout(
         () => reject(new Error(`safeFetch timeout after ${timeoutMs}ms`)),
         timeoutMs + 100,
       );
@@ -45,13 +46,18 @@ export async function safeFetch(
     return await Promise.race([fetchPromise, timeoutPromise]);
   } finally {
     clearTimeout(timer);
+    if (innerTimer !== undefined) clearTimeout(innerTimer);
   }
 }
 
-/** Convenience type-guard for the timeout error thrown by safeFetch. */
+/** Convenience type-guard for the timeout error thrown by safeFetch.
+ *  Note: AbortError on its own is no longer treated as a timeout — a caller-
+ *  supplied AbortSignal can also produce AbortError, and treating that as a
+ *  timeout would mask the real cancel. Only the explicit "safeFetch timeout"
+ *  message and the platform TimeoutError DOMException count.
+ */
 export function isSafeFetchTimeout(err: unknown): boolean {
   if (err instanceof Error) {
-    if (err.name === 'AbortError') return true;
     if (err.name === 'TimeoutError') return true;
     if (err.message.startsWith('safeFetch timeout after')) return true;
   }

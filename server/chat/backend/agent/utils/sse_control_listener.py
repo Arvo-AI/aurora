@@ -208,14 +208,22 @@ async def _handle_direct_tool(
             "[sse_control_listener] direct_tool payload missing tool_name: %s", payload,
         )
         return
-    outcome = await dispatch_direct_tool_call(
-        payload=payload,
-        user_id=user_id,
-        session_id=session_id,
-        mode=mode,
-        provider_preference=provider_preference,
-        selected_project_id=selected_project_id,
-    )
+    try:
+        outcome = await dispatch_direct_tool_call(
+            payload=payload,
+            user_id=user_id,
+            session_id=session_id,
+            mode=mode,
+            provider_preference=provider_preference,
+            selected_project_id=selected_project_id,
+        )
+    except Exception as e:
+        logger.error(
+            "[sse_control_listener] dispatch_direct_tool_call raised "
+            "(user=%s session=%s mode=%s tool=%s): %s",
+            user_id, session_id, mode, payload.get("tool_name"), e,
+        )
+        return
     logger.info(
         "[sse_control_listener] direct_tool %s -> %s",
         outcome.tool_name, outcome.status,

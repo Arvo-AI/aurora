@@ -84,6 +84,15 @@ def _execute_ssh_local(
         # user cancels the RCA — otherwise we tie up the device until the
         # default 5-min timeout elapses.
         from utils.terminal.terminal_run import run_with_cancel
+        # Minimal env so the ssh subprocess does not inherit the full server
+        # environment (per CLAUDE.md credential-isolation rule). PATH lets ssh
+        # resolve helper binaries; HOME lets it find known_hosts / identity files.
+        ssh_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", "/root"),
+        }
+        if os.environ.get("SSH_AUTH_SOCK"):
+            ssh_env["SSH_AUTH_SOCK"] = os.environ["SSH_AUTH_SOCK"]
         result = run_with_cancel(
             cmd=ssh_cmd,
             args=ssh_cmd,
@@ -92,7 +101,7 @@ def _execute_ssh_local(
             shell=False,
             timeout=timeout,
             cwd=None,
-            env=None,
+            env=ssh_env,
         )
 
         output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout)

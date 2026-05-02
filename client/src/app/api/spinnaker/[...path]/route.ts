@@ -1,79 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/auth-helper';
-import { isSafeFetchTimeout, safeFetch } from '@/lib/safe-fetch';
+import { NextRequest } from 'next/server';
+import { forwardRequest } from '@/lib/backend-proxy';
 
-const API_BASE_URL = process.env.BACKEND_URL;
-const FETCH_TIMEOUT_MS = 15_000;
-
-async function proxyToBackend(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
-  if (!API_BASE_URL) {
-    return NextResponse.json({ error: 'BACKEND_URL is not configured' }, { status: 500 });
-  }
-
-  try {
-    const authResult = await getAuthenticatedUser();
-    if (authResult instanceof NextResponse) {
-      return authResult;
-    }
-
-    const { path } = await params;
-    const subPath = path.join('/');
-    const { headers: authHeaders } = authResult;
-
-    const fetchOptions: RequestInit & { timeoutMs?: number } = {
-      method: request.method,
-      headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      timeoutMs: FETCH_TIMEOUT_MS,
-    };
-
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      const body = await request.text();
-      if (body) fetchOptions.body = body;
-    }
-
-    const backendUrl = `${API_BASE_URL}/spinnaker/${subPath}${request.nextUrl.search}`;
-    const response = await safeFetch(backendUrl, fetchOptions);
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`[api/spinnaker/${subPath}] Backend error:`, text);
-      let errorMessage: string;
-      try {
-        const parsed = JSON.parse(text);
-        errorMessage = parsed?.error ? String(parsed.error) : text.trim() || 'Backend request failed';
-      } catch {
-        errorMessage = text.trim() || 'Backend request failed';
-      }
-      return NextResponse.json(
-        { error: errorMessage },
-        { status: response.status },
-      );
-    }
-
-    if (response.status === 204 || response.headers.get('content-length') === '0') {
-      return NextResponse.json(null, { status: response.status });
-    }
-
-    const text = await response.text();
-    if (!text) {
-      return NextResponse.json(null, { status: response.status });
-    }
-    try {
-      const data = JSON.parse(text);
-      return NextResponse.json(data);
-    } catch {
-      return NextResponse.json(
-        { error: 'Non-JSON response from backend' },
-        { status: 502 },
-      );
-    }
-  } catch (error) {
-    if (isSafeFetchTimeout(error)) {
-      return NextResponse.json({ error: 'Connection timeout' }, { status: 504 });
-    }
-    console.error('[api/spinnaker] Error:', error instanceof Error ? error.message : 'Unknown error');
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
+async function proxyToBackend(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  const { path } = await params;
+  const subPath = path.join('/');
+  return forwardRequest(request, request.method, `/spinnaker/${subPath}`, `spinnaker/${subPath}`, { timeoutMs: 15_000 });
 }
 
 export const GET = proxyToBackend;

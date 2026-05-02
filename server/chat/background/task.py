@@ -1209,8 +1209,9 @@ async def _execute_background_chat(
         )
         logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
 
-        # Set UI state (preserve triggerMetadata so it persists when workflow saves)
-        wf._ui_state = ui_state or {
+        # Set UI state (preserve triggerMetadata so it persists when workflow saves).
+        # Use explicit None check so caller-supplied {} isn't silently replaced.
+        wf._ui_state = ui_state if ui_state is not None else {
             "selectedMode": mode,
             "selectedProviders": provider_preference or [],
             "isBackground": not is_interactive,
@@ -2645,9 +2646,10 @@ async def _run_multi_agent_graph(
 
     async def _cancel_listener() -> None:
         from utils.redis.redis_stream_bus import subscribe_cancel
-        pubsub = await subscribe_cancel(session_id)
-        if pubsub is None:
+        result = await subscribe_cancel(session_id)
+        if result is None:
             return
+        pubsub, redis_client = result
         try:
             while not cancel_event.is_set():
                 msg = await pubsub.get_message(
@@ -2667,6 +2669,10 @@ async def _run_multi_agent_graph(
             try:
                 await pubsub.unsubscribe()
                 await pubsub.aclose()
+            except Exception:
+                pass
+            try:
+                await redis_client.aclose()
             except Exception:
                 pass
 

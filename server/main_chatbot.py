@@ -972,6 +972,15 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
             await send_via_appropriate_sender(error_msg)
         await send_end_status("error")
     finally:
+        # Drain pending emit tasks so terminal `assistant_finalized` events
+        # complete their DB writes before the Celery wrapper's asyncio.run()
+        # teardown cancels them.
+        if pending_emit_tasks:
+            try:
+                await asyncio.gather(*pending_emit_tasks, return_exceptions=True)
+            except Exception as e:
+                logger.warning("[chat_events:drain_pending_failed] %s", e)
+            pending_emit_tasks.clear()
         reset_active_ws_sender(_ws_sender_token)
 
     # Handle API cost tracking - always execute regardless of WebSocket status

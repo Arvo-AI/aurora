@@ -389,6 +389,8 @@ def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_
         
         # Merge instead of overwrite — handle_immediate_save persisted the user
         # bubble; overwriting with [bot] alone would wipe it on mid-confirm reload.
+        # If the merge cannot complete (DB error, RLS miss), abort the save so we
+        # don't clobber the existing chat_sessions.messages with un-merged data.
         try:
             from utils.db.connection_pool import db_pool
             from utils.auth.stateless_auth import set_rls_context
@@ -405,7 +407,10 @@ def _save_ui_messages_with_confirmation_via_workflow(workflow_instance, session_
                         existing = row[0]
             ui_messages = _merge_confirmation_messages(existing, ui_messages, target_tool_call)
         except Exception as e:
-            logger.warning(f"Failed to merge with existing chat_sessions.messages: {e}")
+            logger.error(
+                f"Failed to merge with existing chat_sessions.messages, aborting save: {e}"
+            )
+            return False
 
         logger.debug(f"Saving {len(ui_messages)} UI messages (chat_events suppressed for confirmation pause)")
         return workflow_instance._save_ui_messages(

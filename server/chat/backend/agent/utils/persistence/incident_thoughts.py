@@ -41,8 +41,8 @@ def _persist_row(*, incident_id: str, content: str, agent_id: Optional[str]) -> 
         if batching_enabled():
             get_default_batcher().enqueue(sql, params)
             return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("incident_thoughts: write_batcher unavailable, falling back to direct insert (%s)", e)
 
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
@@ -71,7 +71,11 @@ class IncidentThoughtAccumulator:
         now = time.time()
         elapsed = now - self._last_save
         should_check = force or elapsed >= _PERIODIC_FLUSH_SECONDS or len(text) >= _PERIODIC_FLUSH_CHARS
-        if not should_check or len(text) <= _MIN_CHUNK_CHARS:
+        if not should_check:
+            return
+        # On force=True we save whatever's buffered, even if it's shorter than
+        # _MIN_CHUNK_CHARS — otherwise tail-end short fragments are dropped.
+        if not force and len(text) <= _MIN_CHUNK_CHARS:
             return
 
         matches = list(_SENTENCE_BOUNDARY.finditer(text))
