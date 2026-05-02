@@ -125,7 +125,6 @@ _NEW_INCIDENT_EVENTS = frozenset((
     "incident.created", "v2.incidents.created",
     "incident.declared", "public_incident.incident_created",
     "public_incident.incident_created_v2",
-    "public_alert.alert_created_v1",
 ))
 
 
