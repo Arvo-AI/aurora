@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Set
 
-_DB_UTILS = Path(__file__).resolve().parent.parent / "utils" / "db" / "db_utils.py"
+_DB_UTILS = Path(__file__).resolve().parent.parent.parent / "utils" / "db" / "db_utils.py"
 
 # Tables with org_id that are intentionally excluded from RLS.
 # Each entry MUST have a comment explaining why.

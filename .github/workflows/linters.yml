@@ -38,15 +38,18 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest
+        run: pip install pytest Flask psycopg2-binary python-dotenv
 
-      - name: Run static analysis tests
+      - name: Run static analysis & unit tests
         working-directory: server
         run: |
-          tests=(tests/test_connector_rbac.py)
-          if [ -f tests/test_rls_coverage.py ]; then
-            tests+=(tests/test_rls_coverage.py)
+          tests=(
+            tests/architectural/test_connector_rbac.py
+            tests/db/test_connection_pool.py
+          )
+          if [ -f tests/architectural/test_rls_coverage.py ]; then
+            tests+=(tests/architectural/test_rls_coverage.py)
           else
-            echo "::warning::tests/test_rls_coverage.py not present yet (waiting on PR #314); skipping."
+            echo "::warning::tests/architectural/test_rls_coverage.py not present yet; skipping."
           fi
           python -m pytest "${tests[@]}" -v
