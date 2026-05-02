@@ -15,6 +15,7 @@ from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, asse
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 import time
 import asyncio
+from typing import Optional
 
 # Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
 # because features like Gemini thinking only work with their native SDK.
@@ -180,7 +181,14 @@ class Agent:
         except Exception as e:
             logging.error(f"Error fetching session files from storage: {e}")
 
-    async def agentic_tool_flow(self, state: State) -> State:
+    async def agentic_tool_flow(
+        self,
+        state: State,
+        *,
+        system_prompt_override: Optional[str] = None,
+        tool_subset: Optional[list] = None,
+        max_turns: Optional[int] = None,
+    ) -> State:
         """Execute cloud tools using the agentic workflow with streaming callbacks."""
         
         # ------------------------------------------------------------------
@@ -282,9 +290,13 @@ class Agent:
 
             # Assemble final system prompt from segments
             system_prompt_text = assemble_system_prompt(segments)
-            
+            if system_prompt_override is not None:
+                system_prompt_text = system_prompt_override
+
             # Get cloud tools
             tools = get_cloud_tools()
+            if tool_subset is not None:
+                tools = tool_subset
             
             
             prompt_text = ''
@@ -526,7 +538,9 @@ class Agent:
             try:         
                 # Get recursion limit from environment variable (required)
                 max_iterations = int(os.environ["AGENT_RECURSION_LIMIT"])
-                
+                if max_turns is not None:
+                    max_iterations = min(max_turns, max_iterations)
+
                 # Prepare chat history for the agent - handle LangChain message objects
                 chat_history = []
                 

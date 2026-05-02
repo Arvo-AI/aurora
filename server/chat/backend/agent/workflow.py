@@ -121,11 +121,48 @@ class Workflow:
             logger.debug(f"Still waiting for {len(still_ongoing)} tool call(s): {still_ongoing}")
 
     def _create_workflow(self) -> StateGraph:
-        """Create and configure the workflow graph."""
+        """Create and configure the workflow graph.
+
+        When ORCHESTRATOR_ENABLED=false (default), returns the existing single-node
+        graph unchanged. Orchestrator imports are lazy so the inert path never pulls
+        in orchestrator deps.
+        """
         workflow = StateGraph(State)
-        workflow.add_node("agentic_tool_flow", self.agent.agentic_tool_flow)
-        workflow.add_edge(START, "agentic_tool_flow") 
-        workflow.add_edge("agentic_tool_flow", END)
+
+        from chat.backend.agent.orchestrator import is_orchestrator_enabled
+
+        if not is_orchestrator_enabled():
+            workflow.add_node("agentic_tool_flow", self.agent.agentic_tool_flow)
+            workflow.add_edge(START, "agentic_tool_flow")
+            workflow.add_edge("agentic_tool_flow", END)
+            return workflow
+
+        # Multi-agent graph (only reached when ORCHESTRATOR_ENABLED=true)
+        from chat.backend.agent.orchestrator.triage import triage_node, route_triage
+        from chat.backend.agent.orchestrator.dispatcher import dispatch_node, dispatch_to_sub_agents
+        from chat.backend.agent.orchestrator.sub_agent import sub_agent_node
+        from chat.backend.agent.orchestrator.synthesis import synthesis_node, route_after_synthesis
+
+        workflow.add_node("triage", triage_node)
+        workflow.add_node("direct_react", self.agent.agentic_tool_flow)
+        workflow.add_node("dispatch", dispatch_node)
+        workflow.add_node("sub_agent", sub_agent_node)
+        workflow.add_node("synthesis", synthesis_node)
+
+        workflow.add_edge(START, "triage")
+        workflow.add_conditional_edges(
+            "triage",
+            route_triage,
+            {"direct_react": "direct_react", "dispatch": "dispatch"},
+        )
+        workflow.add_edge("direct_react", END)
+        workflow.add_conditional_edges("dispatch", dispatch_to_sub_agents, ["sub_agent"])
+        workflow.add_edge("sub_agent", "synthesis")
+        workflow.add_conditional_edges(
+            "synthesis",
+            route_after_synthesis,
+            {"dispatch": "dispatch", "end": END},
+        )
         return workflow
 
     def get_compiled_workflow(self) -> CompiledStateGraph:

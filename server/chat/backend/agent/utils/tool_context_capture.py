@@ -51,6 +51,18 @@ class InternalToolMessage(ToolMessage):
 
 logger = logging.getLogger(__name__)
 
+# Bound tool output excerpts retained for rca_findings.tool_call_history JSONB.
+_OUTPUT_EXCERPT_MAX_CHARS = 1000
+
+
+def _build_excerpt(output: Optional[str], is_err: bool) -> str:
+    if not output:
+        return ""
+    s = str(output)
+    if len(s) > _OUTPUT_EXCERPT_MAX_CHARS:
+        return s[:_OUTPUT_EXCERPT_MAX_CHARS] + "...[truncated]"
+    return s
+
 # --------------------------------------------------------------------------------------
 # Token counting utility (delegates to LLMUsageTracker for context management only)
 # --------------------------------------------------------------------------------------
@@ -230,6 +242,11 @@ class ToolContextCapture:
             return
             
         tool_info = self.current_tool_calls[tool_call_id]
+        # Store a truncated output excerpt on the in-memory tool call record so the
+        # orchestrator's _extract_tool_call_history can include it in finding payloads.
+        tool_info["output_excerpt"] = _build_excerpt(output, is_error)
+        tool_info["is_error"] = bool(is_error)
+        tool_info["completed_at"] = datetime.now(timezone.utc).isoformat()
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
