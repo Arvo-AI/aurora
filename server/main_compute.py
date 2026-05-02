@@ -188,7 +188,7 @@ if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
         "Refusing to start without authentication secrets in production." % _AURORA_ENV
     )
 
-_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
+_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register", "/api/auth/me"))
 
 _HEALTH_PATH = "/health"
 
