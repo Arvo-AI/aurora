@@ -2139,6 +2139,30 @@ def initialize_tables():
             """)
             logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
 
+            # kubectl agent token verification is a bootstrap auth query — the
+            # agent connects with a Bearer token before any org context exists.
+            # Same pattern as mcp_tokens: a permissive policy keyed on a session
+            # variable so the handler can opt in to a scoped RLS bypass.
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS select_by_token_resolve ON kubectl_agent_tokens;
+                    CREATE POLICY select_by_token_resolve ON kubectl_agent_tokens
+                    FOR SELECT USING (
+                        current_setting('myapp.kubectl_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS update_by_token_resolve ON kubectl_agent_tokens;
+                    CREATE POLICY update_by_token_resolve ON kubectl_agent_tokens
+                    FOR UPDATE USING (
+                        current_setting('myapp.kubectl_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            logging.info("Added kubectl token resolve RLS policies on kubectl_agent_tokens.")
+
             conn.commit()
 
             # Migration: Add role column to users table for RBAC
