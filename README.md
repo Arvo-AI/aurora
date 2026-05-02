@@ -76,7 +76,7 @@ Track all incidents in a single dashboard. Aurora ingests alerts from PagerDuty,
 
 ### Automated Postmortem Generation
 
-Aurora generates detailed postmortem reports with timeline, root cause, impact assessment, and remediation steps. Export directly to Confluence.
+Aurora generates detailed postmortem reports with timeline, root cause, impact assessment, and remediation steps. Export directly to Confluence or Notion.
 
 <p align="center">
   <img src=".github/assets/postmortem-report.png" alt="Aurora auto-generated postmortem with timeline, root cause, and remediation" width="800" />
