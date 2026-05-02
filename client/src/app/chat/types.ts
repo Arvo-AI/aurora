@@ -28,6 +28,13 @@ export interface ToolCall {
   yes_always_effect?: YesAlwaysEffect;
   command?: string; // Add command field to store final_command
   isExpanded?: boolean; // Track whether the tool output is expanded
+  // Multi-agent dispatch fields (populated when tool_name === "dispatch_subagent")
+  agent_id?: string;
+  role_name?: string;
+  purpose?: string;
+  child_session_id?: string;
+  wave?: number;
+  self_assessed_strength?: "strong" | "moderate" | "weak" | "inconclusive";
 }
 
 export type MessageContentPart =
@@ -57,4 +64,36 @@ export type Message = {
   toolCalls?: ToolCall[];
   // New content array for chronological rendering
   content?: MessageContentPart[];
-}; 
+};
+
+export interface ParsedDispatchCall {
+  agent_id: string;
+  role_name: string;
+  purpose: string;
+  child_session_id: string;
+  wave: number;
+  self_assessed_strength?: "strong" | "moderate" | "weak" | "inconclusive";
+}
+
+export function parseDispatchToolCall(tc: ToolCall): ParsedDispatchCall | null {
+  if (tc.tool_name !== "dispatch_subagent") return null;
+  try {
+    const parsed = typeof tc.input === "string" ? JSON.parse(tc.input) : tc.input;
+    if (!parsed?.agent_id || !parsed?.role_name || !parsed?.purpose) return null;
+    const outputStrength =
+      tc.output && typeof tc.output === "object"
+        ? (tc.output as { self_assessed_strength?: ParsedDispatchCall["self_assessed_strength"] })
+            .self_assessed_strength
+        : undefined;
+    return {
+      agent_id: String(parsed.agent_id),
+      role_name: String(parsed.role_name),
+      purpose: String(parsed.purpose),
+      child_session_id: String(parsed.child_session_id ?? ""),
+      wave: Number(parsed.wave ?? 1),
+      self_assessed_strength: outputStrength ?? parsed.self_assessed_strength,
+    };
+  } catch {
+    return null;
+  }
+}

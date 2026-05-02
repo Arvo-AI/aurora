@@ -10,9 +10,11 @@ interface MessageListProps {
   onUpdateMessage?: (messageId: number, updater: (message: Message) => Message) => void;
   sessionId?: string;
   userId?: string;
+  incidentId?: string;
+  onSelectSubAgent?: (agentId: string, childSessionId: string) => void;
 }
 
-export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId }: MessageListProps) {
+export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId, incidentId, onSelectSubAgent }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -94,6 +96,8 @@ export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, use
             userId={userId}
             allMessages={messages}
             messageIndex={index}
+            incidentId={incidentId}
+            onSelectSubAgent={onSelectSubAgent}
           />
         </div>
       ))}

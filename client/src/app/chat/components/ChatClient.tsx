@@ -29,6 +29,7 @@ import { useSessionLoader } from '@/hooks/useSessionLoader';
 import { useChatExpansion } from '@/app/components/ClientShell';
 import { useChatCancellation } from '@/hooks/useChatCancellation';
 import SessionUsagePanel from "@/components/SessionUsagePanel";
+import SubAgentDetailPanel from "@/components/chat/subagent-detail-panel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
 
@@ -68,7 +69,16 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const lastLoadedSessionRef = useRef<string | null>(null);
   const initialMessageSentRef = useRef<boolean>(false);
   const [activeIncidentContext, setActiveIncidentContext] = useState<string | undefined>(incidentContext);
-  
+
+  // Multi-agent dispatch panel state
+  const [selectedSubAgent, setSelectedSubAgent] = useState<{
+    agentId: string;
+    childSessionId?: string;
+    roleName?: string;
+    purpose?: string;
+  } | null>(null);
+  const [linkedIncidentId, setLinkedIncidentId] = useState<string | undefined>(undefined);
+
   
   // Modular streaming message handling
   const streamingMessages = useStreamingMessages();
@@ -293,6 +303,39 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     };
   }, [cleanupStreaming]);
 
+  // Resolve linked incident_id for the active chat session. Used to wire the
+  // multi-agent dispatch detail panel to /api/incidents/:id/findings/:agentId.
+  // Hits the existing /api/chat-sessions/:id proxy which exposes incident_id.
+  // If no session is loaded the panel cannot open and this stays undefined.
+  useEffect(() => {
+    setSelectedSubAgent(null);
+    if (!currentSessionId) {
+      setLinkedIncidentId(undefined);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/chat-sessions/${currentSessionId}`, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "include",
+        });
+        if (cancelled || !res.ok) return;
+        const data = await res.json();
+        const id = data?.incident_id;
+        if (!cancelled) {
+          setLinkedIncidentId(typeof id === "string" && id.length > 0 ? id : undefined);
+        }
+      } catch {
+        if (!cancelled) setLinkedIncidentId(undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSessionId]);
+
   // Initialize user and session
   useEffect(() => {
     if (!isLoaded) return;
@@ -435,18 +478,60 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         <div className="flex-1 min-h-0">
             <MessageList
               key={currentSessionId || "new"}
-              messages={memoizedMessages} 
+              messages={memoizedMessages}
               sendRaw={chatWebSocket.sendRaw}
               onUpdateMessage={onUpdateMessage}
               sessionId={currentSessionId || undefined}
               userId={userId || undefined}
+              incidentId={linkedIncidentId}
+              onSelectSubAgent={(agentId, childSessionId) => {
+                // Look up role/purpose from messages so the panel can render
+                // the brief without an extra round-trip.
+                let roleName: string | undefined;
+                let purpose: string | undefined;
+                for (const msg of memoizedMessages) {
+                  const tc = msg.toolCalls?.find(t =>
+                    t.tool_name === "dispatch_subagent" &&
+                    (() => {
+                      try {
+                        const p = typeof t.input === "string" ? JSON.parse(t.input) : t.input;
+                        return p?.agent_id === agentId;
+                      } catch {
+                        return false;
+                      }
+                    })()
+                  );
+                  if (tc) {
+                    try {
+                      const p = typeof tc.input === "string" ? JSON.parse(tc.input) : tc.input;
+                      roleName = p?.role_name;
+                      purpose = p?.purpose;
+                    } catch {
+                      // ignore
+                    }
+                    break;
+                  }
+                }
+                setSelectedSubAgent({ agentId, childSessionId, roleName, purpose });
+              }}
             />
         </div>
 
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
-            <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
+            {selectedSubAgent && linkedIncidentId ? (
+              <SubAgentDetailPanel
+                incidentId={linkedIncidentId}
+                agentId={selectedSubAgent.agentId}
+                childSessionId={selectedSubAgent.childSessionId}
+                roleName={selectedSubAgent.roleName}
+                purpose={selectedSubAgent.purpose}
+                onClose={() => setSelectedSubAgent(null)}
+              />
+            ) : (
+              <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
+            )}
             {isReadOnly ? (
               <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
             ) : (
