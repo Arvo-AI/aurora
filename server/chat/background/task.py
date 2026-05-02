@@ -2110,7 +2110,8 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 for uid in _affected_users(cursor):
-                    set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]")
+                    if not set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]"):
+                        continue
                     cursor.execute("""
                         SELECT id, rca_celery_task_id,
                                COALESCE((SELECT cs.updated_at FROM chat_sessions cs
@@ -2125,7 +2126,7 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                         cursor.execute("""
                             UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
                                    rca_celery_task_id = NULL, updated_at = NOW()
-                            WHERE id = %s AND aurora_status = 'running' RETURNING id
+                            WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
                         """, (inc_id,))
                         if cursor.fetchone():
                             _record_rca_error(cursor, str(inc_id), uid)
@@ -2163,7 +2164,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
 
             with conn.cursor() as cursor:
                 for uid in _affected_users(cursor):
-                    set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
+                    if not set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]"):
+                        continue
 
                     # --- 1. Stale sessions (>20 min with no update) ---
                     cursor.execute("""
@@ -2183,7 +2185,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         _propagate_suggestion_status(str(session_id), 'failed')
                         if incident_id:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
@@ -2203,7 +2205,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                              cursor=cursor, incident_id=inc_id):
                             continue
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' RETURNING id",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
                             (inc_id,)
                         )
                         if not cursor.fetchone():
@@ -2232,7 +2234,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     """, (stale_threshold, uid))
                     for (inc_id,) in cursor.fetchall():
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' RETURNING id",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
                             (inc_id,)
                         )
                         if cursor.fetchone():

@@ -239,13 +239,13 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
         const sessionData = await sessionResp.json();
         if (isCancelled) return;
-        
-        // Update the session in our local state
+
         setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) => 
           s.id === sessionIdToFetch 
             ? { ...s, messages: sessionData.messages || [], status: sessionData.status }
             : s
         ));
+        pollStartRef.current = Date.now();
 
         // If completed or failed, stop polling and remove from creating set
         if (sessionData.status === 'completed' || sessionData.status === 'failed') {

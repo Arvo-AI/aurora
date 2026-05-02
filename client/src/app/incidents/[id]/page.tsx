@@ -69,6 +69,7 @@ export default function IncidentDetailPage() {
           setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
           return;
         }
+        pollStartRef.current = Date.now();
         timer = setTimeout(() => fetchAndSchedule(false), 1000);
       } catch (e) {
         if (!active) return;
