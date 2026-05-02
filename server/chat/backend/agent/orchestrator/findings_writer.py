@@ -9,7 +9,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from chat.backend.agent.orchestrator.findings_schema import (
-    FindingsValidationError, parse_findings,
+    FindingsValidationError, make_stub, parse_findings,
 )
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
@@ -25,14 +25,19 @@ class WriteFindingsArgs(BaseModel):
     ))
 
 
+_SCHEMA_RETRY_LIMIT = 2
+
+
 def make_write_findings_tool(agent_id: str, role_name: str, incident_id: str,
                               user_id: str, org_id: Optional[str],
                               child_session_id: str) -> StructuredTool:
+    schema_failures = {"n": 0}  # closure-bound; bounded by _SCHEMA_RETRY_LIMIT
+
     def write_findings(body: str) -> str:
         return _write_findings_impl(
             body=body, agent_id=agent_id, role_name=role_name,
             incident_id=incident_id, user_id=user_id, org_id=org_id,
-            child_session_id=child_session_id,
+            child_session_id=child_session_id, failures=schema_failures,
         )
 
     return StructuredTool.from_function(
@@ -48,7 +53,7 @@ def make_write_findings_tool(agent_id: str, role_name: str, incident_id: str,
 
 def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
                          incident_id: str, user_id: str, org_id: Optional[str],
-                         child_session_id: str) -> str:
+                         child_session_id: str, failures: dict) -> str:
     inc_hash = hash_for_log(incident_id)
     logger.info(
         "write_findings: agent=%s incident=%s session=%s",
@@ -58,8 +63,20 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
     try:
         meta = parse_findings(body)
     except FindingsValidationError as exc:
-        logger.warning("write_findings: schema validation failed for %s: %s", agent_id, exc)
-        return f"ERROR: findings.md schema validation failed: {exc}. Please fix and call write_findings again."
+        failures["n"] += 1
+        logger.warning(
+            "write_findings: schema validation failed for %s (attempt %d/%d): %s",
+            agent_id, failures["n"], _SCHEMA_RETRY_LIMIT, exc,
+        )
+        if failures["n"] >= _SCHEMA_RETRY_LIMIT:
+            # Hard cap: force a stub so the agent stops retrying broken markdown
+            # and synthesis sees status=failed deterministically.
+            return _force_stub_after_retry_exhaustion(
+                agent_id=agent_id, role_name=role_name, incident_id=incident_id,
+                user_id=user_id, org_id=org_id, child_session_id=child_session_id,
+                error_message=str(exc),
+            )
+        return f"ERROR (attempt {failures['n']}/{_SCHEMA_RETRY_LIMIT}): findings.md schema validation failed: {exc}. Please fix and call write_findings again."
 
     storage_uri = f"rca/{incident_id}/findings/{agent_id}.md"
     try:
@@ -118,3 +135,44 @@ def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
         logger.exception(
             "write_findings: failed to update rca_findings row for agent %s", agent_id
         )
+
+
+def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
+                                        incident_id: str, user_id: str,
+                                        org_id: Optional[str], child_session_id: str,
+                                        error_message: str) -> str:
+    """Persist a synthetic stub when the LLM exhausts its schema-retry budget.
+
+    Returns a success-shaped acknowledgment so the LLM stops retrying broken
+    markdown. Synthesis sees status=failed deterministically.
+    """
+    logger.warning(
+        "write_findings: agent %s exhausted schema retries — writing stub", agent_id,
+    )
+    storage_uri = f"rca/{incident_id}/findings/{agent_id}.md"
+    stub_body = make_stub(
+        agent_id=agent_id, role_name=role_name, incident_id=incident_id,
+        purpose="schema validation retries exhausted", status="failed",
+        error_message=error_message,
+    )
+    try:
+        from utils.storage.storage import get_storage_manager
+        get_storage_manager(user_id).upload_bytes(
+            stub_body.encode("utf-8"), storage_uri, user_id, content_type="text/markdown",
+        )
+    except Exception:
+        logger.exception("write_findings: failed to upload stub for agent %s", agent_id)
+
+    try:
+        meta = parse_findings(stub_body)
+        _update_finding_row(
+            agent_id=agent_id, incident_id=incident_id, user_id=user_id, org_id=org_id,
+            meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
+        )
+    except Exception:
+        logger.exception("write_findings: failed to persist stub row for agent %s", agent_id)
+
+    return (
+        f"findings.md persisted with status=failed after {_SCHEMA_RETRY_LIMIT} "
+        f"schema-validation failures. Stop calling write_findings."
+    )
