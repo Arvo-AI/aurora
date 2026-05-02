@@ -70,6 +70,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
+  const pollStartRef = useRef<number>(0);
   
   // Track session IDs we're currently creating to avoid state conflicts with parent component.
   // When we send a message, we create an optimistic session in local state (chatSessions).
@@ -207,14 +208,21 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
   // Poll for session updates when a session is in progress
   useEffect(() => {
-    if (!pollingSessionId) return;
+    if (!pollingSessionId) { pollStartRef.current = 0; return; }
+    if (!pollStartRef.current) pollStartRef.current = Date.now();
 
     let isCancelled = false;
     const abortController = new AbortController();
-    const sessionIdToFetch = pollingSessionId; // Capture value to avoid stale closure
+    const sessionIdToFetch = pollingSessionId;
 
     const pollInterval = setInterval(async () => {
       if (isCancelled) return;
+
+      if (Date.now() - pollStartRef.current > 5 * 60 * 1000) {
+        setPollingSessionId(null);
+        setIsLoading(false);
+        return;
+      }
       
       try {
         const sessionResp = await fetch(`/api/chat-sessions/${sessionIdToFetch}`, {

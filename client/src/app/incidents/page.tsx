@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
@@ -236,8 +236,11 @@ function IncidentRow({ incident }: { incident: Incident }) {
                 )}
                 {isActive && (
                   <span className="flex items-center gap-1 text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Aurora investigating
+                    {Date.now() - new Date(incident.startedAt).getTime() > 30 * 60 * 1000 ? (
+                      <><AlertTriangle className="h-3 w-3 text-red-400" /> Investigation stalled</>
+                    ) : (
+                      <><Loader2 className="h-3 w-3 animate-spin" /> Aurora investigating</>
+                    )}
                   </span>
                 )}
                 {isMerged && (

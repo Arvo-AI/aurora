@@ -24,6 +24,7 @@ export default function IncidentDetailPage() {
   const [thoughts, setThoughts] = useState<StreamingThought[]>([]);
   const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const userClosedThoughtsRef = useRef<boolean>(false);
+  const pollStartRef = useRef<number>(0);
 
   const applyIncidentData = useCallback((data: Incident) => {
     const newThoughts = data.streamingThoughts || [];
@@ -59,7 +60,15 @@ export default function IncidentDetailPage() {
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
         if (needsPoll && active) {
+          if (!pollStartRef.current) pollStartRef.current = Date.now();
+          const staleMins = 5;
+          if (Date.now() - pollStartRef.current > staleMins * 60 * 1000) {
+            setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+            return;
+          }
           timer = setTimeout(() => fetchAndSchedule(false), 1000);
+        } else {
+          pollStartRef.current = 0;
         }
       } catch (e) {
         if (!active) return;

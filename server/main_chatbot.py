@@ -1577,6 +1577,34 @@ async def handle_connection(websocket) -> None:
         if weaviate_client:
             weaviate_client.close()
 
+def _cleanup_orphaned_investigations():
+    """Mark investigations left in 'running' state by a previous process as failed."""
+    try:
+        from datetime import timedelta
+        threshold = datetime.now() - timedelta(minutes=25)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+                for uid, org_id in cursor.fetchall():
+                    set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]")
+                    cursor.execute("""
+                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW()
+                        WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
+                        RETURNING id
+                    """, (threshold, uid))
+                    stale_incidents = cursor.fetchall()
+                    cursor.execute("""
+                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
+                    """, (threshold, uid))
+                    conn.commit()
+                    if stale_incidents:
+                        ids = [str(r[0]) for r in stale_incidents]
+                        logger.info(f"[StartupCleanup] Marked {len(ids)} orphaned investigations as error for user {uid}: {ids}")
+    except Exception as e:
+        logger.error(f"[StartupCleanup] Failed to clean orphaned investigations: {e}")
+
+
 async def main():
     """Start the WebSocket server and health check endpoint."""
     WS_PORT = 5006
@@ -1585,6 +1613,9 @@ async def main():
 
     # Clean up old terraform files on startup
     cleanup_terraform_directory()
+
+    # Mark any investigations orphaned by a previous crash as failed
+    _cleanup_orphaned_investigations()
 
     # Start HTTP server (health check + internal API)
     http_server = await asyncio.start_server(handle_http_request, "0.0.0.0", HEALTH_PORT)

@@ -2050,9 +2050,8 @@ def create_background_chat_session(
 
 @celery_app.task(name="chat.background.cleanup_stale_sessions")
 def cleanup_stale_background_chats() -> Dict[str, Any]:
-    """Cleanup background chat sessions stuck in 'in_progress' for >20 minutes.
-    
-    Runs periodically to mark abandoned sessions as 'failed' and update their incidents.
+    """Cleanup background chat sessions stuck in 'in_progress' and incidents
+    whose Celery task is no longer alive. Runs every 5 minutes.
     """    
     stale_threshold = datetime.now() - __import__('datetime').timedelta(minutes=20)
     
@@ -2143,7 +2142,69 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 conn.commit()
             
             logger.info(f"[BackgroundChat:Cleanup] Marked {cleaned_count} stale sessions as failed")
-            return {"cleaned": cleaned_count, "session_ids": [s[0] for s in stale_sessions]}
+
+            # Check for incidents whose Celery task is dead (catches crashes immediately, no 20-min wait)
+            dead_task_count = 0
+            dead_task_threshold = datetime.now() - __import__('datetime').timedelta(minutes=3)
+            with conn.cursor() as cursor:
+                for uid, org_id in all_users:
+                    set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
+                    cursor.execute("""
+                        SELECT i.id, i.rca_celery_task_id, i.aurora_chat_session_id,
+                               COALESCE(cs.updated_at, i.updated_at) as last_activity
+                        FROM incidents i
+                        LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
+                        WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
+                          AND i.updated_at < %s AND i.user_id = %s
+                    """, (dead_task_threshold, uid))
+                    for inc_id, task_id, session_id, last_activity in cursor.fetchall():
+                        result = celery_app.AsyncResult(task_id)
+                        is_dead = result.state in ('FAILURE', 'REVOKED') or (result.state == 'PENDING' and result.result is None)
+                        # STARTED in result backend is stale if no DB activity for 3+ min (worker died without updating Redis)
+                        if not is_dead and result.state == 'STARTED' and last_activity and last_activity < dead_task_threshold:
+                            # Check for running tool calls -- a long tool (e.g. terraform) may not update the session
+                            cursor.execute("""
+                                SELECT 1 FROM execution_steps
+                                WHERE incident_id = %s AND status = 'running' AND started_at > %s
+                                LIMIT 1
+                            """, (inc_id, dead_task_threshold))
+                            if not cursor.fetchone():
+                                is_dead = True
+                        if is_dead:
+                            set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = %s WHERE id = %s AND aurora_status = 'running'",
+                                (datetime.now(), inc_id)
+                            )
+                            if session_id:
+                                cursor.execute(
+                                    "UPDATE chat_sessions SET status = 'failed', updated_at = %s WHERE id = %s AND status = 'in_progress'",
+                                    (datetime.now(), str(session_id))
+                                )
+                            conn.commit()
+                            dead_task_count += 1
+                            logger.info(f"[BackgroundChat:Cleanup] Dead Celery task {task_id} for incident {inc_id} (state={result.state})")
+
+            # Also catch incidents stuck in 'running' with no linked in-progress session
+            with conn.cursor() as cursor:
+                for uid, org_id in all_users:
+                    set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
+                    cursor.execute("""
+                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s
+                        WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM chat_sessions cs
+                              WHERE cs.id::text = incidents.aurora_chat_session_id::text
+                                AND cs.status = 'in_progress'
+                          )
+                        RETURNING id
+                    """, (datetime.now(), stale_threshold, uid))
+                    orphaned = cursor.fetchall()
+                    if orphaned:
+                        conn.commit()
+                        logger.info(f"[BackgroundChat:Cleanup] Marked {len(orphaned)} orphaned incidents as error for user {uid}")
+
+            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "session_ids": [s[0] for s in stale_sessions]}
             
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
