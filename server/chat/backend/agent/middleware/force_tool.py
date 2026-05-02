@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain.agents.middleware.types import ModelRequest
 
 
 class ForceToolChoice(AgentMiddleware):
