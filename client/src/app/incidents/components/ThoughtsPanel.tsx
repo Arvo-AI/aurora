@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type Chan
 import { MessageSquare, Send } from 'lucide-react';
 import { StreamingThought, Incident, ChatSession, incidentsService } from '@/lib/services/incidents';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import SubAgentInvestigationsSection from './SubAgentInvestigationsSection';
 
 // Maximum length for short titles in incident chat tabs
 const TITLE_SHORT_MAX_LENGTH = 15;
@@ -427,6 +428,10 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
               {thoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
                 <p className="text-center text-zinc-500 text-sm py-8">No investigation thoughts yet</p>
               )}
+              <SubAgentInvestigationsSection
+                incidentId={incident.id}
+                isActive={incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing'}
+              />
             </div>
           </div>
 
