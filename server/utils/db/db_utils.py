@@ -1153,6 +1153,37 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_incident ON incident_lifecycle_events(incident_id, created_at);
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_user ON incident_lifecycle_events(user_id, created_at DESC);
                 """,
+                "rca_findings": """
+                    CREATE TABLE IF NOT EXISTS rca_findings (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        agent_id VARCHAR(64) NOT NULL,
+                        role_name VARCHAR(128) NOT NULL,
+                        purpose TEXT NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'running',
+                        wave INTEGER NOT NULL DEFAULT 1,
+                        storage_uri TEXT,
+                        current_action TEXT,
+                        self_assessed_strength VARCHAR(20),
+                        tools_used JSONB DEFAULT '[]'::jsonb,
+                        citations JSONB DEFAULT '[]'::jsonb,
+                        follow_ups_suggested JSONB DEFAULT '[]'::jsonb,
+                        tool_call_history JSONB DEFAULT '[]'::jsonb,
+                        child_session_id VARCHAR(255),
+                        error_message TEXT,
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        org_id VARCHAR(255),
+                        user_id VARCHAR(255) NOT NULL
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_rca_findings_incident_agent
+                    ON rca_findings(incident_id, agent_id);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_incident_status
+                    ON rca_findings(incident_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
+                    ON rca_findings(org_id, started_at DESC);
+                """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -1236,6 +1267,7 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("rca_findings")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1275,6 +1307,22 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: ensure rca_findings.tool_call_history exists for upgrades
+            try:
+                cursor.execute(
+                    "ALTER TABLE rca_findings "
+                    "ADD COLUMN IF NOT EXISTS tool_call_history JSONB DEFAULT '[]'::jsonb;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured tool_call_history column exists on rca_findings table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding tool_call_history column to rca_findings: {e}"
+                )
+                conn.rollback()
 
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:

@@ -193,6 +193,13 @@ config:
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
+
+  # --- Multi-agent RCA orchestrator ---
+  # When "false" (default), background RCA uses the existing single-agent path
+  # unchanged. When "true", a lead orchestrator may triage and fan out parallel
+  # read-only sub-agents. Operational kill-switch: set to "false" and restart
+  # celery workers to fully revert.
+  ORCHESTRATOR_ENABLED: "false"
   
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
