@@ -215,17 +215,17 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     const abortController = new AbortController();
     const sessionIdToFetch = pollingSessionId;
 
+    const markSessionFailed = () => {
+      setPollingSessionId(null);
+      setIsLoading(false);
+      setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+        s.id === sessionIdToFetch ? { ...s, status: 'failed' } : s
+      ));
+    };
+
     const pollInterval = setInterval(async () => {
       if (isCancelled) return;
-
-      if (Date.now() - pollStartRef.current > 5 * 60 * 1000) {
-        setPollingSessionId(null);
-        setIsLoading(false);
-        setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
-          s.id === sessionIdToFetch ? { ...s, status: 'failed' } : s
-        ));
-        return;
-      }
+      if (Date.now() - pollStartRef.current > 5 * 60 * 1000) { markSessionFailed(); return; }
       
       try {
         const sessionResp = await fetch(`/api/chat-sessions/${sessionIdToFetch}`, {

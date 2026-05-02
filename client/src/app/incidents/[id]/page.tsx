@@ -61,16 +61,14 @@ export default function IncidentDetailPage() {
         applyIncidentData(data);
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
-        if (needsPoll && active) {
-          if (!pollStartRef.current) pollStartRef.current = Date.now();
-          if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
-            setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
-            return;
-          }
-          timer = setTimeout(() => fetchAndSchedule(false), 1000);
-        } else {
-          pollStartRef.current = 0;
+        if (!needsPoll || !active) { pollStartRef.current = 0; return; }
+
+        if (!pollStartRef.current) pollStartRef.current = Date.now();
+        if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
+          setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+          return;
         }
+        timer = setTimeout(() => fetchAndSchedule(false), 1000);
       } catch (e) {
         if (!active) return;
         if (isInitial) {
