@@ -2048,7 +2048,7 @@ def create_background_chat_session(
     
     return session_id
 
-def _record_rca_error(cursor, conn, incident_id: str, user_id: str) -> None:
+def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
     """Write an rca_error lifecycle event, wrapped in a savepoint to avoid aborting the caller."""
     try:
         cursor.execute("SAVEPOINT sp_rca_err")
@@ -2128,7 +2128,7 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                             WHERE id = %s AND aurora_status = 'running' RETURNING id
                         """, (inc_id,))
                         if cursor.fetchone():
-                            _record_rca_error(cursor, conn, str(inc_id), uid)
+                            _record_rca_error(cursor, str(inc_id), uid)
                             cleaned += 1
                         conn.commit()
                     cursor.execute("""
@@ -2183,7 +2183,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW() WHERE id = %s",
                                 (incident_id,)
                             )
-                            _record_rca_error(cursor, conn, str(incident_id), uid)
+                            _record_rca_error(cursor, str(incident_id), uid)
                         conn.commit()
 
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
@@ -2208,7 +2208,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress'",
                                 (str(session_id),)
                             )
-                        _record_rca_error(cursor, conn, str(inc_id), uid)
+                        _record_rca_error(cursor, str(inc_id), uid)
                         conn.commit()
                         dead_task_count += 1
 
@@ -2228,7 +2228,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             (inc_id,)
                         )
                         if cursor.fetchone():
-                            _record_rca_error(cursor, conn, str(inc_id), uid)
+                            _record_rca_error(cursor, str(inc_id), uid)
                             orphaned_count += 1
                         conn.commit()
 

@@ -71,6 +71,12 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   const [isLoading, setIsLoading] = useState(false);
   const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
   const pollStartRef = useRef<number>(0);
+
+  const failSession = useCallback((sid: string) => {
+    setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+      s.id === sid ? { ...s, status: 'failed' } : s
+    ));
+  }, []);
   
   // Track session IDs we're currently creating to avoid state conflicts with parent component.
   // When we send a message, we create an optimistic session in local state (chatSessions).
@@ -218,9 +224,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     const markSessionFailed = () => {
       setPollingSessionId(null);
       setIsLoading(false);
-      setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
-        s.id === sessionIdToFetch ? { ...s, status: 'failed' } : s
-      ));
+      failSession(sessionIdToFetch);
     };
 
     const pollInterval = setInterval(async () => {
