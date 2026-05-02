@@ -9,6 +9,21 @@ interface Step {
 }
 
 async function refreshSession(): Promise<void> {
+  // Capture the orgId in the JWT cookie BEFORE we trigger a refresh, so we
+  // can detect when the cookie has actually been rewritten with the new org.
+  // Without this, a user who was already in a non-Default org (e.g. switching
+  // between two real orgs by accepting an invite) would see the polling exit
+  // early on the stale cookie — leaving every subsequent API call carrying
+  // the old X-Org-ID and getting 403 Forbidden.
+  let priorOrgId: string | null = null;
+  try {
+    const initial = await fetch("/api/auth/session", { cache: "no-store" });
+    if (initial.ok) {
+      const data = await initial.json();
+      priorOrgId = data?.user?.orgId ?? null;
+    }
+  } catch { /* tolerate; we'll fall back to default-org check */ }
+
   const csrfResp = await fetch("/api/auth/csrf");
   if (!csrfResp.ok) throw new Error("csrf");
   const { csrfToken } = await csrfResp.json();
@@ -21,12 +36,17 @@ async function refreshSession(): Promise<void> {
   if (!res.ok) throw new Error("refresh");
 
   for (let attempt = 0; attempt < 10; attempt++) {
-    const check = await fetch("/api/auth/session");
+    const check = await fetch("/api/auth/session", { cache: "no-store" });
     if (check.ok) {
       const session = await check.json();
       const orgId = session?.user?.orgId;
       const orgName = session?.user?.orgName?.toLowerCase();
-      if (orgId && orgName !== "default organization") {
+      // Success requires: a valid orgId, not the placeholder Default org,
+      // AND a different orgId than what was in the cookie before the refresh.
+      // If we couldn't read priorOrgId, fall back to the looser check (which
+      // still catches the Default-org → real-org case).
+      const orgChanged = priorOrgId === null || (!!orgId && orgId !== priorOrgId);
+      if (orgId && orgName !== "default organization" && orgChanged) {
         return;
       }
     }
