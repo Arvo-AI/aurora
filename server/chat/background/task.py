@@ -2062,8 +2062,8 @@ def _record_rca_error(cursor, conn, incident_id: str, user_id: str) -> None:
     except Exception as e:
         try:
             cursor.execute("ROLLBACK TO SAVEPOINT sp_rca_err")
-        except Exception:
-            pass
+        except Exception as rollback_err:
+            logger.debug("[Cleanup] Rollback failed for incident %s: %s", incident_id, rollback_err)
         logger.debug("[Cleanup] Failed to record rca_error for incident %s: %s", incident_id, e)
 
 
