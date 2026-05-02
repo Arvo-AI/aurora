@@ -38,12 +38,6 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        # pytest                       -> test runner
-        # Flask                        -> imported by utils.db.connection_pool and the
-        #                                 connection-pool test (Flask request context)
-        # psycopg2-binary              -> connection_pool.py imports psycopg2 at module
-        #                                 import time even though the pool is mocked
-        # python-dotenv                -> connection_pool.py calls load_dotenv() on import
         run: pip install pytest Flask psycopg2-binary python-dotenv
 
       - name: Run static analysis & unit tests
