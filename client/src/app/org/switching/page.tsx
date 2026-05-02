@@ -9,28 +9,45 @@ interface Step {
 }
 
 async function refreshSession(): Promise<void> {
+  // Snapshot the orgId already encoded in the JWT cookie. We're done only
+  // when the polled session shows a *different* orgId — landing on the same
+  // value (real-org → real-org case) means the JWT didn't actually update
+  // and Casbin will 403 every subsequent call.
+  let priorOrgId: string | null = null;
+  try {
+    const initial = await fetch("/api/auth/session", { cache: "no-store" });
+    if (initial.ok) {
+      const data = await initial.json();
+      priorOrgId = data?.user?.orgId ?? null;
+    }
+  } catch { /* tolerate; we'll fall back to non-default check */ }
+
   const csrfResp = await fetch("/api/auth/csrf");
   if (!csrfResp.ok) throw new Error("csrf");
   const { csrfToken } = await csrfResp.json();
 
-  const res = await fetch("/api/auth/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ csrfToken }),
-  });
-  if (!res.ok) throw new Error("refresh");
-
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const check = await fetch("/api/auth/session");
-    if (check.ok) {
-      const session = await check.json();
+  // POST in a loop instead of POST-once-then-GET-poll. Each POST sets
+  // trigger === "update" in the JWT callback, which forces a fresh
+  // refreshUserFromBackend() call regardless of the lastRefreshedAt
+  // throttle. A single attempt loses to the 3s timeout often enough
+  // right after join_org's Casbin/cleanup burst; the retries cover that.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const res = await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ csrfToken, data: {} }),
+    });
+    if (res.ok) {
+      const session = await res.json();
       const orgId = session?.user?.orgId;
       const orgName = session?.user?.orgName?.toLowerCase();
-      if (orgId && orgName !== "default organization") {
+      const orgChanged = priorOrgId === null || (!!orgId && orgId !== priorOrgId);
+      if (orgId && orgName !== "default organization" && orgChanged) {
         return;
       }
     }
-    await new Promise((r) => setTimeout(r, 250 + attempt * 150));
+    await new Promise((r) => setTimeout(r, 400 + attempt * 200));
   }
   throw new Error("session did not update");
 }

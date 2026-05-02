@@ -140,6 +140,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.id = undefined
           token.email = undefined
           token.name = undefined
+          token.lastRefreshedAt = now
           return token
         }
         if (fresh) {
@@ -147,8 +148,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.orgId = fresh.orgId
           token.orgName = fresh.orgName
           token.mustChangePassword = fresh.mustChangePassword
+          token.lastRefreshedAt = now
         }
-        token.lastRefreshedAt = now
+        // On failure (fresh === null, typically the 3s timeout after a busy
+        // backend write burst), do NOT advance lastRefreshedAt — otherwise
+        // the next 60s of GET /api/auth/session calls short-circuit on the
+        // stale token, leaving the user with the old org_id in their cookie
+        // until the time-based check re-fires. This was the root cause of
+        // DEV-1100: the post-invite-accept refresh would lose the race once
+        // and then never re-attempt within the /org/switching polling window.
       }
 
       return token
