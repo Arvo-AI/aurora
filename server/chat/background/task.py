@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
@@ -2056,7 +2056,6 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
     """
     cleaned = 0
     try:
-        from datetime import timedelta
         threshold = datetime.now() - timedelta(minutes=threshold_minutes)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -2064,7 +2063,8 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                 for uid, org_id in cursor.fetchall():
                     set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]")
                     cursor.execute("""
-                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW()
+                        UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
+                               rca_celery_task_id = NULL, updated_at = NOW()
                         WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
                         RETURNING id
                     """, (threshold, uid))
@@ -2088,7 +2088,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     """Cleanup background chat sessions stuck in 'in_progress' and incidents
     whose Celery task is no longer alive. Runs every 5 minutes.
     """    
-    stale_threshold = datetime.now() - __import__('datetime').timedelta(minutes=20)
+    stale_threshold = datetime.now() - timedelta(minutes=20)
     
     try:
         with db_pool.get_admin_connection() as conn:
@@ -2179,7 +2179,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
 
             # Check for incidents whose Celery task is dead (catches crashes immediately, no 20-min wait)
             dead_task_count = 0
-            dead_task_threshold = datetime.now() - __import__('datetime').timedelta(minutes=3)
+            dead_task_threshold = datetime.now() - timedelta(minutes=3)
             with conn.cursor() as cursor:
                 for uid, org_id in all_users:
                     set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
@@ -2234,8 +2234,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         RETURNING id
                     """, (datetime.now(), stale_threshold, uid))
                     orphaned = cursor.fetchall()
+                    conn.commit()
                     if orphaned:
-                        conn.commit()
                         logger.info(f"[BackgroundChat:Cleanup] Marked {len(orphaned)} orphaned incidents as error for user {uid}")
 
             return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "session_ids": [s[0] for s in stale_sessions]}

@@ -221,6 +221,9 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       if (Date.now() - pollStartRef.current > 5 * 60 * 1000) {
         setPollingSessionId(null);
         setIsLoading(false);
+        setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+          s.id === sessionIdToFetch ? { ...s, status: 'failed' } : s
+        ));
         return;
       }
       

@@ -13,6 +13,8 @@ import { canWrite } from '@/lib/roles';
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel from '../components/ThoughtsPanel';
 
+const STALE_POLL_MS = 5 * 60 * 1000;
+
 export default function IncidentDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -61,8 +63,7 @@ export default function IncidentDetailPage() {
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
         if (needsPoll && active) {
           if (!pollStartRef.current) pollStartRef.current = Date.now();
-          const staleMins = 5;
-          if (Date.now() - pollStartRef.current > staleMins * 60 * 1000) {
+          if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
             setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
             return;
           }
