@@ -378,6 +378,7 @@ def process_grafana_alert(
                                     source_alert_id=per_alert_source_id, alert_title=per_alert_title,
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
+                                    org_id=org_id,
                                 )
                                 cursor.execute("RELEASE SAVEPOINT sp_correlation")
                             except Exception as exc:
