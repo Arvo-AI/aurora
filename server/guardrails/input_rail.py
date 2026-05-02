@@ -205,7 +205,6 @@ def _classify_failure(exc: Exception) -> str:
     if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
         return _FAIL_CLOSED_CONNECTIVITY
     # SDK-specific types that don't subclass the builtins
-    type_name = type(exc).__qualname__
     for parent in type(exc).__mro__:
         name = parent.__qualname__
         if "Auth" in name or "Permission" in name or "Forbidden" in name:
