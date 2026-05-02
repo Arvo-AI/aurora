@@ -104,7 +104,7 @@ Aurora doesn't just find the root cause — it suggests code fixes and can gener
 - **Multi-Cloud Native** — AWS (STS AssumeRole + IRSA), Azure (Service Principal), GCP (OAuth + Service Account), OVH, Scaleway, Cloudflare, Kubernetes
 - **Any LLM Provider** — OpenAI, Anthropic, Google, or local models via Ollama for air-gapped deployments
 - **Terraform/IaC Analysis** — Understands your infrastructure-as-code state
-- **Self-Hosted** — Docker Compose or Helm chart. HashiCorp Vault for secrets management
+- **Self-Hosted** — Docker Compose or Helm chart. HashiCorp Vault or AWS Secrets Manager for secrets management
 - **Free Forever** — No per-seat or per-incident pricing. Apache 2.0.
 
 ## How It Works
