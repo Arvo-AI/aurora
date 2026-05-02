@@ -215,7 +215,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   // Poll for session updates when a session is in progress
   useEffect(() => {
     if (!pollingSessionId) { pollStartRef.current = 0; return; }
-    if (!pollStartRef.current) pollStartRef.current = Date.now();
+    pollStartRef.current = Date.now();
 
     let isCancelled = false;
     const abortController = new AbortController();

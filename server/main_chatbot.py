@@ -1588,7 +1588,7 @@ async def main():
 
     # Mark any investigations orphaned by a previous crash as failed
     from chat.background.task import cleanup_orphaned_investigations
-    cleanup_orphaned_investigations()
+    await asyncio.to_thread(cleanup_orphaned_investigations)
 
     # Start HTTP server (health check + internal API)
     http_server = await asyncio.start_server(handle_http_request, "0.0.0.0", HEALTH_PORT)

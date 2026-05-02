@@ -48,6 +48,7 @@ export default function IncidentDetailPage() {
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    pollStartRef.current = 0;
 
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;

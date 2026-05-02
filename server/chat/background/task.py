@@ -2134,7 +2134,10 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                     cursor.execute("""
                         UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
                         WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
+                        RETURNING id
                     """, (threshold, uid))
+                    for (sid,) in cursor.fetchall():
+                        _propagate_suggestion_status(str(sid), 'failed')
                     conn.commit()
 
         if cleaned:
@@ -2180,7 +2183,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         _propagate_suggestion_status(str(session_id), 'failed')
                         if incident_id:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW() WHERE id = %s",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s",
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
@@ -2200,14 +2203,19 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                              cursor=cursor, incident_id=inc_id):
                             continue
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running'",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' RETURNING id",
                             (inc_id,)
                         )
+                        if not cursor.fetchone():
+                            conn.commit()
+                            continue
                         if session_id:
                             cursor.execute(
-                                "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress'",
+                                "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress' RETURNING id",
                                 (str(session_id),)
                             )
+                            if cursor.fetchone():
+                                _propagate_suggestion_status(str(session_id), 'failed')
                         _record_rca_error(cursor, str(inc_id), uid)
                         conn.commit()
                         dead_task_count += 1
@@ -2224,7 +2232,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     """, (stale_threshold, uid))
                     for (inc_id,) in cursor.fetchall():
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = NOW() WHERE id = %s AND aurora_status = 'running' RETURNING id",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' RETURNING id",
                             (inc_id,)
                         )
                         if cursor.fetchone():
