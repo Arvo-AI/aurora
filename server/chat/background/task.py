@@ -2091,10 +2091,10 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
     return False
 
 
-def _iter_rls_users(cursor, conn):
-    """Return (user_id, org_id) pairs. users table is not RLS-protected."""
-    cursor.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
-    return cursor.fetchall()
+def _affected_users(cursor):
+    """Return user_ids that could have stale work. users table has no RLS."""
+    cursor.execute("SELECT DISTINCT id FROM users WHERE org_id IS NOT NULL")
+    return [r[0] for r in cursor.fetchall()]
 
 
 def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
@@ -2109,7 +2109,7 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                for uid, org_id in _iter_rls_users(cursor, conn):
+                for uid in _affected_users(cursor):
                     set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]")
                     cursor.execute("""
                         SELECT id, rca_celery_task_id,
@@ -2159,7 +2159,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
             orphaned_count = 0
 
             with conn.cursor() as cursor:
-                for uid, org_id in _iter_rls_users(cursor, conn):
+                for uid in _affected_users(cursor):
                     set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]")
 
                     # --- 1. Stale sessions (>20 min with no update) ---
