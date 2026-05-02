@@ -38,15 +38,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest
+        run: pip install pytest pyyaml flask
 
-      - name: Run static analysis tests
+      - name: Run all unit tests
         working-directory: server
-        run: |
-          tests=(tests/test_connector_rbac.py)
-          if [ -f tests/test_rls_coverage.py ]; then
-            tests+=(tests/test_rls_coverage.py)
-          else
-            echo "::warning::tests/test_rls_coverage.py not present yet (waiting on PR #314); skipping."
-          fi
-          python -m pytest "${tests[@]}" -v
+        run: python -m pytest tests/ -v
