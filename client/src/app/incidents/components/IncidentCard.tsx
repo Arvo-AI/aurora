@@ -121,7 +121,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
-  const sourceIconSrc = alert.source === 'chat' ? null : `/${alert.source}.svg`;
+  const sourceIconSrc = alert.source === 'chat' ? '/arvologotransparent.png' : `/${alert.source}.svg`;
 
   const handleResolveIncident = async () => {
     setResolvingIncident(true);

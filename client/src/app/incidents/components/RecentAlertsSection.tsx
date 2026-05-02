@@ -26,17 +26,15 @@ function RecentAlertCard({
     <div className="group relative p-3 rounded-lg bg-zinc-900/30 border border-zinc-800/50 hover:border-zinc-700/50 transition-all duration-200">
       <div className="flex items-start gap-3">
         {/* Source icon */}
-        {incident.sourceType !== 'chat' && (
-          <div className="flex-shrink-0 mt-0.5 opacity-50">
-            <Image 
-              src={`/${incident.sourceType}.svg`}
-              alt={incident.sourceType}
-              width={16}
-              height={16}
-              className={`object-contain${incident.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
-            />
-          </div>
-        )}
+        <div className="flex-shrink-0 mt-0.5 opacity-50">
+          <Image
+            src={incident.sourceType === 'chat' ? '/arvologotransparent.png' : `/${incident.sourceType}.svg`}
+            alt={incident.sourceType}
+            width={16}
+            height={16}
+            className={`object-contain${incident.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+          />
+        </div>
         
         {/* Content */}
         <div className="flex-1 min-w-0">
