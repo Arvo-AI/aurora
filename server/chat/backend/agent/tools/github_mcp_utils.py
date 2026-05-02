@@ -138,7 +138,12 @@ def parse_file_content_response(result: dict) -> Optional[str]:
             try:
                 data = json.loads(text)
                 if data.get("encoding") == "base64" and data.get("content"):
-                    decoded = base64.b64decode(data["content"]).decode("utf-8")
+                    raw = base64.b64decode(data["content"])
+                    try:
+                        decoded = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        decoded = raw.decode("latin-1")
+                        logger.warning("[parse_file_content] File is not UTF-8, decoded as latin-1")
                     logger.info(f"[parse_file_content] Decoded base64 content ({len(decoded)} chars)")
                     return decoded
                 if data.get("content"):

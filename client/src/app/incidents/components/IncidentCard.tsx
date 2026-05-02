@@ -178,14 +178,42 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     return bestMatch;
   }, [incident.suggestions, extractSignificantWords]);
 
-  // Function to render text with citation badges
-  const renderTextWithCitations = useCallback((text: string): React.ReactNode => {
-    if (!citations.length) return text;
+  // Find a fix suggestion by its database ID (for [S:id] markers)
+  const findFixSuggestionById = useCallback((id: string): Suggestion | null => {
+    if (!incident.suggestions?.length) return null;
+    return incident.suggestions.find(s => String(s.id) === id && s.type === 'fix') || null;
+  }, [incident.suggestions]);
 
-    // Split text by citation patterns: [1], [2], [1, 2], [6, 7], etc.
-    const parts = text.split(/(\[\d+(?:,\s*\d+)*\])/g);
+  // Function to render text with citation badges and suggestion markers
+  const renderTextWithCitations = useCallback((text: string): React.ReactNode => {
+    // Split by citation patterns [1], [1, 2] AND suggestion markers [S:4]
+    const parts = text.split(/(\[\d+(?:,\s*\d+)*\]|\[S:\d+\])/g);
 
     return parts.map((part, index) => {
+      // Match suggestion marker [S:id] — always consume to avoid showing raw tokens
+      const suggestionMatch = part.match(/^\[S:(\d+)\]$/);
+      if (suggestionMatch) {
+        if (!canWrite) return null;
+        const suggestion = findFixSuggestionById(suggestionMatch[1]);
+        if (suggestion) {
+          return (
+            <button
+              key={`suggestion-marker-${index}`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setSelectedFixSuggestion(suggestion);
+              }}
+              className="inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400"
+              title={`Create PR: ${suggestion.filePath || 'Fix suggestion'}`}
+            >
+              <GitBranch className="w-3 h-3" />
+            </button>
+          );
+        }
+        return null;
+      }
+
       // Match single [1] or multiple [1, 2] or [6, 7]
       const match = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
       if (match) {
@@ -213,7 +241,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       }
       return part;
     });
-  }, [citations]);
+  }, [citations, canWrite, findFixSuggestionById]);
 
 
   // Helper to process children and replace citation patterns
@@ -265,7 +293,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         ),
         li: ({ children }) => {
           const textContent = extractTextFromNode(children);
-          const matchingSuggestion = findMatchingSuggestion(textContent);
+          // Skip word-matching fallback if text has a [S:id] marker (already rendered inline)
+          const hasSuggestionMarker = /\[S:\d+\]/.test(textContent);
+          const matchingSuggestion = hasSuggestionMarker ? null : findMatchingSuggestion(textContent);
           const isFixType = matchingSuggestion?.type === 'fix';
           const canExecute = Boolean(matchingSuggestion?.command);
           const canShowAction = canWrite && (canExecute || isFixType);
