@@ -2078,7 +2078,6 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 
                 if not stale_sessions:
                     logger.info("[BackgroundChat:Cleanup] No stale sessions found")
-                    return {"cleaned": 0}
                 
                 # Mark sessions as failed per-user (respecting RLS)
                 actually_failed_ids = set()
