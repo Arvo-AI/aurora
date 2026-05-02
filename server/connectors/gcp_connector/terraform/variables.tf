@@ -13,6 +13,12 @@ variable "aurora_sa_email" {
   type        = string
 }
 
+variable "org_id" {
+  description = "GCP organization ID. When set, IAM roles are granted at the org level instead of per-project."
+  type        = string
+  default     = ""
+}
+
 variable "additional_project_ids" {
   description = "Additional GCP projects Aurora should have access to"
   type        = list(string)

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
+import { AlertCircle, Check, Loader2, ShieldCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
@@ -24,6 +24,13 @@ export function GcpWifForm({ onSuccess }: GcpWifFormProps) {
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copyText = (text: string, id: string) => {
+    void navigator.clipboard.writeText(text);
+    setCopied(id);
+    setTimeout(() => setCopied((v) => (v === id ? null : v)), 1500);
+  };
 
   const [projectId, setProjectId] = useState("");
   const [projectNumber, setProjectNumber] = useState("");
@@ -31,6 +38,7 @@ export function GcpWifForm({ onSuccess }: GcpWifFormProps) {
   const [providerId, setProviderId] = useState("aurora-provider");
   const [saEmail, setSaEmail] = useState("");
   const [viewerSaEmail, setViewerSaEmail] = useState("");
+  const [orgId, setOrgId] = useState("");
   const [additionalProjects, setAdditionalProjects] = useState("");
 
   const isValid = projectId.trim() && projectNumber.trim() && saEmail.trim();
@@ -52,6 +60,9 @@ export function GcpWifForm({ onSuccess }: GcpWifFormProps) {
       };
       if (viewerSaEmail.trim()) {
         body.viewer_sa_email = viewerSaEmail.trim();
+      }
+      if (orgId.trim()) {
+        body.org_id = orgId.trim();
       }
       const extra = additionalProjects
         .split(",")
@@ -109,13 +120,111 @@ export function GcpWifForm({ onSuccess }: GcpWifFormProps) {
     }
   };
 
+  const pid = projectId.trim() || "<YOUR_PROJECT_ID>";
+  const pnum = projectNumber.trim() || "<YOUR_PROJECT_NUMBER>";
+  const pool = poolId.trim() || "aurora-wif-pool";
+  const provider = providerId.trim() || "aurora-provider";
+  const agentSa = saEmail.trim()
+    ? saEmail.trim()
+    : projectId.trim()
+      ? `aurora-agent@${projectId.trim()}.iam.gserviceaccount.com`
+      : "aurora-agent@<PROJECT_ID>.iam.gserviceaccount.com";
+  const viewerSa = viewerSaEmail.trim()
+    ? viewerSaEmail.trim()
+    : projectId.trim()
+      ? `aurora-viewer@${projectId.trim()}.iam.gserviceaccount.com`
+      : "aurora-viewer@<PROJECT_ID>.iam.gserviceaccount.com";
+  const org = orgId.trim();
+
+  const iamBindCmd = org
+    ? `# Org-level IAM (applies to all projects in org ${org})
+gcloud organizations add-iam-policy-binding ${org} \\
+  --member="serviceAccount:${agentSa}" \\
+  --role="roles/editor" --condition=None --quiet
+gcloud organizations add-iam-policy-binding ${org} \\
+  --member="serviceAccount:${agentSa}" \\
+  --role="roles/iam.serviceAccountUser" --condition=None --quiet
+gcloud organizations add-iam-policy-binding ${org} \\
+  --member="serviceAccount:${agentSa}" \\
+  --role="roles/resourcemanager.organizationViewer" --condition=None --quiet
+
+gcloud organizations add-iam-policy-binding ${org} \\
+  --member="serviceAccount:${viewerSa}" \\
+  --role="roles/viewer" --condition=None --quiet`
+    : `# Project-level IAM
+gcloud projects add-iam-policy-binding ${pid} \\
+  --member="serviceAccount:${agentSa}" \\
+  --role="roles/editor" --condition=None --quiet
+gcloud projects add-iam-policy-binding ${pid} \\
+  --member="serviceAccount:${agentSa}" \\
+  --role="roles/iam.serviceAccountUser" --condition=None --quiet
+
+gcloud projects add-iam-policy-binding ${pid} \\
+  --member="serviceAccount:${viewerSa}" \\
+  --role="roles/viewer" --condition=None --quiet`;
+
+  const gcloudScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ID="${pid}"
+PROJECT_NUMBER="${pnum}"
+POOL_ID="${pool}"
+PROVIDER_ID="${provider}"
+AURORA_ISSUER="<AURORA_OIDC_ISSUER>"
+AURORA_SA="<AURORA_SA_EMAIL>"
+
+# Enable required APIs
+gcloud services enable \\
+  sts.googleapis.com iamcredentials.googleapis.com iam.googleapis.com \\
+  cloudresourcemanager.googleapis.com compute.googleapis.com \\
+  container.googleapis.com storage.googleapis.com monitoring.googleapis.com \\
+  logging.googleapis.com bigquery.googleapis.com cloudasset.googleapis.com \\
+  --project="$PROJECT_ID" --quiet
+
+# Create WIF pool + provider
+gcloud iam workload-identity-pools create "$POOL_ID" \\
+  --project="$PROJECT_ID" --location=global \\
+  --display-name="Aurora WIF Pool" 2>/dev/null || true
+
+gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \\
+  --project="$PROJECT_ID" --location=global \\
+  --workload-identity-pool="$POOL_ID" \\
+  --issuer-uri="$AURORA_ISSUER" \\
+  --attribute-mapping="google.subject=assertion.sub" \\
+  --attribute-condition="google.subject == \\"$AURORA_SA\\"" 2>/dev/null || true
+
+# Create service accounts
+gcloud iam service-accounts create aurora-agent \\
+  --project="$PROJECT_ID" --display-name="Aurora Agent" 2>/dev/null || true
+gcloud iam service-accounts create aurora-viewer \\
+  --project="$PROJECT_ID" --display-name="Aurora Viewer" 2>/dev/null || true
+
+# Grant WIF federation on both SAs
+POOL_RESOURCE="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID"
+for SA in aurora-agent aurora-viewer; do
+  gcloud iam service-accounts add-iam-policy-binding \\
+    "$SA@$PROJECT_ID.iam.gserviceaccount.com" \\
+    --project="$PROJECT_ID" \\
+    --role="roles/iam.workloadIdentityUser" \\
+    --member="principalSet://iam.googleapis.com/$POOL_RESOURCE/*" \\
+    --condition=None --quiet
+done
+
+${iamBindCmd}`;
+
+  const terraformBlock = `module "aurora" {
+  source            = "./aurora-wif"
+  project_id        = "${pid}"
+  aurora_oidc_issuer = "<AURORA_OIDC_ISSUER>"
+  aurora_sa_email   = "<AURORA_SA_EMAIL>"${org ? `\n  org_id            = "${org}"` : ""}
+}`;
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2 text-sm text-muted-foreground">
         <p>
-          Run the Aurora Terraform module or gcloud script in your GCP project,
-          then paste the output values below. Aurora verifies access instantly
-          with no background tasks.
+          Run the gcloud commands or Terraform module in your GCP project,
+          then fill in the values below. Aurora verifies access instantly.
         </p>
       </div>
 
@@ -125,23 +234,35 @@ export function GcpWifForm({ onSuccess }: GcpWifFormProps) {
             {setupOpen ? "Hide" : "Show"} setup instructions
           </Button>
         </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3 space-y-2 text-xs text-muted-foreground rounded-lg border p-3">
-          <p className="font-medium text-foreground">Option A: Terraform</p>
-          <pre className="bg-muted p-2 rounded text-xs overflow-x-auto">
-{`module "aurora" {
-  source           = "./aurora-wif"
-  project_id       = "your-project-id"
-  aurora_oidc_issuer = "<from Aurora setup page>"
-  aurora_sa_email    = "<from Aurora setup page>"
-}`}
-          </pre>
-          <p className="font-medium text-foreground mt-3">Option B: gcloud script</p>
-          <pre className="bg-muted p-2 rounded text-xs overflow-x-auto">
-{`bash setup.sh \\
-  --project your-project-id \\
-  --aurora-issuer <issuer URL> \\
-  --aurora-sa <SA email>`}
-          </pre>
+        <CollapsibleContent className="mt-3 space-y-3 text-xs text-muted-foreground rounded-lg border p-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <p className="font-medium text-foreground">Option A: gcloud</p>
+              <Button
+                type="button" variant="ghost" size="sm" className="h-6 text-xs px-2"
+                onClick={() => copyText(gcloudScript, "gcloud")}
+              >
+                {copied === "gcloud" ? <><Check className="h-3 w-3 mr-1" />Copied</> : "Copy"}
+              </Button>
+            </div>
+            <pre className="bg-muted p-2 rounded text-xs overflow-x-auto whitespace-pre max-h-72 overflow-y-auto">
+              {gcloudScript}
+            </pre>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <p className="font-medium text-foreground">Option B: Terraform</p>
+              <Button
+                type="button" variant="ghost" size="sm" className="h-6 text-xs px-2"
+                onClick={() => copyText(terraformBlock, "terraform")}
+              >
+                {copied === "terraform" ? <><Check className="h-3 w-3 mr-1" />Copied</> : "Copy"}
+              </Button>
+            </div>
+            <pre className="bg-muted p-2 rounded text-xs overflow-x-auto">
+              {terraformBlock}
+            </pre>
+          </div>
         </CollapsibleContent>
       </Collapsible>
 
@@ -205,6 +326,18 @@ export function GcpWifForm({ onSuccess }: GcpWifFormProps) {
             value={viewerSaEmail}
             onChange={(e) => setViewerSaEmail(e.target.value)}
             placeholder="aurora-viewer@my-project.iam.gserviceaccount.com"
+            disabled={loading}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="wif-org-id" className="text-sm">
+            Organization ID <span className="text-muted-foreground">(optional - grants access to all org projects)</span>
+          </Label>
+          <Input
+            id="wif-org-id"
+            value={orgId}
+            onChange={(e) => setOrgId(e.target.value)}
+            placeholder="123456789012"
             disabled={loading}
           />
         </div>

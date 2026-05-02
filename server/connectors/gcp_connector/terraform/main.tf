@@ -18,6 +18,7 @@ data "google_project" "current" {
 
 locals {
   all_project_ids = concat([var.project_id], var.additional_project_ids)
+  use_org_binding = var.org_id != ""
 
   required_apis = [
     "compute.googleapis.com",
@@ -107,13 +108,23 @@ resource "google_service_account_iam_member" "agent_wif_binding" {
 }
 
 resource "google_project_iam_member" "agent_roles" {
-  for_each = {
+  for_each = local.use_org_binding ? {} : {
     for pair in setproduct(local.all_project_ids, var.agent_roles) :
     "${pair[0]}:${pair[1]}" => { project = pair[0], role = pair[1] }
   }
   project = each.value.project
   role    = each.value.role
   member  = "serviceAccount:${google_service_account.aurora_agent.email}"
+}
+
+resource "google_organization_iam_member" "agent_org_roles" {
+  for_each = local.use_org_binding ? toset(concat(
+    var.agent_roles,
+    ["roles/resourcemanager.organizationViewer"],
+  )) : toset([])
+  org_id = var.org_id
+  role   = each.value
+  member = "serviceAccount:${google_service_account.aurora_agent.email}"
 }
 
 # ---------------------------------------------------------------------------
@@ -135,11 +146,18 @@ resource "google_service_account_iam_member" "viewer_wif_binding" {
 }
 
 resource "google_project_iam_member" "viewer_roles" {
-  for_each = var.enable_read_only ? {
+  for_each = (var.enable_read_only && !local.use_org_binding) ? {
     for pair in setproduct(local.all_project_ids, var.viewer_roles) :
     "${pair[0]}:${pair[1]}" => { project = pair[0], role = pair[1] }
   } : {}
   project = each.value.project
   role    = each.value.role
   member  = "serviceAccount:${google_service_account.aurora_viewer[0].email}"
+}
+
+resource "google_organization_iam_member" "viewer_org_roles" {
+  for_each = (var.enable_read_only && local.use_org_binding) ? toset(var.viewer_roles) : toset([])
+  org_id   = var.org_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.aurora_viewer[0].email}"
 }

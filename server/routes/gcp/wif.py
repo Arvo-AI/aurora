@@ -41,6 +41,8 @@ def connect_wif(user_id):
     }
     if payload.get("viewer_sa_email"):
         wif_config["viewer_sa_email"] = payload["viewer_sa_email"].strip()
+    if payload.get("org_id"):
+        wif_config["org_id"] = payload["org_id"].strip()
     if payload.get("additional_project_ids"):
         wif_config["additional_project_ids"] = [
             p.strip() for p in payload["additional_project_ids"] if isinstance(p, str) and p.strip()

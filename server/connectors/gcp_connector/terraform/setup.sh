@@ -16,6 +16,7 @@ POOL_ID="aurora-wif-pool"
 PROVIDER_ID="aurora-provider"
 ENABLE_VIEWER=true
 ADDITIONAL_PROJECTS=()
+ORG_ID=""
 
 usage() {
   cat <<EOF
@@ -27,6 +28,7 @@ Required:
   --aurora-sa        Aurora WIF service account email (from Aurora setup page)
 
 Options:
+  --org-id ORG_ID             GCP organization ID (grants access to all org projects)
   --additional-project PID   Additional project Aurora should access (repeatable)
   --no-viewer                Skip creating the read-only viewer SA
   -h, --help                 Show this help
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     --project)            PROJECT_ID="$2";        shift 2;;
     --aurora-issuer)      AURORA_ISSUER="$2";      shift 2;;
     --aurora-sa)          AURORA_SA="$2";           shift 2;;
+    --org-id)             ORG_ID="$2";              shift 2;;
     --additional-project) ADDITIONAL_PROJECTS+=("$2"); shift 2;;
     --no-viewer)          ENABLE_VIEWER=false;     shift;;
     -h|--help)            usage;;
@@ -99,14 +102,23 @@ gcloud iam service-accounts add-iam-policy-binding "$AGENT_SA" \
   --condition=None --quiet
 
 AGENT_ROLES=(roles/editor roles/iam.serviceAccountUser roles/bigquery.dataViewer)
-ALL_PROJECTS=("$PROJECT_ID" "${ADDITIONAL_PROJECTS[@]}")
-for pid in "${ALL_PROJECTS[@]}"; do
-  for role in "${AGENT_ROLES[@]}"; do
-    gcloud projects add-iam-policy-binding "$pid" \
+if [[ -n "$ORG_ID" ]]; then
+  echo "Granting org-level IAM roles (org: $ORG_ID)..."
+  for role in "${AGENT_ROLES[@]}" roles/resourcemanager.organizationViewer; do
+    gcloud organizations add-iam-policy-binding "$ORG_ID" \
       --member="serviceAccount:${AGENT_SA}" \
       --role="$role" --condition=None --quiet 2>/dev/null || true
   done
-done
+else
+  ALL_PROJECTS=("$PROJECT_ID" "${ADDITIONAL_PROJECTS[@]}")
+  for pid in "${ALL_PROJECTS[@]}"; do
+    for role in "${AGENT_ROLES[@]}"; do
+      gcloud projects add-iam-policy-binding "$pid" \
+        --member="serviceAccount:${AGENT_SA}" \
+        --role="$role" --condition=None --quiet 2>/dev/null || true
+    done
+  done
+fi
 
 # ---- Viewer SA ----
 VIEWER_SA=""
@@ -130,13 +142,21 @@ if $ENABLE_VIEWER; then
     roles/browser roles/cloudasset.viewer roles/compute.viewer
     roles/container.viewer roles/storage.objectViewer
   )
-  for pid in "${ALL_PROJECTS[@]}"; do
+  if [[ -n "$ORG_ID" ]]; then
     for role in "${VIEWER_ROLES[@]}"; do
-      gcloud projects add-iam-policy-binding "$pid" \
+      gcloud organizations add-iam-policy-binding "$ORG_ID" \
         --member="serviceAccount:${VIEWER_SA}" \
         --role="$role" --condition=None --quiet 2>/dev/null || true
     done
-  done
+  else
+    for pid in "${ALL_PROJECTS[@]}"; do
+      for role in "${VIEWER_ROLES[@]}"; do
+        gcloud projects add-iam-policy-binding "$pid" \
+          --member="serviceAccount:${VIEWER_SA}" \
+          --role="$role" --condition=None --quiet 2>/dev/null || true
+      done
+    done
+  fi
 fi
 
 # ---- Output ----
@@ -151,5 +171,6 @@ Aurora WIF Configuration (paste into Aurora)
   provider_id:     $PROVIDER_ID
   sa_email:        $AGENT_SA
   viewer_sa_email: ${VIEWER_SA:-(none)}
+  org_id:          ${ORG_ID:-(none)}
 ============================================================
 EOF

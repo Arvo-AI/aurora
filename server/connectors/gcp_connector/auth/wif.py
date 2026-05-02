@@ -128,6 +128,8 @@ def verify_wif_access(wif_config: Dict) -> Dict:
     """Verify Aurora can federate into the customer's project.
 
     Attempts a token exchange then calls projects.get to confirm access.
+    If org_id is present, enumerates all org projects instead of checking
+    individual project IDs.
     Returns {ok: bool, error?: str, projects?: list}.
     """
     try:
@@ -141,29 +143,54 @@ def verify_wif_access(wif_config: Dict) -> Dict:
         creds = Credentials(token=access_token)
         crm = build("cloudresourcemanager", "v1", credentials=creds)
 
-        project_id = wif_config["project_id"]
-        project_info = crm.projects().get(projectId=project_id).execute()
-
-        verified_projects = [{
-            "project_id": project_info.get("projectId"),
-            "name": project_info.get("name"),
-        }]
-
-        additional = wif_config.get("additional_project_ids") or []
-        for pid in additional:
-            try:
-                info = crm.projects().get(projectId=pid).execute()
-                verified_projects.append({
-                    "project_id": info.get("projectId"),
-                    "name": info.get("name"),
-                })
-            except Exception as e:
-                logger.warning("WIF: cannot access additional project %s: %s", pid, e)
+        org_id = wif_config.get("org_id")
+        if org_id:
+            verified_projects = _enumerate_org_projects(crm, org_id)
+        else:
+            verified_projects = _verify_explicit_projects(crm, wif_config)
 
         return {"ok": True, "projects": verified_projects}
     except Exception as e:
         logger.error("WIF verification failed: %s", e)
         return {"ok": False, "error": str(e)}
+
+
+def _enumerate_org_projects(crm, org_id: str) -> list:
+    """List all ACTIVE projects in an organization."""
+    projects = []
+    req = crm.projects().list(filter=f"parent.id:{org_id} lifecycleState:ACTIVE")
+    while req:
+        resp = req.execute()
+        for p in resp.get("projects", []):
+            projects.append({
+                "project_id": p.get("projectId"),
+                "name": p.get("name"),
+            })
+        req = crm.projects().list_next(req, resp)
+    return projects
+
+
+def _verify_explicit_projects(crm, wif_config: Dict) -> list:
+    """Verify access to explicitly listed project IDs."""
+    project_id = wif_config["project_id"]
+    project_info = crm.projects().get(projectId=project_id).execute()
+
+    verified = [{
+        "project_id": project_info.get("projectId"),
+        "name": project_info.get("name"),
+    }]
+
+    for pid in (wif_config.get("additional_project_ids") or []):
+        try:
+            info = crm.projects().get(projectId=pid).execute()
+            verified.append({
+                "project_id": info.get("projectId"),
+                "name": info.get("name"),
+            })
+        except Exception as e:
+            logger.warning("WIF: cannot access additional project %s: %s", pid, e)
+
+    return verified
 
 
 def write_credential_config_file(token_data: Dict, target_dir: Optional[str] = None, mode: str = "agent") -> str:

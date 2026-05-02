@@ -14,6 +14,7 @@ from connectors.gcp_connector.auth.service_accounts import (
     get_gcp_auth_type,
     GCP_AUTH_TYPE_SA,
 )
+from connectors.gcp_connector.auth.wif import GCP_AUTH_TYPE_WIF, get_wif_access_token
 from connectors.gcp_connector.billing import has_active_billing
 from googleapiclient.discovery import build
 
@@ -27,18 +28,32 @@ def get_projects(user_id):
         logging.info("Fetching GCP projects with billing status")
         provider = "gcp"
 
-        # Refresh token if needed before proceeding
+        token_data = get_token_data(user_id, provider)
+        if not token_data:
+            logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
+            return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
+
+        auth_type = get_gcp_auth_type(token_data)
+
+        # SA / WIF: return pre-verified projects from stored token data
+        if auth_type in (GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF):
+            root_project = get_user_preference(user_id, 'gcp_root_project')
+            result = _sa_mode_project_list(token_data, root_project)
+            return jsonify({
+                "projects": result,
+                "count": len(result),
+                "billing_enabled_count": len(result),
+                "root_project": root_project,
+            }), 200
+
+        # OAuth: refresh token, enumerate projects, check billing
         try:
             refresh_token_if_needed(user_id, provider)
         except Exception as e:
             logging.error(f"Token refresh failed: {e}", exc_info=True)
             return jsonify({"error": "Token refresh failed"}), 401
 
-        logging.info(f"Received user id:'{user_id}' successfully.")
         token_data = get_token_data(user_id, provider)
-        if not token_data:
-            logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
-            return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
         credentials = get_credentials(token_data)
         logging.info(f"Credentials successfully retrieved for user_id:'{user_id}'")
 
@@ -117,7 +132,17 @@ def _refresh_and_reload_gcp_token(user_id):
 
 
 def _sa_mode_project_list(token_data, root_project):
-    """Build project list for service-account mode (no IAM enumeration)."""
+    """Build project list for SA/WIF mode.
+
+    For WIF with org_id, enumerates projects live via the API.
+    Otherwise returns the pre-verified accessible_projects list.
+    """
+    wif_config = token_data.get("wif_config") or {}
+    org_id = wif_config.get("org_id")
+
+    if org_id and get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_WIF:
+        return _wif_org_project_list(token_data, org_id, root_project)
+
     accessible = token_data.get("accessible_projects") or []
     result = []
     for proj in accessible:
@@ -133,6 +158,31 @@ def _sa_mode_project_list(token_data, root_project):
         })
     result.sort(key=lambda x: x['name'])
     return result
+
+
+def _wif_org_project_list(token_data, org_id, root_project):
+    """Enumerate all org projects via WIF token."""
+    result_tok = get_wif_access_token(token_data, mode="agent")
+    from google.oauth2.credentials import Credentials as OAuthCreds
+    creds = OAuthCreds(token=result_tok["access_token"])
+    crm = build("cloudresourcemanager", "v1", credentials=creds)
+
+    projects = []
+    req = crm.projects().list(filter=f"parent.id:{org_id} lifecycleState:ACTIVE")
+    while req:
+        resp = req.execute()
+        for p in resp.get("projects", []):
+            pid = p.get("projectId")
+            projects.append({
+                "projectId": pid,
+                "name": p.get("name") or pid,
+                "enabled": True,
+                "hasPermission": True,
+                "isRootProject": pid == root_project,
+            })
+        req = crm.projects().list_next(req, resp)
+    projects.sort(key=lambda x: x["name"])
+    return projects
 
 
 def _check_project_iam(crm_service, pid, name, member_sa, root_project):
@@ -188,10 +238,9 @@ def sa_project_access_get(user_id):
 
         root_project = get_user_preference(user_id, 'gcp_root_project')
 
-        # SA mode: surface auto-discovered accessible_projects (no IAM enumeration).
-        # Aurora doesn't manage IAM bindings in SA mode — the uploaded SA already
-        # has whatever roles the user granted it directly in GCP.
-        if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        # SA / WIF mode: surface pre-verified accessible_projects (no IAM enumeration).
+        auth_type = get_gcp_auth_type(token_data)
+        if auth_type in (GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF):
             result = _sa_mode_project_list(token_data, root_project)
             return jsonify({"projects": result, "root_project": root_project}), 200
 
@@ -221,8 +270,8 @@ def sa_project_access_post(user_id):
         if err:
             return err
 
-        # SA mode: nothing to persist — Aurora does not manage IAM bindings.
-        if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        # SA / WIF mode: nothing to persist — Aurora does not manage IAM bindings.
+        if get_gcp_auth_type(token_data) in (GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF):
             return jsonify({"success": True}), 200
 
         data = request.get_json() or {}

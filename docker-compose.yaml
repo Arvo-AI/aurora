@@ -45,6 +45,11 @@ x-common-env: &common-env
   WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
   SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-false}
 
+  # GCP Workload Identity Federation (operator identity)
+  AURORA_WIF_CREDENTIAL_SOURCE: ${AURORA_WIF_CREDENTIAL_SOURCE:-}
+  AURORA_WIF_SA_KEY_PATH: ${AURORA_WIF_SA_KEY_PATH:-}
+  AURORA_WIF_SA_EMAIL: ${AURORA_WIF_SA_EMAIL:-}
+
   # AWS base credentials for role assumption
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
