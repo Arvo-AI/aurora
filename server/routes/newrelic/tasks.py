@@ -383,6 +383,7 @@ def process_newrelic_event(
                         broadcast_incident_update_to_user_connections(
                             user_id,
                             {"type": "incident_update", "incident_id": str(incident_id), "source": "newrelic"},
+                            org_id=org_id,
                         )
                     except Exception as e:
                         logger.warning("[NEWRELIC][WEBHOOK] Failed to notify SSE: %s", e)
