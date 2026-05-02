@@ -1,5 +1,10 @@
 prompts:
   - task: self_check_input
+    # NeMo defaults to 3 output tokens which is enough for OpenAI/Anthropic
+    # but too tight for Gemini 2.5 models that reserve part of the budget
+    # for thinking before emitting the Yes/No answer. 512 covers the thinking
+    # overhead on short inputs while staying negligible in cost.
+    max_tokens: 512
     content: |
       You are a security classifier for a cloud operations AI assistant.
 
