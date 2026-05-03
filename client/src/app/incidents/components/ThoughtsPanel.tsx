@@ -216,6 +216,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   useEffect(() => {
     if (!pollingSessionId) { pollStartRef.current = 0; return; }
     pollStartRef.current = Date.now();
+    let lastMsgCount = -1;
 
     let isCancelled = false;
     const abortController = new AbortController();
@@ -240,12 +241,17 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
         const sessionData = await sessionResp.json();
         if (isCancelled) return;
 
+        const msgCount = sessionData.messages?.length ?? 0;
+        if (msgCount !== lastMsgCount) {
+          lastMsgCount = msgCount;
+          pollStartRef.current = Date.now();
+        }
+
         setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) => 
           s.id === sessionIdToFetch 
             ? { ...s, messages: sessionData.messages || [], status: sessionData.status }
             : s
         ));
-        pollStartRef.current = Date.now();
 
         // If completed or failed, stop polling and remove from creating set
         if (sessionData.status === 'completed' || sessionData.status === 'failed') {

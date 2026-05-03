@@ -2082,9 +2082,9 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
         if cursor and incident_id:
             cursor.execute("""
                 SELECT 1 FROM execution_steps
-                WHERE incident_id = %s AND status = 'running' AND started_at > %s
+                WHERE incident_id = %s AND status = 'running'
                 LIMIT 1
-            """, (incident_id, threshold))
+            """, (incident_id,))
             if cursor.fetchone():
                 return False
         return True
