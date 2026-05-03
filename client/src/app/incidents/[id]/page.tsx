@@ -41,10 +41,13 @@ export default function IncidentDetailPage() {
     }
   }, []);
 
-  // Single fetch + poll loop — one effect, no duplicates
+  // Single fetch + poll loop with backoff — one effect, no duplicates
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let pollCount = 0;
+
+    const getInterval = () => Math.min(3000 * Math.pow(1.5, pollCount), 15000);
 
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;
@@ -59,7 +62,8 @@ export default function IncidentDetailPage() {
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
         if (needsPoll && active) {
-          timer = setTimeout(() => fetchAndSchedule(false), 1000);
+          timer = setTimeout(() => fetchAndSchedule(false), getInterval());
+          pollCount++;
         }
       } catch (e) {
         if (!active) return;
