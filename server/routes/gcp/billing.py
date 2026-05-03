@@ -1,8 +1,13 @@
 """GCP billing routes."""
 import logging
 from flask import Blueprint, request, jsonify
+from google.oauth2.credentials import Credentials
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_refresh import refresh_token_if_needed
+from connectors.gcp_connector.auth import (
+    get_gcp_auth_type, GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF,
+    generate_sa_access_token,
+)
 from connectors.gcp_connector.auth.oauth import get_credentials
 from utils.auth.token_management import get_token_data
 from connectors.gcp_connector.gcp.projects import get_project_list
@@ -18,19 +23,23 @@ def billing(user_id):
         data = request.get_json()
         provider = data.get("X-Provider", "gcp") if data else "gcp"
 
-        # Refresh token if needed before proceeding
-        try:
-            refresh_token_if_needed(user_id, provider)
-        except Exception as e:
-            logging.error(f"Token refresh failed: {e}", exc_info=True)
-            return jsonify({"error": "Token refresh failed"}), 401
-
-        logging.info(f"Received user id:'{user_id}' successfully.")
         token_data = get_token_data(user_id, provider)
         if not token_data:
             logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
             return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
-        credentials = get_credentials(token_data)
+
+        auth_type = get_gcp_auth_type(token_data)
+        if auth_type in (GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF):
+            resp = generate_sa_access_token(token_data)
+            credentials = Credentials(token=resp["access_token"])
+        else:
+            try:
+                refresh_token_if_needed(user_id, provider)
+            except Exception as e:
+                logging.error(f"Token refresh failed: {e}", exc_info=True)
+                return jsonify({"error": "Token refresh failed"}), 401
+            token_data = get_token_data(user_id, provider)
+            credentials = get_credentials(token_data)
         logging.info(f"Credentials successfully retrieved for user_id:'{user_id}'")
 
         # Rest of the existing function code...

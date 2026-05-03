@@ -4,7 +4,6 @@
 # Run this in a shell authenticated as a project Owner:
 #   bash setup.sh \
 #     --project my-project-id \
-#     --aurora-issuer https://... \
 #     --aurora-sa aurora-wif@aurora-saas-prod.iam.gserviceaccount.com
 #
 # The script outputs the WIF config values to paste into Aurora.
@@ -20,12 +19,11 @@ ORG_ID=""
 
 usage() {
   cat <<EOF
-Usage: $0 --project PROJECT_ID --aurora-issuer ISSUER_URL --aurora-sa SA_EMAIL [options]
+Usage: $0 --project PROJECT_ID --aurora-sa SA_EMAIL [options]
 
 Required:
   --project          GCP project ID
-  --aurora-issuer    Aurora OIDC issuer URL (from Aurora setup page)
-  --aurora-sa        Aurora WIF service account email (from Aurora setup page)
+  --aurora-sa        Aurora's service account email (shown on the Aurora GCP connection page)
 
 Options:
   --org-id ORG_ID             GCP organization ID (grants access to all org projects)
@@ -39,7 +37,6 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project)            PROJECT_ID="$2";        shift 2;;
-    --aurora-issuer)      AURORA_ISSUER="$2";      shift 2;;
     --aurora-sa)          AURORA_SA="$2";           shift 2;;
     --org-id)             ORG_ID="$2";              shift 2;;
     --additional-project) ADDITIONAL_PROJECTS+=("$2"); shift 2;;
@@ -50,7 +47,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 : "${PROJECT_ID:?--project is required}"
-: "${AURORA_ISSUER:?--aurora-issuer is required}"
 : "${AURORA_SA:?--aurora-sa is required}"
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
@@ -69,21 +65,23 @@ echo "Enabling APIs..."
 gcloud services enable "${APIS[@]}" --project="$PROJECT_ID" --quiet
 
 # ---- WIF pool + provider ----
+# Issuer is accounts.google.com because Aurora authenticates with a
+# Google-signed ID token from its own GCP service account.
 echo "Creating WIF pool..."
 gcloud iam workload-identity-pools create "$POOL_ID" \
   --project="$PROJECT_ID" --location=global \
   --display-name="Aurora WIF Pool" \
   --description="Allows Aurora SaaS to federate into this project" \
-  2>/dev/null || echo "  (pool already exists)"
+  2>&1 || echo "  (pool may already exist)"
 
 echo "Creating WIF provider..."
 gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
   --project="$PROJECT_ID" --location=global \
   --workload-identity-pool="$POOL_ID" \
-  --issuer-uri="$AURORA_ISSUER" \
-  --attribute-mapping="google.subject=assertion.sub" \
-  --attribute-condition="google.subject == \"$AURORA_SA\"" \
-  2>/dev/null || echo "  (provider already exists)"
+  --issuer-uri="https://accounts.google.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.email=assertion.email" \
+  --attribute-condition="attribute.email == \"$AURORA_SA\"" \
+  2>&1 || echo "  (provider may already exist)"
 
 # ---- Agent SA ----
 AGENT_SA="aurora-agent@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -92,7 +90,7 @@ gcloud iam service-accounts create aurora-agent \
   --project="$PROJECT_ID" \
   --display-name="Aurora Agent" \
   --description="Full-access SA for Aurora Agent mode" \
-  2>/dev/null || echo "  (SA already exists)"
+  2>&1 || echo "  (SA may already exist)"
 
 POOL_RESOURCE="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}"
 gcloud iam service-accounts add-iam-policy-binding "$AGENT_SA" \
@@ -129,7 +127,7 @@ if $ENABLE_VIEWER; then
     --project="$PROJECT_ID" \
     --display-name="Aurora Viewer" \
     --description="Read-only SA for Aurora Ask mode" \
-    2>/dev/null || echo "  (SA already exists)"
+    2>&1 || echo "  (SA may already exist)"
 
   gcloud iam service-accounts add-iam-policy-binding "$VIEWER_SA" \
     --project="$PROJECT_ID" \

@@ -45,6 +45,10 @@ def refresh_token_if_needed(user_id, provider):
                 return None
 
         # GCP and Azure: handle refresh token logic
+        # SA and WIF auth types manage their own token lifecycle -- skip OAuth refresh.
+        if provider == "gcp" and token_data.get("auth_type") in ("service_account", "wif"):
+            return token_data
+
         expires_at = token_data.get("expires_at", 0)
         if current_time >= expires_at - 300:  # 5 minutes before expiry
             refresh_token = token_data.get("refresh_token")

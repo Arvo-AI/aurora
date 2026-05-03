@@ -199,6 +199,13 @@ config:
   RATE_LIMIT_HEADERS_ENABLED: "true"
   SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
+
+  # --- GCP Workload Identity Federation (optional, alternative to OAuth) ---
+  # On GKE with Workload Identity: set to "gke_metadata"
+  # With SA key file: set to "json_file" and provide SA_KEY_PATH + SA_EMAIL
+  AURORA_WIF_CREDENTIAL_SOURCE: ""   # "json_file" or "gke_metadata"
+  AURORA_WIF_SA_KEY_PATH: ""         # Path to Aurora's own SA key JSON (json_file mode only)
+  AURORA_WIF_SA_EMAIL: ""            # Aurora's WIF service account email
   
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods

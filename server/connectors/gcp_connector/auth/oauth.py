@@ -157,6 +157,15 @@ def get_credentials(token_data=None):
                 "Failed to load GCP service account credentials. The key may be malformed, revoked, or the service account may have been disabled."
             ) from e
 
+    # WIF branch: generate a short-lived access token via STS token exchange.
+    # Callers should prefer generate_sa_access_token() which handles WIF
+    # natively, but this defensive branch prevents crashes if WIF token_data
+    # is passed here directly.
+    if token_data.get("auth_type") == "wif":
+        from connectors.gcp_connector.auth.wif import get_wif_access_token
+        result = get_wif_access_token(token_data)
+        return Credentials(token=result["access_token"])
+
     try:
         credentials = Credentials(
             token=token_data.get('access_token'),

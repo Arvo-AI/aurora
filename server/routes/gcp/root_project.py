@@ -4,12 +4,17 @@ API endpoints for managing GCP root project selection.
 
 import logging
 from flask import Blueprint, request, jsonify
+from google.oauth2.credentials import Credentials
 from utils.auth.stateless_auth import (
     store_user_preference,
     get_user_preference,
     get_credentials_from_db,
 )
 from utils.auth.rbac_decorators import require_permission
+from connectors.gcp_connector.auth import (
+    get_gcp_auth_type, GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF,
+    generate_sa_access_token,
+)
 from connectors.gcp_connector.auth.oauth import get_credentials
 from connectors.gcp_connector.gcp.projects import check_billing_enabled
 from routes.gcp.root_project_tasks import setup_root_project_async
@@ -54,7 +59,12 @@ def set_root_project(user_id):
         if not token_data:
             return jsonify({"error": "No GCP credentials found"}), 401
 
-        credentials = get_credentials(token_data)
+        auth_type = get_gcp_auth_type(token_data)
+        if auth_type in (GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF):
+            resp = generate_sa_access_token(token_data)
+            credentials = Credentials(token=resp["access_token"])
+        else:
+            credentials = get_credentials(token_data)
 
         # Validate the project
         validation_result = validate_root_project(credentials, project_id)

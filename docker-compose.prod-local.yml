@@ -53,6 +53,11 @@ x-common-env: &common-env
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
   AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
 
+  # GCP Workload Identity Federation (operator identity)
+  AURORA_WIF_CREDENTIAL_SOURCE: ${AURORA_WIF_CREDENTIAL_SOURCE:-}
+  AURORA_WIF_SA_KEY_PATH: ${AURORA_WIF_SA_KEY_PATH:-}
+  AURORA_WIF_SA_EMAIL: ${AURORA_WIF_SA_EMAIL:-}
+
   # Feature Flags (all disabled by default for minimal local setup)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
@@ -168,6 +173,7 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
+      - ./server/.aurora-wif-dev-key.json:/app/.aurora-wif-dev-key.json:ro
     command: ["python", "main_compute.py"]
     environment:
       <<: *common-env
@@ -262,6 +268,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
+      - ./server/.aurora-wif-dev-key.json:/app/.aurora-wif-dev-key.json:ro
     command: >
       celery -A celery_config worker
         --loglevel=info
@@ -412,6 +419,7 @@ services:
     command: ["python", "main_chatbot.py"]
     volumes:
       - terraform-workdir:/app/terraform_workdir
+      - ./server/.aurora-wif-dev-key.json:/app/.aurora-wif-dev-key.json:ro
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: chatbot

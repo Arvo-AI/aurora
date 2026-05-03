@@ -120,25 +120,52 @@ def _task_belongs_to_user(task_info, user_id):
 
 
 def _get_all_gcp_project_ids(user_id):
-    """Get all GCP project IDs accessible to the user.
-
-    Uses the user's OAuth credentials to enumerate projects via the
-    Cloud Resource Manager API.
-    """
+    """Get all GCP project IDs accessible to the user."""
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
+        from connectors.gcp_connector.auth import (
+            get_gcp_auth_type, GCP_AUTH_TYPE_SA, GCP_AUTH_TYPE_WIF,
+            generate_sa_access_token, get_wif_access_token,
+        )
         from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
         from connectors.gcp_connector.billing import has_active_billing
+        from google.oauth2.credentials import Credentials
 
         token_data = get_credentials_from_db(user_id, 'gcp')
         if not token_data:
             logger.warning("[Discovery] No GCP credentials found for user %s", user_id)
             return []
 
-        credentials = get_credentials(token_data)
-        projects = get_project_list(credentials)
+        auth_type = get_gcp_auth_type(token_data)
 
-        # Only include projects with active billing (same filter as post-auth)
+        if auth_type == GCP_AUTH_TYPE_WIF:
+            wif_config = token_data.get("wif_config", {})
+            org_id = wif_config.get("org_id")
+            if org_id:
+                result_tok = get_wif_access_token(token_data, mode="agent")
+                creds = Credentials(token=result_tok["access_token"])
+                from googleapiclient.discovery import build
+                crm = build("cloudresourcemanager", "v1", credentials=creds)
+                project_ids = []
+                req = crm.projects().list(filter=f"parent.id:{org_id} lifecycleState:ACTIVE")
+                while req:
+                    resp = req.execute()
+                    for p in resp.get("projects", []):
+                        pid = p.get("projectId")
+                        if pid:
+                            project_ids.append(pid)
+                    req = crm.projects().list_next(req, resp)
+                logger.info("[Discovery] Found %d GCP org projects for user %s", len(project_ids), user_id)
+                return project_ids
+            return [p["projectId"] for p in token_data.get("accessible_projects", []) if p.get("projectId")]
+
+        if auth_type == GCP_AUTH_TYPE_SA:
+            resp = generate_sa_access_token(token_data)
+            credentials = Credentials(token=resp["access_token"])
+        else:
+            credentials = get_credentials(token_data)
+
+        projects = get_project_list(credentials)
         project_ids = []
         for p in projects:
             pid = p.get("projectId")
@@ -148,7 +175,6 @@ def _get_all_gcp_project_ids(user_id):
                 if has_active_billing(pid, credentials):
                     project_ids.append(pid)
             except Exception:
-                # If billing check fails, include the project anyway
                 project_ids.append(pid)
 
         logger.info("[Discovery] Found %d GCP projects for user %s: %s", len(project_ids), user_id, project_ids)

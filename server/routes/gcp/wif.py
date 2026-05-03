@@ -8,6 +8,7 @@ from utils.auth.stateless_auth import store_user_preference
 from utils.auth.token_management import store_tokens_in_db
 from connectors.gcp_connector.auth.wif import (
     GCP_AUTH_TYPE_WIF,
+    get_aurora_sa_email,
     verify_wif_access,
 )
 
@@ -87,6 +88,16 @@ def connect_wif(user_id):
         "default_project_id": wif_config["project_id"],
         "accessible_projects": verified_projects,
     })
+
+
+@gcp_wif_bp.route("/api/gcp/wif/setup-info", methods=["GET"])
+@require_permission("connectors", "read")
+def wif_setup_info(user_id):
+    """Return Aurora's SA email so the UI can embed it in setup instructions."""
+    sa_email = get_aurora_sa_email()
+    if not sa_email:
+        return jsonify({"error": "WIF not configured on this Aurora instance"}), 404
+    return jsonify({"aurora_sa_email": sa_email})
 
 
 @gcp_wif_bp.route("/api/gcp/wif/verify", methods=["POST"])

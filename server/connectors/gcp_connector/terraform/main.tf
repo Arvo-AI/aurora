@@ -8,14 +8,6 @@ terraform {
   }
 }
 
-provider "google" {
-  project = var.project_id
-}
-
-data "google_project" "current" {
-  project_id = var.project_id
-}
-
 locals {
   all_project_ids = concat([var.project_id], var.additional_project_ids)
   use_org_binding = var.org_id != ""
@@ -63,7 +55,11 @@ resource "google_project_service" "apis" {
 }
 
 # ---------------------------------------------------------------------------
-# Workload Identity Pool + Provider
+# Workload Identity Pool + OIDC Provider
+#
+# The issuer is https://accounts.google.com because Aurora authenticates
+# with a Google-signed ID token (from its own GCP SA). The attribute
+# condition restricts federation to Aurora's specific SA email.
 # ---------------------------------------------------------------------------
 resource "google_iam_workload_identity_pool" "aurora" {
   project                   = var.project_id
@@ -81,14 +77,14 @@ resource "google_iam_workload_identity_pool_provider" "aurora" {
   display_name                       = "Aurora OIDC Provider"
 
   oidc {
-    issuer_uri = var.aurora_oidc_issuer
+    issuer_uri = "https://accounts.google.com"
   }
 
-  # Confused-deputy prevention: only accept tokens from Aurora's SA.
   attribute_mapping = {
     "google.subject" = "assertion.sub"
+    "attribute.email" = "assertion.email"
   }
-  attribute_condition = "google.subject == \"${var.aurora_sa_email}\""
+  attribute_condition = "attribute.email == \"${var.aurora_sa_email}\""
 }
 
 # ---------------------------------------------------------------------------

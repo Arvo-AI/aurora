@@ -3,13 +3,8 @@ variable "project_id" {
   type        = string
 }
 
-variable "aurora_oidc_issuer" {
-  description = "Aurora's OIDC issuer URL (provided on the Aurora GCP connection page)"
-  type        = string
-}
-
 variable "aurora_sa_email" {
-  description = "Aurora's WIF service account email (provided on the Aurora GCP connection page)"
+  description = "Aurora's service account email (shown on the Aurora GCP connection page)"
   type        = string
 }
 

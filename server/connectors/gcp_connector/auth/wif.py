@@ -1,10 +1,14 @@
 """
 Workload Identity Federation (WIF) authentication for customer GCP projects.
 
-Aurora presents its own identity (via GKE pod token, SA key, or OIDC) to
-Google's STS endpoint, which exchanges it for a short-lived federated token
-scoped to the customer's project. The customer pre-configures a WIF pool
-that trusts Aurora's identity.
+Flow:
+  1. Aurora obtains a Google-signed ID token for its own SA, targeting the
+     customer's WIF pool as the audience.
+  2. The ID token is exchanged at Google's STS endpoint for a short-lived
+     federated access token (the WIF pool validates the OIDC token and
+     enforces the attribute_condition).
+  3. The federated token impersonates the customer's SA via
+     iamcredentials.generateAccessToken.
 
 This is the GCP equivalent of AWS STS AssumeRole.
 """
@@ -16,33 +20,47 @@ import tempfile
 from typing import Dict, List, Optional
 
 import google.auth.transport.requests
+import requests as http_requests
 from google.oauth2 import service_account as google_service_account
 
 logger = logging.getLogger(__name__)
 
 GCP_AUTH_TYPE_WIF = "wif"
 
-# Aurora's own identity configuration (set via environment)
 _CREDENTIAL_SOURCE = os.getenv("AURORA_WIF_CREDENTIAL_SOURCE", "json_file")
 _SA_KEY_PATH = os.getenv("AURORA_WIF_SA_KEY_PATH", "")
 _SA_EMAIL = os.getenv("AURORA_WIF_SA_EMAIL", "")
 
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+_STS_ENDPOINT = "https://sts.googleapis.com/v1/token"
 
 
-def _get_aurora_source_credentials() -> google_service_account.Credentials:
-    """Build credentials representing Aurora's own identity.
+def _wif_audience(wif_config: Dict) -> str:
+    """Build the full WIF pool provider audience URI."""
+    return (
+        f"//iam.googleapis.com/projects/{wif_config['project_number']}"
+        f"/locations/global/workloadIdentityPools/{wif_config.get('pool_id', 'aurora-wif-pool')}"
+        f"/providers/{wif_config.get('provider_id', 'aurora-provider')}"
+    )
 
-    In production GKE with Workload Identity, the pod's projected SA token
-    is consumed automatically by google-auth's default credential chain.
-    For other deployments we load an explicit SA key file.
+
+def _get_aurora_id_token(audience: str) -> str:
+    """Obtain a Google-signed OIDC ID token for Aurora's SA.
+
+    On GKE with Workload Identity the metadata server provides one directly.
+    With a SA key file we call iamcredentials.generateIdToken.
     """
     source = _CREDENTIAL_SOURCE.lower().strip()
 
     if source == "gke_metadata":
-        import google.auth
-        creds, _ = google.auth.default(scopes=[_CLOUD_PLATFORM_SCOPE])
-        return creds
+        from google.auth.transport.requests import Request
+        from google.auth import compute_engine
+        id_creds = compute_engine.IDTokenCredentials(
+            request=Request(), target_audience=audience,
+            use_metadata_identity_endpoint=True,
+        )
+        id_creds.refresh(Request())
+        return id_creds.token
 
     if source == "json_file":
         if not _SA_KEY_PATH or not os.path.isfile(_SA_KEY_PATH):
@@ -50,11 +68,47 @@ def _get_aurora_source_credentials() -> google_service_account.Credentials:
                 "AURORA_WIF_SA_KEY_PATH is not set or file does not exist. "
                 "Required when AURORA_WIF_CREDENTIAL_SOURCE=json_file."
             )
-        return google_service_account.Credentials.from_service_account_file(
-            _SA_KEY_PATH, scopes=[_CLOUD_PLATFORM_SCOPE]
+        sa_creds = google_service_account.Credentials.from_service_account_file(
+            _SA_KEY_PATH, scopes=[_CLOUD_PLATFORM_SCOPE],
         )
+        sa_creds.refresh(google.auth.transport.requests.Request())
+
+        from googleapiclient.discovery import build
+        iam = build("iamcredentials", "v1", credentials=sa_creds)
+        resp = iam.projects().serviceAccounts().generateIdToken(
+            name=f"projects/-/serviceAccounts/{_SA_EMAIL}",
+            body={"audience": audience, "includeEmail": True},
+        ).execute()
+        return resp["token"]
 
     raise ValueError(f"Unknown AURORA_WIF_CREDENTIAL_SOURCE: {source!r}")
+
+
+def _sts_exchange(id_token: str, audience: str) -> str:
+    """Exchange a Google-signed ID token for a federated access token via STS."""
+    resp = http_requests.post(_STS_ENDPOINT, json={
+        "grantType": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "audience": audience,
+        "scope": _CLOUD_PLATFORM_SCOPE,
+        "requestedTokenType": "urn:ietf:params:oauth:token-type:access_token",
+        "subjectTokenType": "urn:ietf:params:oauth:token-type:id_token",
+        "subjectToken": id_token,
+    })
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def _impersonate_sa(federated_token: str, target_sa: str, scopes: List[str]) -> Dict:
+    """Use a federated token to generate a short-lived access token for a customer SA."""
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    fed_creds = Credentials(token=federated_token)
+    iam = build("iamcredentials", "v1", credentials=fed_creds)
+    return iam.projects().serviceAccounts().generateAccessToken(
+        name=f"projects/-/serviceAccounts/{target_sa}",
+        body={"scope": scopes, "lifetime": "3600s"},
+    ).execute()
 
 
 def _resolve_sa_email(wif_config: Dict, mode: str = "agent") -> str:
@@ -73,13 +127,13 @@ def get_wif_access_token(
     selected_project_id: Optional[str] = None,
     mode: str = "agent",
 ) -> Dict:
-    """Generate a short-lived access token via WIF impersonation.
+    """Generate a short-lived access token via the full WIF flow.
 
-    Uses Aurora's own credentials to call iamcredentials.generateAccessToken
-    on the customer's SA (which the WIF pool authorises).
+    1. Obtain a Google-signed ID token for Aurora targeting the customer's WIF pool
+    2. Exchange it at Google STS for a federated access token
+    3. Use the federated token to impersonate the customer's SA
 
-    Returns the same dict shape as generate_sa_access_token for drop-in
-    compatibility: {access_token, expire_time, project_id, service_account_email, auth_type}.
+    Returns: {access_token, expire_time, project_id, service_account_email, auth_type}
     """
     wif_config = token_data.get("wif_config")
     if not wif_config:
@@ -87,33 +141,12 @@ def get_wif_access_token(
 
     target_sa = _resolve_sa_email(wif_config, mode)
     target_project = selected_project_id or wif_config.get("project_id")
-
-    if selected_project_id:
-        accessible = {
-            p.get("project_id")
-            for p in (token_data.get("accessible_projects") or [])
-            if isinstance(p, dict)
-        }
-        if accessible and selected_project_id not in accessible:
-            logger.info(
-                "WIF: selected project %s not in accessible list; using default",
-                selected_project_id,
-            )
-            target_project = wif_config.get("project_id")
-
     scopes = scopes or [_CLOUD_PLATFORM_SCOPE]
+    audience = _wif_audience(wif_config)
 
-    source_creds = _get_aurora_source_credentials()
-    if not source_creds.valid:
-        source_creds.refresh(google.auth.transport.requests.Request())
-
-    from googleapiclient.discovery import build
-
-    iamcred = build("iamcredentials", "v1", credentials=source_creds)
-    resp = iamcred.projects().serviceAccounts().generateAccessToken(
-        name=f"projects/-/serviceAccounts/{target_sa}",
-        body={"scope": scopes, "lifetime": "3600s"},
-    ).execute()
+    id_token = _get_aurora_id_token(audience)
+    federated_token = _sts_exchange(id_token, audience)
+    resp = _impersonate_sa(federated_token, target_sa, scopes)
 
     return {
         "access_token": resp["accessToken"],
@@ -127,9 +160,7 @@ def get_wif_access_token(
 def verify_wif_access(wif_config: Dict) -> Dict:
     """Verify Aurora can federate into the customer's project.
 
-    Attempts a token exchange then calls projects.get to confirm access.
-    If org_id is present, enumerates all org projects instead of checking
-    individual project IDs.
+    Runs the full WIF flow then calls CRM to confirm access.
     Returns {ok: bool, error?: str, projects?: list}.
     """
     try:
@@ -194,63 +225,34 @@ def _verify_explicit_projects(crm, wif_config: Dict) -> list:
 
 
 def write_credential_config_file(token_data: Dict, target_dir: Optional[str] = None, mode: str = "agent") -> str:
-    """Write a Google external_account credential config JSON file.
+    """Write a credential file usable by GOOGLE_APPLICATION_CREDENTIALS.
 
-    This file can be pointed at by GOOGLE_APPLICATION_CREDENTIALS and is
-    natively understood by gcloud, gsutil, Terraform, and all Google client
-    libraries. It tells the SDK to perform the STS token exchange on demand.
-
-    For simplicity we use the 'file-sourced' credential type with a
-    temporary file containing Aurora's own SA key, so the google-auth
-    library can self-refresh without Aurora acting as a token broker.
+    Fetches a short-lived access token via the full WIF flow and writes it
+    as a simple JSON file. The primary auth path for gcloud/gsutil is the
+    CLOUDSDK_AUTH_ACCESS_TOKEN env var (set by the caller); this file
+    serves as a fallback for tools that only read GOOGLE_APPLICATION_CREDENTIALS.
     """
     wif_config = token_data.get("wif_config")
     if not wif_config:
         raise ValueError("Token data missing wif_config")
 
-    target_sa = _resolve_sa_email(wif_config, mode)
-    project_number = wif_config["project_number"]
-    pool_id = wif_config.get("pool_id", "aurora-wif-pool")
-    provider_id = wif_config.get("provider_id", "aurora-provider")
+    result = get_wif_access_token(token_data, mode=mode)
 
-    audience = (
-        f"//iam.googleapis.com/projects/{project_number}"
-        f"/locations/global/workloadIdentityPools/{pool_id}"
-        f"/providers/{provider_id}"
+    cred_path = os.path.join(
+        target_dir or tempfile.gettempdir(),
+        f"gcp_wif_cred_{mode}.json",
     )
-
-    source = _CREDENTIAL_SOURCE.lower().strip()
-
-    if source == "json_file":
-        credential_source = {
-            "file": _SA_KEY_PATH,
-            "format": {"type": "json", "subject_token_field_name": "access_token"},
-        }
-    elif source == "gke_metadata":
-        credential_source = {
-            "url": "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token",
-            "headers": {"Metadata-Flavor": "Google"},
-            "format": {"type": "json", "subject_token_field_name": "access_token"},
-        }
-    else:
-        raise ValueError(f"Cannot build credential config for source: {source!r}")
-
-    config = {
-        "type": "external_account",
-        "audience": audience,
-        "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-        "token_url": "https://sts.googleapis.com/v1/token",
-        "service_account_impersonation_url": (
-            f"https://iamcredentials.googleapis.com/v1/projects/-"
-            f"/serviceAccounts/{target_sa}:generateAccessToken"
-        ),
-        "credential_source": credential_source,
+    payload = {
+        "type": "access_token",
+        "access_token": result["access_token"],
+        "project_id": result.get("project_id", wif_config.get("project_id", "")),
     }
+    fd = os.open(cred_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(payload, f)
+    return cred_path
 
-    kwargs = {"suffix": ".json", "prefix": "gcp_wif_cred_", "mode": "w", "delete": False}
-    if target_dir:
-        kwargs["dir"] = target_dir
 
-    with tempfile.NamedTemporaryFile(**kwargs) as f:
-        json.dump(config, f)
-        return f.name
+def get_aurora_sa_email() -> str:
+    """Return Aurora's WIF SA email (for display in setup instructions)."""
+    return _SA_EMAIL
