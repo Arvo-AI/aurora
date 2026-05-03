@@ -8,7 +8,7 @@ from flask import Blueprint, Response
 
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
-from utils.cache.redis_client import get_redis_ssl_kwargs
+from utils.cache.redis_client import get_redis_client, get_redis_ssl_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +21,12 @@ def broadcast_incident_update_to_user_connections(user_id: str, incident_data: d
     """Publish an incident update via Redis so any process can broadcast to SSE clients."""
     scope_key = org_id or user_id
     channel = f"{_CHANNEL_PREFIX}{scope_key}"
-    r = None
     try:
-        r = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), **get_redis_ssl_kwargs())
-        r.publish(channel, json.dumps(incident_data))
+        r = get_redis_client()
+        if r:
+            r.publish(channel, json.dumps(incident_data))
     except Exception as e:
         logger.warning("Failed to publish incident SSE update to Redis: %s", e)
-    finally:
-        if r:
-            r.close()
 
 
 @incidents_sse_bp.route('/api/incidents/stream', methods=['GET'])
