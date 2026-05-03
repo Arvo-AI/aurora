@@ -38,38 +38,38 @@ interface ModelSelectorProps {
 
 // Pricing information mapping (input/output per 1M tokens)
 const modelPricing: Record<string, string> = {
-  'openai/gpt-5.2': 'Premium Cost ($1.75/$14 per 1M)',
-  'anthropic/claude-sonnet-4-5': 'Medium Cost ($3/$15 per 1M)',
-  'anthropic/claude-opus-4-5': 'High Cost ($5/$25 per 1M)',
+  'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
+  'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
+  'anthropic/claude-opus-4.7': 'High Cost ($5/$25 per 1M)',
   'google/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
 };
 
 const modelOptions: ModelOption[] = [
   {
-    id: 'openai/gpt-5.2',
-    name: 'gpt-5.2',
-    displayName: 'GPT-5.2',
+    id: 'openai/gpt-5.5',
+    name: 'gpt-5.5',
+    displayName: 'GPT-5.5',
     provider: 'OpenAI',
     tier: 'premium',
-    contextLength: '400K',
+    contextLength: '1M',
     hasReasoning: true
   },
   {
-    id: 'anthropic/claude-sonnet-4-5',
-    name: 'claude-sonnet-4-5',
-    displayName: 'Claude Sonnet 4.5',
+    id: 'anthropic/claude-sonnet-4.6',
+    name: 'claude-sonnet-4.6',
+    displayName: 'Claude Sonnet 4.6',
     provider: 'Anthropic',
     tier: 'pro',
-    contextLength: '200K',
+    contextLength: '1M',
     hasReasoning: true
   },
   {
-    id: 'anthropic/claude-opus-4-5',
-    name: 'claude-opus-4-5',
-    displayName: 'Claude Opus 4.5',
+    id: 'anthropic/claude-opus-4.7',
+    name: 'claude-opus-4.7',
+    displayName: 'Claude Opus 4.7',
     provider: 'Anthropic',
     tier: 'premium',
-    contextLength: '200K',
+    contextLength: '1M',
     hasReasoning: true,
     isSlow: true
   },

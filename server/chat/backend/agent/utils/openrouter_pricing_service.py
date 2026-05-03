@@ -36,6 +36,7 @@ class OpenRouterPricingService:
 
         self.fallback_pricing = {
             # OpenAI (OpenRouter pricing per 1K tokens)
+            "openai/gpt-5.5": {"input": 0.005, "output": 0.030},
             "openai/gpt-5.4": {"input": 0.0025, "output": 0.015},
             "openai/gpt-5.2": {"input": 0.00175, "output": 0.014},
             "openai/o3": {"input": 0.002, "output": 0.008},
@@ -46,6 +47,7 @@ class OpenRouterPricingService:
             "openai/gpt-4o": {"input": 0.0025, "output": 0.01},
             "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
             # Anthropic
+            "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025},
             "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025},
             "anthropic/claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
             "anthropic/claude-opus-4-5": {"input": 0.005, "output": 0.025},
