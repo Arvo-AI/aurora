@@ -7,7 +7,6 @@ import { signOut } from "next-auth/react";
 import { ThemeProvider } from "next-themes";
 import { ProviderPreferenceProvider } from "@/context/ProviderPreferenceContext";
 import { Toaster } from "@/components/ui/toaster";
-import { useToast } from "@/hooks/use-toast";
 import AppLayout from "@/app/components/AppLayout";
 import GlobalProjectSelectionMonitor from "@/components/cloud-provider/GlobalProjectSelectionMonitor";
 import { WebViewWarning } from "@/components/WebViewWarning";
@@ -97,8 +96,6 @@ export default function ClientShell({ children }: ClientShellProps) {
   const [workspaceConfig, setWorkspaceConfig] = useState<WorkspaceConfig | null>(null);
   const [workspacePanelWidth, setWorkspacePanelWidth] = useState(800); 
 
-  const { toast } = useToast();
-
   // Clear localStorage if version has changed (moved from layout.tsx)
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -115,70 +112,6 @@ export default function ClientShell({ children }: ClientShellProps) {
     }
   }, []);
 
-  // Force GCP reauthentication when service account naming changes
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    
-    const GCP_AUTH_VERSION = "1.0.0"; // Bump this to force GCP reauth
-    const GCP_AUTH_VERSION_KEY = "aurora_gcp_auth_version";
-    
-    const storedGcpAuthVersion = localStorage.getItem(GCP_AUTH_VERSION_KEY);
-    
-    // Force reauth if version key doesn't exist (first deployment) or version changed
-    if (!storedGcpAuthVersion || storedGcpAuthVersion !== GCP_AUTH_VERSION) {
-      console.log(`GCP authentication version ${!storedGcpAuthVersion ? 'not set' : 'changed'}, forcing reauth`);
-      
-      // Clear GCP-specific localStorage keys
-      const gcpKeys = [
-        'isGCPConnected',
-        'isGCPFetched',
-        'isGCPFetching',
-        'cloudProvider',
-        'gcpSetupInProgress',
-        'gcpSetupTaskId',
-        'gcpPollingActive',
-        'gcpSetupInProgress_timestamp',
-        'gcpPollingIntervalId'
-      ];
-      
-      gcpKeys.forEach(key => localStorage.removeItem(key));
-      
-      // Clear provider preferences cache if it includes GCP
-      try {
-        const cachedPrefs = localStorage.getItem('provider_preferences_cache');
-        if (cachedPrefs) {
-          const prefs = JSON.parse(cachedPrefs);
-          if (Array.isArray(prefs) && prefs.includes('gcp')) {
-            const filtered = prefs.filter((p: string) => p !== 'gcp');
-            localStorage.setItem('provider_preferences_cache', JSON.stringify(filtered));
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to update provider preferences cache:', e);
-      }
-      
-      // Delete GCP tokens from backend
-      fetch('/api/gcp/force-disconnect', { method: 'POST' })
-        .then(res => {
-          if (res.ok) {
-            console.log('GCP tokens deleted from backend');
-            
-            // Show notification to user
-            toast({
-              title: "GCP Reconnection Required",
-              description: "We've updated our GCP integration. Please reconnect your GCP account.",
-              duration: 8000,
-            });
-            
-            // Dispatch event to update provider UI
-            window.dispatchEvent(new CustomEvent('providerStateChanged'));
-          }
-        })
-        .catch(err => console.error('Failed to delete GCP tokens:', err));
-      
-      localStorage.setItem(GCP_AUTH_VERSION_KEY, GCP_AUTH_VERSION);
-    }
-  }, [toast]);
 
   // Save sidebar state to localStorage (moved from layout.tsx)
   useEffect(() => {
