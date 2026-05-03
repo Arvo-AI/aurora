@@ -81,6 +81,13 @@ export default function IncidentDetailPage() {
         if (isInitial) {
           setError('Failed to load incident');
           console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+        } else {
+          if (!pollStartRef.current) pollStartRef.current = Date.now();
+          if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
+            setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+          } else {
+            timer = setTimeout(() => fetchAndSchedule(false), 2000);
+          }
         }
       } finally {
         if (isInitial && active) setLoading(false);
