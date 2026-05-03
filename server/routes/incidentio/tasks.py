@@ -276,6 +276,10 @@ def _store_and_process_event(user_id: str, event_type: str,
             received_at = datetime.now(timezone.utc)
             normalized_severity = _map_severity(fields["severity"])
 
+            if not fields.get("incident_id"):
+                logger.error("[INCIDENTIO] Alert event has no extractable incident_id, dropping event for user %s", user_id)
+                return
+
             alert_db_id = _upsert_alert(cursor, conn, user_id=user_id, org_id=org_id,
                                         fields=fields, payload=payload,
                                         severity=normalized_severity, received_at=received_at)
