@@ -71,15 +71,15 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if is_alert_event and not incident.get("name"):
         severity_raw = "unknown"
-        metadata = incident.get("metadata", {}) or {}
-        if isinstance(metadata, dict):
-            for key in ("severity", "priority", "level"):
-                if key in metadata:
-                    severity_raw = str(metadata[key])
-                    break
+        raw_metadata = incident.get("metadata")
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+        for key in ("severity", "priority", "level"):
+            if key in metadata:
+                severity_raw = str(metadata[key])
+                break
 
         return {
-            "incident_id": incident.get("id") or incident.get("deduplication_key") or payload.get("id"),
+            "incident_id": None,
             "incident_name": incident.get("title") or "Untitled Alert",
             "incident_status": incident.get("status") or "firing",
             "severity": severity_raw,
@@ -444,8 +444,8 @@ def _trigger_rca_pipeline(
 
         logger.info("[INCIDENTIO] Triggered RCA for incident %s (task=%s)", incident_id, task.id)
 
-        # Post-back RCA summary if enabled
-        if _should_postback(user_id):
+        # Post-back RCA summary if enabled (skip for alert-only events with no incident ID)
+        if _should_postback(user_id) and fields.get("incident_id"):
             postback_rca_to_incidentio.delay(user_id, str(incident_id), fields["incident_id"])
 
     except Exception as exc:

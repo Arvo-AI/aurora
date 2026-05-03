@@ -1,32 +1,32 @@
-"""Server-Sent Events for real-time incident updates."""
-import logging
+"""Server-Sent Events for real-time incident updates via Redis pub/sub."""
 import json
-import queue
+import logging
+import os
+
+import redis
 from flask import Blueprint, Response
+
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
+from utils.cache.redis_client import get_redis_client, get_redis_ssl_kwargs
 
 logger = logging.getLogger(__name__)
 
 incidents_sse_bp = Blueprint('incidents_sse', __name__)
 
-# Store active SSE connection queues per org: {org_id: [queue1, queue2, ...]}
-_active_connection_queues_by_org = {}
+_CHANNEL_PREFIX = "incidents:sse:"
 
 
 def broadcast_incident_update_to_user_connections(user_id: str, incident_data: dict, org_id: str = None):
-    """Send incident update to all active SSE connections for a given org (or user as fallback)."""
+    """Publish an incident update via Redis so any process can broadcast to SSE clients."""
     scope_key = org_id or user_id
-    org_queues = _active_connection_queues_by_org.get(scope_key, [])
-    if not org_queues:
-        return
-    for message_queue in org_queues:
-        try:
-            message_queue.put_nowait(incident_data)
-        except queue.Full:
-            logger.warning("Message queue full for scope %s, dropping message", scope_key)
-        except Exception as e:
-            logger.error("Error sending message to queue for scope %s: %s", scope_key, e)
+    channel = f"{_CHANNEL_PREFIX}{scope_key}"
+    try:
+        r = get_redis_client()
+        if r:
+            r.publish(channel, json.dumps(incident_data))
+    except Exception as e:
+        logger.warning("Failed to publish incident SSE update to Redis: %s", e)
 
 
 @incidents_sse_bp.route('/api/incidents/stream', methods=['GET'])
@@ -35,32 +35,34 @@ def incident_stream(user_id):
     """SSE endpoint that streams real-time incident updates to the client."""
     org_id = get_org_id_from_request()
     scope_key = org_id or user_id
-    
+    channel = f"{_CHANNEL_PREFIX}{scope_key}"
+
     def generate_sse_events():
-        message_queue = queue.Queue(maxsize=50)
-        
-        if scope_key not in _active_connection_queues_by_org:
-            _active_connection_queues_by_org[scope_key] = []
-        _active_connection_queues_by_org[scope_key].append(message_queue)
-        
+        r = None
+        pubsub = None
         try:
+            r = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), **get_redis_ssl_kwargs())
+            pubsub = r.pubsub()
+            pubsub.subscribe(channel)
+
             while True:
-                try:
-                    message = message_queue.get(timeout=10)
-                    yield f"data: {json.dumps(message)}\n\n"
-                except queue.Empty:
+                message = pubsub.get_message(timeout=10.0)
+                if message and message['type'] == 'message':
+                    data = message['data']
+                    if isinstance(data, bytes):
+                        data = data.decode('utf-8')
+                    yield f"data: {data}\n\n"
+                elif message is None:
                     yield ": keepalive\n\n"
         except GeneratorExit:
             pass
         finally:
-            if scope_key in _active_connection_queues_by_org:
-                try:
-                    _active_connection_queues_by_org[scope_key].remove(message_queue)
-                    if not _active_connection_queues_by_org[scope_key]:
-                        del _active_connection_queues_by_org[scope_key]
-                except ValueError:
-                    pass
-    
+            if pubsub:
+                pubsub.unsubscribe(channel)
+                pubsub.close()
+            if r:
+                r.close()
+
     return Response(
         generate_sse_events(),
         mimetype='text/event-stream',
@@ -70,4 +72,3 @@ def incident_stream(user_id):
             'Connection': 'keep-alive'
         }
     )
-

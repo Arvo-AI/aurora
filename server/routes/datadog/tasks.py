@@ -360,6 +360,7 @@ def process_datadog_event(
                                 "incident_id": str(incident_id),
                                 "source": "datadog",
                             },
+                            org_id=org_id,
                         )
                     except Exception as e:
                         logger.warning(f"[DATADOG][WEBHOOK] Failed to notify SSE: {e}")
