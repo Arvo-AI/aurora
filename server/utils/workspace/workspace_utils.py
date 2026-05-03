@@ -12,7 +12,7 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 
-def get_or_create_workspace(user_id: str, workspace_name: str = "default", org_id: str = None) -> Dict[str, Any]:
+def get_or_create_workspace(user_id: str, workspace_name: str = "default", org_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Get existing workspace or create a new one for a user.
 
@@ -30,13 +30,21 @@ def get_or_create_workspace(user_id: str, workspace_name: str = "default", org_i
     if not user_id:
         raise ValueError("user_id is required")
 
+    from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
+
     if not org_id:
-        from utils.auth.stateless_auth import get_org_id_for_user
         org_id = get_org_id_for_user(user_id)
+
+    if not org_id:
+        raise ValueError(
+            f"Cannot resolve org_id for user {sanitize(user_id)}; "
+            "workspace INSERT would violate RLS policy"
+        )
 
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id)
 
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
