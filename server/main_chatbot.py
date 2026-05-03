@@ -1586,6 +1586,10 @@ async def main():
     # Clean up old terraform files on startup
     cleanup_terraform_directory()
 
+    # Mark any investigations orphaned by a previous crash as failed
+    from chat.background.task import cleanup_orphaned_investigations
+    await asyncio.to_thread(cleanup_orphaned_investigations)
+
     # Start HTTP server (health check + internal API)
     http_server = await asyncio.start_server(handle_http_request, "0.0.0.0", HEALTH_PORT)
     logger.info(f"HTTP server (health + internal API) listening on port {HEALTH_PORT}")
