@@ -26,7 +26,12 @@ def _should_postback(user_id: str) -> bool:
 
 
 def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Find the incident dict inside an incident.io webhook payload."""
+    """Find the incident dict inside an incident.io webhook payload.
+
+    incident.io sends two families of events:
+    - Incident events: nested under event.incident or payload.incident
+    - Alert events (public_alert.*): alert data is a direct child of the payload
+    """
     event = payload.get("event", {}) or {}
     incident = event.get("incident") or payload.get("incident") or None
 
@@ -35,6 +40,11 @@ def _resolve_incident_object(payload: Dict[str, Any]) -> Dict[str, Any]:
             if key.startswith("public_incident.") and isinstance(value, dict):
                 incident = value.get("incident") or value
                 break
+
+    if not incident:
+        alert = event.get("alert") or payload.get("alert")
+        if isinstance(alert, dict):
+            return alert
 
     return incident or {}
 
@@ -47,9 +57,40 @@ def _safe_name(obj, default: str = "") -> str:
 
 
 def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract normalized incident fields from the webhook event envelope."""
+    """Extract normalized incident fields from the webhook event envelope.
+
+    Handles both incident events (event.incident.*) and alert events
+    (public_alert.*). Alert events carry title/description/status/metadata
+    directly on the alert object rather than in incident-shaped fields.
+    """
     event = payload.get("event", {}) or {}
     incident = _resolve_incident_object(payload)
+
+    event_type = payload.get("event_type") or event.get("type", "")
+    is_alert_event = "alert" in event_type.lower()
+
+    if is_alert_event and not incident.get("name"):
+        severity_raw = "unknown"
+        metadata = incident.get("metadata", {}) or {}
+        if isinstance(metadata, dict):
+            for key in ("severity", "priority", "level"):
+                if key in metadata:
+                    severity_raw = str(metadata[key])
+                    break
+
+        return {
+            "incident_id": incident.get("id") or incident.get("deduplication_key") or payload.get("id"),
+            "incident_name": incident.get("title") or "Untitled Alert",
+            "incident_status": incident.get("status") or "firing",
+            "severity": severity_raw,
+            "incident_type": metadata.get("source", ""),
+            "summary": incident.get("description") or "",
+            "created_at": incident.get("created_at"),
+            "updated_at": incident.get("updated_at"),
+            "permalink": "",
+            "custom_fields": [],
+            "roles": [],
+        }
 
     return {
         "incident_id": incident.get("id") or payload.get("id"),
@@ -84,6 +125,7 @@ _NEW_INCIDENT_EVENTS = frozenset((
     "incident.created", "v2.incidents.created",
     "incident.declared", "public_incident.incident_created",
     "public_incident.incident_created_v2",
+    "public_alert.alert_created_v1",
 ))
 
 
@@ -233,6 +275,10 @@ def _store_and_process_event(user_id: str, event_type: str,
 
             received_at = datetime.now(timezone.utc)
             normalized_severity = _map_severity(fields["severity"])
+
+            if not fields.get("incident_id"):
+                logger.error("[INCIDENTIO] Alert event has no extractable incident_id, dropping event for user %s", user_id)
+                return
 
             alert_db_id = _upsert_alert(cursor, conn, user_id=user_id, org_id=org_id,
                                         fields=fields, payload=payload,
