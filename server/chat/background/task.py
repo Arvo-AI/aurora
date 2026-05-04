@@ -661,6 +661,13 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
         completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
@@ -670,6 +677,13 @@ def run_background_chat(
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
+                                         error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+            except Exception:
+                pass
         return {
             "session_id": session_id,
             "status": "failed",
@@ -681,6 +695,13 @@ def run_background_chat(
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
+                                         error_message=str(e), user_id=user_id)
+            except Exception:
+                pass
         return {
             "session_id": session_id,
             "status": "failed",
@@ -704,6 +725,23 @@ def run_background_chat(
                             _propagate_suggestion_status(session_id, "failed")
             except Exception as cleanup_err:
                 logger.error(f"[BackgroundChat] Failed to cleanup session {session_id}: {cleanup_err}")
+
+            if trigger_metadata and trigger_metadata.get('source') == 'action':
+                try:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ActionCleanup]")
+                            cursor.execute(
+                                "UPDATE action_runs SET status = 'error', completed_at = NOW(), "
+                                "error = 'Background chat did not complete successfully' "
+                                "WHERE id = %s AND status = 'running'",
+                                (trigger_metadata['run_id'],)
+                            )
+                            if cursor.rowcount > 0:
+                                conn.commit()
+                                logger.warning(f"[BackgroundChat] Finally block marked action run {trigger_metadata['run_id']} as error")
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1070,8 +1108,12 @@ async def _execute_background_chat(
         if rca_context:
             logger.info(f"[BackgroundChat] Built RCA context: source={rca_context.get('source')}, providers={rca_context.get('providers')}")
 
-        # Create the initial message (kept simple - user sees this)
-        human_message = HumanMessage(content=initial_message)
+        # Create the initial message; tag it so the UI layer can skip the
+        # synthesized RCA scaffold (internal instructions, not user input).
+        human_message = HumanMessage(
+            content=initial_message,
+            additional_kwargs={"is_rca_scaffold": True},
+        )
 
         # Import centralized model config
         from chat.backend.agent.llm import ModelConfig
