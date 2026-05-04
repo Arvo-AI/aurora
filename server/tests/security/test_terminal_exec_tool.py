@@ -146,7 +146,7 @@ class TestNoOpPaths:
         "ls -la",
         "kubectl get pods",
         "echo ssh -J foo",
-        "scp -J u@b file user@target:/tmp/",
+        "scp -J u@b file user@target:/home/me/",
         "",
     ])
     def test_non_ssh_command_unchanged(self, cmd):
@@ -154,7 +154,7 @@ class TestNoOpPaths:
 
     @pytest.mark.parametrize("cmd", [
         "ssh user@target",
-        "ssh -i /tmp/key user@target",
+        "ssh -i /home/me/.ssh/key user@target",
         "ssh -p 2222 user@target ls -la",
         "ssh -o StrictHostKeyChecking=no user@target",
     ])
@@ -203,15 +203,15 @@ class TestIdentityFilePreserved:
     """Identity file (-i) must propagate to BOTH outer ssh and ProxyCommand."""
 
     def test_identity_file_appears_on_outer_and_proxy(self):
-        out = _transform_ssh_jump_to_proxy("ssh -i /tmp/id_rsa -J u@bastion u@target")
-        assert out.startswith("ssh -i /tmp/id_rsa ")
-        assert 'ProxyCommand="ssh -i /tmp/id_rsa ' in out
+        out = _transform_ssh_jump_to_proxy("ssh -i /home/me/.ssh/id_rsa -J u@bastion u@target")
+        assert out.startswith("ssh -i /home/me/.ssh/id_rsa ")
+        assert 'ProxyCommand="ssh -i /home/me/.ssh/id_rsa ' in out
 
     def test_attached_identity_form(self):
-        """`-i/tmp/key` (no space) parses identically to `-i /tmp/key`."""
-        out = _transform_ssh_jump_to_proxy("ssh -i/tmp/id_rsa -J u@bastion u@target")
-        assert out.startswith("ssh -i /tmp/id_rsa ")
-        assert 'ProxyCommand="ssh -i /tmp/id_rsa ' in out
+        """`-i/home/me/.ssh/key` (no space) parses identically to `-i /home/me/.ssh/key`."""
+        out = _transform_ssh_jump_to_proxy("ssh -i/home/me/.ssh/id_rsa -J u@bastion u@target")
+        assert out.startswith("ssh -i /home/me/.ssh/id_rsa ")
+        assert 'ProxyCommand="ssh -i /home/me/.ssh/id_rsa ' in out
 
 
 class TestPortHandling:
@@ -248,12 +248,12 @@ class TestRobustness:
         assert _transform_ssh_jump_to_proxy(cmd) == cmd
 
     def test_identity_path_with_space_does_not_raise(self):
-        result = _transform_ssh_jump_to_proxy('ssh -i "/tmp/my key" -J u@b u@t')
+        result = _transform_ssh_jump_to_proxy('ssh -i "/home/me/my key" -J u@b u@t')
         assert isinstance(result, str)
-        assert "/tmp/my key" in result
+        assert "/home/me/my key" in result
         assert 'ProxyCommand="' in result
 
     def test_identity_path_with_embedded_quote_does_not_raise(self):
-        result = _transform_ssh_jump_to_proxy("ssh -i '/tmp/weird\"name' -J u@b u@t")
+        result = _transform_ssh_jump_to_proxy("ssh -i '/home/me/weird\"name' -J u@b u@t")
         assert isinstance(result, str)
         assert len(result) > 0
