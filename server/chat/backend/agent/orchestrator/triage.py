@@ -45,16 +45,33 @@ async def _triage(state: State) -> TriageDecision:
         )
         return TriageDecision(mode="single", rationale=f"severity={severity} below fanout threshold")
 
-    provider_preference = getattr(state, "provider_preference", None) or []
-    if len(provider_preference) <= 1:
+    # Use the breadth of available investigator roles as the fan-out signal.
+    # state.provider_preference only counts cloud providers (gcp/aws/azure) —
+    # wrong signal: a user with GitHub + Datadog + Grafana but no cloud provider
+    # would fall through to single even though 3 roles are usable.
+    available_roles: list = []
+    try:
+        from chat.backend.agent.orchestrator.role_registry import RoleRegistry
+        user_id = getattr(state, "user_id", None) or ""
+        if user_id:
+            available_roles = RoleRegistry.get_instance().list_available_roles(user_id)
+    except Exception:
+        logger.exception("triage: failed to enumerate available roles — falling back to single")
+
+    if len(available_roles) <= 1:
         logger.info(
-            "triage: incident %s providers=%d -> single (<=1 connected provider)",
-            incident_id_hash, len(provider_preference),
+            "triage: incident %s available_roles=%d -> single (<=1 role usable)",
+            incident_id_hash, len(available_roles),
         )
         return TriageDecision(
             mode="single",
-            rationale=f"only {len(provider_preference)} connected provider(s)",
+            rationale=f"only {len(available_roles)} role(s) usable for connected integrations",
         )
+
+    logger.info(
+        "triage: incident %s available_roles=%d -> running LLM triage",
+        incident_id_hash, len(available_roles),
+    )
 
     try:
         from chat.backend.agent.llm import ModelConfig
@@ -63,7 +80,7 @@ async def _triage(state: State) -> TriageDecision:
         llm = create_chat_model(model=ModelConfig.MAIN_MODEL)
         structured = llm.with_structured_output(TriageDecision)
 
-        incident_summary = _build_triage_prompt(state)
+        incident_summary = _build_triage_prompt(state, available_roles)
         decision: TriageDecision = await structured.ainvoke(incident_summary)
 
         if len(decision.inputs) > _MAX_SUBAGENTS:
@@ -87,22 +104,25 @@ async def _triage(state: State) -> TriageDecision:
         return TriageDecision(mode="single", rationale="LLM triage error fallback")
 
 
-def _build_triage_prompt(state: State) -> str:
+def _build_triage_prompt(state: State, available_roles: list) -> str:
     rca_context = getattr(state, "rca_context", None) or {}
     question = (getattr(state, "question", "") or "")[:1000]
-    providers = getattr(state, "provider_preference", []) or []
     incident_id = getattr(state, "incident_id", "unknown") or "unknown"
+
+    role_lines = "\n".join(
+        f"- {r.name}: {r.description}" for r in available_roles
+    ) or "(none — fan-out not viable)"
 
     return (
         f"You are an RCA orchestrator deciding whether to fan out to parallel sub-agents.\n\n"
         f"Incident ID: {incident_id}\n"
         f"Alert/question: {question}\n"
-        f"Severity: {rca_context.get('severity', 'unknown')}\n"
-        f"Connected capability areas: {providers}\n\n"
+        f"Severity: {rca_context.get('severity', 'unknown')}\n\n"
+        f"Available investigator roles (use ONLY these role_name values):\n{role_lines}\n\n"
         f"If this incident is complex enough to benefit from parallel investigation "
         f"(multiple simultaneous failure modes, cross-system correlation needed), "
         f"return mode='fanout' with up to {_MAX_SUBAGENTS} SubAgentInput objects.\n"
-        f"Each input needs: agent_id (e.g. 'sa_1'), role_name (from available roles), "
+        f"Each input needs: agent_id (e.g. 'sa_1'), role_name (from the list above), "
         f"purpose (one bounded sentence), optional time_window.\n"
         f"If the incident is straightforward, return mode='single' with empty inputs.\n"
         f"Always include a brief rationale."
