@@ -34,6 +34,9 @@ paths = [
   # real credentials. See LICENSE-THIRD-PARTY.md.
   '''server/utils/security/_generated_patterns\.py$''',
 
+  # GitHub App setup guide references PEM header in expected-output comments
+  '''server/connectors/github_connector/SETUP_GITHUB_APP\.md$''',
+
   # Helm templates (contain template variables, not real secrets)
   '''k8s/templates/.*\.tpl$''',
   '''k8s/templates/.*\.yaml$''',
