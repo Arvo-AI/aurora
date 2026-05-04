@@ -25,8 +25,14 @@ from utils.auth.github_app_jwt import mint_app_jwt_with_config
 
 
 def _decode_unverified(token: str) -> dict[str, Any]:
-    """Decode a JWT WITHOUT signature verification (header/payload inspection)."""
-    return pyjwt.decode(token, options={"verify_signature": False})
+    """Decode a JWT WITHOUT signature verification (header/payload inspection).
+
+    Signature verification is intentionally skipped here: this helper is used
+    by tests that need to inspect the raw payload of a freshly-minted token.
+    Round-trip signature verification is exercised in
+    ``test_jwt_verifiable_with_public_key``.
+    """
+    return pyjwt.decode(token, options={"verify_signature": False})  # NOSONAR: test inspection
 
 
 def test_jwt_iss_is_client_id(
@@ -52,7 +58,7 @@ def test_jwt_uses_rs256(
     private_pem, _ = app_private_key
 
     token = mint_app_jwt_with_config(app_config, private_pem)
-    header = pyjwt.get_unverified_header(token)
+    header = pyjwt.get_unverified_header(token)  # NOSONAR: header-only inspection
 
     assert header["alg"] == "RS256"
     assert header["typ"] == "JWT"

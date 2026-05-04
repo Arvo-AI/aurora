@@ -75,13 +75,13 @@ def test_first_call_mints(responses_mock: Any) -> None:
     responses_mock.add(
         responses_mock.POST,
         url,
-        json={"token": "ghs_first_call_token", "expires_at": _future_iso()},
+        json={"token": "ghs_first_call_token", "expires_at": _future_iso()},  # NOSONAR: stub
         status=201,
     )
 
     token = get_installation_token(installation_id)
 
-    assert token == "ghs_first_call_token"
+    assert token == "ghs_first_call_token"  # NOSONAR: stub
     assert len(responses_mock.calls) == 1
 
 
@@ -91,14 +91,14 @@ def test_cache_hit_skips_mint(responses_mock: Any) -> None:
     responses_mock.add(
         responses_mock.POST,
         url,
-        json={"token": "ghs_cached_token", "expires_at": _future_iso()},
+        json={"token": "ghs_cached_token", "expires_at": _future_iso()},  # NOSONAR: stub
         status=201,
     )
 
     first = get_installation_token(installation_id)
     second = get_installation_token(installation_id)
 
-    assert first == second == "ghs_cached_token"
+    assert first == second == "ghs_cached_token"  # NOSONAR: stub
     assert len(responses_mock.calls) == 1
 
 
@@ -108,21 +108,21 @@ def test_expired_remints(responses_mock: Any) -> None:
     responses_mock.add(
         responses_mock.POST,
         url,
-        json={"token": "ghs_expired_token", "expires_at": _past_iso()},
+        json={"token": "ghs_expired_token", "expires_at": _past_iso()},  # NOSONAR: stub
         status=201,
     )
     responses_mock.add(
         responses_mock.POST,
         url,
-        json={"token": "ghs_fresh_token", "expires_at": _future_iso()},
+        json={"token": "ghs_fresh_token", "expires_at": _future_iso()},  # NOSONAR: stub
         status=201,
     )
 
     first = get_installation_token(installation_id)
     second = get_installation_token(installation_id)
 
-    assert first == "ghs_expired_token"
-    assert second == "ghs_fresh_token"
+    assert first == "ghs_expired_token"  # NOSONAR: stub
+    assert second == "ghs_fresh_token"  # NOSONAR: stub
     assert len(responses_mock.calls) == 2
 
 
@@ -188,7 +188,7 @@ def test_concurrent_calls_no_stampede(responses_mock: Any) -> None:
     )
 
     results: list[str] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     barrier = threading.Barrier(20)
 
     def _worker() -> None:
@@ -196,7 +196,7 @@ def test_concurrent_calls_no_stampede(responses_mock: Any) -> None:
             barrier.wait()
             token = get_installation_token(installation_id)
             results.append(token)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=_worker) for _ in range(20)]

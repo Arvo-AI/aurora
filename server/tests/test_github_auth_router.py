@@ -108,7 +108,7 @@ def test_oauth_only_user_returns_oauth(
     """No App link + OAuth credential present → method=oauth."""
 
     _patch_repo_lookup(monkeypatch, installation_id=None, has_active=None)
-    _patch_oauth(monkeypatch, token="ghp_oauth_only_token")
+    _patch_oauth(monkeypatch, token="ghp_oauth_only_token")  # NOSONAR: stub
     _patch_mint(
         monkeypatch,
         AssertionError("App mint MUST NOT be called when no installation is linked"),
@@ -177,7 +177,7 @@ def test_suspended_app_falls_back_to_oauth(
     """
 
     _patch_repo_lookup(monkeypatch, installation_id=8484, has_active=True)
-    _patch_oauth(monkeypatch, token="ghp_oauth_fallback")
+    _patch_oauth(monkeypatch, token="ghp_oauth_fallback")  # NOSONAR: stub
     _patch_mint(
         monkeypatch,
         GitHubAppInstallationSuspended("installation_id=8484 suspended"),
