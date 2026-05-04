@@ -38,14 +38,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest Flask psycopg2-binary python-dotenv
+        run: pip install pytest Flask psycopg2-binary python-dotenv langchain-core
 
       - name: Run static analysis & unit tests
         working-directory: server
         run: |
           tests=(
             tests/architectural/test_connector_rbac.py
+            tests/chat/test_tool_output_cap.py
             tests/db/test_connection_pool.py
+            tests/security/test_input_rail.py
+            tests/security/test_terminal_exec_tool.py
           )
           if [ -f tests/architectural/test_rls_coverage.py ]; then
             tests+=(tests/architectural/test_rls_coverage.py)
