@@ -16,8 +16,15 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    _cryptography_available = True
+except ImportError:  # pragma: no cover — host envs without cryptography
+    serialization = None  # type: ignore[assignment]
+    rsa = None  # type: ignore[assignment]
+    _cryptography_available = False
 
 # Compatibility shim for pre-existing tests/services/correlation/ tests that
 # import Aurora services whose third-party deps may be absent on host envs.
@@ -57,6 +64,8 @@ except ImportError:  # pragma: no cover — Task 3 not yet landed
 @pytest.fixture(scope="function")
 def app_private_key() -> tuple[str, str]:
     """Yield ``(private_pem, public_pem)`` from a fresh RSA-2048 keypair."""
+    if not _cryptography_available:
+        pytest.skip("cryptography library is not installed")
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
