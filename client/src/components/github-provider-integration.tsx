@@ -314,7 +314,7 @@ export default function GitHubProviderIntegration() {
       const installUrl = await GitHubAppService.getInstallUrl(userId);
       const installUrlState = new URL(installUrl).searchParams.get('state');
 
-      if (installUrlState !== userId) {
+      if (!installUrlState) {
         throw new Error('GitHub App install URL is missing the required state parameter');
       }
 

@@ -39,6 +39,7 @@ import os
 import flask
 import requests
 from flask import Blueprint, jsonify, request
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth.rbac_decorators import require_permission
@@ -52,13 +53,60 @@ github_app_bp = Blueprint("github_app", __name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 GITHUB_TIMEOUT = 20
 
+# Install-state TTL: GitHub's install flow takes seconds in practice, but
+# allow 30 minutes to absorb account-creation, 2FA, OAuth-grant, popup-block
+# detours. After expiry the user must re-initiate the install.
+_INSTALL_STATE_TTL_SEC = 30 * 60
+_INSTALL_STATE_SALT = "aurora.github.app.install-state.v1"
+
 # Hard-coded user-facing error strings. NEVER substitute query params.
 _ERROR_MISSING_PARAMS = "Missing required parameters from GitHub callback"
 _ERROR_BAD_INSTALL_ID = "GitHub installation could not be verified"
 _ERROR_UNKNOWN_USER = "User identity could not be verified"
+_ERROR_INVALID_STATE = "Install request could not be verified. Please try installing again."
 _ERROR_GITHUB_API = "Could not verify installation with GitHub"
 _ERROR_INTERNAL = "An internal error occurred while finalizing installation"
 _ERROR_NOT_CONFIGURED = "GitHub App is not configured"
+
+
+def _state_serializer() -> URLSafeTimedSerializer:
+    """Build the timed serializer used for the install state token.
+
+    Bound to ``FLASK_SECRET_KEY`` so the same key that authenticates Flask
+    sessions also authenticates install state. Created on each call so a
+    rotated secret takes effect without restarting the worker.
+    """
+    secret = os.getenv("FLASK_SECRET_KEY") or flask.current_app.secret_key
+    if not secret:
+        raise RuntimeError(
+            "FLASK_SECRET_KEY is not configured; cannot sign GitHub App install state"
+        )
+    return URLSafeTimedSerializer(secret, salt=_INSTALL_STATE_SALT)
+
+
+def _sign_install_state(user_id: str) -> str:
+    """Return a signed, expiring state token bound to ``user_id``."""
+    return _state_serializer().dumps(user_id)
+
+
+def _verify_install_state(state: str) -> str | None:
+    """Return the bound ``user_id`` if ``state`` is a valid, unexpired token; else ``None``.
+
+    Returns ``None`` (instead of raising) so the caller can render a single
+    error template without leaking which check failed (signature vs. expiry
+    vs. parse), which matches the rest of this module's anti-spoofing posture.
+    """
+    try:
+        return _state_serializer().loads(state, max_age=_INSTALL_STATE_TTL_SEC)
+    except SignatureExpired:
+        logger.warning("[GITHUB-APP-CALLBACK] install state expired")
+        return None
+    except BadSignature:
+        logger.warning("[GITHUB-APP-CALLBACK] install state failed signature check")
+        return None
+    except Exception:
+        logger.warning("[GITHUB-APP-CALLBACK] install state could not be parsed")
+        return None
 
 
 def _render_error(reason: str) -> flask.Response:
@@ -92,8 +140,14 @@ def github_app_install_url(user_id):
         )
         return jsonify({"error": "GitHub App not configured"}), 503
 
+    try:
+        signed_state = _sign_install_state(user_id)
+    except RuntimeError:
+        logger.exception("[GITHUB-APP-INSTALL] failed to sign install state")
+        return jsonify({"error": "GitHub App install state could not be initialized"}), 500
+
     install_url = (
-        f"https://github.com/apps/{slug}/installations/new?state={user_id}"
+        f"https://github.com/apps/{slug}/installations/new?state={signed_state}"
     )
     return jsonify({"install_url": install_url})
 
@@ -127,11 +181,15 @@ def github_app_install_callback():
         logger.warning("[GITHUB-APP-CALLBACK] non-positive installation_id rejected")
         return _render_error(_ERROR_BAD_INSTALL_ID)
 
-    # Verify the state user BEFORE making the GitHub API call. This is also
-    # the cheaper of the two checks, so it short-circuits faster on the
-    # forged-state attack path.
-    if not validate_user_exists(state):
-        logger.warning("[GITHUB-APP-CALLBACK] unknown state user")
+    # Verify the signed state token BEFORE the GitHub API call. The state
+    # MUST be a token signed by ``_sign_install_state`` for the user that
+    # initiated the install — a raw user_id would let any caller link an
+    # arbitrary installation to a victim account.
+    user_id = _verify_install_state(state)
+    if user_id is None:
+        return _render_error(_ERROR_INVALID_STATE)
+    if not validate_user_exists(user_id):
+        logger.warning("[GITHUB-APP-CALLBACK] state user no longer exists")
         return _render_error(_ERROR_UNKNOWN_USER)
 
     # Mint the App JWT and call GitHub to verify the installation_id is real
@@ -260,7 +318,7 @@ def github_app_install_callback():
                             (user_id, installation_id)
                        VALUES (%s, %s)
                        ON CONFLICT (user_id, installation_id) DO NOTHING""",
-                    (state, installation_id),
+                    (user_id, installation_id),
                 )
                 conn.commit()
     except Exception:
@@ -269,7 +327,7 @@ def github_app_install_callback():
         logger.exception(
             "[GITHUB-APP-CALLBACK] DB write failed for installation_id=%d user=%s",
             installation_id,
-            state,
+            user_id,
         )
         return _render_error(_ERROR_INTERNAL)
 
@@ -277,7 +335,7 @@ def github_app_install_callback():
     logger.info(
         "[GITHUB-APP-CALLBACK] linked installation_id=%d to user=%s setup_action=%s",
         installation_id,
-        state,
+        user_id,
         setup_action or "unknown",
     )
 

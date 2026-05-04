@@ -46,8 +46,12 @@ _TEMPLATE_DIR = os.path.abspath(
 
 
 @pytest.fixture(scope="function")
-def flask_app() -> flask.Flask:
+def flask_app(monkeypatch: pytest.MonkeyPatch) -> flask.Flask:
+    # Stable secret so the signed install-state token round-trips through
+    # the test client without depending on the host's FLASK_SECRET_KEY.
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-flask-secret-key-do-not-use-in-prod")
     app = flask.Flask(__name__, template_folder=_TEMPLATE_DIR)
+    app.secret_key = "test-flask-secret-key-do-not-use-in-prod"
     app.register_blueprint(github_app_bp, url_prefix="/github")
     app.config["TESTING"] = True
     app.config["GITHUB_APP_ENABLED"] = True
@@ -57,6 +61,14 @@ def flask_app() -> flask.Flask:
 @pytest.fixture(scope="function")
 def client(flask_app: flask.Flask) -> Any:
     return flask_app.test_client()
+
+
+def _signed_state(flask_app: flask.Flask, user_id: str) -> str:
+    """Return a state token bound to ``user_id`` valid under ``flask_app``'s secret."""
+    from routes.github.github_app import _sign_install_state
+
+    with flask_app.app_context():
+        return _sign_install_state(user_id)
 
 
 def _gh_api_url(installation_id: int) -> str:
@@ -126,7 +138,7 @@ def patched_db(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 @pytest.fixture(scope="function")
 def patched_jwt(monkeypatch: pytest.MonkeyPatch) -> str:
-    token = "eyJTEST.JWT.PAYLOAD"
+    token = "eyJTEST.JWT.PAYLOAD"  # NOSONAR: synthetic placeholder for tests
     from routes.github import github_app as route_module
 
     monkeypatch.setattr(route_module, "mint_app_jwt", lambda: token)
@@ -151,6 +163,7 @@ def patched_user_exists(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_callback_verifies_installation_id_with_api(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
@@ -175,7 +188,7 @@ def test_callback_verifies_installation_id_with_api(
         "/github/app/install/callback",
         query_string={
             "installation_id": str(payload["id"]),
-            "state": "user-abc",
+            "state": _signed_state(flask_app, "user-abc"),
             "setup_action": "install",
         },
     )
@@ -191,14 +204,15 @@ def test_callback_verifies_installation_id_with_api(
 
 
 def test_callback_rejects_unknown_state_user(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
     patched_jwt: str,
     patched_user_exists: Any,
 ) -> None:
-    """Anti-spoof invariant #2: unknown ``state`` MUST short-circuit
-    before any DB write or GitHub API call.
+    """Anti-spoof invariant #2: a signed state for a since-deleted user MUST
+    short-circuit before any DB write or GitHub API call.
 
     State validation is the cheaper of the two checks; running it first
     limits the rate-limit blast radius of forged-state attacks.
@@ -210,7 +224,7 @@ def test_callback_rejects_unknown_state_user(
         "/github/app/install/callback",
         query_string={
             "installation_id": "9900001",
-            "state": "ghost-user",
+            "state": _signed_state(flask_app, "ghost-user"),
             "setup_action": "install",
         },
     )
@@ -222,7 +236,41 @@ def test_callback_rejects_unknown_state_user(
     patched_db.execute.assert_not_called()
 
 
+def test_callback_rejects_unsigned_state(
+    client: Any,
+    responses_mock: Any,
+    patched_db: MagicMock,
+    patched_jwt: str,
+    patched_user_exists: Any,
+) -> None:
+    """A raw ``state=user_id`` (the pre-fix attack shape) MUST be rejected.
+
+    Anyone who can start the public install flow must not be able to swap
+    ``state`` to a victim's user id. The route requires a signed token that
+    the caller could only have obtained from ``/github/app/install`` for
+    their own session.
+    """
+
+    patched_user_exists(True)
+
+    response = client.get(
+        "/github/app/install/callback",
+        query_string={
+            "installation_id": "9900099",
+            "state": "victim-user",  # forged: raw user id, not signed
+            "setup_action": "install",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Install request could not be verified" in body
+    assert len(responses_mock.calls) == 0
+    patched_db.execute.assert_not_called()
+
+
 def test_callback_rejects_404_installation(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
@@ -246,7 +294,7 @@ def test_callback_rejects_404_installation(
         "/github/app/install/callback",
         query_string={
             "installation_id": "7777777",
-            "state": "user-abc",
+            "state": _signed_state(flask_app, "user-abc"),
             "setup_action": "install",
         },
     )
@@ -259,6 +307,7 @@ def test_callback_rejects_404_installation(
 
 
 def test_callback_persists_installation_metadata(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
@@ -280,7 +329,7 @@ def test_callback_persists_installation_metadata(
         "/github/app/install/callback",
         query_string={
             "installation_id": str(payload["id"]),
-            "state": "user-meta-1",
+            "state": _signed_state(flask_app, "user-meta-1"),
             "setup_action": "install",
         },
     )
@@ -315,6 +364,7 @@ def test_callback_persists_installation_metadata(
 
 
 def test_callback_persists_user_link(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
@@ -331,7 +381,7 @@ def test_callback_persists_user_link(
         "/github/app/install/callback",
         query_string={
             "installation_id": str(payload["id"]),
-            "state": "user-link-target",
+            "state": _signed_state(flask_app, "user-link-target"),
             "setup_action": "install",
         },
     )
@@ -349,6 +399,7 @@ def test_callback_persists_user_link(
 
 
 def test_callback_idempotent_on_repeat_install(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
@@ -371,7 +422,7 @@ def test_callback_idempotent_on_repeat_install(
 
     qs = {
         "installation_id": str(payload["id"]),
-        "state": "user-repeat",
+        "state": _signed_state(flask_app, "user-repeat"),
         "setup_action": "install",
     }
     first = client.get("/github/app/install/callback", query_string=qs)
@@ -389,6 +440,7 @@ def test_callback_idempotent_on_repeat_install(
 
 
 def test_callback_xss_safe(
+    flask_app: flask.Flask,
     client: Any,
     responses_mock: Any,
     patched_db: MagicMock,
@@ -413,7 +465,7 @@ def test_callback_xss_safe(
         "/github/app/install/callback",
         query_string={
             "installation_id": malicious,
-            "state": "user-xss",
+            "state": _signed_state(flask_app, "user-xss"),
             "setup_action": "install",
         },
     )
