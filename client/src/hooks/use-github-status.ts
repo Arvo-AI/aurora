@@ -1,11 +1,40 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { GitHubIntegrationService } from '@/components/github-provider-integration';
+import type { GitHubInstallation } from '@/lib/github-app';
 
 interface GitHubStatus {
   isAuthenticated: boolean;
   isConnected: boolean;
   hasReposConnected: boolean | null;
   username?: string;
+}
+
+export type InstallationState = 'ok' | 'suspended' | 'pending_permissions' | 'no_repos';
+
+type InstallationRepoLike = { installation_id?: number | null };
+
+/**
+ * Derive an installation's state from its record + caller-supplied repo list.
+ * Precedence (per Task 18 spec): suspended > pending_permissions > no_repos > ok.
+ * `reposLoaded` MUST be true before `no_repos` can be reported, otherwise we'd
+ * surface a false-positive banner during the lazy-load window.
+ */
+export function computeInstallationState(
+  installation: GitHubInstallation,
+  repos: InstallationRepoLike[],
+  options: { reposLoaded?: boolean } = {}
+): InstallationState {
+  const { reposLoaded = true } = options;
+  if (installation.suspended_at) return 'suspended';
+  if (installation.permissions_pending_update) return 'pending_permissions';
+  if (
+    installation.repository_selection === 'selected' &&
+    reposLoaded &&
+    repos.filter(r => r.installation_id === installation.installation_id).length === 0
+  ) {
+    return 'no_repos';
+  }
+  return 'ok';
 }
 
 /**

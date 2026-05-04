@@ -102,7 +102,13 @@ python-docx>=1.1.0
 openpyxl>=3.1.0
 
 # Testing
-pytest>=7.0
+pytest>=7.4
+responses>=0.24
+cryptography>=41
 
 # MCP Server (Model Context Protocol)
 mcp[cli]>=1.27.0
+
+# GitHub App authentication (JWT mint + installation tokens)
+PyGithub>=2.1
+PyJWT[crypto]>=2.8

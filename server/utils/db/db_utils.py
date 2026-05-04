@@ -333,6 +333,49 @@ def initialize_tables():
                         UNIQUE(user_id, repo_full_name)
                     );
                 """,
+                "github_installations": """
+                    CREATE TABLE IF NOT EXISTS github_installations (
+                        id SERIAL PRIMARY KEY,
+                        installation_id BIGINT NOT NULL UNIQUE,
+                        account_login VARCHAR(255) NOT NULL,
+                        account_id BIGINT NOT NULL,
+                        account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('User', 'Organization')),
+                        target_type VARCHAR(20) NOT NULL,
+                        permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        events JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        repository_selection VARCHAR(20) NOT NULL DEFAULT 'selected',
+                        suspended_at TIMESTAMP NULL,
+                        permissions_pending_update BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """,
+                "user_github_installations": """
+                    CREATE TABLE IF NOT EXISTS user_github_installations (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255) NULL,
+                        installation_id BIGINT NOT NULL REFERENCES github_installations(installation_id) ON DELETE CASCADE,
+                        linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+                        UNIQUE(user_id, installation_id)
+                    );
+                """,
+                "webhook_deliveries": """
+                    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                        id SERIAL PRIMARY KEY,
+                        delivery_id VARCHAR(64) NOT NULL UNIQUE,
+                        event_type VARCHAR(64) NOT NULL,
+                        installation_id BIGINT NULL,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        processed_at TIMESTAMP NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'received',
+                        error TEXT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
+                    ON webhook_deliveries(received_at);
+                """,
                 "user_manual_vms": """
                     CREATE TABLE IF NOT EXISTS user_manual_vms (
                         id SERIAL PRIMARY KEY,
@@ -1275,6 +1318,22 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: Add installation_id column to github_connected_repos for
+            # GitHub App-linked repos while preserving legacy OAuth rows as NULL.
+            try:
+                cursor.execute(
+                    "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured installation_id column exists on github_connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding installation_id column to github_connected_repos: {e}"
+                )
+                conn.rollback()
 
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
