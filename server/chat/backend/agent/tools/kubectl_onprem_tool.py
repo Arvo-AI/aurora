@@ -42,35 +42,18 @@ def on_prem_kubectl(
     if command.lower().startswith('kubectl '):
         command = command[8:].strip()
 
-    # Org command policy check against full kubectl command
-    from utils.auth.command_policy import evaluate_compound_command
-    from utils.auth.stateless_auth import get_org_id_for_user
+    # Unified gate: signature + org policy + LLM judge + HITL (foreground).
     full_command = f"kubectl {command}"
-    org_id = get_org_id_for_user(user_id) if user_id else None
-    verdict = evaluate_compound_command(org_id, full_command)
-    if not verdict.allowed:
-        reason = (verdict.rule_description or "Matched organization policy")[:200]
-        logger.warning("Policy denied kubectl_onprem command for user %s (%s)",
-                        user_id, reason)
+    from utils.auth.command_gate import gate_command
+    gate = gate_command(user_id=user_id, tool_name="kubectl_onprem", command=full_command)
+    if not gate.allowed:
+        logger.warning("kubectl_onprem blocked for user %s (%s): %s",
+                       user_id, gate.code, gate.block_reason[:200])
         return json.dumps({
             'success': False,
-            'error': f"Command blocked by organization policy: {reason}",
-            'code': 'POLICY_DENIED',
-            'chat_output': f"$ {full_command}\nBlocked by organization policy: {reason}",
-            'command': full_command,
-            'return_code': 1,
-            'provider': 'onprem_kubectl',
-        })
-
-    from utils.security.command_safety import evaluate_command
-    decision = evaluate_command(full_command, tool="kubectl_onprem", user_id=user_id, session_id=session_id)
-    if decision.blocked:
-        code = 'SIGNATURE_MATCHED' if decision.layer == 'signature_match' else 'SAFETY_BLOCKED'
-        return json.dumps({
-            'success': False,
-            'error': f"Command blocked by safety guardrail: {decision.reason}",
-            'code': code,
-            'chat_output': f"$ {full_command}\nBlocked by safety guardrail: {decision.reason}",
+            'error': gate.block_reason,
+            'code': gate.code,
+            'chat_output': f"$ {full_command}\n{gate.block_reason}",
             'command': full_command,
             'return_code': 1,
             'provider': 'onprem_kubectl',

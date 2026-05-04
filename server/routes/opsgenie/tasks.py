@@ -276,6 +276,7 @@ def process_opsgenie_event(
                                 "incident_id": str(incident_id),
                                 "source": "opsgenie",
                             },
+                            org_id=org_id,
                         )
                     except Exception as e:
                         logger.warning("[OPSGENIE][WEBHOOK] Failed to notify SSE: %s", e)

@@ -996,8 +996,23 @@ class Workflow:
                     reason=rail_result.reason,
                     latency_ms=rail_result.latency_ms,
                 )
-                yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
-                return
+                from guardrails.input_rail import _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
+                _RAIL_USER_MESSAGES = {
+                    _BLOCKED_REASON: "Your message was blocked by our safety system. Please rephrase your request.",
+                    _FAIL_CLOSED_AUTH: "There is an issue with the AI service configuration. Please try again later.",
+                    _FAIL_CLOSED_CONNECTIVITY: "The AI service is temporarily unavailable. Please try again in a moment.",
+                }
+                # Background chats have no interactive user: hard block stays.
+                # Foreground chats that were genuinely blocked: taint the session
+                # so every subsequent tool call goes through the command gate.
+                if getattr(input_state, "is_background", False) or rail_result.reason != _BLOCKED_REASON:
+                    yield ("token", _RAIL_USER_MESSAGES.get(rail_result.reason, "Something went wrong. Please try again."))
+                    return
+                from utils.auth.command_gate import mark_session_tainted
+                mark_session_tainted(
+                    getattr(input_state, "session_id", None),
+                    getattr(input_state, "user_id", None),
+                )
 
             # Rail passed: NOW it's safe to persist the user message.
             # Kept inside the rail gate so blocked messages never touch

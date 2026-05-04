@@ -256,19 +256,16 @@ def terminal_exec(
     has_shell_syntax = _has_shell_metacharacters(command)
     allow_routing = not force_shell and not has_shell_syntax
 
-    # Org command policy check (shared allow/deny firewall across all tools)
-    from utils.auth.command_policy import evaluate_compound_command
-    from utils.auth.stateless_auth import get_org_id_for_user
-    org_id = get_org_id_for_user(user_id) if user_id else None
-    verdict = evaluate_compound_command(org_id, command)
-    if not verdict.allowed:
-        reason = (verdict.rule_description or "Matched organization policy")[:200]
-        logger.warning("Policy denied terminal command for user %s (%s)",
-                        user_id, reason)
+    # Unified gate: signature + org policy + LLM judge + HITL (foreground).
+    from utils.auth.command_gate import gate_command
+    gate = gate_command(user_id=user_id, tool_name="terminal_exec", command=command)
+    if not gate.allowed:
+        logger.warning("terminal_exec blocked for user %s (%s): %s",
+                       user_id, gate.code, gate.block_reason[:200])
         return json.dumps({
             "success": False,
-            "error": f"Command blocked by organization policy: {reason}",
-            "code": "POLICY_DENIED",
+            "error": gate.block_reason,
+            "code": gate.code,
         })
 
     # Define routing table for cloud commands

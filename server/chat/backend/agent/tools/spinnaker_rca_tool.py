@@ -225,22 +225,17 @@ def spinnaker_rca(
             return json.dumps({"error": "Spinnaker is not connected. Configure credentials in Settings > Connectors > Spinnaker."})
 
         try:
-            from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
-            from chat.backend.agent.tools.cloud_tools import get_state_context
-
-            session_id = getattr(get_state_context(), "session_id", None)
+            from utils.auth.command_gate import gate_action
 
             summary = f"Trigger pipeline '{pipeline_name}' for application '{application}'"
             if parameters:
                 summary += f"\nParameters: {json.dumps(parameters)}"
 
-            confirmed = wait_for_user_confirmation(
+            if not gate_action(
                 user_id=user_id,
-                message=summary,
                 tool_name="spinnaker_rca",
-                session_id=session_id,
-            )
-            if not confirmed:
+                summary=summary,
+            ).allowed:
                 return json.dumps({"status": "cancelled", "message": "Pipeline trigger cancelled by user"})
         except Exception as e:
             logger.error("[SPINNAKER_RCA] Confirmation flow failed, aborting trigger: %s", e)

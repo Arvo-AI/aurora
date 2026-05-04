@@ -1461,6 +1461,40 @@ def initialize_tables():
                 logging.warning(f"Error adding incident_id index: {e}")
                 conn.rollback()
 
+            # Migration: Add pending_turn column (live HITL state, separate from
+            # the append-only messages history). Cleared by the command gate
+            # once the user resolves the confirmation. Rehydrated as a
+            # synthetic tail card on session load.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS pending_turn JSONB;
+                """)
+                logging.info(
+                    "Added pending_turn column to chat_sessions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding pending_turn column: {e}")
+                conn.rollback()
+
+            # Migration: Add security_tainted column. When NeMo's input rail
+            # blocks the opening user message in a foreground chat, we mark
+            # the session tainted instead of hard-failing; every subsequent
+            # tool call then requires user approval via the command gate.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS security_tainted BOOLEAN NOT NULL DEFAULT false;
+                """)
+                logging.info(
+                    "Added security_tainted column to chat_sessions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding security_tainted column: {e}")
+                conn.rollback()
+
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist
             try:
                 cursor.execute("""
@@ -2104,6 +2138,30 @@ def initialize_tables():
                 END $$;
             """)
             logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
+
+            # kubectl agent token verification is a bootstrap auth query — the
+            # agent connects with a Bearer token before any org context exists.
+            # Same pattern as mcp_tokens: a permissive policy keyed on a session
+            # variable so the handler can opt in to a scoped RLS bypass.
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS select_by_token_resolve ON kubectl_agent_tokens;
+                    CREATE POLICY select_by_token_resolve ON kubectl_agent_tokens
+                    FOR SELECT USING (
+                        current_setting('myapp.kubectl_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS update_by_token_resolve ON kubectl_agent_tokens;
+                    CREATE POLICY update_by_token_resolve ON kubectl_agent_tokens
+                    FOR UPDATE USING (
+                        current_setting('myapp.kubectl_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            logging.info("Added kubectl token resolve RLS policies on kubectl_agent_tokens.")
 
             conn.commit()
 

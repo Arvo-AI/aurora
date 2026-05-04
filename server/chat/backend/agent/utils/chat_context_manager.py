@@ -27,8 +27,12 @@ class ChatContextManager:
     # Model context limits (tokens) - leaving some buffer for system prompts and tool calls
     # Keys use OpenRouter format (dot notation) since ModelMapper resolves to this
     MODEL_CONTEXT_LIMITS = {
+        "openai/gpt-5.5": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
+        "anthropic/claude-sonnet-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-4.7": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
         "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
         "google/gemini-3.1-pro-preview": 1000000,  # 1M context

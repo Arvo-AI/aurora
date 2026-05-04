@@ -16,7 +16,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import AuroraCreditProgressBar from "@/components/AuroraCreditProgressBar"
 
 interface NavigationProps {
   isChatExpanded?: boolean;
@@ -246,25 +245,6 @@ export default function Navigation({
             <div className="w-full">
               {user ? (
                 <div className="space-y-2">
-                  {/* API Cost Tracking for signed-in users */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div>
-                          <AuroraCreditProgressBar />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-sm">
-                        <div className="text-sm space-y-1">
-                          <p className="font-medium">API Cost Tracking</p>
-                          <p className="text-muted-foreground">
-                            Track your LLM API usage costs.
-                          </p>
-                        </div>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  
                   <div className="relative" ref={userMenuRef}>
                     <button
                       type="button"

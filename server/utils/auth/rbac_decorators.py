@@ -19,7 +19,7 @@ from flask import jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
-from utils.auth.enforcer import get_enforcer, reload_policies
+from utils.auth.enforcer import enforce_with_reload
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -68,18 +68,15 @@ def require_permission(resource: str, action: str):
                 _audit_auth_failure(user_id, None, "rbac_denied", {"endpoint": fn.__name__, "reason": "no_org_context"})
                 return jsonify({"error": "Forbidden - no organization context"}), 403
 
-            enforcer = get_enforcer()
-            if not enforcer.enforce(user_id, org_id, resource, action):
-                reload_policies()
-                if not enforcer.enforce(user_id, org_id, resource, action):
-                    logger.warning(
-                        "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
-                        sanitize(user_id), sanitize(org_id), resource, action, fn.__name__,
-                    )
-                    _audit_auth_failure(user_id, org_id, "rbac_denied", {
-                        "endpoint": fn.__name__, "resource": resource, "action": action,
-                    })
-                    return jsonify({"error": "Forbidden"}), 403
+            if not enforce_with_reload(user_id, org_id, resource, action):
+                logger.warning(
+                    "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
+                    sanitize(user_id), sanitize(org_id), resource, action, fn.__name__,
+                )
+                _audit_auth_failure(user_id, org_id, "rbac_denied", {
+                    "endpoint": fn.__name__, "resource": resource, "action": action,
+                })
+                return jsonify({"error": "Forbidden"}), 403
 
             try:
                 return fn(user_id, *args, **kwargs)
