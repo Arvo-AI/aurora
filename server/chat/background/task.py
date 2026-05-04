@@ -581,9 +581,7 @@ def run_background_chat(
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
-            _update_incident_status(incident_id, "analyzed", user_id=user_id)
-
-            _update_incident_aurora_status(incident_id, "summarizing",  user_id=user_id)
+            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
 
             # Post RCA-complete comment to linked JSM incident
             if (trigger_metadata or {}).get("source") == "opsgenie":
@@ -1323,6 +1321,31 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
                     logger.error(f"[BackgroundChat] Failed to record lifecycle event '{event_type}' for incident {incident_id}: {le}")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
+
+
+def _update_incident_status_and_aurora(
+    incident_id: str, status: str, aurora_status: str, user_id: str
+) -> None:
+    """Atomically update both incident status and aurora_status in one transaction."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:StatusAndAurora]"):
+                    return
+                now = datetime.now()
+                cursor.execute(
+                    """UPDATE incidents
+                       SET status = %s,
+                           aurora_status = %s,
+                           analyzed_at = CASE WHEN %s = 'analyzed' THEN COALESCE(analyzed_at, %s) ELSE analyzed_at END,
+                           updated_at = %s
+                       WHERE id = %s AND status != 'merged'""",
+                    (status, aurora_status, status, now, now, incident_id),
+                )
+            conn.commit()
+            logger.info(f"[BackgroundChat] Set incident {incident_id} status='{status}' aurora_status='{aurora_status}'")
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status/aurora_status: {e}")
 
 
 def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str) -> None:
@@ -2125,6 +2148,7 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                             continue
                         cursor.execute("""
                             UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
+                                   analyzed_at = COALESCE(analyzed_at, NOW()),
                                    rca_celery_task_id = NULL, updated_at = NOW()
                             WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
                         """, (inc_id,))
@@ -2185,7 +2209,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         _propagate_suggestion_status(str(session_id), 'failed')
                         if incident_id:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
@@ -2205,7 +2229,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                              cursor=cursor, incident_id=inc_id):
                             continue
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
                             (inc_id,)
                         )
                         if not cursor.fetchone():
@@ -2222,23 +2246,30 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         conn.commit()
                         dead_task_count += 1
 
-                    # --- 3. Orphaned incidents (running but no in-progress session) ---
+                    # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
                     cursor.execute("""
-                        SELECT i.id FROM incidents i
-                        WHERE i.aurora_status = 'running' AND i.updated_at < %s AND i.user_id = %s
+                        SELECT i.id, i.aurora_status FROM incidents i
+                        WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
                           AND NOT EXISTS (
                               SELECT 1 FROM chat_sessions cs
                               WHERE cs.id::text = i.aurora_chat_session_id::text
                                 AND cs.status = 'in_progress'
                           )
                     """, (stale_threshold, uid))
-                    for (inc_id,) in cursor.fetchall():
-                        cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
-                            (inc_id,)
-                        )
+                    for inc_id, cur_aurora in cursor.fetchall():
+                        if cur_aurora in ('complete', 'error'):
+                            cursor.execute(
+                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
+                                (inc_id,)
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' RETURNING id",
+                                (inc_id,)
+                            )
                         if cursor.fetchone():
-                            _record_rca_error(cursor, str(inc_id), uid)
+                            if cur_aurora not in ('complete', 'error'):
+                                _record_rca_error(cursor, str(inc_id), uid)
                             orphaned_count += 1
                         conn.commit()
 
