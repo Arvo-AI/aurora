@@ -216,7 +216,7 @@ except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
 
 try:
-    import tasks.github_webhook_tasks  # noqa: F401
+    from tasks import github_webhook_tasks  # noqa: F401
     logging.info("GitHub webhook dispatcher task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")

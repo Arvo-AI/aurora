@@ -13,7 +13,7 @@ import logging
 import os
 import hmac
 import secrets
-import hmac
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
@@ -24,16 +24,6 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(leve
 # Silence verbose loggers
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('utils.auth.stateless_auth').setLevel(logging.INFO)
- 
-import os
-import secrets  # For generating a secure random key
-import flask
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-from utils.db.db_utils import (
-    ensure_database_exists,
-    initialize_tables,
-)
 
 
 # Initialize Flask application
