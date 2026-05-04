@@ -46,6 +46,7 @@ jobs:
           tests=(
             tests/architectural/test_connector_rbac.py
             tests/db/test_connection_pool.py
+            tests/security/test_terminal_exec_tool.py
           )
           if [ -f tests/architectural/test_rls_coverage.py ]; then
             tests+=(tests/architectural/test_rls_coverage.py)
