@@ -442,6 +442,7 @@ def handle_correlated_alert(
                 "alert_title": alert_title,
                 "correlation_score": correlation_result.score,
             },
+            org_id=org_id,
         )
     except Exception as e:
         logger.warning("[CORRELATION] Failed to notify SSE: %s", e)

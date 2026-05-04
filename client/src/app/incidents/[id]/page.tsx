@@ -13,6 +13,8 @@ import { canWrite } from '@/lib/roles';
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel from '../components/ThoughtsPanel';
 
+const STALE_POLL_MS = 5 * 60 * 1000;
+
 export default function IncidentDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -24,6 +26,8 @@ export default function IncidentDetailPage() {
   const [thoughts, setThoughts] = useState<StreamingThought[]>([]);
   const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const userClosedThoughtsRef = useRef<boolean>(false);
+  const pollStartRef = useRef<number>(0);
+  const lastUpdatedAtRef = useRef<string>('');
 
   const applyIncidentData = useCallback((data: Incident) => {
     const newThoughts = data.streamingThoughts || [];
@@ -45,6 +49,8 @@ export default function IncidentDetailPage() {
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    pollStartRef.current = 0;
+    lastUpdatedAtRef.current = '';
 
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;
@@ -58,14 +64,30 @@ export default function IncidentDetailPage() {
         applyIncidentData(data);
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
-        if (needsPoll && active) {
-          timer = setTimeout(() => fetchAndSchedule(false), 1000);
+        if (!needsPoll || !active) { pollStartRef.current = 0; return; }
+
+        if (data.updatedAt !== lastUpdatedAtRef.current) {
+          lastUpdatedAtRef.current = data.updatedAt;
+          pollStartRef.current = Date.now();
         }
+        if (!pollStartRef.current) pollStartRef.current = Date.now();
+        if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
+          setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+          return;
+        }
+        timer = setTimeout(() => fetchAndSchedule(false), 1000);
       } catch (e) {
         if (!active) return;
         if (isInitial) {
           setError('Failed to load incident');
           console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+        } else {
+          if (!pollStartRef.current) pollStartRef.current = Date.now();
+          if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
+            setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+          } else {
+            timer = setTimeout(() => fetchAndSchedule(false), 2000);
+          }
         }
       } finally {
         if (isInitial && active) setLoading(false);

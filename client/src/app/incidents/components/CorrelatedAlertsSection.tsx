@@ -80,15 +80,17 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
       
       <div className="flex items-start gap-3">
         {/* Source icon */}
-        <div className="flex-shrink-0 mt-0.5">
-          <Image 
-            src={alert.sourceType === 'pagerduty' ? '/pagerduty-icon.svg' : alert.sourceType === 'dynatrace' ? '/dynatrace.png' : `/${alert.sourceType}.svg`}
-            alt={alert.sourceType}
-            width={18}
-            height={18}
-            className={`object-contain opacity-70${alert.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}${alert.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
-          />
-        </div>
+        {alert.sourceType !== 'chat' && (
+          <div className="flex-shrink-0 mt-0.5">
+            <Image 
+              src={`/${alert.sourceType}.svg`}
+              alt={alert.sourceType}
+              width={18}
+              height={18}
+              className={`object-contain opacity-70${alert.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+            />
+          </div>
+        )}
         
         {/* Content */}
         <div className="flex-1 min-w-0">

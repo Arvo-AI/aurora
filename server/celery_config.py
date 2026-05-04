@@ -94,7 +94,8 @@ celery_app.conf.update(
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.github.github_repo_metadata',
-        'routes.change_intercept.tasks',
+        'tasks.github_webhook_tasks',
+        'tasks.change_intercept_tasks',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -216,7 +217,13 @@ except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
 
 try:
-    import routes.change_intercept.tasks  # noqa: F401
+    import tasks.github_webhook_tasks  # noqa: F401
+    logging.info("GitHub webhook dispatcher task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")
+
+try:
+    import tasks.change_intercept_tasks  # noqa: F401
     logging.info("Change-intercept tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import change-intercept tasks: {e}")
