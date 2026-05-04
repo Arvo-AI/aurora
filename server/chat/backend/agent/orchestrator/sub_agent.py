@@ -142,10 +142,21 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
             "sub_agent_node: timeout agent=%s incident=%s after %ds",
             agent_id, inc_hash, timeout,
         )
+        # Recover any tool calls captured before the timeout. _run set the
+        # contextvar via set_tool_capture(...) and asyncio.wait_for runs the
+        # inner coro in the same task, so the contextvar is still live here.
+        history: list = []
+        try:
+            from utils.cloud.cloud_utils import _tool_capture_var
+            partial_capture = _tool_capture_var.get()
+            if partial_capture is not None:
+                history = _extract_tool_call_history(partial_capture)
+        except Exception:
+            logger.exception("sub_agent: failed to recover tool_call_history on timeout")
         _write_stub_to_storage(agent_id, role_name, incident_id, user_id, "timeout", "timed out")
         _update_db_terminal(
             agent_id, incident_id, user_id, input_dict.get("parent_org_id"),
-            "timeout", tool_call_history=[],
+            "timeout", tool_call_history=history,
         )
         return FindingRef(
             agent_id=agent_id, role_name=role_name,

@@ -312,7 +312,10 @@ class Agent:
             if not self._prompt_references_zip(prompt_text, getattr(state, 'attachments', [])):
                 tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file', 'rag_index_zip')]
 
-            # Register canonicalized prefix + tools with cache middleware
+            # Register canonicalized prefix + tools with cache middleware.
+            # Skip for sub-agents: their `system_prompt_override` (the role brief)
+            # is not built from `segments`, so registering with `segments=segments`
+            # would poison the lead's prefix cache with a mismatched prompt.
             try:
                 pcm = PrefixCacheManager.get_instance()
                 provider = None
@@ -322,9 +325,9 @@ class Agent:
                     provider = pref[0]
                 elif isinstance(pref, str):
                     provider = pref
-                
-                # Only register cache if provider is set
-                if provider:
+
+                # Only register cache if provider is set AND we're the lead agent
+                if provider and system_prompt_override is None:
                     provider = provider.lower()
                     tenant_id = getattr(state, 'user_id', None) or "public"
                     # Register segmented cache breakpoints: tools, system_invariant, provider_constraints, regional_rules, ephemeral

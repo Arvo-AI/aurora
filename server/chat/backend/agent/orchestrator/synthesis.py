@@ -52,6 +52,9 @@ async def _synthesis(state: State) -> dict:
     # Build ToolMessages closing the synthetic dispatch tool_calls round-trip.
     tool_messages = _build_tool_messages(state, incident_id, target_wave)
 
+    # Fetch findings up to and including the wave that just completed. The
+    # final summary needs full context across waves; the needs_more decision
+    # is steered by which findings are NEW (target_wave) via the prompt.
     finding_rows = _fetch_finding_rows(incident_id, user_id, target_wave)
     pending = [row for row in finding_rows if row.get("storage_uri")]
     bodies = await asyncio.gather(
@@ -59,7 +62,7 @@ async def _synthesis(state: State) -> dict:
         return_exceptions=False,
     ) if pending else []
     finding_bodies: list[str] = [
-        f"## Agent: {row.get('agent_id')} ({row.get('role_name')})\n\n{body}"
+        f"## Wave {row.get('wave', '?')} | Agent: {row.get('agent_id')} ({row.get('role_name')})\n\n{body}"
         for row, body in zip(pending, bodies) if body
     ]
 
@@ -168,27 +171,37 @@ def _build_tool_messages(state: State, incident_id: str, target_wave: int) -> li
 
 
 def _build_synthesis_prompt(state: State, combined_findings: str, wave: int) -> str:
+    """Build the synthesis prompt.
+
+    Findings are grouped by wave in `combined_findings` (each block prefixed with
+    `## Wave N | ...`). The LLM must judge `needs_more_research` from what the
+    NEW wave (target_wave = wave+1) added, but write the user-facing `summary`
+    using full context across all waves.
+    """
     incident_id = getattr(state, "incident_id", "unknown") or "unknown"
     question = (getattr(state, "question", "") or "")[:500]
+    target_wave = wave + 1
     return (
         f"You are an RCA orchestrator synthesizing parallel investigation findings.\n\n"
-        f"Incident: {incident_id}\nOriginal question: {question}\nWave: {wave + 1}\n\n"
-        f"=== SUB-AGENT FINDINGS ===\n\n{combined_findings[:12000]}\n\n"
+        f"Incident: {incident_id}\nOriginal question: {question}\n"
+        f"Most recent wave: {target_wave} (max {_MAX_SYNTHESIS_WAVES})\n\n"
+        f"=== SUB-AGENT FINDINGS (grouped by wave) ===\n\n{combined_findings[:12000]}\n\n"
         f"=== TASK ===\n"
-        f"Review the findings above. "
-        f"If they provide a clear root cause with at least one strong/moderate-confidence finding, "
-        f"return needs_more_research=false.\n"
-        f"If critical gaps remain that a second wave of targeted sub-agents could fill "
-        f"(and wave < {_MAX_SYNTHESIS_WAVES}), return needs_more_research=true with follow_up_inputs.\n"
-        f"Each follow_up_input needs agent_id (sa_w2_1, sa_w2_2, ...), role_name, purpose.\n"
-        f"Always include a rationale.\n"
-        f"ALSO return a `summary` field: a concise (3-6 sentence) user-facing markdown summary of the investigation "
-        f"so far — what was found, the most likely root cause(s), and (if needs_more_research=true) what's being "
-        f"investigated next. The summary will be shown directly to the user in chat."
+        f"1) needs_more_research: judge based on what wave {target_wave} added. "
+        f"If the new wave (or, on wave 1, the only wave) provides a clear root cause "
+        f"with at least one strong/moderate-confidence finding, return false. "
+        f"If critical gaps remain that another wave could fill AND target_wave < {_MAX_SYNTHESIS_WAVES}, "
+        f"return true with follow_up_inputs. Each follow_up_input needs agent_id "
+        f"(e.g. sa_w{target_wave + 1}_1), role_name, purpose.\n"
+        f"2) summary: a concise (3-6 sentence) user-facing markdown summary using ALL findings "
+        f"across every wave shown above. Cover what was found, the most likely root cause(s), "
+        f"and (if needs_more_research=true) what's being investigated next. Shown directly to the user.\n"
+        f"3) rationale: brief reasoning for your decision."
     )
 
 
-def _fetch_finding_rows(incident_id: str, user_id: str, wave: int) -> list:
+def _fetch_finding_rows(incident_id: str, user_id: str, max_wave: int) -> list:
+    """Return all rca_findings rows for waves 1..max_wave, ordered by wave then start time."""
     from utils.db.connection_pool import db_pool
     from utils.auth.stateless_auth import set_rls_context
 
@@ -197,11 +210,12 @@ def _fetch_finding_rows(incident_id: str, user_id: str, wave: int) -> list:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[Synthesis]")
                 cur.execute(
-                    """SELECT agent_id, role_name, storage_uri, status, self_assessed_strength
+                    """SELECT agent_id, role_name, storage_uri, status,
+                              self_assessed_strength, wave
                        FROM rca_findings
-                       WHERE incident_id = %s AND wave = %s
-                       ORDER BY started_at ASC""",
-                    (incident_id, wave),
+                       WHERE incident_id = %s AND wave <= %s
+                       ORDER BY wave ASC, started_at ASC""",
+                    (incident_id, max_wave),
                 )
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
