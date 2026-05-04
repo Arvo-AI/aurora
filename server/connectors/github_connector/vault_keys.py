@@ -64,7 +64,7 @@ def _read_webhook_secret_from_env() -> str:
     for env_var in _WEBHOOK_SECRET_ENV_VARS:
         value = os.getenv(env_var)
         if value:
-            logger.info("Using GitHub App webhook secret from %s fallback", env_var)
+            logger.info("Using GitHub App webhook secret from environment fallback")
             return value
 
     raise GitHubAppConfigError(

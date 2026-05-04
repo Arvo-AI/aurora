@@ -127,7 +127,7 @@ def _resolve_secret(cli_secret: str | None) -> str:
     if env_secret:
         return env_secret
     print(
-        f"error: webhook secret not provided (use --secret or set ${_DEFAULT_SECRET_ENV})",
+        "error: webhook secret not provided (use --secret or set the webhook-secret env var)",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -143,8 +143,11 @@ def _load_payload(path: Path) -> bytes:
         print(f"error: payload file not found: {path}", file=sys.stderr)
         sys.exit(2)
     raw = path.read_bytes()
+    if not raw:
+        print(f"error: payload file is empty: {path}", file=sys.stderr)
+        sys.exit(2)
     try:
-        json.loads(raw or b"{}")
+        json.loads(raw)
     except json.JSONDecodeError as exc:
         print(f"error: payload file is not valid JSON: {exc}", file=sys.stderr)
         sys.exit(2)

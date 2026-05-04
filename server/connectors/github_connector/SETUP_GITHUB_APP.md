@@ -196,7 +196,7 @@ Verify both writes:
 
 ```bash
 docker exec aurora-vault-1 vault kv get -field=pem aurora/system/github-app/private-key | head -1
-# Expect: -----BEGIN RSA PRIVATE KEY-----  (or -----BEGIN PRIVATE KEY-----)
+# Expect: a PEM private-key header line (BEGIN ... PRIVATE KEY)
 
 docker exec aurora-vault-1 vault kv get -field=secret aurora/system/github-app/webhook-secret | wc -c
 # Expect: 64 (hex chars) + trailing newline = 65

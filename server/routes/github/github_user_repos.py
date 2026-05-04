@@ -43,6 +43,7 @@ from utils.auth.github_auth_router import (
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 github_user_repos_bp = Blueprint('github_user_repos', __name__)
 logger = logging.getLogger(__name__)
@@ -323,7 +324,7 @@ def get_user_branches(user_id, repo_full_name):
         except NoGitHubAuthError as exc:
             logger.warning(
                 "[USER-BRANCHES] No GitHub auth user=%s repo=%s: %s",
-                user_id, repo_full_name, exc,
+                user_id, sanitize(repo_full_name), exc,
             )
             return create_cors_response(
                 {
@@ -367,12 +368,12 @@ def get_user_branches(user_id, repo_full_name):
             page += 1
 
             if page > _BRANCHES_PAGE_LIMIT:
-                logger.warning(f"Hit pagination safety limit for repo {repo_full_name}")
+                logger.warning("Hit pagination safety limit for repo %s", sanitize(repo_full_name))
                 break
 
         logger.info(
             "Fetched %d branches for repo %s via %s",
-            len(all_branches), repo_full_name, auth.method,
+            len(all_branches), sanitize(repo_full_name), auth.method,
         )
         return create_cors_response({"branches": all_branches})
 
