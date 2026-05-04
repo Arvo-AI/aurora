@@ -34,7 +34,8 @@ interface Action {
   name: string;
   description: string;
   instructions: string;
-  trigger_type: 'on_incident' | 'manual';
+  trigger_type: 'on_incident' | 'manual' | 'on_schedule';
+  trigger_config: Record<string, unknown>;
   mode: 'agent' | 'ask';
   enabled: boolean;
   run_count: number;
@@ -55,7 +56,6 @@ interface ActionRun {
 }
 
 interface ActionDetail extends Action {
-  trigger_config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -115,10 +115,12 @@ function TriggerBadge({ type }: { type: Action['trigger_type'] }) {
   const styles: Record<string, string> = {
     on_incident: 'bg-blue-500/10 text-blue-400',
     manual: 'bg-zinc-500/10 text-zinc-400',
+    on_schedule: 'bg-purple-500/10 text-purple-400',
   };
   const labels: Record<string, string> = {
     on_incident: 'On Incident',
     manual: 'Manual',
+    on_schedule: 'Scheduled',
   };
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${styles[type] || styles.manual}`}>
@@ -232,7 +234,7 @@ function ActionsListView({ actions, onSelect, onCreate }: {
 
 // -- Detail view --
 
-function ActionDetailView({ actionId, onBack }: { actionId: string; onBack: () => void }) {
+function ActionDetailView({ actionId, onBack, onEdit }: { actionId: string; onBack: () => void; onEdit: () => void }) {
   const { toast } = useToast();
   const { data, mutate } = useQuery<{ action: ActionDetail; recent_runs: ActionRun[] }>(
     `/api/actions/${actionId}`, actionDetailFetcher, { staleTime: 5_000 }
@@ -290,6 +292,9 @@ function ActionDetailView({ actionId, onBack }: { actionId: string; onBack: () =
             </div>
             <button onClick={handleRunNow} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all">
               <Play className="h-3 w-3" /> Run Now
+            </button>
+            <button onClick={onEdit} className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all">
+              Edit
             </button>
             <button onClick={handleDelete} className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-red-900/30 text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-900/20 transition-all">
               Delete
@@ -373,34 +378,67 @@ function ActionDetailView({ actionId, onBack }: { actionId: string; onBack: () =
   );
 }
 
-// -- Create view --
+// -- Form view (create + edit) --
 
-function CreateActionView({ onBack, onCreated }: { onBack: () => void; onCreated: () => void }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [instructions, setInstructions] = useState('');
-  const [triggerType, setTriggerType] = useState('manual');
-  const [mode, setMode] = useState('agent');
+function ActionFormView({ onBack, onSaved, action }: {
+  onBack: () => void;
+  onSaved: () => void;
+  action?: ActionDetail;
+}) {
+  const isEdit = !!action;
+  const [name, setName] = useState(action?.name || '');
+  const [description, setDescription] = useState(action?.description || '');
+  const [instructions, setInstructions] = useState(action?.instructions || '');
+  const [triggerType, setTriggerType] = useState(action?.trigger_type || 'manual');
+  const [mode, setMode] = useState(action?.mode || 'agent');
+  const [intervalValue, setIntervalValue] = useState(() => {
+    const s = Number(action?.trigger_config?.interval_seconds || 3600);
+    if (s >= 86400 && s % 86400 === 0) return s / 86400;
+    if (s >= 3600 && s % 3600 === 0) return s / 3600;
+    return s / 60;
+  });
+  const [intervalUnit, setIntervalUnit] = useState<'minutes' | 'hours' | 'days'>(() => {
+    const s = Number(action?.trigger_config?.interval_seconds || 3600);
+    if (s >= 86400 && s % 86400 === 0) return 'days';
+    if (s >= 3600 && s % 3600 === 0) return 'hours';
+    return 'minutes';
+  });
   const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
 
-  const handleCreate = async () => {
+  const getIntervalSeconds = () => {
+    const multipliers = { minutes: 60, hours: 3600, days: 86400 };
+    return Math.max(300, Math.round(intervalValue * multipliers[intervalUnit]));
+  };
+
+  const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      const res = await fetchR('/api/actions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: description || undefined, instructions, trigger_type: triggerType, mode }),
+      const body: Record<string, unknown> = {
+        name, description: description || undefined, instructions,
+        trigger_type: triggerType, mode,
+      };
+      if (triggerType === 'on_schedule') {
+        body.trigger_config = { interval_seconds: getIntervalSeconds() };
+      } else {
+        body.trigger_config = {};
+      }
+
+      const url = isEdit ? `/api/actions/${action.id}` : '/api/actions';
+      const method = isEdit ? 'PUT' : 'POST';
+      const res = await fetchR(url, {
+        method, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        toast({ title: 'Failed to create action', description: err.error || 'Unknown error', variant: 'destructive' });
+        toast({ title: `Failed to ${isEdit ? 'update' : 'create'} action`, description: err.error || 'Unknown error', variant: 'destructive' });
         return;
       }
-      toast({ title: 'Action created' });
-      onCreated();
+      toast({ title: isEdit ? 'Action updated' : 'Action created' });
+      onSaved();
     } catch {
-      toast({ title: 'Failed to create action', variant: 'destructive' });
+      toast({ title: `Failed to ${isEdit ? 'update' : 'create'} action`, variant: 'destructive' });
     } finally {
       setSubmitting(false);
     }
@@ -410,9 +448,9 @@ function CreateActionView({ onBack, onCreated }: { onBack: () => void; onCreated
     <div className="space-y-6">
       <div>
         <button onClick={onBack} className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors mb-3">
-          <ArrowLeft className="h-3 w-3" /> All Actions
+          <ArrowLeft className="h-3 w-3" /> {isEdit ? 'Back' : 'All Actions'}
         </button>
-        <h2 className="text-xl font-semibold tracking-tight text-zinc-100">Create Action</h2>
+        <h2 className="text-xl font-semibold tracking-tight text-zinc-100">{isEdit ? 'Edit Action' : 'Create Action'}</h2>
         <p className="text-sm text-zinc-500 mt-0.5">Define natural language instructions that Aurora executes as a background agent task.</p>
       </div>
 
@@ -457,14 +495,43 @@ function CreateActionView({ onBack, onCreated }: { onBack: () => void; onCreated
                   <SelectContent>
                     <SelectItem value="manual">Manual only</SelectItem>
                     <SelectItem value="on_incident">On Incident (after RCA completes)</SelectItem>
+                    <SelectItem value="on_schedule">On Schedule</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-zinc-600">
                   {triggerType === 'on_incident'
                     ? 'Fires automatically after every incident RCA completes.'
-                    : 'Only runs when triggered from the Actions page or Incident Detail page.'}
+                    : triggerType === 'on_schedule'
+                      ? 'Runs automatically on a recurring interval.'
+                      : 'Only runs when triggered from the Actions page or Incident Detail page.'}
                 </p>
               </div>
+
+              {triggerType === 'on_schedule' && (
+                <div className="space-y-2">
+                  <Label className="text-xs text-zinc-400">Run every</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={intervalValue}
+                      onChange={e => setIntervalValue(Math.max(1, Number(e.target.value)))}
+                      className="w-20"
+                    />
+                    <Select value={intervalUnit} onValueChange={v => setIntervalUnit(v as 'minutes' | 'hours' | 'days')}>
+                      <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="minutes">minutes</SelectItem>
+                        <SelectItem value="hours">hours</SelectItem>
+                        <SelectItem value="days">days</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {getIntervalSeconds() < 300 && (
+                    <p className="text-xs text-red-400">Minimum interval is 5 minutes.</p>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label className="text-xs text-zinc-400">Execution Mode</Label>
@@ -488,11 +555,11 @@ function CreateActionView({ onBack, onCreated }: { onBack: () => void; onCreated
 
           <div className="flex gap-2">
             <button
-              disabled={!name.trim() || !instructions.trim() || submitting}
-              onClick={handleCreate}
+              disabled={!name.trim() || !instructions.trim() || submitting || (triggerType === 'on_schedule' && getIntervalSeconds() < 300)}
+              onClick={handleSubmit}
               className="flex-1 px-3 py-2 rounded-lg bg-zinc-100 text-zinc-900 text-xs font-medium hover:bg-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              {submitting ? 'Creating...' : 'Create Action'}
+              {submitting ? (isEdit ? 'Saving...' : 'Creating...') : (isEdit ? 'Save Changes' : 'Create Action')}
             </button>
             <button onClick={onBack} className="px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/80 transition-all">
               Cancel
@@ -509,6 +576,7 @@ function CreateActionView({ onBack, onCreated }: { onBack: () => void; onCreated
 export default function ActionsPage() {
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingActionId, setEditingActionId] = useState<string | null>(null);
 
   const { data: actions = [], isLoading, mutate } = useQuery<Action[]>(
     '/api/actions', actionsFetcher, { staleTime: 10_000 }
@@ -521,7 +589,7 @@ export default function ActionsPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Actions</h1>
           <p className="text-sm text-zinc-500 mt-1">Background agent tasks that follow your instructions</p>
         </div>
-        {!createOpen && !selectedActionId && (
+        {!createOpen && !selectedActionId && !editingActionId && (
           <button
             onClick={() => setCreateOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all"
@@ -531,10 +599,12 @@ export default function ActionsPage() {
         )}
       </div>
 
-      {createOpen ? (
-        <CreateActionView onBack={() => setCreateOpen(false)} onCreated={() => { setCreateOpen(false); mutate(); }} />
+      {editingActionId ? (
+        <EditActionWrapper actionId={editingActionId} onBack={() => { setEditingActionId(null); setSelectedActionId(editingActionId); }} onSaved={() => { setEditingActionId(null); mutate(); }} />
+      ) : createOpen ? (
+        <ActionFormView onBack={() => setCreateOpen(false)} onSaved={() => { setCreateOpen(false); mutate(); }} />
       ) : selectedActionId ? (
-        <ActionDetailView actionId={selectedActionId} onBack={() => { setSelectedActionId(null); mutate(); }} />
+        <ActionDetailView actionId={selectedActionId} onBack={() => { setSelectedActionId(null); mutate(); }} onEdit={() => { setEditingActionId(selectedActionId); setSelectedActionId(null); }} />
       ) : isLoading ? (
         <div className="text-sm text-zinc-500 py-12 text-center">Loading...</div>
       ) : (
@@ -542,4 +612,12 @@ export default function ActionsPage() {
       )}
     </div>
   );
+}
+
+function EditActionWrapper({ actionId, onBack, onSaved }: { actionId: string; onBack: () => void; onSaved: () => void }) {
+  const { data } = useQuery<{ action: ActionDetail; recent_runs: ActionRun[] }>(
+    `/api/actions/${actionId}`, actionDetailFetcher, { staleTime: 5_000 }
+  );
+  if (!data?.action) return <div className="text-sm text-zinc-500 py-12 text-center">Loading...</div>;
+  return <ActionFormView action={data.action} onBack={onBack} onSaved={onSaved} />;
 }

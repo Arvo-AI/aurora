@@ -11,7 +11,7 @@ from . import actions_bp
 
 logger = logging.getLogger(__name__)
 
-_VALID_TRIGGER_TYPES = ("manual", "on_incident")
+_VALID_TRIGGER_TYPES = ("manual", "on_incident", "on_schedule")
 _VALID_MODES = ("agent", "ask")
 
 
@@ -66,6 +66,12 @@ def create_action(user_id):
 
     description = (body.get("description") or "").strip() or None
     trigger_config = body.get("trigger_config", {})
+
+    if trigger_type == "on_schedule":
+        interval = trigger_config.get("interval_seconds")
+        if not isinstance(interval, (int, float)) or int(interval) < 300:
+            return jsonify({"error": "on_schedule requires trigger_config.interval_seconds >= 300"}), 400
+        trigger_config = {"interval_seconds": int(interval)}
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
@@ -168,8 +174,15 @@ def update_action(user_id, action_id):
         sets.append("trigger_type = %s")
         vals.append(body["trigger_type"])
     if "trigger_config" in body:
+        tc = body["trigger_config"]
+        effective_type = body.get("trigger_type") or None
+        if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
+            interval = (tc or {}).get("interval_seconds")
+            if not isinstance(interval, (int, float)) or int(interval) < 300:
+                return jsonify({"error": "on_schedule requires trigger_config.interval_seconds >= 300"}), 400
+            tc = {"interval_seconds": int(interval)}
         sets.append("trigger_config = %s")
-        vals.append(json.dumps(body["trigger_config"]))
+        vals.append(json.dumps(tc))
     if "mode" in body:
         if body["mode"] not in _VALID_MODES:
             return jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400
