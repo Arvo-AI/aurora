@@ -41,18 +41,22 @@ export class GitHubAppService {
     if (!response.ok) {
       const errorText = await response.text();
 
-      try {
-        const errorData = errorText ? JSON.parse(errorText) : null;
-        if (typeof errorData?.error === 'string' && errorData.error.trim()) {
-          throw new Error(errorData.error);
-        }
-      } catch (parseError) {
-        if (parseError instanceof Error && parseError.message !== errorText) {
-          throw parseError;
+      // Surface the backend's structured error message when present, but
+      // never let a malformed JSON body short-circuit the fallback below —
+      // SyntaxError from JSON.parse should fall through, only intentional
+      // errors (parsed errorData.error) should propagate.
+      let parsedMessage: string | null = null;
+      if (errorText) {
+        try {
+          const errorData = JSON.parse(errorText);
+          if (typeof errorData?.error === 'string' && errorData.error.trim()) {
+            parsedMessage = errorData.error;
+          }
+        } catch {
+          // Malformed JSON body — fall through to errorText/errorMessage.
         }
       }
-
-      throw new Error(errorText || errorMessage);
+      throw new Error(parsedMessage || errorText || errorMessage);
     }
 
     const text = await response.text();
