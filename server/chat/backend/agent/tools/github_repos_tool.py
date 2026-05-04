@@ -7,6 +7,11 @@ import json
 import logging
 from pydantic import BaseModel
 
+from utils.auth.github_auth_router import (
+    NoGitHubAuthError,
+    get_any_auth_for_user,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +25,14 @@ def get_connected_repos(**kwargs) -> str:
     user_id = kwargs.get("user_id")
     if not user_id:
         return json.dumps({"error": "No user context available"})
+
+    try:
+        auth = get_any_auth_for_user(user_id)
+    except NoGitHubAuthError:
+        return "GitHub not connected for this user. Install the GitHub App or connect via OAuth."
+    except Exception as e:
+        logger.error(f"Error resolving GitHub auth for user {user_id}: {e}", exc_info=True)
+        return json.dumps({"error": f"Failed to resolve GitHub auth: {e}"})
 
     try:
         from utils.db.connection_pool import db_pool
@@ -37,7 +50,12 @@ def get_connected_repos(**kwargs) -> str:
                 rows = cur.fetchall()
 
         if not rows:
-            return json.dumps({"repos": [], "message": "No GitHub repos connected. Ask the user to connect repos in Settings > Connectors > GitHub."})
+            return json.dumps({
+                "repos": [],
+                "auth_method": auth.method,
+                "installation_id": auth.installation_id,
+                "message": "No GitHub repos connected. Ask the user to connect repos in Settings > Connectors > GitHub.",
+            })
 
         repos = [
             {
@@ -48,7 +66,11 @@ def get_connected_repos(**kwargs) -> str:
             }
             for r in rows
         ]
-        return json.dumps({"repos": repos})
+        return json.dumps({
+            "repos": repos,
+            "auth_method": auth.method,
+            "installation_id": auth.installation_id,
+        })
     except Exception as e:
         logger.error(f"Error fetching connected repos: {e}", exc_info=True)
         return json.dumps({"error": f"Failed to fetch connected repos: {e}"})

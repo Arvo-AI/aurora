@@ -11,6 +11,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, Tuple, List, Literal
 from pydantic import BaseModel, Field
 
+from utils.auth.github_auth_router import (
+    NoGitHubAuthError,
+    get_auth_for_user_repo,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -601,7 +606,9 @@ def _format_output(
     owner: str,
     repo: str,
     repo_source: str,
-    time_window: Tuple[datetime, datetime]
+    time_window: Tuple[datetime, datetime],
+    auth_method: Optional[str] = None,
+    installation_id: Optional[int] = None,
 ) -> str:
     """Format results as JSON string for LLM consumption."""
     output = {
@@ -609,6 +616,8 @@ def _format_output(
         "action": action,
         "repository": f"{owner}/{repo}",
         "repository_source": repo_source,
+        "auth_method": auth_method,
+        "installation_id": installation_id,
         "time_window": {
             "start": time_window[0].strftime('%Y-%m-%dT%H:%M:%SZ'),
             "end": time_window[1].strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -691,6 +700,33 @@ def github_rca(
 
     logger.info(f"Resolved repository: {owner}/{repo_name} (source: {repo_source})")
 
+    repo_full_name = f"{owner}/{repo_name}"
+    try:
+        auth = get_auth_for_user_repo(user_id, repo_full_name)
+    except NoGitHubAuthError:
+        return json.dumps({
+            "status": "error",
+            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
+            "action": action,
+            "repository": repo_full_name,
+        })
+    except Exception as e:
+        logger.error(
+            f"Error resolving GitHub auth for user {user_id} repo {repo_full_name}: {e}",
+            exc_info=True,
+        )
+        return json.dumps({
+            "status": "error",
+            "error": f"Failed to resolve GitHub auth: {e}",
+            "action": action,
+            "repository": repo_full_name,
+        })
+
+    logger.info(
+        f"Resolved GitHub auth for {user_id} {repo_full_name}: "
+        f"method={auth.method} installation_id={auth.installation_id}"
+    )
+
     # Calculate time windows
     start_time, end_time = _calculate_time_windows(incident_time, time_window_hours)
     time_window = (start_time, end_time)
@@ -719,7 +755,16 @@ def github_rca(
                 owner, repo_name, branch, start_time, end_time, user_id
             )
 
-        return _format_output(action, results, owner, repo_name, repo_source, time_window)
+        return _format_output(
+            action,
+            results,
+            owner,
+            repo_name,
+            repo_source,
+            time_window,
+            auth_method=auth.method,
+            installation_id=auth.installation_id,
+        )
 
     except Exception as e:
         logger.error(f"Error in github_rca: {e}", exc_info=True)
