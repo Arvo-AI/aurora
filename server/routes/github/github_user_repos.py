@@ -26,10 +26,19 @@ field (``"app"`` or ``"oauth"``) plus, for App entries, the
 """
 import logging
 import os
+import re
 import time
 from typing import Any
 import requests
 from flask import Blueprint, jsonify, request
+
+# GitHub's owner/repo slug grammar: alphanumerics, hyphens, underscores,
+# and (for repos only) periods, joined by exactly one slash. Anchoring
+# both ends prevents path traversal or query-string smuggling into the
+# downstream ``api.github.com`` URL — which is what Sonar's S7044
+# (server-side request forgery) rule is concerned about for user-
+# controlled URL components.
+_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 from utils.auth.github_app_token import (
     GitHubAppInstallationSuspended,
     GitHubAppTokenError,
@@ -317,6 +326,17 @@ def get_user_branches(user_id, repo_full_name):
     """List branches for ``repo_full_name`` using App-preferred auth."""
     if request.method == 'OPTIONS':
         return create_cors_response()
+
+    # Validate the slug shape up-front. ``repo_full_name`` flows into
+    # both ``get_auth_for_user_repo`` (DB lookup) and the GitHub API
+    # URL below; rejecting anything that isn't ``owner/repo`` keeps
+    # path traversal / SSRF off the downstream call (Sonar's S7044)
+    # AND lets us log a clean 400 with a known-safe placeholder.
+    if not _REPO_FULL_NAME_RE.match(repo_full_name or ""):
+        return create_cors_response(
+            {"error": "Invalid repository identifier", "branches": []},
+            400,
+        )
 
     # Pre-sanitize the user-controlled path component before any log
     # statement. ``sanitize()`` strips C0/C1 + Unicode line separators
