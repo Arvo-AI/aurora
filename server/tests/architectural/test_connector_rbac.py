@@ -60,8 +60,11 @@ EXEMPT_FUNCTIONS: Set[str] = {
     "azure_callback_route",
     # Webhooks (external service push — HMAC/secret validates sender)
     "webhook",
+    "github_webhook",
     "alert_webhook",
     "deployment_webhook",
+    # GitHub App install callback (GitHub redirect — state param validates user)
+    "github_app_install_callback",
     # Setup scripts (static content, no user data)
     "home",
     "aws_setup_script",
