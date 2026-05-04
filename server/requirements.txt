@@ -104,7 +104,7 @@ openpyxl>=3.1.0
 # Testing
 pytest>=7.4
 responses>=0.24
-cryptography>=41
+cryptography>=43.0.1  # CVE-2023-50782, CVE-2024-26130 fixed in >=43
 
 # MCP Server (Model Context Protocol)
 mcp[cli]>=1.27.0
