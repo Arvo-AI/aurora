@@ -46,7 +46,7 @@ help:
 	@echo ""
 	@echo "Kubernetes Deployment:"
 	@echo "  make deploy-build      - Build and push images for K8s deployment (reads values.generated.yaml)"
-	@echo "  make deploy            - Run deploy-build then deploy with Helm"
+	@echo "  make deploy            - Verify image signatures and deploy with Helm (run deploy-build first, or use prebuilt images)"
 
 rebuild-server:
 	@echo "Stopping aurora-server container..."
@@ -172,21 +172,7 @@ prod-prebuilt:
 	echo "Pulling prebuilt images from GHCR (tag: $$TAG)..."; \
 	docker pull ghcr.io/arvo-ai/aurora-server:$$TAG; \
 	docker pull ghcr.io/arvo-ai/aurora-frontend:$$TAG; \
-	if command -v cosign >/dev/null 2>&1; then \
-		echo "Verifying image signatures..."; \
-		cosign verify \
-			--certificate-identity-regexp="https://github.com/Arvo-AI/aurora/.*" \
-			--certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-			ghcr.io/arvo-ai/aurora-server:$$TAG && \
-		cosign verify \
-			--certificate-identity-regexp="https://github.com/Arvo-AI/aurora/.*" \
-			--certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-			ghcr.io/arvo-ai/aurora-frontend:$$TAG && \
-		echo "Image signatures verified."; \
-	else \
-		echo "WARNING: cosign not installed, skipping signature verification."; \
-		echo "Install cosign to verify image provenance: https://docs.sigstore.dev/cosign/system_config/installation/"; \
-	fi; \
+	./scripts/cosign-verify.sh ghcr.io/arvo-ai/aurora-server:$$TAG ghcr.io/arvo-ai/aurora-frontend:$$TAG; \
 	echo "Tagging images for docker compose..."; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_server:latest; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-worker:latest; \
@@ -197,7 +183,7 @@ prod-prebuilt:
 	@echo "Starting Aurora in production mode (prebuilt images)..."
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
 	@docker network rm aurora_default 2>/dev/null || true
-	@docker compose -f docker-compose.prod-local.yml up -d
+	@docker compose -f docker-compose.prod-local.yml up --no-build -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"
 	@echo "  - Frontend: $$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:3000})"
@@ -362,7 +348,20 @@ deploy-build:
 	echo "Updating values.generated.yaml with new tag..."; \
 	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml
 
-deploy: deploy-build
+deploy:
+	@if [ ! -f deploy/helm/aurora/values.generated.yaml ]; then \
+		echo "Error: values.generated.yaml not found. Copy values.yaml to values.generated.yaml and configure it."; \
+		exit 1; \
+	fi
+	@set -e; \
+	IMAGE_REGISTRY=$$(yq '.image.registry' deploy/helm/aurora/values.generated.yaml); \
+	GIT_SHA=$$(yq '.image.tag' deploy/helm/aurora/values.generated.yaml); \
+	IMAGES="$$IMAGE_REGISTRY/aurora-server:$$GIT_SHA $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA"; \
+	ENABLE_POD_ISOLATION=$$(yq '.config.ENABLE_POD_ISOLATION' deploy/helm/aurora/values.generated.yaml); \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		IMAGES="$$IMAGES $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA"; \
+	fi; \
+	./scripts/cosign-verify.sh $$IMAGES
 	@echo "Deploying to Kubernetes with Helm..."
 	@helm upgrade --install aurora-oss ./deploy/helm/aurora \
 		--namespace aurora --create-namespace \
