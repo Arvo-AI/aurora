@@ -229,9 +229,9 @@ jobs:
           IMAGE_NAME: ghcr.io/arvo-ai/aurora-${{ matrix.image }}
         run: |
           set -euo pipefail
-          DIGEST=$(docker buildx imagetools inspect "$IMAGE_NAME" --format '{{.Manifest.Digest}}')
-          echo "Signing ${IMAGE_NAME}@${DIGEST}"
-          cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+          TAG=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          echo "Signing $TAG"
+          cosign sign --yes "$TAG"
 
   publish-summary:
     name: Publish Summary
