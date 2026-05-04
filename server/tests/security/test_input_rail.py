@@ -60,15 +60,11 @@ def _make_rails_that_raises(exc: Exception):
 
 
 def _patch_get_rails_returning(monkeypatch, rails):
-    async def _fake():
-        return rails
-    monkeypatch.setattr(input_rail, "_get_rails", _fake)
+    monkeypatch.setattr(input_rail, "_get_rails", AsyncMock(return_value=rails))
 
 
 def _patch_get_rails_raising(monkeypatch, exc: Exception):
-    async def _fake():
-        raise exc
-    monkeypatch.setattr(input_rail, "_get_rails", _fake)
+    monkeypatch.setattr(input_rail, "_get_rails", AsyncMock(side_effect=exc))
 
 
 @pytest.fixture(autouse=True)
@@ -257,10 +253,9 @@ class TestInitFailureBackoff:
 
         rails = _make_rails_with_result(output_data={})
 
-        async def _fake_to_thread(fn, *args, **kwargs):
-            return rails
-
-        monkeypatch.setattr(input_rail.asyncio, "to_thread", _fake_to_thread)
+        monkeypatch.setattr(
+            input_rail.asyncio, "to_thread", AsyncMock(return_value=rails),
+        )
         monkeypatch.setattr(input_rail, "_build_rails_sync", lambda: rails)
 
         result = _run(check_input("hi"))

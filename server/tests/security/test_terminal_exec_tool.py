@@ -180,7 +180,7 @@ class TestDocumentedTransformations:
         )
         assert _transform_ssh_jump_to_proxy(cmd) == expected
 
-    def test_dash_J_attached_form_handled(self):
+    def test_dash_j_attached_form_handled(self):
         """`-Juser@bastion` (no space) is treated like `-J user@bastion`."""
         cmd = "ssh -Juser@bastion user@target"
         expected = (
