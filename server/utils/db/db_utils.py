@@ -1170,6 +1170,41 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
                 """,
+                "actions": """
+                    CREATE TABLE IF NOT EXISTS actions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        description TEXT,
+                        instructions TEXT NOT NULL,
+                        trigger_type VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        trigger_config JSONB DEFAULT '{}',
+                        mode VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        enabled BOOLEAN NOT NULL DEFAULT true,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_actions_org ON actions(org_id);
+                    CREATE INDEX IF NOT EXISTS idx_actions_trigger ON actions(org_id, trigger_type, enabled);
+                """,
+                "action_runs": """
+                    CREATE TABLE IF NOT EXISTS action_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        action_id UUID NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        chat_session_id VARCHAR(255),
+                        incident_id UUID,
+                        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                        trigger_context JSONB DEFAULT '{}',
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        error TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
+                    CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1236,6 +1271,8 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("actions")
+            rls_tables.append("action_runs")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
