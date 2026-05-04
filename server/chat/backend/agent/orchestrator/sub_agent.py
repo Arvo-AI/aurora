@@ -285,9 +285,10 @@ async def _run(input_dict: dict) -> FindingRef:
             mode="ask",
         )
 
+        postgres_client = PostgreSQLClient()
         agent = Agent(
-            weaviate_client=WeaviateClient(),
-            postgres_client=PostgreSQLClient(),
+            weaviate_client=WeaviateClient(postgres_client),
+            postgres_client=postgres_client,
         )
         if tool_capture is not None:
             agent.set_tool_capture(tool_capture)

@@ -1102,6 +1102,11 @@ class Workflow:
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":
+                    # Suppress orchestrator-internal LLM chunks (triage / synthesis
+                    # produce structured output that's not meant to render in chat).
+                    _node = (event.get("metadata") or {}).get("langgraph_node")
+                    if _node in ("triage", "synthesis"):
+                        continue
                     _token_count += 1
                     chunk_data = event.get("data", {})
                     chunk_obj = chunk_data.get("chunk")
