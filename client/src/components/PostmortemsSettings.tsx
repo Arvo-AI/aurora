@@ -2,14 +2,20 @@
 
 import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Download, ExternalLink, ChevronDown, ChevronRight, FileText, Edit2, Save, X } from 'lucide-react';
+import { Download, ExternalLink, ChevronDown, ChevronRight, FileText, Edit2, Save, X, Upload } from 'lucide-react';
 import { postmortemService, PostmortemListItem } from '@/lib/services/incidents';
 import { postmortemMarkdownComponents } from '@/lib/markdown-components';
+import ExportToNotionDialog from '@/components/postmortem/ExportToNotionDialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface ConfluenceFormState {
   spaceKey: string;
   parentPageId: string;
-  showForm: boolean;
   exporting: boolean;
   exportSuccess: string | null;
   exportError: string | null;
@@ -18,11 +24,12 @@ interface ConfluenceFormState {
 const defaultConfluenceState: ConfluenceFormState = {
   spaceKey: '',
   parentPageId: '',
-  showForm: false,
   exporting: false,
   exportSuccess: null,
   exportError: null,
 };
+
+type ActiveExport = { id: string; type: 'confluence' | 'notion' } | null;
 
 interface EditState {
   editing: boolean;
@@ -43,6 +50,7 @@ export function PostmortemsSettings() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confluenceState, setConfluenceState] = useState<Record<string, ConfluenceFormState>>({});
   const [editState, setEditState] = useState<Record<string, EditState>>({});
+  const [activeExport, setActiveExport] = useState<ActiveExport>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,8 +120,8 @@ export function PostmortemsSettings() {
         updateConfluence(item.id, {
           exporting: false,
           exportSuccess: result.pageUrl || 'Exported successfully',
-          showForm: false,
         });
+        setActiveExport(null);
       } else {
         updateConfluence(item.id, {
           exporting: false,
@@ -136,6 +144,15 @@ export function PostmortemsSettings() {
     } catch {
       updateEdit(item.id, { saving: false });
     }
+  }
+
+  function handleNotionExported(targetId: string, pageUrl: string, pageId: string) {
+    const exportedAt = new Date().toISOString();
+    setItems(prev => prev.map(i =>
+      i.id === targetId
+        ? { ...i, notionPageUrl: pageUrl, notionPageId: pageId, notionExportedAt: exportedAt }
+        : i
+    ));
   }
 
   function formatDate(dateStr: string): string {
@@ -185,6 +202,10 @@ export function PostmortemsSettings() {
       </div>
     );
   }
+
+  const notionTarget = activeExport?.type === 'notion'
+    ? items.find(i => i.id === activeExport.id) ?? null
+    : null;
 
   return (
     <div className="p-6">
@@ -274,13 +295,32 @@ export function PostmortemsSettings() {
                         <Download className="w-3 h-3" />
                         Download
                       </button>
-                      <button
-                        onClick={() => updateConfluence(item.id, { showForm: !cfl.showForm })}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        Export to Confluence
-                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                          >
+                            <Upload className="w-3 h-3" />
+                            Export
+                            <ChevronDown className="w-3 h-3" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuItem
+                            onClick={() => setActiveExport({ id: item.id, type: 'confluence' })}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Confluence
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setActiveExport({ id: item.id, type: 'notion' })}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Notion
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </>
                   )}
                 </div>
@@ -303,7 +343,7 @@ export function PostmortemsSettings() {
                 )}
 
                 {/* Confluence export form */}
-                {cfl.showForm && (
+                {activeExport?.id === item.id && activeExport.type === 'confluence' && (
                   <div className="p-4 rounded-lg bg-zinc-900 border border-zinc-800">
                     <p className="text-xs text-zinc-400 mb-3">Export postmortem to Confluence</p>
                     <div className="space-y-2">
@@ -338,7 +378,7 @@ export function PostmortemsSettings() {
                           {cfl.exporting ? 'Exporting...' : 'Export'}
                         </button>
                         <button
-                          onClick={() => updateConfluence(item.id, { showForm: false })}
+                          onClick={() => setActiveExport(null)}
                           className="px-3 py-1.5 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                         >
                           Cancel
@@ -365,11 +405,35 @@ export function PostmortemsSettings() {
                     </a>
                   </div>
                 )}
+
+                {/* Existing Notion link */}
+                {item.notionPageUrl && (
+                  <div className="mt-3">
+                    <a
+                      href={item.notionPageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      View in Notion
+                    </a>
+                  </div>
+                )}
               </div>
             )}
           </div>
         );
       })}
+
+      {notionTarget && (
+        <ExportToNotionDialog
+          open
+          onOpenChange={(open) => { if (!open) setActiveExport(null); }}
+          incidentId={notionTarget.incidentId}
+          onExported={({ pageUrl, pageId }) => handleNotionExported(notionTarget.id, pageUrl, pageId)}
+        />
+      )}
     </div>
   );
 }
