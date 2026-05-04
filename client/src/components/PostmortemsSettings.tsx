@@ -146,6 +146,15 @@ export function PostmortemsSettings() {
     }
   }
 
+  function handleNotionExported(targetId: string, pageUrl: string, pageId: string) {
+    const exportedAt = new Date().toISOString();
+    setItems(prev => prev.map(i =>
+      i.id === targetId
+        ? { ...i, notionPageUrl: pageUrl, notionPageId: pageId, notionExportedAt: exportedAt }
+        : i
+    ));
+  }
+
   function formatDate(dateStr: string): string {
     try {
       return new Date(dateStr).toLocaleDateString(undefined, {
@@ -193,6 +202,10 @@ export function PostmortemsSettings() {
       </div>
     );
   }
+
+  const notionTarget = activeExport?.type === 'notion'
+    ? items.find(i => i.id === activeExport.id) ?? null
+    : null;
 
   return (
     <div className="p-6">
@@ -413,23 +426,14 @@ export function PostmortemsSettings() {
         );
       })}
 
-      {activeExport?.type === 'notion' && (() => {
-        const target = items.find(i => i.id === activeExport.id);
-        if (!target) return null;
-        return (
-          <ExportToNotionDialog
-            open
-            onOpenChange={(open) => { if (!open) setActiveExport(null); }}
-            incidentId={target.incidentId}
-            onExported={({ pageUrl, pageId }) => {
-              setItems(prev => prev.map(i => i.id === target.id
-                ? { ...i, notionPageUrl: pageUrl, notionPageId: pageId, notionExportedAt: new Date().toISOString() }
-                : i
-              ));
-            }}
-          />
-        );
-      })()}
+      {notionTarget && (
+        <ExportToNotionDialog
+          open
+          onOpenChange={(open) => { if (!open) setActiveExport(null); }}
+          incidentId={notionTarget.incidentId}
+          onExported={({ pageUrl, pageId }) => handleNotionExported(notionTarget.id, pageUrl, pageId)}
+        />
+      )}
     </div>
   );
 }
