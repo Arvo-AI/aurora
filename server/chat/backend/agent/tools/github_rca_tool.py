@@ -704,7 +704,12 @@ def github_rca(
     try:
         auth = get_auth_for_user_repo(user_id, repo_full_name)
     except NoGitHubAuthError:
-        return "GitHub not connected for this user. Install the GitHub App or connect via OAuth."
+        return json.dumps({
+            "status": "error",
+            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
+            "action": action,
+            "repository": repo_full_name,
+        })
     except Exception as e:
         logger.error(
             f"Error resolving GitHub auth for user {user_id} repo {repo_full_name}: {e}",

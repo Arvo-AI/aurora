@@ -141,12 +141,27 @@ def _lookup_repo_installation(
     set ``myapp.current_user_id`` for RLS.
     """
 
+    # Also join ``user_github_installations`` so an unlink (DELETE on that
+    # join row) immediately revokes App-token minting even when the
+    # ``github_connected_repos.installation_id`` was set during a prior
+    # repo-selection write. ``has_active`` requires:
+    #   1. the user still links the installation (u.installation_id present),
+    #   2. the installation row exists (i.installation_id present), and
+    #   3. the installation is not suspended (suspended_at IS NULL).
+    # A LEFT JOIN means missing user link → has_active=False, which sends
+    # the caller down the OAuth fallback path.
     sql = """
         SELECT
             r.installation_id,
-            (i.installation_id IS NOT NULL AND i.suspended_at IS NULL)
-                AS has_active_installation
+            (
+                u.installation_id IS NOT NULL
+                AND i.installation_id IS NOT NULL
+                AND i.suspended_at IS NULL
+            ) AS has_active_installation
         FROM github_connected_repos r
+        LEFT JOIN user_github_installations u
+            ON u.installation_id = r.installation_id
+            AND u.user_id = r.user_id
         LEFT JOIN github_installations i
             ON i.installation_id = r.installation_id
         WHERE r.user_id = %s AND r.repo_full_name = %s

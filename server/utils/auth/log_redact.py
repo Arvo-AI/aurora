@@ -50,10 +50,12 @@ _REDACTION_MARKER = "***REDACTED***"
 _GHS_TOKEN_PATTERN = re.compile(r"ghs_[A-Za-z0-9]+")
 
 # JSON Web Tokens. ``eyJ`` is the deterministic base64url prefix of a
-# JSON object opener (``{``). The 20-char minimum keeps the pattern
-# from matching short coincidental prefixes; legitimate JWT headers
-# are ~30+ chars, and full tokens are 100+ chars.
-_JWT_PATTERN = re.compile(r"eyJ[A-Za-z0-9_=-]{20,}")
+# JSON object opener (``{``). The pattern matches the full
+# ``header.payload[.signature]`` shape so the entire bearer is redacted
+# rather than just the predictable header — for GitHub App JWTs the
+# header is essentially a constant, so leaving the payload+signature
+# intact would still leak claim data and signing material.
+_JWT_PATTERN = re.compile(r"eyJ[A-Za-z0-9_=-]+(?:\.[A-Za-z0-9_=-]+){1,2}")
 
 _TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (_GHS_TOKEN_PATTERN, _JWT_PATTERN)
 
@@ -76,8 +78,8 @@ def redact_token(s: str) -> str:
     Examples:
         >>> redact_token("failed for token ghs_abc123XYZ")
         'failed for token ***REDACTED***'
-        >>> redact_token("Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload")
-        'Bearer ***REDACTED***.payload'
+        >>> redact_token("Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig")
+        'Bearer ***REDACTED***'
         >>> redact_token("no secrets here")
         'no secrets here'
         >>> redact_token("")
