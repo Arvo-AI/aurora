@@ -790,6 +790,7 @@ def _update_incident_summary(
                         UPDATE incidents 
                         SET aurora_summary = %s, 
                             aurora_status = %s,
+                            status = CASE WHEN status = 'investigating' THEN 'analyzed' ELSE status END,
                             analyzed_at = CASE WHEN analyzed_at IS NULL THEN %s ELSE analyzed_at END,
                             updated_at = %s
                         WHERE id = %s
