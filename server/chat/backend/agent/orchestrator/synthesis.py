@@ -86,7 +86,10 @@ async def _synthesis(state: State) -> dict:
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.providers import create_chat_model
 
-        llm = create_chat_model(model=ModelConfig.MAIN_MODEL)
+        # Non-streaming: structured-output chunks must not leak into chat.
+        # The user-facing summary is appended below as an AIMessage that the
+        # existing chat pipeline handles.
+        llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
         structured = llm.with_structured_output(SynthesisDecision)
 
         prompt = _build_synthesis_prompt(state, combined, current_wave)

@@ -77,7 +77,9 @@ async def _triage(state: State) -> TriageDecision:
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.providers import create_chat_model
 
-        llm = create_chat_model(model=ModelConfig.MAIN_MODEL)
+        # Non-streaming: triage's structured output is internal — must not
+        # leak token chunks into the user-facing chat stream.
+        llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
         structured = llm.with_structured_output(TriageDecision)
 
         incident_summary = _build_triage_prompt(state, available_roles)
