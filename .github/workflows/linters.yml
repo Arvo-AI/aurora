@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest Flask psycopg2-binary python-dotenv
+        run: pip install pytest Flask psycopg2-binary python-dotenv cryptography
 
       - name: Run static analysis & unit tests
         working-directory: server
