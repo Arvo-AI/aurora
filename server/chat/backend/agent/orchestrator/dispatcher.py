@@ -64,8 +64,26 @@ def dispatch_node(state: State) -> dict:
     return update
 
 
+def _filter_known_roles(raw_inputs: list) -> list:
+    """Drop inputs whose role_name isn't in the registry (LLM may hallucinate)."""
+    try:
+        from chat.backend.agent.orchestrator.role_registry import RoleRegistry
+        valid = {r.name for r in RoleRegistry.get_instance().list_all()}
+    except Exception:
+        return raw_inputs  # fail open — registry error shouldn't kill dispatch
+    out = []
+    for raw in raw_inputs:
+        rn = raw.get("role_name") if isinstance(raw, dict) else getattr(raw, "role_name", None)
+        if rn in valid:
+            out.append(raw)
+        else:
+            logger.warning("dispatcher: dropping input with unknown role_name %r", rn)
+    return out
+
+
 def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
     raw_inputs = getattr(state, "subagent_inputs", []) or []
+    raw_inputs = _filter_known_roles(raw_inputs)
     if not raw_inputs:
         return None
     if len(raw_inputs) > _MAX_SUBAGENTS_PER_WAVE:
@@ -102,6 +120,7 @@ def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
 
 def _pre_emit_rows(state: State) -> None:
     raw_inputs = getattr(state, "subagent_inputs", []) or []
+    raw_inputs = _filter_known_roles(raw_inputs)
     if not raw_inputs:
         return
     if len(raw_inputs) > _MAX_SUBAGENTS_PER_WAVE:
@@ -142,6 +161,7 @@ def dispatch_to_sub_agents(state: State) -> list:
 
 def _build_sends(state: State) -> list:
     raw_inputs = getattr(state, "subagent_inputs", []) or []
+    raw_inputs = _filter_known_roles(raw_inputs)
     if not raw_inputs:
         logger.info("dispatcher: no sub-agent inputs — empty Send list")
         return []

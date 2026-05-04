@@ -18,22 +18,39 @@ _SUBAGENT_SKILL_BUDGET = 4_000  # tokens — budget for skill bodies appended to
 # Tools NOT listed here default to: mutates=False, cacheable=False, capability_tags=[]
 # (i.e. they stay available to the lead but excluded from sub-agent tool subsets).
 _TOOL_METADATA: dict = {
-    "query_logs": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
-    "search_logs": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
-    "query_metrics": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
-    "query_datadog": {"capability_tags": ["metrics", "observability", "error_tracking"], "mutates": False, "cacheable": True},
+    # Generic CLI execution. mutates=False because mutation safety is enforced
+    # per-command by the guardrails layer (signature matcher + LLM judge), not
+    # by this static flag. Sub-agents need cloud_exec to actually query state.
+    "cloud_exec": {"capability_tags": ["runtime_state", "metrics", "logs", "observability"], "mutates": False, "cacheable": False},
+    "kubectl_onprem": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": False},
+    "terminal_exec": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": False},
+    "tailscale_ssh": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": False},
+    # Observability platforms — read-only query tools
+    "query_datadog": {"capability_tags": ["metrics", "observability", "error_tracking", "logs"], "mutates": False, "cacheable": True},
     "query_newrelic": {"capability_tags": ["metrics", "observability", "error_tracking"], "mutates": False, "cacheable": True},
-    "query_dynatrace": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "query_dynatrace": {"capability_tags": ["metrics", "observability", "error_tracking"], "mutates": False, "cacheable": True},
+    "query_opsgenie": {"capability_tags": ["on_call", "ticket_history"], "mutates": False, "cacheable": True},
+    "search_splunk": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "list_splunk_indexes": {"capability_tags": ["logs"], "mutates": False, "cacheable": True},
+    "list_splunk_sourcetypes": {"capability_tags": ["logs"], "mutates": False, "cacheable": True},
+    "spinnaker_rca": {"capability_tags": ["ci_cd"], "mutates": False, "cacheable": True},
+    # Source control — read-only
     "github_rca": {"capability_tags": ["source_control_read", "ci_cd"], "mutates": False, "cacheable": True},
     "get_connected_repos": {"capability_tags": ["source_control_read"], "mutates": False, "cacheable": False},
+    # Write tools — excluded from sub-agents
     "github_commit": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
     "github_fix": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
     "github_apply_fix": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
-    "run_iac_tool": {"capability_tags": ["iac"], "mutates": True, "cacheable": False},
-    "cloud_exec": {"capability_tags": ["runtime_state"], "mutates": True, "cacheable": False},
+    "iac_tool": {"capability_tags": ["iac"], "mutates": True, "cacheable": False},
+    # Runbooks + knowledge base
     "confluence_runbook_parse": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "confluence_search_similar": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "confluence_search_runbooks": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "knowledge_base_search": {"capability_tags": ["knowledge_base", "runbooks"], "mutates": False, "cacheable": True},
+    # Ticket / incident history
+    "list_incidentio_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
+    "get_incidentio_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
+    "get_incidentio_timeline": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
+    # General research
+    "web_search": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
 }
 
 

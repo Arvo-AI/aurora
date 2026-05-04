@@ -92,8 +92,31 @@ async def _synthesis(state: State) -> dict:
         llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
         structured = llm.with_structured_output(SynthesisDecision)
 
-        prompt = _build_synthesis_prompt(state, combined, current_wave)
+        # Pass available role names to constrain follow-up dispatch — prevents
+        # the LLM from hallucinating role names that aren't in the registry.
+        from chat.backend.agent.orchestrator.role_registry import RoleRegistry
+        try:
+            available_roles = RoleRegistry.get_instance().list_available_roles(
+                getattr(state, "user_id", "") or ""
+            )
+        except Exception:
+            available_roles = []
+
+        prompt = _build_synthesis_prompt(state, combined, current_wave, available_roles)
         decision: SynthesisDecision = await structured.ainvoke(prompt)
+
+        # Defense-in-depth: drop follow-up inputs whose role_name isn't registered.
+        valid_role_names = {r.name for r in available_roles}
+        if valid_role_names and decision.follow_up_inputs:
+            before = len(decision.follow_up_inputs)
+            decision.follow_up_inputs = [
+                inp for inp in decision.follow_up_inputs if inp.role_name in valid_role_names
+            ]
+            dropped = before - len(decision.follow_up_inputs)
+            if dropped:
+                logger.warning(
+                    "synthesis_node: dropped %d follow_up_inputs with unknown role names", dropped,
+                )
 
         logger.info(
             "synthesis_node: incident=%s wave=%d needs_more=%s follow_ups=%d",
@@ -173,21 +196,25 @@ def _build_tool_messages(state: State, incident_id: str, target_wave: int) -> li
     return out
 
 
-def _build_synthesis_prompt(state: State, combined_findings: str, wave: int) -> str:
+def _build_synthesis_prompt(state: State, combined_findings: str, wave: int,
+                              available_roles: list) -> str:
     """Build the synthesis prompt.
 
-    Findings are grouped by wave in `combined_findings` (each block prefixed with
-    `## Wave N | ...`). The LLM must judge `needs_more_research` from what the
-    NEW wave (target_wave = wave+1) added, but write the user-facing `summary`
-    using full context across all waves.
+    Findings are grouped by wave in `combined_findings`. The LLM judges
+    `needs_more_research` from what the NEW wave (target_wave = wave+1) added,
+    but writes the user-facing `summary` using full context across all waves.
     """
     incident_id = getattr(state, "incident_id", "unknown") or "unknown"
     question = (getattr(state, "question", "") or "")[:500]
     target_wave = wave + 1
+    role_lines = "\n".join(
+        f"- {r.name}: {r.description}" for r in available_roles
+    ) or "(none available)"
     return (
         f"You are an RCA orchestrator synthesizing parallel investigation findings.\n\n"
         f"Incident: {incident_id}\nOriginal question: {question}\n"
         f"Most recent wave: {target_wave} (max {_MAX_SYNTHESIS_WAVES})\n\n"
+        f"Available investigator roles for follow-up (use ONLY these role_name values):\n{role_lines}\n\n"
         f"=== SUB-AGENT FINDINGS (grouped by wave) ===\n\n{combined_findings[:12000]}\n\n"
         f"=== TASK ===\n"
         f"1) needs_more_research: judge based on what wave {target_wave} added. "
@@ -195,7 +222,7 @@ def _build_synthesis_prompt(state: State, combined_findings: str, wave: int) -> 
         f"with at least one strong/moderate-confidence finding, return false. "
         f"If critical gaps remain that another wave could fill AND target_wave < {_MAX_SYNTHESIS_WAVES}, "
         f"return true with follow_up_inputs. Each follow_up_input needs agent_id "
-        f"(e.g. sa_w{target_wave + 1}_1), role_name, purpose.\n"
+        f"(e.g. sa_w{target_wave + 1}_1), role_name (from the list above), purpose.\n"
         f"2) summary: a concise (3-6 sentence) user-facing markdown summary using ALL findings "
         f"across every wave shown above. Cover what was found, the most likely root cause(s), "
         f"and (if needs_more_research=true) what's being investigated next. Shown directly to the user.\n"
