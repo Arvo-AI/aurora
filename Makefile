@@ -172,6 +172,21 @@ prod-prebuilt:
 	echo "Pulling prebuilt images from GHCR (tag: $$TAG)..."; \
 	docker pull ghcr.io/arvo-ai/aurora-server:$$TAG; \
 	docker pull ghcr.io/arvo-ai/aurora-frontend:$$TAG; \
+	if command -v cosign >/dev/null 2>&1; then \
+		echo "Verifying image signatures..."; \
+		cosign verify \
+			--certificate-identity-regexp="https://github.com/Arvo-AI/aurora/.*" \
+			--certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+			ghcr.io/arvo-ai/aurora-server:$$TAG && \
+		cosign verify \
+			--certificate-identity-regexp="https://github.com/Arvo-AI/aurora/.*" \
+			--certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+			ghcr.io/arvo-ai/aurora-frontend:$$TAG && \
+		echo "Image signatures verified."; \
+	else \
+		echo "WARNING: cosign not installed, skipping signature verification."; \
+		echo "Install cosign to verify image provenance: https://docs.sigstore.dev/cosign/system_config/installation/"; \
+	fi; \
 	echo "Tagging images for docker compose..."; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_server:latest; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-worker:latest; \
@@ -334,6 +349,16 @@ deploy-build:
 	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
 		docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA; \
 	fi; \
+	echo "Signing images with Cosign..."; \
+	SERVER_DIGEST=$$(docker buildx imagetools inspect --raw $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA | sha256sum | awk '{print "sha256:"$$1}'); \
+	FRONTEND_DIGEST=$$(docker buildx imagetools inspect --raw $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA | sha256sum | awk '{print "sha256:"$$1}'); \
+	cosign sign --yes $$IMAGE_REGISTRY/aurora-server@$$SERVER_DIGEST; \
+	cosign sign --yes $$IMAGE_REGISTRY/aurora-frontend@$$FRONTEND_DIGEST; \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		TERMINAL_DIGEST=$$(docker buildx imagetools inspect --raw $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA | sha256sum | awk '{print "sha256:"$$1}'); \
+		cosign sign --yes $$IMAGE_REGISTRY/aurora-terminal@$$TERMINAL_DIGEST; \
+	fi; \
+	echo "All images signed successfully"; \
 	echo "Updating values.generated.yaml with new tag..."; \
 	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml
 
