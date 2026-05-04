@@ -2,10 +2,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Download, Edit2, Save, X, ExternalLink, RefreshCw, FileText } from 'lucide-react';
+import { Download, Edit2, Save, X, ExternalLink, RefreshCw, FileText, Upload, ChevronDown } from 'lucide-react';
 import { postmortemService, PostmortemData } from '@/lib/services/incidents';
 import { postmortemMarkdownComponents } from '@/lib/markdown-components';
 import ExportToNotionDialog from '@/components/postmortem/ExportToNotionDialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface PostmortemPanelProps {
   incidentId: string;
@@ -22,12 +28,11 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [exportingToConfluence, setExportingToConfluence] = useState(false);
-  const [showConfluenceForm, setShowConfluenceForm] = useState(false);
+  const [activeExport, setActiveExport] = useState<'confluence' | 'notion' | null>(null);
   const [confluenceSpaceKey, setConfluenceSpaceKey] = useState('');
   const [confluenceParentPageId, setConfluenceParentPageId] = useState('');
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [showNotionDialog, setShowNotionDialog] = useState(false);
 
   const loadPostmortem = useCallback(async () => {
     const result = await postmortemService.getPostmortem(incidentId);
@@ -95,7 +100,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       );
       if (result.success) {
         setExportSuccess(result.pageUrl || 'Exported successfully');
-        setShowConfluenceForm(false);
+        setActiveExport(null);
         await loadPostmortem(); // Refresh to get confluence URL
       } else {
         setExportError(result.error || 'Export failed');
@@ -140,20 +145,28 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                 <Download className="w-3 h-3" />
                 Download
               </button>
-              <button
-                onClick={() => setShowConfluenceForm(!showConfluenceForm)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Export to Confluence
-              </button>
-              <button
-                onClick={() => setShowNotionDialog(true)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Export to Notion
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                  >
+                    <Upload className="w-3 h-3" />
+                    Export
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-40">
+                  <DropdownMenuItem onClick={() => setActiveExport('confluence')}>
+                    <ExternalLink className="w-3 h-3" />
+                    Confluence
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setActiveExport('notion')}>
+                    <ExternalLink className="w-3 h-3" />
+                    Notion
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           )}
           {editing && (
@@ -179,7 +192,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       </div>
 
       {/* Confluence export form */}
-      {showConfluenceForm && (
+      {activeExport === 'confluence' && (
         <div className="mb-4 p-4 rounded-lg bg-zinc-900 border border-zinc-800">
           <p className="text-xs text-zinc-400 mb-3">Export postmortem to Confluence</p>
           <div className="space-y-2">
@@ -214,7 +227,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                 {exportingToConfluence ? 'Exporting...' : 'Export'}
               </button>
               <button
-                onClick={() => setShowConfluenceForm(false)}
+                onClick={() => setActiveExport(null)}
                 className="px-3 py-1.5 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
               >
                 Cancel
@@ -291,8 +304,8 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       )}
 
       <ExportToNotionDialog
-        open={showNotionDialog}
-        onOpenChange={setShowNotionDialog}
+        open={activeExport === 'notion'}
+        onOpenChange={(open) => { if (!open) setActiveExport(null); }}
         incidentId={incidentId}
         onExported={() => { loadPostmortem(); }}
       />
