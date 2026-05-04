@@ -45,6 +45,7 @@ jobs:
         run: |
           tests=(
             tests/architectural/test_connector_rbac.py
+            tests/chat/test_tool_output_cap.py
             tests/db/test_connection_pool.py
             tests/security/test_input_rail.py
             tests/security/test_terminal_exec_tool.py
