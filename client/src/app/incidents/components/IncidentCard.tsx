@@ -16,11 +16,13 @@ import {
   FileText,
   Coins,
   Activity,
+  Workflow,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
+import { fetchR } from '@/lib/query';
 import { useUser } from '@/hooks/useAuthHooks';
 import { canWrite as checkCanWrite } from '@/lib/roles';
 import Link from 'next/link';
@@ -103,6 +105,73 @@ function isSafeUrl(url: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+function RunActionDropdown({ incidentId, incidentTitle }: { incidentId: string; incidentTitle: string }) {
+  const [open, setOpen] = useState(false);
+  const [actions, setActions] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+
+  const handleOpen = async () => {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/actions?enabled=true', { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setActions((data.actions || []).filter((a: { enabled: boolean }) => a.enabled));
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  const handleTrigger = async (actionId: string) => {
+    setOpen(false);
+    try {
+      await fetchR(`/api/actions/${actionId}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incident_id: incidentId, trigger_label: `Incident: ${incidentTitle}` }),
+      });
+      toast({ title: 'Action triggered', description: 'Background task started.' });
+    } catch {
+      toast({ title: 'Failed to trigger action', variant: 'destructive' });
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={handleOpen}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800/80 border border-zinc-700/50 text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/80 transition-all"
+      >
+        <Workflow className="h-3.5 w-3.5" />
+        Run Action
+        <ChevronDown className="h-3 w-3" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-64 bg-zinc-900 border border-zinc-700/60 rounded-lg shadow-xl z-50 py-1">
+          {loading ? (
+            <p className="text-xs text-zinc-500 px-3 py-2">Loading...</p>
+          ) : actions.length === 0 ? (
+            <p className="text-xs text-zinc-500 px-3 py-2">No actions configured</p>
+          ) : (
+            actions.map(a => (
+              <button
+                key={a.id}
+                onClick={() => handleTrigger(a.id)}
+                className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
+              >
+                {a.name}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
@@ -376,7 +445,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               )}
             </div>
           </div>
-          <StatusPill status={incident.auroraStatus} />
+          <div className="flex items-center gap-3">
+            <StatusPill status={incident.auroraStatus} />
+            {incident.auroraStatus === 'complete' && (
+              <RunActionDropdown incidentId={incident.id} incidentTitle={alert.title} />
+            )}
+          </div>
         </div>
 
         {/* Alert title */}

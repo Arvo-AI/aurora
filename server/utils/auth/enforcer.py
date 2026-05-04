@@ -44,6 +44,7 @@ _DEFAULT_POLICIES = [
     ("viewer", "*", "user_preferences", "read"),
     ("viewer", "*", "user_preferences", "write"),
     ("viewer", "*", "rca_emails", "read"),
+    ("viewer", "*", "actions", "read"),
 
     # --- editor permissions (mutating operations) ---
     ("editor", "*", "connectors", "write"),
@@ -54,6 +55,7 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "vms", "write"),
     ("editor", "*", "rca_emails", "write"),
     ("editor", "*", "graph", "write"),
+    ("editor", "*", "actions", "write"),
 
     # --- admin-only permissions ---
     ("admin", "*", "users", "manage"),
@@ -102,6 +104,7 @@ def _seed_default_policies(enforcer: casbin.Enforcer) -> None:
     
     Also handles migration from non-domain to domain-based model by checking
     if existing policies have the old 3-field format and re-seeding.
+    Adds any missing default policies for existing installations.
     """
     existing = enforcer.get_policy()
     if existing:
@@ -111,7 +114,23 @@ def _seed_default_policies(enforcer: casbin.Enforcer) -> None:
             logger.info("Detected old non-domain Casbin policies, migrating to domain-based format...")
             enforcer.clear_policy()
         else:
-            logger.info("Casbin policies already present (%d rules), skipping seed.", len(existing))
+            # Add any missing default policies (e.g. new resources added in code)
+            existing_set = {tuple(p) for p in existing}
+            added = 0
+            for role, domain, resource, action in _DEFAULT_POLICIES:
+                if (role, domain, resource, action) not in existing_set:
+                    enforcer.add_policy(role, domain, resource, action)
+                    added += 1
+            existing_groups = {tuple(g) for g in enforcer.get_named_grouping_policy("g")}
+            for parent_role, child_role, domain in _DEFAULT_ROLE_HIERARCHY:
+                if (parent_role, child_role, domain) not in existing_groups:
+                    enforcer.add_grouping_policy(parent_role, child_role, domain)
+                    added += 1
+            if added:
+                enforcer.save_policy()
+                logger.info("Added %d missing default Casbin policies.", added)
+            else:
+                logger.info("Casbin policies already present (%d rules), all defaults satisfied.", len(existing))
             return
 
     logger.info("Seeding default Casbin RBAC policies …")
