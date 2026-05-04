@@ -160,6 +160,19 @@ def github_webhook():
     )
 
     # 4-7: DB insert with idempotent dedupe + Celery dispatch.
+    #
+    # Status lifecycle:
+    #   pending    - row inserted, dispatch not yet attempted
+    #   processing - Celery accepted the dispatch
+    #   processed  - Celery worker finished (set by tasks.github_webhook_tasks)
+    #   failed     - dispatch raised; safe to retry on duplicate
+    #
+    # Why ``pending`` and not ``received``: if dispatch.delay raises (broker
+    # unavailable, import error, etc.), GitHub retries the delivery. The
+    # retry hits the UNIQUE(delivery_id) constraint and lands on the
+    # duplicate branch. That branch MUST re-attempt dispatch when the row
+    # is still in ``pending`` (or ``failed``) status, otherwise the webhook
+    # is silently dropped after the first broker hiccup.
     installation_id: int | None = None
     try:
         with db_pool.get_admin_connection() as conn:
@@ -167,24 +180,14 @@ def github_webhook():
                 try:
                     cur.execute(
                         """INSERT INTO webhook_deliveries (delivery_id, event_type, status)
-                           VALUES (%s, %s, 'received')""",
+                           VALUES (%s, %s, 'pending')""",
                         (delivery_id, event_type),
                     )
+                    conn.commit()
+                    is_duplicate = False
                 except (IntegrityError, psycopg_errors.UniqueViolation):
-                    # Duplicate delivery - GitHub retried. Idempotent ack
-                    # so it stops retrying. No new Celery dispatch.
                     conn.rollback()
-                    duration_ms = int((time.monotonic() - start) * 1000)
-                    logger.info(
-                        "gh_webhook_event=deduped delivery_id=%s event_type=%s "
-                        "installation_id=%s duration_ms=%d",
-                        delivery_id,
-                        event_type,
-                        installation_id,
-                        duration_ms,
-                    )
-                    return jsonify({"deduped": True, "delivery_id": delivery_id}), 200
-                conn.commit()
+                    is_duplicate = True
 
                 # Best-effort installation.id capture for the audit row.
                 # Sig already verified, so the body is trusted bytes; if
@@ -206,6 +209,42 @@ def github_webhook():
                         type(exc).__name__,
                     )
 
+                if is_duplicate:
+                    # GitHub retried this delivery. If the prior attempt
+                    # already succeeded (processing/processed) we ack
+                    # idempotently; if it stalled (pending/failed) we
+                    # re-dispatch so a single broker hiccup doesn't drop
+                    # the delivery permanently.
+                    cur.execute(
+                        """SELECT status FROM webhook_deliveries
+                            WHERE delivery_id = %s""",
+                        (delivery_id,),
+                    )
+                    existing = cur.fetchone()
+                    existing_status = existing[0] if existing else None
+
+                    if existing_status in (None, "processing", "processed"):
+                        duration_ms = int((time.monotonic() - start) * 1000)
+                        logger.info(
+                            "gh_webhook_event=deduped delivery_id=%s event_type=%s "
+                            "installation_id=%s duration_ms=%d existing_status=%s",
+                            delivery_id,
+                            event_type,
+                            installation_id,
+                            duration_ms,
+                            existing_status or "missing",
+                        )
+                        return jsonify({"deduped": True, "delivery_id": delivery_id}), 200
+                    # else: existing_status in (pending, failed) — fall through
+                    # to dispatch, treating this as a recovery retry.
+                    logger.info(
+                        "gh_webhook_event=redispatch delivery_id=%s event_type=%s "
+                        "previous_status=%s",
+                        delivery_id,
+                        event_type,
+                        existing_status,
+                    )
+
                 if installation_id is not None:
                     cur.execute(
                         """UPDATE webhook_deliveries
@@ -222,12 +261,31 @@ def github_webhook():
                 # Decode for Celery JSON serializer; payload is the same
                 # bytes the sender sent so handlers see the original text.
                 payload_json_str = (raw_body or b"").decode("utf-8", errors="replace")
-                dispatch_github_webhook.delay(delivery_id, event_type, payload_json_str)
+                try:
+                    dispatch_github_webhook.delay(delivery_id, event_type, payload_json_str)
+                except Exception as dispatch_exc:
+                    # Mark the row as ``failed`` so the next GitHub retry
+                    # lands on the redispatch branch above and tries again.
+                    cur.execute(
+                        """UPDATE webhook_deliveries
+                            SET status = 'failed',
+                                error = %s
+                            WHERE delivery_id = %s""",
+                        (
+                            redact_token(
+                                f"{type(dispatch_exc).__name__}: {dispatch_exc}"
+                            )[:1024],
+                            delivery_id,
+                        ),
+                    )
+                    conn.commit()
+                    raise
 
                 cur.execute(
                     """UPDATE webhook_deliveries
                        SET status = 'processing'
-                       WHERE delivery_id = %s AND status = 'received'""",
+                       WHERE delivery_id = %s
+                         AND status IN ('pending', 'failed')""",
                     (delivery_id,),
                 )
                 conn.commit()

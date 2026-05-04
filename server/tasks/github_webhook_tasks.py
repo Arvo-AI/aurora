@@ -430,17 +430,53 @@ def _handle_installation_repositories_event(
                     if isinstance(full_name, str) and full_name:
                         repo_full_names.append(full_name)
 
+        # github_connected_repos is RLS-protected; the Celery worker has
+        # no Flask request context so RLS vars are unset by default. Set
+        # the RLS context per-user before DELETE so FORCE RLS doesn't
+        # silently no-op the cleanup. An installation can be linked by
+        # multiple users (different orgs), so we iterate over the join
+        # table and reset context for each.
+        from utils.auth.stateless_auth import set_rls_context
+
+        rows_deleted = 0
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                rows_deleted = 0
                 if repo_full_names:
                     cur.execute(
-                        """DELETE FROM github_connected_repos
-                           WHERE installation_id = %s
-                             AND repo_full_name = ANY(%s)""",
-                        (installation_id, repo_full_names),
+                        """SELECT user_id
+                             FROM user_github_installations
+                            WHERE installation_id = %s""",
+                        (installation_id,),
                     )
-                    rows_deleted = cur.rowcount
+                    linked_users = [row[0] for row in cur.fetchall() if row[0]]
+
+                    for linked_user_id in linked_users:
+                        if not set_rls_context(
+                            cur,
+                            conn,
+                            linked_user_id,
+                            log_prefix="[gh_webhook:installation_repositories]",
+                        ):
+                            logger.warning(
+                                "gh_webhook_handler=installation_repositories action=removed "
+                                "installation_id=%s user=%s status=skipped_no_org_context",
+                                installation_id,
+                                linked_user_id,
+                            )
+                            continue
+                        cur.execute(
+                            """DELETE FROM github_connected_repos
+                                WHERE installation_id = %s
+                                  AND repo_full_name = ANY(%s)""",
+                            (installation_id, repo_full_names),
+                        )
+                        rows_deleted += cur.rowcount
+                # Reset RLS for the audit-row update; webhook_deliveries
+                # is not RLS-protected but leaving stale per-user vars on
+                # the connection just hides bugs in adjacent code.
+                cur.execute(
+                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                )
                 cur.execute(
                     """UPDATE webhook_deliveries
                        SET status = 'processed', processed_at = NOW()
@@ -848,14 +884,24 @@ def dispatch_github_webhook(
 
         action = payload.get("action") if isinstance(payload.get("action"), str) else None
 
-        if event_type == "installation":
-            _handle_installation_event(payload, action, delivery_id)
-        elif event_type == "installation_repositories":
-            _handle_installation_repositories_event(payload, action, delivery_id)
+        handlers = {
+            "installation": _handle_installation_event,
+            "installation_repositories": _handle_installation_repositories_event,
+            "pull_request": _handle_pull_request_event,
+            "issues": _handle_issues_event,
+            "deployment": _handle_deployment_event,
+            "deployment_status": _handle_deployment_status_event,
+            "workflow_run": _handle_workflow_run_event,
+            "check_run": _handle_check_run_event,
+            "check_suite": _handle_check_suite_event,
+        }
+        handler = handlers.get(event_type)
+        if handler is not None:
+            handler(payload, action, delivery_id)
         else:
-            # Unhandled event type (Task 14 will wire push/release/etc.).
-            # Acknowledge so GitHub stops retrying; log as a breadcrumb
-            # so ops can spot unexpected event subscriptions.
+            # Unhandled event type (push/release are intentionally excluded;
+            # anything else is an unexpected subscription). Acknowledge so
+            # GitHub stops retrying; log as a breadcrumb for ops.
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.info(
                 "gh_webhook_handler=%s action=%s delivery_id=%s "
