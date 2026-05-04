@@ -64,7 +64,7 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
 };
 
 export default function IncidentsPage() {
-  const { providerIds } = useConnectedAccounts();
+  const { providerIds, isLoading: isLoadingAccounts } = useConnectedAccounts();
 
   const isConnectedToIncidentPlatform = useMemo(
     () => providerIds.some(id => ALERT_PROVIDERS.has(id)),
@@ -131,7 +131,7 @@ export default function IncidentsPage() {
         </div>
       ) : (
         <div className="space-y-8">
-          {incidents.length > 0 && !isConnectedToIncidentPlatform && (
+          {incidents.length > 0 && !isConnectedToIncidentPlatform && !isLoadingAccounts && (
             <DisconnectedBanner />
           )}
 
@@ -183,7 +183,7 @@ export default function IncidentsPage() {
           {incidents.length === 0 && (
             <Card>
               <CardContent className="py-12 text-center">
-                {!isConnectedToIncidentPlatform ? (
+                {!isConnectedToIncidentPlatform && !isLoadingAccounts ? (
                   <ConnectPlatformCTA />
                 ) : (
                   <>
