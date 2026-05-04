@@ -129,7 +129,10 @@ celery_app.conf.update(
         },
     },
     beat_schedule_filename='celerybeat-schedule',
-    worker_hijack_root_logger=False
+    worker_hijack_root_logger=False,
+    task_routes={
+        'change_intercept.*': {'queue': 'change_intercept'},
+    },
 ) 
 
 # Manually import task modules to ensure they're registered
