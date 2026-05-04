@@ -1335,11 +1335,11 @@ def _update_incident_status_and_aurora(
                 now = datetime.now()
                 cursor.execute(
                     """UPDATE incidents
-                       SET status = CASE WHEN status != 'merged' THEN %s ELSE status END,
+                       SET status = %s,
                            aurora_status = %s,
                            analyzed_at = CASE WHEN %s = 'analyzed' THEN COALESCE(analyzed_at, %s) ELSE analyzed_at END,
                            updated_at = %s
-                       WHERE id = %s""",
+                       WHERE id = %s AND status != 'merged'""",
                     (status, aurora_status, status, now, now, incident_id),
                 )
             conn.commit()
@@ -2148,6 +2148,7 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                             continue
                         cursor.execute("""
                             UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
+                                   analyzed_at = COALESCE(analyzed_at, NOW()),
                                    rca_celery_task_id = NULL, updated_at = NOW()
                             WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
                         """, (inc_id,))
@@ -2208,7 +2209,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         _propagate_suggestion_status(str(session_id), 'failed')
                         if incident_id:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
@@ -2228,7 +2229,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                              cursor=cursor, incident_id=inc_id):
                             continue
                         cursor.execute(
-                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
                             (inc_id,)
                         )
                         if not cursor.fetchone():
@@ -2258,12 +2259,12 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     for inc_id, cur_aurora in cursor.fetchall():
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
-                                "UPDATE incidents SET status = 'analyzed', updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
+                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
                                 (inc_id,)
                             )
                         else:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' RETURNING id",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' RETURNING id",
                                 (inc_id,)
                             )
                         if cursor.fetchone():
