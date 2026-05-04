@@ -527,12 +527,13 @@ def _handle_pull_request_event(
     action: str | None,
     delivery_id: str,
 ) -> None:
-    """Log a ``pull_request.<action>`` webhook for RCA correlation.
+    """Log a ``pull_request.<action>`` webhook and dispatch to change-intercept.
 
-    MVP: structured-log only (no DB write beyond ``webhook_deliveries``
-    audit, no GitHub API call). Fields per the Task 14 spec:
-    ``repo, pr_number, action, state, merged_at, head_sha, base_sha,
-    author, title``.
+    MVP logging fields per spec: ``repo, pr_number, action, state,
+    merged_at, head_sha, base_sha, author, title``.
+
+    PR actions ``opened``, ``synchronize``, and ``reopened`` are routed
+    to the change-intercept pipeline for risk assessment.
     """
     repo = _safe_get(payload, "repository", "full_name")
     pr_number = _safe_get(payload, "pull_request", "number")
@@ -561,6 +562,9 @@ def _handle_pull_request_event(
         delivery_id,
     )
     _update_delivery_status(delivery_id, status="processed")
+
+    if action in ("opened", "synchronize", "reopened") and installation_id:
+        _dispatch_change_intercept(payload, installation_id)
 
 
 def _handle_issues_event(
@@ -773,6 +777,90 @@ def _handle_check_suite_event(
     _update_delivery_status(delivery_id, status="processed")
 
 
+def _dispatch_change_intercept(
+    payload: dict[str, Any],
+    installation_id: int,
+) -> None:
+    """Resolve org_id and enqueue a change-intercept investigation."""
+    from services.change_intercept.adapters.github import GitHubAdapter
+
+    org_id = GitHubAdapter._resolve_org_id(installation_id)
+
+    from tasks.change_intercept_tasks import process_change_event
+    process_change_event.delay("github", payload, org_id, installation_id)
+
+
+class _WebhookRequest:
+    """Minimal request-like object for adapter.is_reply_to_us."""
+
+    def __init__(self, event_type: str, payload: dict[str, Any]):
+        self.headers = {"X-GitHub-Event": event_type}
+        self._json = payload
+
+    def get_json(self, silent: bool = False) -> dict:
+        return self._json
+
+
+def _try_dispatch_reply(
+    event_type: str,
+    payload: dict[str, Any],
+    installation_id: int,
+) -> None:
+    """Check if a comment event is a reply to Aurora and dispatch if so."""
+    from services.change_intercept.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter()
+    reply = adapter.is_reply_to_us(_WebhookRequest(event_type, payload))
+    if reply:
+        org_id = GitHubAdapter._resolve_org_id(installation_id)
+        from tasks.change_intercept_tasks import launch_followup_investigation
+        launch_followup_investigation.delay(
+            reply.original_event_dedup_key, reply.reply_body, org_id,
+        )
+
+
+def _handle_issue_comment_event(
+    payload: dict[str, Any],
+    action: str | None,
+    delivery_id: str,
+) -> None:
+    """Route ``issue_comment`` events -- detect replies to Aurora reviews."""
+    installation_id = _extract_installation_id(payload)
+
+    logger.info(
+        "event_type=issue_comment action=%s installation_id=%s "
+        "delivery_id=%s status=processed",
+        _fmt_field(action),
+        _fmt_field(installation_id),
+        delivery_id,
+    )
+    _update_delivery_status(delivery_id, status="processed")
+
+    if action == "created" and installation_id:
+        _try_dispatch_reply("issue_comment", payload, installation_id)
+
+
+def _handle_pr_review_comment_event(
+    payload: dict[str, Any],
+    action: str | None,
+    delivery_id: str,
+) -> None:
+    """Route ``pull_request_review_comment`` events -- detect threaded replies."""
+    installation_id = _extract_installation_id(payload)
+
+    logger.info(
+        "event_type=pull_request_review_comment action=%s installation_id=%s "
+        "delivery_id=%s status=processed",
+        _fmt_field(action),
+        _fmt_field(installation_id),
+        delivery_id,
+    )
+    _update_delivery_status(delivery_id, status="processed")
+
+    if action == "created" and installation_id:
+        _try_dispatch_reply("pull_request_review_comment", payload, installation_id)
+
+
 @celery_app.task(
     name="tasks.github_webhook_tasks.dispatch_github_webhook",
     bind=True,
@@ -852,10 +940,27 @@ def dispatch_github_webhook(
             _handle_installation_event(payload, action, delivery_id)
         elif event_type == "installation_repositories":
             _handle_installation_repositories_event(payload, action, delivery_id)
+        elif event_type == "pull_request":
+            _handle_pull_request_event(payload, action, delivery_id)
+        elif event_type == "issues":
+            _handle_issues_event(payload, action, delivery_id)
+        elif event_type == "deployment":
+            _handle_deployment_event(payload, action, delivery_id)
+        elif event_type == "deployment_status":
+            _handle_deployment_status_event(payload, action, delivery_id)
+        elif event_type == "workflow_run":
+            _handle_workflow_run_event(payload, action, delivery_id)
+        elif event_type == "check_run":
+            _handle_check_run_event(payload, action, delivery_id)
+        elif event_type == "check_suite":
+            _handle_check_suite_event(payload, action, delivery_id)
+        elif event_type == "issue_comment":
+            _handle_issue_comment_event(payload, action, delivery_id)
+        elif event_type == "pull_request_review_comment":
+            _handle_pr_review_comment_event(payload, action, delivery_id)
         else:
-            # Unhandled event type (Task 14 will wire push/release/etc.).
-            # Acknowledge so GitHub stops retrying; log as a breadcrumb
-            # so ops can spot unexpected event subscriptions.
+            # Unsubscribed / future event type. Acknowledge so GitHub
+            # stops retrying; log as a breadcrumb for ops.
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.info(
                 "gh_webhook_handler=%s action=%s delivery_id=%s "

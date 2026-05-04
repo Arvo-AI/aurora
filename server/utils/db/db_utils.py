@@ -1213,18 +1213,6 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
                 """,
-                "github_app_installations": """
-                    CREATE TABLE IF NOT EXISTS github_app_installations (
-                        installation_id BIGINT PRIMARY KEY,
-                        org_id VARCHAR(255) NOT NULL,
-                        github_account_login TEXT NOT NULL,
-                        repos JSONB NOT NULL DEFAULT '[]'::jsonb,
-                        review_config JSONB DEFAULT '{}'::jsonb,
-                        installed_at TIMESTAMPTZ DEFAULT now(),
-                        suspended_at TIMESTAMPTZ,
-                        UNIQUE (org_id, github_account_login)
-                    );
-                """,
                 "change_events": """
                     CREATE TABLE IF NOT EXISTS change_events (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1233,6 +1221,7 @@ def initialize_tables():
                         kind VARCHAR(32) NOT NULL,
                         external_id TEXT NOT NULL,
                         dedup_key TEXT NOT NULL,
+                        installation_id BIGINT,
                         repo TEXT,
                         ref TEXT,
                         commit_sha TEXT,
@@ -1355,7 +1344,6 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
-            rls_tables.append("github_app_installations")
             rls_tables.append("change_events")
             rls_tables.append("change_investigations")
 

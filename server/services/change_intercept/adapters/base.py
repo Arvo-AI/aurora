@@ -69,7 +69,7 @@ class ChangeAdapter(Protocol):
         """
         ...
 
-    def fetch_snapshot(self, event: NormalizedChangeEvent) -> ChangeSnapshot:
+    def fetch_snapshot(self, event: NormalizedChangeEvent, *, installation_id: int | None = None) -> ChangeSnapshot:
         """One-shot fetch of diff, files, commits, and body."""
         ...
 

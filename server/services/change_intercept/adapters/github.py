@@ -1,25 +1,25 @@
 """GitHub adapter for the change-intercept pipeline.
 
 Implements the ChangeAdapter protocol for GitHub pull-request webhooks.
-Methods that require a live GitHub App (fetch_snapshot, post_verdict,
-dismiss_prior) raise NotImplementedError until Phase 0 (App migration)
-provides the auth layer.
+Outbound methods (fetch_snapshot, post_verdict, dismiss_prior) use
+the GitHub App installation token from utils.auth.github_app_token.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 from typing import Any
 
+import requests
+
 from services.change_intercept.adapters.base import (
-    ChangeAdapter,
     ChangeSnapshot,
     NormalizedChangeEvent,
     ReplyMatch,
 )
-from utils.web.webhook_signature import verify_github_signature
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,13 @@ _TARGET_ENV_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^(dev|develop.*)$", re.IGNORECASE), "development"),
 ]
 
+_GH_API = "https://api.github.com"
+_GH_ACCEPT = "application/vnd.github+json"
+_GH_API_VERSION = "2022-11-28"
+_GH_TIMEOUT = 20
+_GH_DIFF_ACCEPT = "application/vnd.github.v3.diff"
+_MAX_DIFF_BYTES = 512_000
+
 
 def _infer_target_env(base_ref: str | None) -> str | None:
     if not base_ref:
@@ -41,25 +48,31 @@ def _infer_target_env(base_ref: str | None) -> str | None:
     return None
 
 
+def _gh_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"token {token}",
+        "Accept": _GH_ACCEPT,
+        "X-GitHub-Api-Version": _GH_API_VERSION,
+    }
+
+
 class GitHubAdapter:
     """ChangeAdapter implementation for GitHub pull requests."""
 
     vendor: str = "github"
 
     def __init__(self) -> None:
-        self._webhook_secret = os.getenv("GITHUB_APP_WEBHOOK_SECRET", "")
         self._app_slug = os.getenv("GITHUB_APP_SLUG", "aurora-app")
 
     # ------------------------------------------------------------------
-    # Inbound (webhook → normalized event)
+    # Inbound (webhook -> normalized event)
     # ------------------------------------------------------------------
 
     def verify_signature(self, request: Any) -> bool:
-        sig = request.headers.get("X-Hub-Signature-256", "")
-        if not sig:
-            logger.warning("[ChangeIntercept:GitHub] Missing X-Hub-Signature-256")
-            return False
-        return verify_github_signature(request.get_data(), sig, self._webhook_secret)
+        # Signature verification is handled by Haled's webhook route
+        # (server/routes/github/github_webhook.py). This method exists
+        # only to satisfy the ChangeAdapter protocol.
+        return True
 
     def parse(self, request: Any) -> NormalizedChangeEvent | None:
         event_type = request.headers.get("X-GitHub-Event", "")
@@ -103,18 +116,14 @@ class GitHubAdapter:
 
         sender = payload.get("sender", {})
         if sender.get("login", "").endswith("[bot]") and sender.get("type") == "Bot":
-            return None  # self-filter: ignore our own comments
+            return None
 
         bot_login = f"{self._app_slug}[bot]"
 
         if event_type == "pull_request_review_comment":
             comment = payload.get("comment", {})
-            in_reply_to = comment.get("in_reply_to_id")
-            if not in_reply_to:
+            if not comment.get("in_reply_to_id"):
                 return None
-            # We can't verify the parent author without an API call here,
-            # so we check if the comment body references Aurora or is in
-            # a thread. The webhook handler will cross-check the DB.
             return self._build_reply_match(payload, comment.get("body", ""))
 
         if event_type == "issue_comment":
@@ -126,23 +135,137 @@ class GitHubAdapter:
         return None
 
     # ------------------------------------------------------------------
-    # Outbound (investigation → vendor) — stubbed until Phase 0
+    # Outbound (investigation -> vendor)
     # ------------------------------------------------------------------
 
-    def fetch_snapshot(self, event: NormalizedChangeEvent) -> ChangeSnapshot:
-        raise NotImplementedError(
-            "GitHubAdapter.fetch_snapshot requires App auth (Phase 0)"
+    def fetch_snapshot(
+        self,
+        event: NormalizedChangeEvent,
+        *,
+        installation_id: int | None = None,
+    ) -> ChangeSnapshot:
+        """Fetch the PR diff, file list, commits, and body from GitHub."""
+        from utils.auth.github_app_token import get_installation_token
+
+        inst_id = installation_id or self._installation_id_from_event(event)
+        if not inst_id:
+            raise ValueError("No installation_id available for fetch_snapshot")
+
+        token = get_installation_token(inst_id)
+        headers = _gh_headers(token)
+        repo, pr_number = self._parse_dedup_key(event.dedup_key)
+
+        pr_url = f"{_GH_API}/repos/{repo}/pulls/{pr_number}"
+        pr_resp = requests.get(pr_url, headers=headers, timeout=_GH_TIMEOUT)
+        pr_resp.raise_for_status()
+        pr_data = pr_resp.json()
+
+        diff_headers = {**headers, "Accept": _GH_DIFF_ACCEPT}
+        diff_resp = requests.get(pr_url, headers=diff_headers, timeout=_GH_TIMEOUT)
+        diff_resp.raise_for_status()
+        diff_text = diff_resp.text[:_MAX_DIFF_BYTES]
+
+        files_resp = requests.get(
+            f"{pr_url}/files", headers=headers, timeout=_GH_TIMEOUT,
+            params={"per_page": 100},
+        )
+        files_resp.raise_for_status()
+        files_data = files_resp.json()
+
+        commits_resp = requests.get(
+            f"{pr_url}/commits", headers=headers, timeout=_GH_TIMEOUT,
+            params={"per_page": 100},
+        )
+        commits_resp.raise_for_status()
+        commits_data = commits_resp.json()
+
+        return ChangeSnapshot(
+            change_body=pr_data.get("body") or "",
+            change_diff=diff_text,
+            change_files=[
+                {"filename": f.get("filename"), "status": f.get("status"),
+                 "additions": f.get("additions"), "deletions": f.get("deletions")}
+                for f in files_data
+            ],
+            change_commits=[
+                {"sha": c.get("sha"),
+                 "message": (c.get("commit") or {}).get("message", "")}
+                for c in commits_data
+            ],
         )
 
     def post_verdict(self, event: Any, investigation: Any) -> str:
-        raise NotImplementedError(
-            "GitHubAdapter.post_verdict requires App auth (Phase 0)"
+        """Post a PR review with the investigation verdict."""
+        from utils.auth.github_app_token import get_installation_token
+
+        inst_id = event.get("installation_id")
+        if not inst_id:
+            raise ValueError("No installation_id on change_event for post_verdict")
+
+        token = get_installation_token(inst_id)
+        headers = _gh_headers(token)
+        repo, pr_number = self._parse_dedup_key(event["dedup_key"])
+
+        verdict = investigation["verdict"]
+        rationale = investigation["rationale"]
+        gh_event = "APPROVE" if verdict == "approve" else "REQUEST_CHANGES"
+
+        body = f"**Aurora Change Risk Assessment: {verdict.upper()}**\n\n{rationale}"
+
+        cited = investigation.get("cited_findings")
+        if cited:
+            try:
+                findings = json.loads(cited) if isinstance(cited, str) else cited
+                if findings:
+                    body += "\n\n**Cited Findings:**\n"
+                    for f in findings:
+                        body += f"\n- {f.get('summary', f)}"
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        intent = investigation.get("intent_alignment")
+        if intent:
+            body += f"\n\n**Intent Alignment:** {intent}"
+            notes = investigation.get("intent_notes")
+            if notes:
+                body += f" - {notes}"
+
+        review_url = f"{_GH_API}/repos/{repo}/pulls/{pr_number}/reviews"
+        resp = requests.post(
+            review_url,
+            headers=headers,
+            json={"body": body, "event": gh_event},
+            timeout=_GH_TIMEOUT,
         )
+        resp.raise_for_status()
+        return str(resp.json().get("id", ""))
 
     def dismiss_prior(self, event: Any, prior_verdict_id: str) -> None:
-        raise NotImplementedError(
-            "GitHubAdapter.dismiss_prior requires App auth (Phase 0)"
+        """Dismiss a previous Aurora review on the PR."""
+        from utils.auth.github_app_token import get_installation_token
+
+        inst_id = event.get("installation_id")
+        if not inst_id:
+            return
+
+        token = get_installation_token(inst_id)
+        headers = _gh_headers(token)
+        repo, pr_number = self._parse_dedup_key(event["dedup_key"])
+
+        dismiss_url = (
+            f"{_GH_API}/repos/{repo}/pulls/{pr_number}"
+            f"/reviews/{prior_verdict_id}/dismissals"
         )
+        resp = requests.put(
+            dismiss_url,
+            headers=headers,
+            json={"message": "Superseded by updated Aurora review."},
+            timeout=_GH_TIMEOUT,
+        )
+        if resp.status_code == 404:
+            logger.debug("[ChangeIntercept:GitHub] Review %s already gone", prior_verdict_id)
+            return
+        resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -152,9 +275,8 @@ class GitHubAdapter:
     def _resolve_org_id(installation_id: int) -> str:
         """Map a GitHub App installation_id to an Aurora org_id.
 
-        Looks up the github_app_installations table.  Falls back to the
-        installation_id as a string if not found (the event will still
-        be persisted and can be linked later).
+        Uses the user_github_installations table (Haled's migration).
+        Falls back to the installation_id as a string if not found.
         """
         try:
             from utils.db.connection_pool import db_pool
@@ -162,24 +284,23 @@ class GitHubAdapter:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT org_id FROM github_app_installations "
-                        "WHERE installation_id = %s AND suspended_at IS NULL",
+                        "SELECT org_id FROM user_github_installations "
+                        "WHERE installation_id = %s LIMIT 1",
                         (installation_id,),
                     )
                     row = cur.fetchone()
-                    if row:
+                    if row and row[0]:
                         return row[0]
         except Exception as exc:
             logger.warning(
                 "[ChangeIntercept:GitHub] org_id lookup failed for "
                 "installation %s: %s",
-                installation_id,
-                exc,
+                installation_id, exc,
             )
         return str(installation_id)
 
     def _build_reply_match(
-        self, payload: dict[str, Any], body: str
+        self, payload: dict[str, Any], body: str,
     ) -> ReplyMatch | None:
         pr = payload.get("pull_request") or payload.get("issue", {})
         repo_full = payload.get("repository", {}).get("full_name", "")
@@ -190,3 +311,13 @@ class GitHubAdapter:
             original_event_dedup_key=f"{repo_full}#{pr_number}",
             reply_body=body,
         )
+
+    @staticmethod
+    def _parse_dedup_key(dedup_key: str) -> tuple[str, int]:
+        """Parse ``owner/repo#123`` into ``('owner/repo', 123)``."""
+        repo, _, num = dedup_key.rpartition("#")
+        return repo, int(num)
+
+    @staticmethod
+    def _installation_id_from_event(event: NormalizedChangeEvent) -> int | None:
+        return event.payload.get("installation", {}).get("id")

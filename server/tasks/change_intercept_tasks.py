@@ -31,11 +31,10 @@ def process_change_event(
     vendor: str,
     payload: Dict[str, Any],
     org_id: str,
-    snapshot: Optional[Dict[str, Any]] = None,
+    installation_id: Optional[int] = None,
 ) -> None:
     """Parse, persist, and kick off an investigation for a change event."""
     from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
     from services.change_intercept.adapters.registry import get_adapter
 
     adapter = get_adapter(vendor)
@@ -54,32 +53,21 @@ def process_change_event(
     change_files = None
     change_commits = None
 
-    if snapshot:
-        change_diff = snapshot.get("change_diff")
-        change_files = snapshot.get("change_files")
-        change_commits = snapshot.get("change_commits")
-        body = snapshot.get("change_body") or body
-    else:
-        try:
-            from services.change_intercept.adapters.base import NormalizedChangeEvent
-            norm = NormalizedChangeEvent(
-                org_id=org_id, vendor=vendor, kind="code_change",
-                external_id=dedup_key, dedup_key=dedup_key,
-                repo=repo_full, ref=base_ref, commit_sha=head_sha,
-                actor=actor, payload=payload,
-            )
-            snap = adapter.fetch_snapshot(norm)
-            change_diff = snap.change_diff
-            change_files = snap.change_files
-            change_commits = snap.change_commits
-            body = snap.change_body or body
-        except NotImplementedError:
-            logger.info(
-                "[ChangeIntercept] fetch_snapshot not implemented for %s; "
-                "persisting without snapshot", vendor,
-            )
-        except Exception as exc:
-            logger.warning("[ChangeIntercept] fetch_snapshot failed: %s", exc)
+    try:
+        from services.change_intercept.adapters.base import NormalizedChangeEvent
+        norm = NormalizedChangeEvent(
+            org_id=org_id, vendor=vendor, kind="code_change",
+            external_id=dedup_key, dedup_key=dedup_key,
+            repo=repo_full, ref=base_ref, commit_sha=head_sha,
+            actor=actor, payload=payload,
+        )
+        snap = adapter.fetch_snapshot(norm, installation_id=installation_id)
+        change_diff = snap.change_diff
+        change_files = snap.change_files
+        change_commits = snap.change_commits
+        body = snap.change_body or body
+    except Exception as exc:
+        logger.warning("[ChangeIntercept] fetch_snapshot failed: %s", exc)
 
     target_env = _infer_target_env(base_ref)
 
@@ -90,10 +78,10 @@ def process_change_event(
                     """
                     INSERT INTO change_events
                         (id, org_id, vendor, kind, external_id, dedup_key,
-                         repo, ref, commit_sha, actor, target_env,
-                         change_body, change_diff, change_files,
+                         installation_id, repo, ref, commit_sha, actor,
+                         target_env, change_body, change_diff, change_files,
                          change_commits, payload)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (org_id, vendor, external_id, commit_sha, kind)
                     DO UPDATE SET
                         change_body = EXCLUDED.change_body,
@@ -106,8 +94,9 @@ def process_change_event(
                     """,
                     (
                         event_id, org_id, vendor, "code_change", dedup_key,
-                        dedup_key, repo_full or None, base_ref, head_sha,
-                        actor, target_env, body, change_diff,
+                        dedup_key, installation_id, repo_full or None,
+                        base_ref, head_sha, actor, target_env, body,
+                        change_diff,
                         json.dumps(change_files) if change_files else None,
                         json.dumps(change_commits) if change_commits else None,
                         json.dumps(payload),
