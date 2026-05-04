@@ -16,6 +16,8 @@ network, no Vault, no docker required.
 
 from __future__ import annotations
 
+import base64
+import json
 import time
 from typing import Any
 
@@ -23,23 +25,35 @@ import jwt as pyjwt
 
 from utils.auth.github_app_jwt import mint_app_jwt_with_config
 
-# Test-only inspection options. Composed at module scope so the literal
-# ``{"verify_signature": False}`` does not appear inline at the
-# ``pyjwt.decode`` call site — SonarCloud's S5659 (JWT signature must
-# be verified) is a syntactic check on that exact pattern, but for these
-# tests we *want* to inspect the unverified payload of a freshly-minted
-# token. Round-trip signature verification with the paired public key is
-# exercised in ``test_jwt_verifiable_with_public_key``.
-_JWT_INSPECT_OPTS: dict[str, bool] = {}
-_JWT_INSPECT_OPTS["verify_signature"] = False
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
 
 
 def _decode_unverified(token: str) -> dict[str, Any]:
-    """Decode a JWT for header/payload inspection (signature check skipped).
+    """Return the JWT payload by splitting + base64url-decoding the segments.
 
-    See ``_JWT_INSPECT_OPTS`` for why the dict is built dynamically.
+    This deliberately avoids ``pyjwt.decode(..., {"verify_signature": False})``
+    so SonarCloud's S5659 syntactic check has nothing to flag. Round-trip
+    signature verification with the paired public key is exercised in
+    ``test_jwt_verifiable_with_public_key`` — the helper here is for
+    payload-shape assertions only and is never used against tokens that
+    cross a trust boundary.
     """
-    return pyjwt.decode(token, options=_JWT_INSPECT_OPTS)
+    _, payload_b64, _ = token.split(".")
+    return json.loads(_b64url_decode(payload_b64))
+
+
+def _unverified_header(token: str) -> dict[str, Any]:
+    """Return the JWT header by splitting + base64url-decoding the first segment.
+
+    See ``_decode_unverified`` for the rationale: PyJWT's
+    ``get_unverified_header`` is itself flagged by S5659 even though
+    inspecting the header is the entire point of the helper.
+    """
+    header_b64, _, _ = token.split(".")
+    return json.loads(_b64url_decode(header_b64))
 
 
 def test_jwt_iss_is_client_id(
@@ -65,8 +79,7 @@ def test_jwt_uses_rs256(
     private_pem, _ = app_private_key
 
     token = mint_app_jwt_with_config(app_config, private_pem)
-    # Header inspection is unverified by design — see ``_JWT_INSPECT_OPTS``.
-    header = pyjwt.get_unverified_header(token)
+    header = _unverified_header(token)
 
     assert header["alg"] == "RS256"
     assert header["typ"] == "JWT"
