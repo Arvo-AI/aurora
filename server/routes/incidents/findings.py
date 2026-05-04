@@ -99,7 +99,7 @@ def get_finding_body(user_id, incident_id: str, agent_id: str):
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
-                    "SELECT storage_uri, status, tool_call_history "
+                    "SELECT storage_uri, status, tool_call_history, user_id "
                     "FROM rca_findings WHERE incident_id = %s AND agent_id = %s",
                     (incident_id, agent_id),
                 )
@@ -108,7 +108,7 @@ def get_finding_body(user_id, incident_id: str, agent_id: str):
         if not row:
             return jsonify({"error": "Finding not found"}), 404
 
-        storage_uri, status, tool_call_history = row[0], row[1], row[2]
+        storage_uri, status, tool_call_history, originator_id = row[0], row[1], row[2], row[3]
         history = tool_call_history or []
         if not storage_uri:
             # Body not yet written. Return 200 with status so the client can keep
@@ -120,9 +120,12 @@ def get_finding_body(user_id, incident_id: str, agent_id: str):
                 "tool_call_history": history,
             }), 200
 
+        # Storage path is user-scoped under the RCA originator; co-org viewers
+        # (RBAC-allowed) must read with the originator's id or the prefix mismatches.
+        storage_user_id = originator_id or user_id
         try:
             from utils.storage.storage import get_storage_manager
-            data = get_storage_manager(user_id).download_bytes(storage_uri, user_id)
+            data = get_storage_manager(storage_user_id).download_bytes(storage_uri, storage_user_id)
             body = data.decode("utf-8") if isinstance(data, bytes) else str(data)
         except Exception:
             logger.exception(

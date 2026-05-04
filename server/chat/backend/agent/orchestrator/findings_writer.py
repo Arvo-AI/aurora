@@ -93,6 +93,11 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
         meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
     )
 
+    # Reset on success: only consecutive validation failures should count toward
+    # the retry cap. Without this, a successful write followed by one bad call
+    # would force-stub and overwrite the just-saved findings.md.
+    failures["n"] = 0
+
     return f"findings.md saved successfully. strength={meta.get('self_assessed_strength')} status={meta.get('status')}"
 
 

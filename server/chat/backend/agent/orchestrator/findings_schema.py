@@ -4,8 +4,11 @@ import re
 import yaml
 from typing import Any
 
+# incident_id is intentionally NOT required in findings.md frontmatter — the DB
+# column on rca_findings is authoritative. Including it in the LLM-facing schema
+# example caused the LLM to copy a literal placeholder or hallucinate a UUID.
 _REQUIRED_FRONTMATTER_KEYS = frozenset({
-    "agent_id", "purpose", "status", "incident_id",
+    "agent_id", "purpose", "status",
     "tools_used", "citations", "self_assessed_strength", "follow_ups_suggested",
 })
 _VALID_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled", "inconclusive"})

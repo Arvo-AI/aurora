@@ -86,7 +86,6 @@ def render_brief(inp: SubAgentInput, role_meta: Any) -> str:
         f"agent_id: {inp.agent_id}",
         f"purpose: {inp.purpose}",
         "status: succeeded|failed|timeout|cancelled|inconclusive",
-        "incident_id: <incident UUID>",
         "tools_used: []",
         "citations: []",
         "self_assessed_strength: strong|moderate|weak|inconclusive",

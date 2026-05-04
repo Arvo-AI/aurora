@@ -167,10 +167,20 @@ async def _run(input_dict: dict) -> FindingRef:
         )
     except Exception as exc:
         logger.error("sub_agent: SubAgentInput validation failed: %s", exc)
+        agent_id = input_dict.get("agent_id", "unknown")
+        role_name = input_dict.get("role_name", "")
+        incident_id = input_dict.get("parent_incident_id", "")
+        user_id = input_dict.get("parent_user_id", "")
+        org_id = input_dict.get("parent_org_id")
+        if incident_id and user_id:
+            _write_stub_to_storage(agent_id, role_name, incident_id, user_id,
+                                   "failed", f"input validation: {exc}")
+            _update_db_terminal(agent_id, incident_id, user_id, org_id, "failed",
+                                tool_call_history=[])
         return FindingRef(
-            agent_id=input_dict.get("agent_id", "unknown"),
-            role_name=input_dict.get("role_name", ""),
-            storage_uri=None, status="failed",
+            agent_id=agent_id, role_name=role_name,
+            storage_uri=f"rca/{incident_id}/findings/{agent_id}.md" if incident_id else None,
+            status="failed",
             error_message=f"input validation: {exc}",
         )
 
@@ -213,9 +223,15 @@ async def _run(input_dict: dict) -> FindingRef:
     role_meta = RoleRegistry.get_instance().get(inp.role_name)
     if not role_meta:
         logger.error("sub_agent: role %r not found in registry", inp.role_name)
+        if incident_id and user_id:
+            _write_stub_to_storage(inp.agent_id, inp.role_name, incident_id, user_id,
+                                   "failed", f"role {inp.role_name!r} not found")
+            _update_db_terminal(inp.agent_id, incident_id, user_id, org_id, "failed",
+                                tool_call_history=[])
         return FindingRef(
             agent_id=inp.agent_id, role_name=inp.role_name,
-            storage_uri=None, status="failed",
+            storage_uri=f"rca/{incident_id}/findings/{inp.agent_id}.md" if incident_id else None,
+            status="failed",
             error_message=f"role {inp.role_name!r} not found",
         )
 
@@ -357,14 +373,18 @@ def _update_db_terminal(agent_id: str, incident_id: str, user_id: str,
     try:
         now = datetime.now(timezone.utc)
         history_json = _json.dumps(tool_call_history or [])
+        # Always set storage_uri to the deterministic stub path. _write_stub_to_storage
+        # uploaded a stub on every failure path, so the route can serve a body instead
+        # of stalling the UI on body=null + terminal status.
+        storage_uri = f"rca/{incident_id}/findings/{agent_id}.md"
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[SubAgent]")
                 cur.execute(
                     "UPDATE rca_findings SET status=%s, completed_at=%s, "
-                    "tool_call_history=%s::jsonb "
+                    "tool_call_history=%s::jsonb, storage_uri=COALESCE(storage_uri, %s) "
                     "WHERE incident_id=%s AND agent_id=%s",
-                    (status, now, history_json, incident_id, agent_id),
+                    (status, now, history_json, storage_uri, incident_id, agent_id),
                 )
             conn.commit()
     except Exception:
