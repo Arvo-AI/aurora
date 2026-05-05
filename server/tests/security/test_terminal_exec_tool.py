@@ -1,16 +1,21 @@
-"""Tests for terminal_exec_tool -- shell-routing and SSH jump rewrite.
+"""Tests for terminal_exec_tool -- shell-routing helpers, SSH jump rewrite, and entrypoint wiring.
 
-``terminal_exec_tool`` imports heavy deps (langchain_core, boto3,
-google.cloud.*).  We AST-extract the pure helpers and exec them into a
-controlled namespace to skip the import graph.
+The module pulls in heavy deps (langchain_core, boto3, google.cloud.*), so we
+AST-extract pure helpers / the entrypoint and exec them in a controlled
+namespace rather than importing the full module.
 """
 
 import ast
+import json
+import logging
 import os
 import pathlib
 import re
 import shlex
 import sys
+import types
+from typing import Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -257,3 +262,149 @@ class TestRobustness:
         result = _transform_ssh_jump_to_proxy("ssh -i '/home/me/weird\"name' -J u@b u@t")
         assert isinstance(result, str)
         assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# terminal_exec entrypoint -> helpers wiring
+# ---------------------------------------------------------------------------
+
+
+class _StubTerminalRunResult:
+    returncode = 0
+    stdout = "ok"
+    stderr = ""
+
+
+def _load_terminal_exec_with_spies(transform_spy, metachar_spy):
+    """Load ``terminal_exec`` with helper spies and stubbed I/O; returns (func, stubs)."""
+    terminal_run_stub = MagicMock(return_value=_StubTerminalRunResult())
+    cloud_exec_stub = MagicMock(return_value="{}")
+    run_iac_tool_stub = MagicMock(return_value="{}")
+    gate_stub = MagicMock(
+        return_value=types.SimpleNamespace(allowed=True, code=None, block_reason=""),
+    )
+    provider_pref_stub = MagicMock(return_value=())
+
+    # ``terminal_exec`` does ``from x import y`` lazily, so seed real module
+    # objects in sys.modules before AST-loading the function.
+    gate_module = types.ModuleType("utils.auth.command_gate")
+    gate_module.gate_command = gate_stub
+    sys.modules["utils.auth.command_gate"] = gate_module
+
+    cloud_utils_module = types.ModuleType("utils.cloud.cloud_utils")
+    cloud_utils_module.get_provider_preference = provider_pref_stub
+    sys.modules["utils.cloud.cloud_utils"] = cloud_utils_module
+
+    func = _load_function(
+        "terminal_exec",
+        extra_globals={
+            "json": json,
+            "logger": logging.getLogger("test_terminal_exec"),
+            "_transform_ssh_jump_to_proxy": transform_spy,
+            "_has_shell_metacharacters": metachar_spy,
+            "_build_sanitized_env": lambda: {},
+            "terminal_run": terminal_run_stub,
+            "cloud_exec": cloud_exec_stub,
+            "run_iac_tool": run_iac_tool_stub,
+            "Optional": Optional,
+        },
+    )
+    stubs = types.SimpleNamespace(
+        terminal_run=terminal_run_stub,
+        cloud_exec=cloud_exec_stub,
+        run_iac_tool=run_iac_tool_stub,
+        gate=gate_stub,
+        provider_pref=provider_pref_stub,
+    )
+    return func, stubs
+
+
+@pytest.fixture
+def cleanup_lazy_module_stubs():
+    """Restore sys.modules entries clobbered by ``_load_terminal_exec_with_spies``."""
+    saved = {
+        key: sys.modules.get(key)
+        for key in ("utils.auth.command_gate", "utils.cloud.cloud_utils")
+    }
+    yield
+    for key, value in saved.items():
+        if value is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = value
+
+
+class TestTerminalExecInvokesHelpers:
+    """``terminal_exec`` must actually call the routing helpers; spies catch dead-code regressions."""
+
+    def test_ssh_command_calls_transform_ssh_jump_to_proxy(self, cleanup_lazy_module_stubs):
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, _ = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+
+        terminal_exec(
+            command="ssh -i /home/me/.ssh/key -J user@bastion user@target",
+            user_id="u-1",
+            session_id="s-1",
+        )
+
+        transform_spy.assert_called_once()
+        sent = transform_spy.call_args.args[0]
+        assert sent == "ssh -i /home/me/.ssh/key -J user@bastion user@target"
+
+    def test_transformed_ssh_command_is_what_actually_runs(self, cleanup_lazy_module_stubs):
+        """The helper's return value -- not the original command -- must reach the gate and runner."""
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, stubs = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+
+        terminal_exec(
+            command="ssh -J user@bastion user@target",
+            user_id="u-1",
+            session_id="s-1",
+        )
+
+        executed_cmd = stubs.terminal_run.call_args.args[0]
+        assert "ProxyCommand=" in executed_cmd
+        assert " -J " not in executed_cmd, "rewrite must remove the -J flag"
+
+        gated_cmd = stubs.gate.call_args.kwargs["command"]
+        assert "ProxyCommand=" in gated_cmd
+
+    def test_plain_command_calls_has_shell_metacharacters(self, cleanup_lazy_module_stubs):
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, _ = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+
+        terminal_exec(command="ls -la", user_id="u-1", session_id="s-1")
+
+        metachar_spy.assert_called()
+        assert "ls -la" in metachar_spy.call_args.args
+
+    def test_non_ssh_command_skips_ssh_rewrite_helper(self, cleanup_lazy_module_stubs):
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, _ = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+
+        terminal_exec(command="git status", user_id="u-1", session_id="s-1")
+
+        transform_spy.assert_not_called()
+        metachar_spy.assert_called()
+
+    def test_gate_decision_blocks_execution(self, cleanup_lazy_module_stubs):
+        """A denied gate decision must prevent any runner from executing."""
+        transform_spy = MagicMock(side_effect=_transform_ssh_jump_to_proxy)
+        metachar_spy = MagicMock(side_effect=_has_shell_metacharacters)
+        terminal_exec, stubs = _load_terminal_exec_with_spies(transform_spy, metachar_spy)
+        stubs.gate.return_value = types.SimpleNamespace(
+            allowed=False, code="POLICY_DENY", block_reason="not allowed",
+        )
+
+        result = terminal_exec(command="rm -rf /", user_id="u-1", session_id="s-1")
+
+        stubs.terminal_run.assert_not_called()
+        stubs.cloud_exec.assert_not_called()
+        stubs.run_iac_tool.assert_not_called()
+        parsed = json.loads(result)
+        assert parsed["success"] is False
+        assert parsed["code"] == "POLICY_DENY"

@@ -1,14 +1,10 @@
-"""Tests for guardrails.input_rail.check_input -- fail-closed semantics.
-
-The input rail is L0 of the safety pipeline. If it fails *open* every
-downstream guardrail is bypassed silently, so this file pins the
-fail-closed contract on every error path.
-"""
+"""Tests for guardrails.input_rail -- fail-closed semantics and the Gemini compat shim."""
 
 import asyncio
 import os
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,6 +20,7 @@ from guardrails.input_rail import (  # noqa: E402
     _FAIL_CLOSED_CONNECTIVITY,
     _FAIL_CLOSED_REASON,
     _INIT_FAILURE_BACKOFF_S,
+    _GeminiMaxTokensCompat,
     check_input,
 )
 
@@ -261,3 +258,179 @@ class TestInitFailureBackoff:
         result = _run(check_input("hi"))
 
         assert result.blocked is False
+
+
+# ---------------------------------------------------------------------------
+# _GeminiMaxTokensCompat shim
+# ---------------------------------------------------------------------------
+
+
+def _ai_message_with(content):
+    from langchain_core.messages import AIMessage
+    return AIMessage(content=content)
+
+
+def _chat_result_with(message):
+    return SimpleNamespace(generations=[SimpleNamespace(message=message)])
+
+
+class _RecordingInner:
+    """Stand-in for the inner BaseChatModel; records the kwargs it was called with."""
+
+    def __init__(self, response_content):
+        self.response_content = response_content
+        self.last_kwargs = None
+        self.last_messages = None
+        self.last_stop = None
+
+    def _generate(self, messages, stop=None, **kwargs):
+        self.last_messages = messages
+        self.last_stop = stop
+        self.last_kwargs = kwargs
+        return _chat_result_with(_ai_message_with(self.response_content))
+
+    async def _agenerate(self, messages, stop=None, **kwargs):
+        return self._generate(messages, stop=stop, **kwargs)
+
+
+class TestGeminiMaxTokensCompatRename:
+    """``_rename`` aliases NeMo's ``max_tokens`` to Gemini's ``max_output_tokens``."""
+
+    def test_renames_max_tokens_to_max_output_tokens(self):
+        out = _GeminiMaxTokensCompat._rename({"max_tokens": 3, "temperature": 0.0})
+        assert out == {"max_output_tokens": 3, "temperature": 0.0}
+
+    def test_does_not_mutate_input_dict(self):
+        original = {"max_tokens": 3}
+        _GeminiMaxTokensCompat._rename(original)
+        assert original == {"max_tokens": 3}
+
+    def test_preserves_existing_max_output_tokens_over_alias(self):
+        out = _GeminiMaxTokensCompat._rename(
+            {"max_tokens": 3, "max_output_tokens": 5},
+        )
+        assert out == {"max_tokens": 3, "max_output_tokens": 5}
+
+    def test_passes_through_unrelated_kwargs_unchanged(self):
+        out = _GeminiMaxTokensCompat._rename({"temperature": 0.0, "top_p": 1.0})
+        assert out == {"temperature": 0.0, "top_p": 1.0}
+
+    def test_empty_kwargs_returns_empty(self):
+        assert _GeminiMaxTokensCompat._rename({}) == {}
+
+
+class TestGeminiMaxTokensCompatFlatten:
+    """``_flatten`` collapses Gemini's structured content to a plain string."""
+
+    def test_single_text_block_becomes_string(self):
+        msg = _ai_message_with([{"type": "text", "text": "hello"}])
+
+        _GeminiMaxTokensCompat._flatten(_chat_result_with(msg))
+
+        assert msg.content == "hello"
+
+    def test_drops_thinking_blocks_keeps_text(self):
+        msg = _ai_message_with([
+            {"type": "thinking", "thinking": "internal monologue"},
+            {"type": "text", "text": "answer"},
+        ])
+
+        _GeminiMaxTokensCompat._flatten(_chat_result_with(msg))
+
+        assert msg.content == "answer"
+
+    def test_concatenates_multiple_text_blocks(self):
+        msg = _ai_message_with([
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b"},
+            {"type": "text", "text": "c"},
+        ])
+
+        _GeminiMaxTokensCompat._flatten(_chat_result_with(msg))
+
+        assert msg.content == "abc"
+
+    def test_string_content_passes_through_unchanged(self):
+        msg = _ai_message_with("already a plain string")
+
+        _GeminiMaxTokensCompat._flatten(_chat_result_with(msg))
+
+        assert msg.content == "already a plain string"
+
+    def test_empty_generations_does_not_raise(self):
+        result = SimpleNamespace(generations=[])
+        _GeminiMaxTokensCompat._flatten(result)
+
+    def test_missing_generations_attr_does_not_raise(self):
+        _GeminiMaxTokensCompat._flatten(SimpleNamespace())
+
+    def test_non_message_generation_is_skipped(self):
+        sentinel = object()
+        result = SimpleNamespace(generations=[SimpleNamespace(message=sentinel)])
+        _GeminiMaxTokensCompat._flatten(result)
+        assert result.generations[0].message is sentinel
+
+
+class TestGeminiMaxTokensCompatBind:
+    """``bind`` returns a ``RunnableBinding`` that wraps *self*, with renamed kwargs."""
+
+    def test_bind_returns_runnable_binding_around_wrapper(self):
+        from langchain_core.runnables import RunnableBinding
+
+        wrapper = _GeminiMaxTokensCompat.model_construct(inner=_RecordingInner("ok"))
+
+        bound = wrapper.bind(max_tokens=3, temperature=0.0)
+
+        assert isinstance(bound, RunnableBinding)
+        assert bound.bound is wrapper
+
+    def test_bind_renames_max_tokens_in_stored_kwargs(self):
+        wrapper = _GeminiMaxTokensCompat.model_construct(inner=_RecordingInner("ok"))
+
+        bound = wrapper.bind(max_tokens=7, temperature=0.0)
+
+        assert bound.kwargs == {"max_output_tokens": 7, "temperature": 0.0}
+
+
+class TestGeminiMaxTokensCompatGenerate:
+    """``_generate`` / ``_agenerate`` rename kwargs *and* flatten the result."""
+
+    def test_generate_passes_renamed_kwargs_to_inner(self):
+        inner = _RecordingInner([{"type": "text", "text": "hi"}])
+        wrapper = _GeminiMaxTokensCompat.model_construct(inner=inner)
+
+        wrapper._generate([], stop=None, max_tokens=4)
+
+        assert "max_output_tokens" in inner.last_kwargs
+        assert inner.last_kwargs["max_output_tokens"] == 4
+        assert "max_tokens" not in inner.last_kwargs
+
+    def test_generate_flattens_structured_content_returned_by_inner(self):
+        inner = _RecordingInner(
+            [{"type": "thinking", "thinking": "x"}, {"type": "text", "text": "hi"}],
+        )
+        wrapper = _GeminiMaxTokensCompat.model_construct(inner=inner)
+
+        result = wrapper._generate([], stop=None, max_tokens=1)
+
+        assert result.generations[0].message.content == "hi"
+
+    def test_agenerate_renames_and_flattens(self):
+        inner = _RecordingInner([{"type": "text", "text": "async-hi"}])
+        wrapper = _GeminiMaxTokensCompat.model_construct(inner=inner)
+
+        async def _go():
+            return await wrapper._agenerate([], stop=None, max_tokens=2)
+
+        result = _run(_go())
+
+        assert "max_output_tokens" in inner.last_kwargs
+        assert "max_tokens" not in inner.last_kwargs
+        assert result.generations[0].message.content == "async-hi"
+
+    def test_llm_type_is_proxied_from_inner(self):
+        inner = _RecordingInner("ok")
+        inner._llm_type = "fake-gemini"  # type: ignore[attr-defined]
+        wrapper = _GeminiMaxTokensCompat.model_construct(inner=inner)
+
+        assert wrapper._llm_type == "fake-gemini"

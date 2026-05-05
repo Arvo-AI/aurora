@@ -1,10 +1,4 @@
-"""Tests for chat.backend.agent.utils.tool_output_cap.cap_tool_output.
-
-Pins the three-threshold contract (pass-through, summarize, truncate-then-
-summarize) and the fail-safe fallback when summarization raises. An
-off-by-one or silently-swallowed error here corrupts the agent's context
-window without raising.
-"""
+"""Tests for chat.backend.agent.utils.tool_output_cap -- three-threshold cap and summarization fallback."""
 
 import logging
 import os
@@ -96,6 +90,7 @@ class TestSummarizationInvoked:
         fake_llm.summarize.assert_called_once()
         assert result.endswith(_SUMMARIZE_MARKER)
         assert "SUMMARY" in result
+        assert payload not in result
 
     def test_summarize_receives_full_input_when_under_truncation_limit(self, fake_llm):
         payload = "a" * MAX_SUMMARIZATION_INPUT_CHARS
@@ -204,14 +199,16 @@ class TestSummarizationFailureFallback:
 # ---------------------------------------------------------------------------
 
 
-class TestThresholdConstants:
-    """Pin the documented thresholds; an edit forces this file to update."""
-
-    def test_pass_through_chars_value(self):
-        assert PASS_THROUGH_CHARS == 40_000
-
-    def test_max_summarization_input_chars_value(self):
-        assert MAX_SUMMARIZATION_INPUT_CHARS == 400_000
+class TestThresholdInvariants:
+    """Relationships between thresholds; the values themselves are tunable."""
 
     def test_pass_through_below_max_summarization(self):
         assert PASS_THROUGH_CHARS < MAX_SUMMARIZATION_INPUT_CHARS
+
+    def test_summarize_band_is_wide_enough_for_typical_outputs(self):
+        """Band width must stay >= 100k chars so typical large outputs aren't pre-truncated."""
+        band = MAX_SUMMARIZATION_INPUT_CHARS - PASS_THROUGH_CHARS
+        assert band >= 100_000, (
+            f"MAX_SUMMARIZATION_INPUT_CHARS - PASS_THROUGH_CHARS = {band:,}, "
+            "expected >= 100_000"
+        )
