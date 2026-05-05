@@ -8,6 +8,7 @@ from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
@@ -187,7 +188,7 @@ class Agent:
         state: State,
         *,
         system_prompt_override: Optional[str] = None,
-        tool_subset: Optional[list] = None,
+        tool_subset: Optional[list[StructuredTool]] = None,
         max_turns: Optional[int] = None,
     ) -> State:
         """Execute cloud tools using the agentic workflow with streaming callbacks."""
@@ -543,6 +544,8 @@ class Agent:
                 # Get recursion limit from environment variable (required)
                 max_iterations = int(os.environ["AGENT_RECURSION_LIMIT"])
                 if max_turns is not None:
+                    if max_turns <= 0:
+                        raise ValueError("max_turns must be a positive integer")
                     # max_turns is logical ReAct turns (LLM call + tool node = 1 turn).
                     # LangGraph counts each super-step toward recursion_limit, so we
                     # need ~2x + a small buffer for the terminal write_findings call.

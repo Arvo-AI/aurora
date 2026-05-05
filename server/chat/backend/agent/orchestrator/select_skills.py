@@ -123,19 +123,7 @@ def _get_tool_meta(tool) -> dict:
     return {**base, **tool_md, **override}
 
 
-def _patch_tool_metadata(tools: list) -> None:
-    for tool in tools:
-        name = getattr(tool, "name", "")
-        if name in _TOOL_METADATA and hasattr(tool, "metadata"):
-            try:
-                if tool.metadata is None:
-                    tool.metadata = {}
-                tool.metadata.update(_TOOL_METADATA[name])
-            except (AttributeError, TypeError):
-                continue
-
-
-def get_available_capability_tags(user_id: str) -> set:
+def get_available_capability_tags() -> set:
     try:
         from chat.backend.agent.tools.cloud_tools import get_cloud_tools
         tools = get_cloud_tools()
@@ -176,7 +164,6 @@ def _resolve_connected_tool_filter(user_id: str) -> tuple[set, set]:
 
 
 def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
-    _patch_tool_metadata(all_tools)
     role_tags = set(role.tools)
     skill_owned, connected = _resolve_connected_tool_filter(user_id)
     candidates = []
@@ -252,8 +239,11 @@ def load_skills_for_role(user_id: str, role: Any) -> str:
                 break
             result = registry.load_skill(meta.id, user_id, _prevalidated_context=ctx_data)
             if result.is_connected and result.content:
+                est = result.token_estimate or estimate_tokens(result.content)
+                if tokens_used + est > _SUBAGENT_SKILL_BUDGET:
+                    break
                 parts.append(result.content)
-                tokens_used += result.token_estimate or estimate_tokens(result.content)
+                tokens_used += est
 
         if parts:
             logger.info(

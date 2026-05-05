@@ -10,7 +10,6 @@ import {
   ChevronUp,
   Loader2,
 } from "lucide-react";
-import { useTheme } from "next-themes";
 import { ToolCall } from "@/app/chat/types";
 import SubAgentRow from "./subagent-row";
 
@@ -62,7 +61,6 @@ const DispatchGroupWidget = ({
   onSelectSubAgent,
   className,
 }: DispatchGroupWidgetProps) => {
-  const { theme } = useTheme();
   const [expanded, setExpanded] = React.useState(false);
   const status = React.useMemo(() => aggregateStatus(toolCalls), [toolCalls]);
   const count = toolCalls.length;
@@ -75,10 +73,9 @@ const DispatchGroupWidget = ({
   return (
     <Card
       className={cn(
-        "w-full overflow-hidden border border-border font-mono text-sm",
+        "w-full overflow-hidden border border-border bg-white font-mono text-sm dark:bg-black",
         className,
       )}
-      style={{ backgroundColor: theme === "dark" ? "#000000" : "white" }}
     >
       <div
         role="button"
@@ -104,21 +101,16 @@ const DispatchGroupWidget = ({
             </span>
           )}
         </div>
-        <button
-          type="button"
+        <span
           aria-label={expanded ? "Collapse agents" : "Expand agents"}
-          onClick={(e) => {
-            e.stopPropagation();
-            toggle();
-          }}
-          className="flex flex-shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+          className="flex flex-shrink-0 items-center justify-center text-muted-foreground"
         >
           {expanded ? (
             <ChevronUp className="h-4 w-4" />
           ) : (
             <ChevronDown className="h-4 w-4" />
           )}
-        </button>
+        </span>
       </div>
 
       {expanded && (

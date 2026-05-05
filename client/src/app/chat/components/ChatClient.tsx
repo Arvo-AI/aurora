@@ -21,7 +21,7 @@ const DynamicPrompts = dynamic(() => import("@/components/DynamicPrompts"), {
 // Hooks and utilities
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useChatHistory } from "@/hooks/useChatHistory";
-import { Message } from "../types";
+import { DISPATCH_SUBAGENT_TOOL_NAME, Message } from "../types";
 import { useStreamingMessages } from '@/hooks/useStreamingMessages';
 import { useMessageHandler } from '@/hooks/useMessageHandler';
 import { SimpleChatUiState } from '@/hooks/useSessionPersistence';
@@ -321,7 +321,11 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
           cache: "no-store",
           credentials: "include",
         });
-        if (cancelled || !res.ok) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          setLinkedIncidentId(undefined);
+          return;
+        }
         const data = await res.json();
         const id = data?.incident_id;
         if (!cancelled) {
@@ -491,7 +495,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
                 let purpose: string | undefined;
                 for (const msg of memoizedMessages) {
                   const tc = msg.toolCalls?.find(t =>
-                    t.tool_name === "dispatch_subagent" &&
+                    t.tool_name === DISPATCH_SUBAGENT_TOOL_NAME &&
                     (() => {
                       try {
                         const p = typeof t.input === "string" ? JSON.parse(t.input) : t.input;

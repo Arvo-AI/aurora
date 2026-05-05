@@ -22,7 +22,7 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 class RoleMeta:
     name: str
     description: str
-    tools: list  # capability tags
+    tools: list[str]  # capability tags
     max_turns: int
     max_seconds: int
     rca_priority: int
@@ -73,9 +73,9 @@ class RoleRegistry:
                     name=str(meta["name"]),
                     description=str(meta["description"]),
                     tools=list(meta.get("tools") or []),
-                    max_turns=int(meta.get("max_turns", 8)),
-                    max_seconds=int(meta.get("max_seconds", 180)),
-                    rca_priority=int(meta.get("rca_priority", 99)),
+                    max_turns=int(meta["max_turns"]),
+                    max_seconds=int(meta["max_seconds"]),
+                    rca_priority=int(meta["rca_priority"]),
                     model=meta.get("model") or None,
                     body=body.strip(),
                 )
@@ -84,15 +84,15 @@ class RoleRegistry:
             except Exception:
                 logger.exception("RoleRegistry: failed to load %s", md_file.name)
 
-    def list_all(self) -> list:
+    def list_all(self) -> list[RoleMeta]:
         return sorted(self._roles.values(), key=lambda r: r.rca_priority)
 
     def get(self, name: str) -> Optional[RoleMeta]:
         return self._roles.get(name)
 
-    def list_available_roles(self, user_id: str) -> list:
+    def list_available_roles(self, user_id: str) -> list[RoleMeta]:
         from chat.backend.agent.orchestrator.select_skills import get_available_capability_tags
-        available_tags = get_available_capability_tags(user_id)
+        available_tags = get_available_capability_tags()
         result = []
         for role in self.list_all():
             if any(tag in available_tags for tag in role.tools):

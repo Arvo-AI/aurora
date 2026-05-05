@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Message } from "../../app/chat/types";
+import { DISPATCH_SUBAGENT_TOOL_NAME, Message } from "../../app/chat/types";
 import { MarkdownRenderer } from "../ui/markdown-renderer";
 import { Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
@@ -137,8 +137,8 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
           dispatch_subagent calls are grouped into a single widget. */}
       {!!sortedToolCalls.length && (() => {
         const filtered = sortedToolCalls.filter(toolCall => toolCall.tool_name !== 'unknown' || (toolCall.input && toolCall.input !== '{}' && JSON.stringify(toolCall.input) !== '{}'));
-        const dispatchCalls = filtered.filter(tc => tc.tool_name === 'dispatch_subagent');
-        const otherCalls = filtered.filter(tc => tc.tool_name !== 'dispatch_subagent');
+        const dispatchCalls = filtered.filter(tc => tc.tool_name === DISPATCH_SUBAGENT_TOOL_NAME);
+        const otherCalls = filtered.filter(tc => tc.tool_name !== DISPATCH_SUBAGENT_TOOL_NAME);
         return (
           <div className="mt-3 space-y-2">
             {otherCalls.map((toolCall, index) => (

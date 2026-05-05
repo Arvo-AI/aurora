@@ -1308,22 +1308,6 @@ def initialize_tables():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
 
-            # Migration: ensure rca_findings.tool_call_history exists for upgrades
-            try:
-                cursor.execute(
-                    "ALTER TABLE rca_findings "
-                    "ADD COLUMN IF NOT EXISTS tool_call_history JSONB DEFAULT '[]'::jsonb;"
-                )
-                conn.commit()
-                logging.info(
-                    "Ensured tool_call_history column exists on rca_findings table."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"Error adding tool_call_history column to rca_findings: {e}"
-                )
-                conn.rollback()
-
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
                 cursor.execute(

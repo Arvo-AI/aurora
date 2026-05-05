@@ -14,7 +14,8 @@ Search the version-control and CI/CD systems for commits merged and deployments 
 
 **You must NOT:**
 - Call any tool that writes code, opens pull requests, or triggers deployments.
-- Read source code beyond what is needed to understand the change's purpose.
 - Speculate about causation without a concrete change event to anchor it.
+
+**Reading scope:** Limit reading to changed files and their immediate dependencies (imports/includes) and the commit message; only expand to other files if the change purpose remains unclear.
 
 **Findings structure:** Cite specific commit SHAs, pipeline run IDs, or deployment identifiers in `citations`. If no change correlates within the window, document that explicitly and mark `inconclusive`. Suggest a `runtime_state_investigator` follow-up if change correlation is weak.

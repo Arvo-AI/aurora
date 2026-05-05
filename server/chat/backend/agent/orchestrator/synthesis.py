@@ -7,6 +7,8 @@ from typing import Optional
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel
 
+from chat.backend.agent.llm import ModelConfig
+from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.orchestrator.inputs import SubAgentInput
 from chat.backend.agent.orchestrator.dispatcher import dispatch_tool_call_id
@@ -55,7 +57,7 @@ async def _synthesis(state: State) -> dict:
     # Fetch findings up to and including the wave that just completed. The
     # final summary needs full context across waves; the needs_more decision
     # is steered by which findings are NEW (target_wave) via the prompt.
-    finding_rows = _fetch_finding_rows(incident_id, user_id, target_wave)
+    finding_rows = await asyncio.to_thread(_fetch_finding_rows, incident_id, user_id, target_wave)
     pending = [row for row in finding_rows if row.get("storage_uri")]
     raw_bodies = await asyncio.gather(
         *(asyncio.to_thread(_download_finding, row["storage_uri"], user_id) for row in pending),
@@ -93,9 +95,6 @@ async def _synthesis(state: State) -> dict:
     combined = "\n\n---\n\n".join(finding_bodies)
 
     try:
-        from chat.backend.agent.llm import ModelConfig
-        from chat.backend.agent.providers import create_chat_model
-
         # Non-streaming: structured-output chunks must not leak into chat.
         # The user-facing summary is appended below as an AIMessage that the
         # existing chat pipeline handles.

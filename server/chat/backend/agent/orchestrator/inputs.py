@@ -1,13 +1,17 @@
 """Sub-agent input/output models and brief renderer for the multi-agent RCA orchestrator."""
 
-from typing import Optional, Literal, Any
-from pydantic import BaseModel, ConfigDict
+from typing import Optional, Literal, Any, TYPE_CHECKING
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from .role_registry import RoleMeta
 
 # ---------------------------------------------------------------------------
 # V1 hardcoded constants
 # ---------------------------------------------------------------------------
 _MAX_TURNS_DEFAULT = 8
-_REQUIRED_FINDINGS_SECTIONS = ["## Summary", "## Evidence", "## Reasoning", "## What I ruled out"]
 _HARD_CONSTRAINTS = [
     "You are READ-ONLY. Never call any tool marked as mutating.",
     f"Maximum {_MAX_TURNS_DEFAULT} tool-calling turns. Budget each turn carefully — leave at least one turn for `write_findings`.",
@@ -43,7 +47,10 @@ class FindingRef(BaseModel):
     error_message: Optional[str] = None
     wave: Optional[int] = None
     summary: Optional[str] = None
-    tool_call_history: list = []
+    tool_call_history: list[Any] = Field(default_factory=list)
+
+    # strict — reject unknown keys from LLM output
+    model_config = ConfigDict(extra="forbid")
 
 
 _CLOUD_PROVIDERS = frozenset({"aws", "gcp", "azure", "ovh", "scaleway"})
@@ -51,7 +58,7 @@ _CLOUD_PROVIDERS = frozenset({"aws", "gcp", "azure", "ovh", "scaleway"})
 
 def render_brief(
     inp: SubAgentInput,
-    role_meta: Any,
+    role_meta: "RoleMeta",
     connected_providers: Optional[list[str]] = None,
 ) -> str:
     """Return the system-prompt brief the sub-agent receives.
@@ -110,13 +117,20 @@ def render_brief(
         for k, v in inp.extra_constraints.items():
             lines.append(f"- {k}: {v}")
 
+    # Render the agent_id/purpose pair through safe_dump so a purpose containing
+    # ':', quotes, or newlines doesn't malform the schema example shown to the LLM.
+    # The remaining keys are static placeholders that must stay as literal text
+    # (e.g. ``status: succeeded|failed|...``) so the LLM sees the allowed values.
+    safe_header = yaml.safe_dump(
+        {"agent_id": inp.agent_id, "purpose": inp.purpose},
+        sort_keys=False, default_flow_style=False, allow_unicode=True,
+    ).rstrip("\n")
     lines += [
         "",
         "## Required findings.md Schema",
         "```yaml",
         "---",
-        f"agent_id: {inp.agent_id}",
-        f"purpose: {inp.purpose}",
+        safe_header,
         "status: succeeded|failed|timeout|cancelled|inconclusive",
         "tools_used: []",
         "citations: []",

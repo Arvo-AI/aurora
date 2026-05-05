@@ -62,7 +62,13 @@ function ToolCallStatusIcon({ status }: { status: string }) {
   if (status === "running" || status === "pending") {
     return <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-muted-foreground" />;
   }
-  if (status === "error" || status === "failed" || status === "cancelled") {
+  if (
+    status === "error" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "timeout" ||
+    status === "inconclusive"
+  ) {
     return <XCircle className="h-3.5 w-3.5 flex-shrink-0 text-destructive" />;
   }
   return <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />;
@@ -96,9 +102,11 @@ const SubAgentDetailPanel = ({
         );
         if (cancelled) return;
         if (!res.ok) {
-          // 404 is expected while running and findings don't exist yet
-          if (res.status === 404 && isInitial) {
-            setFinding(null);
+          // 404 is expected while running and findings don't exist yet.
+          // Treat as "not ready yet" silently on both initial and subsequent
+          // polls so transient absence doesn't surface as an error.
+          if (res.status === 404) {
+            if (isInitial) setFinding(null);
             setError(null);
             return;
           }

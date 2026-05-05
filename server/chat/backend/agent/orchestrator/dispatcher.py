@@ -81,13 +81,26 @@ def _filter_known_roles(raw_inputs: list) -> list:
     return out
 
 
-def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
+def _prepare_raw_inputs(state: State, *, log_truncation: bool = False) -> list:
+    """Apply role-filter + per-wave cap. Single source for dispatcher input prep."""
     raw_inputs = getattr(state, "subagent_inputs", []) or []
     raw_inputs = _filter_known_roles(raw_inputs)
     if not raw_inputs:
-        return None
+        return []
     if len(raw_inputs) > _MAX_SUBAGENTS_PER_WAVE:
+        if log_truncation:
+            logger.warning(
+                "dispatcher: %d inputs exceeds cap %d — truncating",
+                len(raw_inputs), _MAX_SUBAGENTS_PER_WAVE,
+            )
         raw_inputs = raw_inputs[:_MAX_SUBAGENTS_PER_WAVE]
+    return raw_inputs
+
+
+def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
+    raw_inputs = _prepare_raw_inputs(state)
+    if not raw_inputs:
+        return None
 
     incident_id = getattr(state, "incident_id", "") or ""
     parent_session_id = getattr(state, "session_id", "") or ""
@@ -97,7 +110,8 @@ def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
     for raw in raw_inputs:
         try:
             inp = SubAgentInput(**raw) if isinstance(raw, dict) else raw
-        except Exception:
+        except Exception as e:
+            logger.warning("Skipped invalid SubAgentInput: %s", e)
             continue
         tool_calls.append({
             "id": dispatch_tool_call_id(incident_id, inp.agent_id, wave),
@@ -119,12 +133,9 @@ def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
 
 
 def _pre_emit_rows(state: State) -> None:
-    raw_inputs = getattr(state, "subagent_inputs", []) or []
-    raw_inputs = _filter_known_roles(raw_inputs)
+    raw_inputs = _prepare_raw_inputs(state)
     if not raw_inputs:
         return
-    if len(raw_inputs) > _MAX_SUBAGENTS_PER_WAVE:
-        raw_inputs = raw_inputs[:_MAX_SUBAGENTS_PER_WAVE]
 
     incident_id = getattr(state, "incident_id", None)
     user_id = getattr(state, "user_id", None)
@@ -132,6 +143,10 @@ def _pre_emit_rows(state: State) -> None:
     wave = (getattr(state, "synthesis_wave", 0) or 0) + 1
 
     if not incident_id or not user_id:
+        logger.debug(
+            "Dispatcher exit: incident_id=%s user_id=%s",
+            incident_id, user_id,
+        )
         return
 
     valid_inputs: list[SubAgentInput] = []
@@ -160,18 +175,10 @@ def dispatch_to_sub_agents(state: State) -> list:
 
 
 def _build_sends(state: State) -> list:
-    raw_inputs = getattr(state, "subagent_inputs", []) or []
-    raw_inputs = _filter_known_roles(raw_inputs)
+    raw_inputs = _prepare_raw_inputs(state, log_truncation=True)
     if not raw_inputs:
         logger.info("dispatcher: no sub-agent inputs — empty Send list")
         return []
-
-    if len(raw_inputs) > _MAX_SUBAGENTS_PER_WAVE:
-        logger.warning(
-            "dispatcher: %d inputs exceeds cap %d — truncating",
-            len(raw_inputs), _MAX_SUBAGENTS_PER_WAVE,
-        )
-        raw_inputs = raw_inputs[:_MAX_SUBAGENTS_PER_WAVE]
 
     incident_id = getattr(state, "incident_id", None)
     user_id = getattr(state, "user_id", None)

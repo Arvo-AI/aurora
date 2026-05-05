@@ -485,7 +485,7 @@ from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 app.register_blueprint(incident_feedback_bp)
-from routes.incidents.findings import findings_bp
+from routes.incidents_findings import findings_bp
 app.register_blueprint(findings_bp)
 
 from routes.postmortem_routes import postmortem_bp

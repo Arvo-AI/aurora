@@ -89,10 +89,22 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
         return "ERROR: storage upload failed. Please retry."
 
     db_ok = _update_finding_row(
-        agent_id=agent_id, incident_id=incident_id, user_id=user_id, org_id=org_id,
+        agent_id=agent_id, incident_id=incident_id, user_id=user_id,
         meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
     )
     if not db_ok:
+        # DB update failed after a successful upload — try to delete the now-orphaned
+        # object so a retry doesn't leave stale content behind. Best-effort: log on
+        # cleanup failure but still surface the original DB error to the LLM.
+        try:
+            from utils.storage.storage import get_storage_manager
+            get_storage_manager(user_id).delete_file(storage_uri, user_id)
+        except Exception:
+            logger.warning(
+                "write_findings: orphaned storage object %s for agent %s "
+                "(DB update failed and cleanup also failed)",
+                storage_uri, agent_id,
+            )
         return "ERROR: failed to persist findings row. Please retry."
 
     # Reset on confirmed success: only consecutive validation failures should
@@ -104,7 +116,7 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
 
 
 def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
-                        org_id: Optional[str], meta: dict, storage_uri: str,
+                        meta: dict, storage_uri: str,
                         child_session_id: str) -> bool:
     try:
         now = datetime.now(timezone.utc)
@@ -137,6 +149,13 @@ def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
                         agent_id,
                     ),
                 )
+                if cur.rowcount == 0:
+                    logger.warning(
+                        "write_findings: no rca_findings row matched incident=%s agent=%s — "
+                        "dispatcher may not have pre-inserted the row",
+                        hash_for_log(incident_id), agent_id,
+                    )
+                    return False
             conn.commit()
         return True
     except Exception:
@@ -165,6 +184,7 @@ def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
         error_message=error_message,
     )
     upload_ok = False
+    db_ok = False
     try:
         from utils.storage.storage import get_storage_manager
         get_storage_manager(user_id).upload_bytes(
@@ -177,14 +197,20 @@ def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
     if upload_ok:
         try:
             meta = parse_findings(stub_body)
-            _update_finding_row(
-                agent_id=agent_id, incident_id=incident_id, user_id=user_id, org_id=org_id,
+            db_ok = _update_finding_row(
+                agent_id=agent_id, incident_id=incident_id, user_id=user_id,
                 meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
             )
         except Exception:
             logger.exception("write_findings: failed to persist stub row for agent %s", agent_id)
 
+    if upload_ok and db_ok:
+        return (
+            f"findings.md persisted with status=failed after {_SCHEMA_RETRY_LIMIT} "
+            f"schema-validation failures. Stop calling write_findings."
+        )
     return (
-        f"findings.md persisted with status=failed after {_SCHEMA_RETRY_LIMIT} "
-        f"schema-validation failures. Stop calling write_findings."
+        f"findings.md could NOT be persisted after {_SCHEMA_RETRY_LIMIT} "
+        f"schema-validation failures (upload_ok={upload_ok}, db_ok={db_ok}). "
+        f"Stop calling write_findings."
     )

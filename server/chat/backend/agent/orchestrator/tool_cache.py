@@ -1,5 +1,6 @@
 """Redis-backed per-incident tool result cache for the multi-agent RCA orchestrator."""
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -12,7 +13,6 @@ from utils.cache.redis_client import get_redis_client
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TTL = 600   # seconds — standard tool results
-_VOLATILE_TTL = 60   # seconds — results that may change quickly
 _KEY_PREFIX = "rca_tool_cache"
 _HIT_COUNTER_LIMIT = 1024  # bound long-running worker memory
 
@@ -23,8 +23,10 @@ def _get_redis():
     return get_redis_client()
 
 
-def _cache_key(incident_id: str, tool_name: str, args: dict) -> str:
-    canonical = json.dumps(args, sort_keys=True, default=str)
+def _cache_key(incident_id: str, tool_name: str, args: tuple, kwargs: dict) -> str:
+    canonical = json.dumps(
+        {"args": list(args), "kwargs": kwargs}, sort_keys=True, default=str
+    )
     digest = hashlib.sha256(f"{tool_name}:{canonical}".encode()).hexdigest()
     return f"{_KEY_PREFIX}:{incident_id}:{digest}"
 
@@ -44,16 +46,16 @@ def cache_decorator(coro_fn: Callable[..., Coroutine], *, tool_name: str,
             if state is not None:
                 incident_id = getattr(state, "incident_id", None)
         except Exception:
-            pass
+            logger.debug("RCA tool cache: failed to read incident state", exc_info=True)
 
         if not incident_id:
             return await coro_fn(*args, **kwargs)
 
-        key = _cache_key(incident_id, tool_name, kwargs)
+        key = _cache_key(incident_id, tool_name, args, kwargs)
         client = _get_redis()
         if client:
             try:
-                cached = client.get(key)
+                cached = await asyncio.to_thread(client.get, key)
                 if cached is not None:
                     _hit_counters[incident_id] = _hit_counters.get(incident_id, 0) + 1
                     _hit_counters.move_to_end(incident_id)
@@ -71,7 +73,7 @@ def cache_decorator(coro_fn: Callable[..., Coroutine], *, tool_name: str,
         if client:
             try:
                 serialized = json.dumps(result, default=str)
-                client.setex(key, ttl_seconds, serialized)
+                await asyncio.to_thread(client.setex, key, ttl_seconds, serialized)
             except Exception as exc:
                 logger.debug("RCA tool cache set error: %s", exc)
         return result

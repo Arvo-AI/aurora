@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 _OUTPUT_EXCERPT_MAX_CHARS = 1000
 
 
-def _build_excerpt(output: Optional[str], is_err: bool) -> str:
+def _build_excerpt(output: Optional[str]) -> str:
     if not output:
         return ""
     s = str(output)
@@ -246,28 +246,36 @@ class ToolContextCapture:
             return
             
         tool_info = self.current_tool_calls[tool_call_id]
-        # Store a truncated output excerpt on the in-memory tool call record so the
-        # orchestrator's _extract_tool_call_history can include it in finding payloads.
-        tool_info["output_excerpt"] = _build_excerpt(output, is_error)
-        tool_info["is_error"] = bool(is_error)
-        tool_info["completed_at"] = datetime.now(timezone.utc).isoformat()
+        # Compute excerpt outside the lock — pure string processing, no shared state.
+        output_excerpt = _build_excerpt(output)
+        is_err_bool = bool(is_error)
+        completed_at_iso = datetime.now(timezone.utc).isoformat()
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]
 
-        # Mirror into append-only history for consumers that may read this after
-        # current_tool_calls has been GC'd (orchestrator sub-agents).
-        try:
-            self.tool_history.append({
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "input": tool_input,
-                "output_excerpt": tool_info["output_excerpt"],
-                "is_error": tool_info["is_error"],
-                "started_at": tool_info.get("start_time").isoformat() if tool_info.get("start_time") else None,
-                "completed_at": tool_info["completed_at"],
-            })
-        except Exception:
-            logger.debug("tool_history append failed", exc_info=True)
+        # Mutate shared dict + append-only history under the lock to avoid races
+        # with concurrent sub-agents.
+        with self.lock:
+            tool_info["output_excerpt"] = output_excerpt
+            tool_info["is_error"] = is_err_bool
+            tool_info["completed_at"] = completed_at_iso
+
+            start_time = tool_info.get("start_time")
+            try:
+                # Bound history defensively (sub-agents have ~8-turn budgets).
+                if len(self.tool_history) >= 256:
+                    self.tool_history.pop(0)
+                self.tool_history.append({
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "input": tool_input,
+                    "output_excerpt": output_excerpt,
+                    "is_error": is_err_bool,
+                    "started_at": start_time.isoformat() if start_time else None,
+                    "completed_at": completed_at_iso,
+                })
+            except Exception:
+                logger.debug("tool_history append failed", exc_info=True)
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
         
         self._record_step_end(tool_info.get("step_id"), output, is_error)

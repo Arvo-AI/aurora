@@ -17,4 +17,10 @@ Search the knowledge base and runbook systems for documents matching the affecte
 - Modify any knowledge-base documents.
 - Suggest new runbook content in your findings (that belongs in a post-mortem, not here).
 
-**Findings structure:** Cite the runbook title, document ID, and the specific section that matches this incident in `citations`. If no matching runbook exists, state that clearly and note this as a gap. Rate `self_assessed_strength` as `weak` if the match is partial.
+**Findings structure:** Cite the runbook title, document ID, and the specific section that matches this incident in `citations`. If no matching runbook exists, state that clearly and note this as a gap.
+
+Rate `self_assessed_strength` (one of `strong | moderate | weak | inconclusive`):
+- `strong` — full match on service and failure pattern, runbook directly applicable.
+- `moderate` — partial match (same service, similar but not identical pattern).
+- `weak` — tangential match (overlapping symptoms, different service or failure mode).
+- `inconclusive` — no matching runbook found, or search could not run.

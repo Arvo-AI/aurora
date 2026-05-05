@@ -172,10 +172,12 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
                 history = _extract_tool_call_history(partial_capture)
         except Exception:
             logger.exception("sub_agent: failed to recover tool_call_history on timeout")
-        _write_stub_to_storage(agent_id, role_name, incident_id, user_id, "timeout", "timed out")
-        _update_db_terminal(
-            agent_id, incident_id, user_id,
-            "timeout", tool_call_history=history,
+        await asyncio.to_thread(
+            _write_stub_to_storage, agent_id, role_name, incident_id, user_id, "timeout", "timed out"
+        )
+        await asyncio.to_thread(
+            _update_db_terminal, agent_id, incident_id, user_id, "timeout",
+            tool_call_history=history,
         )
         return FindingRef(
             agent_id=agent_id, role_name=role_name,
@@ -202,10 +204,14 @@ async def _run(input_dict: dict) -> FindingRef:
         incident_id = input_dict.get("parent_incident_id", "")
         user_id = input_dict.get("parent_user_id", "")
         if incident_id and user_id:
-            _write_stub_to_storage(agent_id, role_name, incident_id, user_id,
-                                   "failed", f"input validation: {exc}")
-            _update_db_terminal(agent_id, incident_id, user_id, "failed",
-                                tool_call_history=[])
+            await asyncio.to_thread(
+                _write_stub_to_storage, agent_id, role_name, incident_id, user_id,
+                "failed", f"input validation: {exc}",
+            )
+            await asyncio.to_thread(
+                _update_db_terminal, agent_id, incident_id, user_id, "failed",
+                tool_call_history=[],
+            )
         return FindingRef(
             agent_id=agent_id, role_name=role_name,
             storage_uri=f"rca/{incident_id}/findings/{agent_id}.md" if incident_id else None,
@@ -253,10 +259,14 @@ async def _run(input_dict: dict) -> FindingRef:
     if not role_meta:
         logger.error("sub_agent: role %r not found in registry", inp.role_name)
         if incident_id and user_id:
-            _write_stub_to_storage(inp.agent_id, inp.role_name, incident_id, user_id,
-                                   "failed", f"role {inp.role_name!r} not found")
-            _update_db_terminal(inp.agent_id, incident_id, user_id, "failed",
-                                tool_call_history=[])
+            await asyncio.to_thread(
+                _write_stub_to_storage, inp.agent_id, inp.role_name, incident_id, user_id,
+                "failed", f"role {inp.role_name!r} not found",
+            )
+            await asyncio.to_thread(
+                _update_db_terminal, inp.agent_id, incident_id, user_id, "failed",
+                tool_call_history=[],
+            )
         return FindingRef(
             agent_id=inp.agent_id, role_name=inp.role_name,
             storage_uri=f"rca/{incident_id}/findings/{inp.agent_id}.md" if incident_id else None,
@@ -317,28 +327,41 @@ async def _run(input_dict: dict) -> FindingRef:
         )
 
         postgres_client = PostgreSQLClient()
-        agent = Agent(
-            weaviate_client=WeaviateClient(postgres_client),
-            postgres_client=postgres_client,
-        )
-        if tool_capture is not None:
-            agent.set_tool_capture(tool_capture)
+        weaviate_client = WeaviateClient(postgres_client)
+        try:
+            agent = Agent(
+                weaviate_client=weaviate_client,
+                postgres_client=postgres_client,
+            )
+            if tool_capture is not None:
+                agent.set_tool_capture(tool_capture)
 
-        await agent.agentic_tool_flow(
-            sub_state,
-            system_prompt_override=brief,
-            tool_subset=tools,
-            max_turns=role_meta.max_turns,
-        )
+            await agent.agentic_tool_flow(
+                sub_state,
+                system_prompt_override=brief,
+                tool_subset=tools,
+                max_turns=role_meta.max_turns,
+            )
 
-        logger.info("sub_agent: agent completed for agent=%s incident=%s", inp.agent_id, inc_hash)
+            logger.info("sub_agent: agent completed for agent=%s incident=%s", inp.agent_id, inc_hash)
+        finally:
+            try:
+                weaviate_client.close()
+            except Exception:
+                logger.exception("sub_agent: failed to close weaviate_client for agent=%s", inp.agent_id)
+            try:
+                postgres_client.close()
+            except Exception:
+                logger.exception("sub_agent: failed to close postgres_client for agent=%s", inp.agent_id)
     except Exception:
         logger.exception("sub_agent: agent execution error for agent=%s", inp.agent_id)
-        _write_stub_to_storage(
-            inp.agent_id, inp.role_name, incident_id, user_id, "failed", "agent execution error"
+        await asyncio.to_thread(
+            _write_stub_to_storage,
+            inp.agent_id, inp.role_name, incident_id, user_id, "failed", "agent execution error",
         )
         history = _extract_tool_call_history(tool_capture)
-        _update_db_terminal(
+        await asyncio.to_thread(
+            _update_db_terminal,
             inp.agent_id, incident_id, user_id, "failed",
             tool_call_history=history,
         )
@@ -351,7 +374,7 @@ async def _run(input_dict: dict) -> FindingRef:
             tool_call_history=history,
         )
 
-    final_status = _get_db_status(inp.agent_id, incident_id, user_id)
+    final_status = await asyncio.to_thread(_get_db_status, inp.agent_id, incident_id, user_id)
     storage_uri = f"rca/{incident_id}/findings/{inp.agent_id}.md"
     history = _extract_tool_call_history(tool_capture)
 
@@ -359,23 +382,29 @@ async def _run(input_dict: dict) -> FindingRef:
         logger.warning(
             "sub_agent: agent %s never called write_findings — writing stub", inp.agent_id
         )
-        _write_stub_to_storage(
+        await asyncio.to_thread(
+            _write_stub_to_storage,
             inp.agent_id, inp.role_name, incident_id, user_id,
             "inconclusive", "agent completed without calling write_findings",
         )
-        _update_db_terminal(
+        await asyncio.to_thread(
+            _update_db_terminal,
             inp.agent_id, incident_id, user_id, "inconclusive",
             tool_call_history=history,
         )
         final_status = "inconclusive"
     else:
         # Persist the tool_call_history alongside whatever write_findings wrote
-        _persist_tool_call_history(inp.agent_id, incident_id, user_id, history)
+        await asyncio.to_thread(
+            _persist_tool_call_history, inp.agent_id, incident_id, user_id, history
+        )
 
     # Map any unexpected DB value to "failed" so the FindingRef Literal stays valid.
     fr_status = final_status if final_status in _FINDING_REF_STATUSES else "failed"
 
-    summary_text = _read_summary_from_storage(incident_id, inp.agent_id, user_id)
+    summary_text = await asyncio.to_thread(
+        _read_summary_from_storage, incident_id, inp.agent_id, user_id
+    )
     if not summary_text:
         summary_text = f"Sub-agent {inp.agent_id} ({inp.role_name}) {final_status}"
 

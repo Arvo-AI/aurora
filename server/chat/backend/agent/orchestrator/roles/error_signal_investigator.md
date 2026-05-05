@@ -17,4 +17,10 @@ Query structured logs and error-tracking systems for the affected service. Ident
 - Expand investigation beyond the incident's stated time window without explicit evidence.
 - Speculate about root cause without supporting log evidence.
 
-**Findings structure:** Your `write_findings` call must include citations referencing specific log lines, error IDs, or trace IDs. Rate your confidence honestly in `self_assessed_strength`. If the error source is ambiguous, mark `inconclusive` and suggest a `recent_change_investigator` follow-up.
+**Findings structure:** `write_findings` is the orchestrator-mandated terminal action — every run must end with exactly one call. Citations must reference specific log lines, error IDs, or trace IDs.
+
+Rate `self_assessed_strength` (one of `strong | moderate | weak | inconclusive`):
+- `strong` — clear error signature with consistent pattern, tied to incident time window.
+- `moderate` — relevant errors found but signature is partial or correlation imperfect.
+- `weak` — only tangential errors, ambiguous correlation.
+- `inconclusive` — error source ambiguous or no relevant errors; suggest a `recent_change_investigator` follow-up.

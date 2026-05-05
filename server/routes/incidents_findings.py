@@ -13,6 +13,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import hash_for_log, sanitize
+from utils.storage.storage import get_storage_manager
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +125,15 @@ def get_finding_body(user_id, incident_id: str, agent_id: str):
         # (RBAC-allowed) must read with the originator's id or the prefix mismatches.
         storage_user_id = originator_id or user_id
         try:
-            from utils.storage.storage import get_storage_manager
             data = get_storage_manager(storage_user_id).download_bytes(storage_uri, storage_user_id)
-            body = data.decode("utf-8") if isinstance(data, bytes) else str(data)
+            if not isinstance(data, bytes):
+                logger.error(
+                    "%s storage returned non-bytes for agent=%s incident=%s: %s",
+                    _LOG_PREFIX, sanitize(agent_id), hash_for_log(incident_id),
+                    type(data).__name__,
+                )
+                return jsonify({"error": "Failed to retrieve finding body"}), 500
+            body = data.decode("utf-8")
         except Exception:
             logger.exception(
                 "%s failed to fetch finding body for agent=%s incident=%s",
