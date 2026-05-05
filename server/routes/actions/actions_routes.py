@@ -25,7 +25,16 @@ _VALID_TRIGGER_TYPES = ("manual", "on_incident", "on_schedule")
 _VALID_MODES = ("agent", "ask")
 
 
-_UPDATABLE_COLUMNS = frozenset({"name", "description", "instructions", "trigger_type", "trigger_config", "mode", "enabled"})
+_COL_FRAGMENTS = {
+    "name": "name = %s",
+    "description": "description = %s",
+    "instructions": "instructions = %s",
+    "trigger_type": "trigger_type = %s",
+    "trigger_config": "trigger_config = %s",
+    "mode": "mode = %s",
+    "enabled": "enabled = %s",
+    "updated_at": "updated_at = %s",
+}
 
 
 def _parse_update_fields(body):
@@ -241,17 +250,6 @@ def update_action(user_id, action_id):
     vals.append(datetime.now(timezone.utc))
     vals.append(action_id)
 
-    # Build SET clause exclusively from constant strings; columns only determines which are included
-    _COL_FRAGMENTS = {
-        "name": "name = %s",
-        "description": "description = %s",
-        "instructions": "instructions = %s",
-        "trigger_type": "trigger_type = %s",
-        "trigger_config": "trigger_config = %s",
-        "mode": "mode = %s",
-        "enabled": "enabled = %s",
-        "updated_at": "updated_at = %s",
-    }
     set_parts = [_COL_FRAGMENTS[col] for col in columns if col in _COL_FRAGMENTS]
     sql = "UPDATE actions SET " + ", ".join(set_parts) + " WHERE id = %s RETURNING id"
 
