@@ -81,7 +81,7 @@ def _extract_tool_call_history(tool_capture) -> list[dict]:
         try:
             items.sort(key=lambda d: d.get("started_at") or "")
         except Exception:
-            pass
+            logger.debug("sub_agent: tool_history sort skipped due to malformed entry", exc_info=True)
         return items[:_MAX_HISTORY_ENTRIES]
     except Exception:
         logger.exception("sub_agent: tool_call_history extraction failed")
@@ -133,7 +133,7 @@ async def sub_agent_node(input_dict: dict) -> dict:
         try:
             ref.wave = int(wave)
         except (TypeError, ValueError):
-            pass
+            logger.debug("sub_agent: invalid wave value, leaving ref.wave unset", exc_info=True)
 
     return {"finding_refs": [ref.model_dump()]}
 
@@ -152,7 +152,7 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
         if role_meta:
             timeout = role_meta.max_seconds
     except Exception:
-        pass
+        logger.debug("sub_agent: role_meta lookup failed, using default timeout %ds", _DEFAULT_TIMEOUT_SECONDS, exc_info=True)
 
     try:
         return await asyncio.wait_for(_run(input_dict), timeout=timeout)
@@ -297,7 +297,7 @@ async def _run(input_dict: dict) -> FindingRef:
     role_tools = select_tools_for_role(user_id, role_meta, all_tools)
     write_tool = make_write_findings_tool(
         agent_id=inp.agent_id, role_name=inp.role_name,
-        incident_id=incident_id, user_id=user_id, org_id=org_id,
+        incident_id=incident_id, user_id=user_id,
         child_session_id=child_session_id,
     )
     tools = role_tools + [write_tool]

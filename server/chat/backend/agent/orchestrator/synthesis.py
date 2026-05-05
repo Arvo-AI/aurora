@@ -105,9 +105,7 @@ async def _synthesis(state: State) -> dict:
         # the LLM from hallucinating role names that aren't in the registry.
         from chat.backend.agent.orchestrator.role_registry import RoleRegistry
         try:
-            available_roles = RoleRegistry.get_instance().list_available_roles(
-                getattr(state, "user_id", "") or ""
-            )
+            available_roles = RoleRegistry.get_instance().list_available_roles()
         except Exception:
             available_roles = []
 

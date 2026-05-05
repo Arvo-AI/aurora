@@ -1,8 +1,7 @@
 """Markdown frontmatter parser and validator for sub-agent findings.md artifacts."""
 
-import re
 import yaml
-from typing import Any
+from typing import Optional
 
 # incident_id is intentionally NOT required in findings.md frontmatter — the DB
 # column on rca_findings is authoritative. Including it in the LLM-facing schema
@@ -17,7 +16,21 @@ _REQUIRED_SECTIONS = frozenset({
     "## Summary", "## Evidence", "## Reasoning", "## What I ruled out",
 })
 
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+def _split_frontmatter(text: str) -> Optional[tuple[str, str]]:
+    """Linear-time split of a `---`-fenced YAML frontmatter from a markdown body.
+
+    Replaces a regex (``^---\\s*\\n(.*?)\\n---\\s*\\n``) flagged by SonarQube as
+    backtracking-prone (S5852). Returns ``(yaml_text, body_after_fence)`` if the
+    text opens with a ``---`` line and contains a closing ``---`` line; else None.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        return None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:])
+    return None
 
 
 class FindingsValidationError(ValueError):
@@ -25,19 +38,19 @@ class FindingsValidationError(ValueError):
 
 
 def _parse_frontmatter(body: str) -> tuple[dict, str]:
-    match = _FRONTMATTER_RE.match(body)
-    if not match:
+    parts = _split_frontmatter(body)
+    if parts is None:
         raise FindingsValidationError(
             "findings.md must start with a YAML frontmatter block (--- ... ---)"
         )
-    raw_yaml = match.group(1)
+    raw_yaml, content = parts
     try:
         meta = yaml.safe_load(raw_yaml)
     except yaml.YAMLError as exc:
         raise FindingsValidationError(f"YAML frontmatter parse error: {exc}") from exc
     if not isinstance(meta, dict):
         raise FindingsValidationError("YAML frontmatter must be a mapping")
-    return meta, body[match.end():]
+    return meta, content
 
 
 def parse_findings(body: str) -> dict:

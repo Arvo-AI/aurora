@@ -122,9 +122,9 @@ function abbreviateValue(value: unknown, max = 160): string {
     s = value;
   } else {
     try {
-      s = JSON.stringify(value);
+      s = JSON.stringify(value) ?? '';
     } catch {
-      s = String(value);
+      s = '[unserializable value]';
     }
   }
   return s.length > max ? `${s.slice(0, max)}...` : s;

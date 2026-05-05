@@ -1,7 +1,6 @@
 """Singleton registry that loads and validates role .md files at startup."""
 
 import logging
-import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +14,20 @@ _ROLES_DIR = Path(__file__).parent / "roles"
 _REQUIRED_FRONTMATTER_KEYS = frozenset(
     {"name", "description", "tools", "max_turns", "max_seconds", "rca_priority"}
 )
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+def _split_frontmatter(text: str) -> Optional[tuple[str, str]]:
+    """Linear-time split of a `---`-fenced YAML frontmatter from a markdown body.
+
+    Replaces a regex (``^---\\s*\\n(.*?)\\n---\\s*\\n``) flagged by SonarQube as
+    backtracking-prone (S5852). Returns ``(yaml_text, body_after_fence)`` if the
+    text opens with a ``---`` line and contains a closing ``---`` line; else None.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        return None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:])
+    return None
 
 
 @dataclass
@@ -54,11 +66,12 @@ class RoleRegistry:
         for md_file in sorted(_ROLES_DIR.glob("*.md")):
             try:
                 raw = md_file.read_text(encoding="utf-8")
-                match = _FRONTMATTER_RE.match(raw)
-                if not match:
+                parts = _split_frontmatter(raw)
+                if parts is None:
                     logger.warning("RoleRegistry: %s has no frontmatter — skipping", md_file.name)
                     continue
-                meta = yaml.safe_load(match.group(1))
+                yaml_text, body = parts
+                meta = yaml.safe_load(yaml_text)
                 if not isinstance(meta, dict):
                     logger.warning("RoleRegistry: %s frontmatter is not a mapping — skipping", md_file.name)
                     continue
@@ -68,7 +81,6 @@ class RoleRegistry:
                         "RoleRegistry: %s missing keys %s — skipping", md_file.name, missing
                     )
                     continue
-                body = raw[match.end():]
                 role = RoleMeta(
                     name=str(meta["name"]),
                     description=str(meta["description"]),
@@ -90,7 +102,7 @@ class RoleRegistry:
     def get(self, name: str) -> Optional[RoleMeta]:
         return self._roles.get(name)
 
-    def list_available_roles(self, user_id: str) -> list[RoleMeta]:
+    def list_available_roles(self) -> list[RoleMeta]:
         from chat.backend.agent.orchestrator.select_skills import get_available_capability_tags
         available_tags = get_available_capability_tags()
         result = []

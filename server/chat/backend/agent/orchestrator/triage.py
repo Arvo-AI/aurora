@@ -54,7 +54,7 @@ async def _triage(state: State) -> TriageDecision:
         from chat.backend.agent.orchestrator.role_registry import RoleRegistry
         user_id = getattr(state, "user_id", None) or ""
         if user_id:
-            available_roles = RoleRegistry.get_instance().list_available_roles(user_id)
+            available_roles = RoleRegistry.get_instance().list_available_roles()
     except Exception:
         logger.exception("triage: failed to enumerate available roles — falling back to single")
 

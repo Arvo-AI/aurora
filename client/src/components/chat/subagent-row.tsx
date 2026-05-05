@@ -56,21 +56,12 @@ function StrengthChip({ strength }: { strength: NonNullable<ToolCall["self_asses
 
 const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
   const parsed = parseDispatchToolCall(toolCall);
-
-  if (!parsed) {
-    return (
-      <div className="px-3 py-2 text-xs text-muted-foreground">
-        Sub-agent dispatch (malformed)
-      </div>
-    );
-  }
-
   const clickable = !!onSelect;
 
   const handleSelect = React.useCallback(() => {
-    if (!clickable) return;
+    if (!clickable || !parsed) return;
     onSelect?.(parsed.agent_id, parsed.child_session_id);
-  }, [clickable, onSelect, parsed.agent_id, parsed.child_session_id]);
+  }, [clickable, onSelect, parsed]);
 
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -82,6 +73,14 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
     },
     [clickable, handleSelect],
   );
+
+  if (!parsed) {
+    return (
+      <div className="px-3 py-2 text-xs text-muted-foreground">
+        Sub-agent dispatch (malformed)
+      </div>
+    );
+  }
 
   return (
     <div

@@ -3,7 +3,6 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -29,14 +28,14 @@ _SCHEMA_RETRY_LIMIT = 2
 
 
 def make_write_findings_tool(agent_id: str, role_name: str, incident_id: str,
-                              user_id: str, org_id: Optional[str],
+                              user_id: str,
                               child_session_id: str) -> StructuredTool:
     schema_failures = {"n": 0}  # closure-bound; bounded by _SCHEMA_RETRY_LIMIT
 
     def write_findings(body: str) -> str:
         return _write_findings_impl(
             body=body, agent_id=agent_id, role_name=role_name,
-            incident_id=incident_id, user_id=user_id, org_id=org_id,
+            incident_id=incident_id, user_id=user_id,
             child_session_id=child_session_id, failures=schema_failures,
         )
 
@@ -52,7 +51,7 @@ def make_write_findings_tool(agent_id: str, role_name: str, incident_id: str,
 
 
 def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
-                         incident_id: str, user_id: str, org_id: Optional[str],
+                         incident_id: str, user_id: str,
                          child_session_id: str, failures: dict) -> str:
     inc_hash = hash_for_log(incident_id)
     logger.info(
@@ -73,7 +72,7 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
             # and synthesis sees status=failed deterministically.
             return _force_stub_after_retry_exhaustion(
                 agent_id=agent_id, role_name=role_name, incident_id=incident_id,
-                user_id=user_id, org_id=org_id, child_session_id=child_session_id,
+                user_id=user_id, child_session_id=child_session_id,
                 error_message=str(exc),
             )
         return f"ERROR (attempt {failures['n']}/{_SCHEMA_RETRY_LIMIT}): findings.md schema validation failed: {exc}. Please fix and call write_findings again."
@@ -167,7 +166,7 @@ def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
 
 def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
                                         incident_id: str, user_id: str,
-                                        org_id: Optional[str], child_session_id: str,
+                                        child_session_id: str,
                                         error_message: str) -> str:
     """Persist a synthetic stub when the LLM exhausts its schema-retry budget.
 

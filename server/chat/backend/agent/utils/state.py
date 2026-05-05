@@ -1,5 +1,5 @@
 import operator
-from typing import List, Any, Dict, Literal, Optional, Annotated
+from typing import List, Any, Dict, Optional, Annotated
 from langchain_core.messages import AnyMessage
 from pydantic import BaseModel, ConfigDict
 
