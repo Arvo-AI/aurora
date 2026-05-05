@@ -272,7 +272,14 @@ async def _run(input_dict: dict) -> FindingRef:
     from chat.backend.agent.orchestrator.findings_writer import make_write_findings_tool
     from chat.backend.agent.tools.cloud_tools import get_cloud_tools
 
-    brief = render_brief(inp, role_meta)
+    connected_providers: list[str] = []
+    try:
+        from chat.background.rca_prompt_builder import get_user_providers
+        connected_providers = get_user_providers(user_id)
+    except Exception:
+        logger.exception("sub_agent: failed to resolve connected providers for %s", inp.agent_id)
+
+    brief = render_brief(inp, role_meta, connected_providers=connected_providers)
     skill_content = load_skills_for_role(user_id, role_meta)
     if skill_content:
         brief = brief + "\n\n## Integration-Specific Guidance\n\n" + skill_content

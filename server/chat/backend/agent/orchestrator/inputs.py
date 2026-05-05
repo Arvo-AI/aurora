@@ -46,11 +46,24 @@ class FindingRef(BaseModel):
     tool_call_history: list = []
 
 
-def render_brief(inp: SubAgentInput, role_meta: Any) -> str:
+_CLOUD_PROVIDERS = frozenset({"aws", "gcp", "azure", "ovh", "scaleway"})
+
+
+def render_brief(
+    inp: SubAgentInput,
+    role_meta: Any,
+    connected_providers: Optional[list[str]] = None,
+) -> str:
     """Return the system-prompt brief the sub-agent receives.
 
     ``role_meta`` is a ``RoleMeta`` object from ``role_registry.py``.
-    The return value is pure markdown — no secrets, no provider names.
+    ``connected_providers`` is the list of provider/skill ids the user has
+    connected (e.g. ``['gcp', 'github', 'datadog']``). When supplied, the brief
+    constrains the sub-agent to only use those providers — prevents the LLM
+    from defaulting to AWS or other unconnected providers it learned about
+    in pre-training.
+
+    The return value is pure markdown — no secrets.
     """
     lines: list[str] = [
         f"# Role: {role_meta.name}",
@@ -68,6 +81,23 @@ def render_brief(inp: SubAgentInput, role_meta: Any) -> str:
         lines += ["", "## Evidence References to Consult"]
         for ref in inp.evidence_refs:
             lines.append(f"- {ref}")
+
+    if connected_providers:
+        cloud = sorted(p for p in connected_providers if p.lower() in _CLOUD_PROVIDERS)
+        other = sorted(p for p in connected_providers if p.lower() not in _CLOUD_PROVIDERS)
+        lines += ["", "## Available Tooling Context"]
+        lines.append(f"- Connected providers: {', '.join(sorted(connected_providers))}")
+        if cloud:
+            lines.append(
+                f"- When calling `cloud_exec`, you MUST use `provider` from this set ONLY: "
+                f"{', '.join(cloud)}. Other cloud providers are NOT connected and will fail."
+            )
+        else:
+            lines.append(
+                "- No cloud providers are connected. Do NOT call `cloud_exec` — it will fail."
+            )
+        if other:
+            lines.append(f"- Other connected integrations: {', '.join(other)}")
 
     lines += [
         "",

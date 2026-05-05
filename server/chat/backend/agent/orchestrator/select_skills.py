@@ -149,17 +149,54 @@ def get_available_capability_tags(user_id: str) -> set:
         return set()
 
 
+def _resolve_connected_tool_filter(user_id: str) -> tuple[set, set]:
+    """Return ``(skill_owned_tools, connected_tools)`` for connection gating.
+
+    - ``skill_owned_tools``: every tool name listed by ANY registered skill.
+      Tools NOT in this set are considered always-available built-ins
+      (e.g. ``cloud_exec``, ``knowledge_base_search``, ``web_search``).
+    - ``connected_tools``: tools owned by at least one skill the user has
+      currently connected. A skill-owned tool only passes the filter if it
+      appears here.
+    """
+    skill_owned: set = set()
+    connected: set = set()
+    try:
+        from chat.backend.agent.skills.registry import SkillRegistry
+        registry = SkillRegistry.get_instance()
+        connected_ids = set(registry.get_connected_skill_ids(user_id) or [])
+        for skill_id, meta in registry._skills.items():
+            for tool_name in (meta.tools or []):
+                skill_owned.add(tool_name)
+                if skill_id in connected_ids:
+                    connected.add(tool_name)
+    except Exception:
+        logger.exception("select_skills: failed to resolve connected-tool filter for user")
+    return skill_owned, connected
+
+
 def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
     _patch_tool_metadata(all_tools)
     role_tags = set(role.tools)
+    skill_owned, connected = _resolve_connected_tool_filter(user_id)
     candidates = []
+    dropped_unconnected: list = []
     for tool in all_tools:
         meta = _get_tool_meta(tool)
         if meta.get("mutates"):
             continue
         if not role_tags.intersection(set(meta.get("capability_tags", []))):
             continue
+        tool_name = getattr(tool, "name", "")
+        if tool_name in skill_owned and tool_name not in connected:
+            dropped_unconnected.append(tool_name)
+            continue
         candidates.append(tool)
+    if dropped_unconnected:
+        logger.info(
+            "select_skills: role=%s dropped %d unconnected tools: %s",
+            role.name, len(dropped_unconnected), sorted(set(dropped_unconnected)),
+        )
 
     _CHARS_PER_TOKEN = 4
     budget_chars = _SKILL_TOKEN_BUDGET * _CHARS_PER_TOKEN
