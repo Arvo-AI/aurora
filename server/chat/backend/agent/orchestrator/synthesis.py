@@ -57,10 +57,20 @@ async def _synthesis(state: State) -> dict:
     # is steered by which findings are NEW (target_wave) via the prompt.
     finding_rows = _fetch_finding_rows(incident_id, user_id, target_wave)
     pending = [row for row in finding_rows if row.get("storage_uri")]
-    bodies = await asyncio.gather(
+    raw_bodies = await asyncio.gather(
         *(asyncio.to_thread(_download_finding, row["storage_uri"], user_id) for row in pending),
-        return_exceptions=False,
+        return_exceptions=True,
     ) if pending else []
+    bodies: list = []
+    for row, body in zip(pending, raw_bodies):
+        if isinstance(body, BaseException):
+            logger.warning(
+                "synthesis_node: finding download raised for agent %s: %s",
+                row.get("agent_id"), body,
+            )
+            bodies.append(None)
+        else:
+            bodies.append(body)
     finding_bodies: list[str] = [
         f"## Wave {row.get('wave', '?')} | Agent: {row.get('agent_id')} ({row.get('role_name')})\n\n{body}"
         for row, body in zip(pending, bodies) if body

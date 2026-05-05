@@ -41,7 +41,7 @@ def _parse_frontmatter(body: str) -> tuple[dict, str]:
 
 
 def parse_findings(body: str) -> dict:
-    meta, _ = _parse_frontmatter(body)
+    meta, content = _parse_frontmatter(body)
     missing = _REQUIRED_FRONTMATTER_KEYS - meta.keys()
     if missing:
         raise FindingsValidationError(
@@ -58,7 +58,7 @@ def parse_findings(body: str) -> dict:
             f"findings.md self_assessed_strength must be one of {sorted(_VALID_STRENGTHS)}, got {strength!r}"
         )
     for section in _REQUIRED_SECTIONS:
-        if section not in body:
+        if section not in content:
             raise FindingsValidationError(
                 f"findings.md missing required section: {section!r}"
             )
@@ -75,27 +75,28 @@ def make_stub(agent_id: str, role_name: str, incident_id: str, purpose: str,
     if status not in _VALID_STATUSES:
         status = "failed"
     safe_error = (error_message or "")[:500].replace("\n", " ")
-    safe_purpose = (purpose or "see error_message").replace('"', "'")[:300]
-    return f"""---
-agent_id: {agent_id}
-purpose: "{safe_purpose}"
-status: {status}
-incident_id: {incident_id}
-tools_used: []
-citations: []
-self_assessed_strength: inconclusive
-follow_ups_suggested: []
----
-## Summary
-Sub-agent {agent_id} ({role_name}) did not complete. Status: {status}.
-{safe_error}
-
-## Evidence
-No evidence collected.
-
-## Reasoning
-Sub-agent terminated before producing findings.
-
-## What I ruled out
-Nothing ruled out due to early termination.
-"""
+    safe_purpose = (purpose or "see error_message")[:300]
+    frontmatter = yaml.safe_dump(
+        {
+            "agent_id": agent_id,
+            "purpose": safe_purpose,
+            "status": status,
+            "incident_id": incident_id,
+            "tools_used": [],
+            "citations": [],
+            "self_assessed_strength": "inconclusive",
+            "follow_ups_suggested": [],
+        },
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+    )
+    return (
+        f"---\n{frontmatter}---\n"
+        f"## Summary\n"
+        f"Sub-agent {agent_id} ({role_name}) did not complete. Status: {status}.\n"
+        f"{safe_error}\n\n"
+        f"## Evidence\nNo evidence collected.\n\n"
+        f"## Reasoning\nSub-agent terminated before producing findings.\n\n"
+        f"## What I ruled out\nNothing ruled out due to early termination.\n"
+    )

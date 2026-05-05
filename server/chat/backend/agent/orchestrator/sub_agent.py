@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_SECONDS = 180
 _MAX_HISTORY_ENTRIES = 30
 _MAX_HISTORY_FIELD_CHARS = 1000
-_FINDING_REF_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled"})
+_FINDING_REF_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled", "inconclusive"})
 
 
 def _truncate(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
@@ -174,7 +174,7 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
             logger.exception("sub_agent: failed to recover tool_call_history on timeout")
         _write_stub_to_storage(agent_id, role_name, incident_id, user_id, "timeout", "timed out")
         _update_db_terminal(
-            agent_id, incident_id, user_id, input_dict.get("parent_org_id"),
+            agent_id, incident_id, user_id,
             "timeout", tool_call_history=history,
         )
         return FindingRef(
@@ -201,11 +201,10 @@ async def _run(input_dict: dict) -> FindingRef:
         role_name = input_dict.get("role_name", "")
         incident_id = input_dict.get("parent_incident_id", "")
         user_id = input_dict.get("parent_user_id", "")
-        org_id = input_dict.get("parent_org_id")
         if incident_id and user_id:
             _write_stub_to_storage(agent_id, role_name, incident_id, user_id,
                                    "failed", f"input validation: {exc}")
-            _update_db_terminal(agent_id, incident_id, user_id, org_id, "failed",
+            _update_db_terminal(agent_id, incident_id, user_id, "failed",
                                 tool_call_history=[])
         return FindingRef(
             agent_id=agent_id, role_name=role_name,
@@ -256,7 +255,7 @@ async def _run(input_dict: dict) -> FindingRef:
         if incident_id and user_id:
             _write_stub_to_storage(inp.agent_id, inp.role_name, incident_id, user_id,
                                    "failed", f"role {inp.role_name!r} not found")
-            _update_db_terminal(inp.agent_id, incident_id, user_id, org_id, "failed",
+            _update_db_terminal(inp.agent_id, incident_id, user_id, "failed",
                                 tool_call_history=[])
         return FindingRef(
             agent_id=inp.agent_id, role_name=inp.role_name,
@@ -333,7 +332,7 @@ async def _run(input_dict: dict) -> FindingRef:
         )
         history = _extract_tool_call_history(tool_capture)
         _update_db_terminal(
-            inp.agent_id, incident_id, user_id, org_id, "failed",
+            inp.agent_id, incident_id, user_id, "failed",
             tool_call_history=history,
         )
         return FindingRef(
@@ -358,7 +357,7 @@ async def _run(input_dict: dict) -> FindingRef:
             "inconclusive", "agent completed without calling write_findings",
         )
         _update_db_terminal(
-            inp.agent_id, incident_id, user_id, org_id, "inconclusive",
+            inp.agent_id, incident_id, user_id, "inconclusive",
             tool_call_history=history,
         )
         final_status = "inconclusive"
@@ -366,10 +365,8 @@ async def _run(input_dict: dict) -> FindingRef:
         # Persist the tool_call_history alongside whatever write_findings wrote
         _persist_tool_call_history(inp.agent_id, incident_id, user_id, history)
 
-    # FindingRef.status only accepts succeeded/failed/timeout/cancelled.
-    # "inconclusive" and any other value collapse to "succeeded" — the body
-    # itself carries the precise status in its frontmatter.
-    fr_status = final_status if final_status in _FINDING_REF_STATUSES else "succeeded"
+    # Map any unexpected DB value to "failed" so the FindingRef Literal stays valid.
+    fr_status = final_status if final_status in _FINDING_REF_STATUSES else "failed"
 
     summary_text = _read_summary_from_storage(incident_id, inp.agent_id, user_id)
     if not summary_text:
@@ -401,7 +398,7 @@ def _write_stub_to_storage(agent_id: str, role_name: str, incident_id: str,
 
 
 def _update_db_terminal(agent_id: str, incident_id: str, user_id: str,
-                         org_id: Optional[str], status: str,
+                         status: str,
                          tool_call_history: Optional[list] = None) -> None:
     from utils.db.connection_pool import db_pool
     from utils.auth.stateless_auth import set_rls_context

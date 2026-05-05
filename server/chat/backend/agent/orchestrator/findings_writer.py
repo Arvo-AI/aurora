@@ -88,14 +88,16 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
         logger.exception("write_findings: storage upload failed for agent %s", agent_id)
         return "ERROR: storage upload failed. Please retry."
 
-    _update_finding_row(
+    db_ok = _update_finding_row(
         agent_id=agent_id, incident_id=incident_id, user_id=user_id, org_id=org_id,
         meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
     )
+    if not db_ok:
+        return "ERROR: failed to persist findings row. Please retry."
 
-    # Reset on success: only consecutive validation failures should count toward
-    # the retry cap. Without this, a successful write followed by one bad call
-    # would force-stub and overwrite the just-saved findings.md.
+    # Reset on confirmed success: only consecutive validation failures should
+    # count toward the retry cap. Without this, a successful write followed by
+    # one bad call would force-stub and overwrite the just-saved findings.md.
     failures["n"] = 0
 
     return f"findings.md saved successfully. strength={meta.get('self_assessed_strength')} status={meta.get('status')}"
@@ -103,7 +105,7 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
 
 def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
                         org_id: Optional[str], meta: dict, storage_uri: str,
-                        child_session_id: str) -> None:
+                        child_session_id: str) -> bool:
     try:
         now = datetime.now(timezone.utc)
         with db_pool.get_admin_connection() as conn:
@@ -136,10 +138,12 @@ def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
                     ),
                 )
             conn.commit()
+        return True
     except Exception:
         logger.exception(
             "write_findings: failed to update rca_findings row for agent %s", agent_id
         )
+        return False
 
 
 def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
@@ -160,22 +164,25 @@ def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
         purpose="schema validation retries exhausted", status="failed",
         error_message=error_message,
     )
+    upload_ok = False
     try:
         from utils.storage.storage import get_storage_manager
         get_storage_manager(user_id).upload_bytes(
             stub_body.encode("utf-8"), storage_uri, user_id, content_type="text/markdown",
         )
+        upload_ok = True
     except Exception:
         logger.exception("write_findings: failed to upload stub for agent %s", agent_id)
 
-    try:
-        meta = parse_findings(stub_body)
-        _update_finding_row(
-            agent_id=agent_id, incident_id=incident_id, user_id=user_id, org_id=org_id,
-            meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
-        )
-    except Exception:
-        logger.exception("write_findings: failed to persist stub row for agent %s", agent_id)
+    if upload_ok:
+        try:
+            meta = parse_findings(stub_body)
+            _update_finding_row(
+                agent_id=agent_id, incident_id=incident_id, user_id=user_id, org_id=org_id,
+                meta=meta, storage_uri=storage_uri, child_session_id=child_session_id,
+            )
+        except Exception:
+            logger.exception("write_findings: failed to persist stub row for agent %s", agent_id)
 
     return (
         f"findings.md persisted with status=failed after {_SCHEMA_RETRY_LIMIT} "
