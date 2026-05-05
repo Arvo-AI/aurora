@@ -290,6 +290,7 @@ class _RecordingInner:
         return _chat_result_with(_ai_message_with(self.response_content))
 
     async def _agenerate(self, messages, stop=None, **kwargs):
+        await asyncio.sleep(0)
         return self._generate(messages, stop=stop, **kwargs)
 
 

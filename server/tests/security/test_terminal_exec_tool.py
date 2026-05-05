@@ -37,7 +37,7 @@ def _load_function(name: str, extra_globals: dict | None = None):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             module = ast.Module(body=[node], type_ignores=[])
             namespace: dict = dict(extra_globals or {})
-            exec(compile(module, str(_SOURCE_FILE), "exec"), namespace)
+            exec(compile(module, str(_SOURCE_FILE), "exec"), namespace)  # noqa: S102
             return namespace[name]
     raise LookupError(f"function {name!r} not found in {_SOURCE_FILE}")
 
