@@ -31,7 +31,7 @@ import { useChatCancellation } from '@/hooks/useChatCancellation';
 import SessionUsagePanel from "@/components/SessionUsagePanel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
-import { useQuery, fetchR } from "@/lib/query";
+import { useQuery } from "@/lib/query";
 
 interface ChatClientProps {
   initialSessionId?: string;

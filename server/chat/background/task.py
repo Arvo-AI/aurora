@@ -701,7 +701,7 @@ def run_background_chat(
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message=str(e), user_id=user_id)
             except Exception:
-                pass
+                logger.debug("Failed to update action run status during error handling")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -739,9 +739,9 @@ def run_background_chat(
                             )
                             if cursor.rowcount > 0:
                                 conn.commit()
-                                logger.warning(f"[BackgroundChat] Finally block marked action run {trigger_metadata['run_id']} as error")
+                                logger.warning("[BackgroundChat] Finally block marked action run as error")
                 except Exception:
-                    pass
+                    logger.debug("Failed to mark action run as error in finally block")
 
 
 # ---------------------------------------------------------------------------

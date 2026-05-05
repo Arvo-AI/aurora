@@ -12,7 +12,6 @@ from utils.auth.stateless_auth import set_rls_context
 logger = logging.getLogger(__name__)
 
 _VALID_TRIGGER_TYPES = frozenset(("manual", "on_incident"))
-_VALID_MODES = frozenset(("agent", "ask"))
 
 
 def dispatch_action(
@@ -56,7 +55,7 @@ def dispatch_action(
 
     if trigger_context.get("incident_id"):
         trigger_context["incident"] = _load_incident_context(
-            trigger_context["incident_id"], user_id
+            trigger_context["incident_id"]
         )
 
     full_prompt, rail_text = build_action_prompt(action, trigger_context)
@@ -102,7 +101,7 @@ def dispatch_action(
         _update_run(run_id, user_id, status="error", error=f"Failed to enqueue: {e}")
         raise
 
-    logger.info("[Actions] Dispatched action %s as run %s (session %s)", action_id, run_id, session_id)
+    logger.info("[Actions] Dispatched action as run (session created)")
     return run_id
 
 
@@ -216,7 +215,7 @@ def _update_run(
             conn.commit()
 
 
-def _load_incident_context(incident_id: str, user_id: str) -> Dict[str, Any]:
+def _load_incident_context(incident_id: str) -> Dict[str, Any]:
     """Load incident data for prompt context."""
     try:
         with db_pool.get_connection() as conn:
@@ -240,7 +239,7 @@ def _load_incident_context(incident_id: str, user_id: str) -> Dict[str, Any]:
                     "summary": (row[5] or "")[:2000],
                 }
     except Exception:
-        logger.exception("[Actions] Failed to load incident context for %s", incident_id)
+        logger.exception("Failed to load incident context")
         return {"incident_id": incident_id}
 
 
