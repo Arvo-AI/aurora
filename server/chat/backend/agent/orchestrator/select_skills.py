@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 _SKILL_TOKEN_BUDGET = 4_000  # approximate tokens of tool-spec description budget
 _SUBAGENT_SKILL_BUDGET = 4_000  # tokens — budget for skill bodies appended to sub-agent briefs
 
+# First-class cloud providers (handled outside the SKILL.md system via direct
+# user_tokens / user_connections). cloud_exec is also valid for these even
+# when no skill claims it.
+_CLOUD_PROVIDERS = frozenset({"aws", "gcp", "azure", "ovh", "scaleway"})
+
 # Capability tag dispatch table for the most-commonly-used RCA tools.
 # Tools NOT listed here default to: mutates=False, cacheable=False, capability_tags=[]
 # (i.e. they stay available to the lead but excluded from sub-agent tool subsets).
@@ -134,12 +139,23 @@ def get_available_capability_tags(user_id: str) -> set:
     try:
         from chat.backend.agent.tools.cloud_tools import get_cloud_tools
         skill_owned, connected = _resolve_connected_tool_filter(user_id)
+        # Mirror select_tools_for_role's cloud_exec special-case: it's also
+        # valid when a first-class cloud provider (gcp/aws/azure) is connected,
+        # not just when an ovh/scaleway/tailscale skill claims it.
+        has_cloud_provider = False
+        try:
+            from chat.background.rca_prompt_builder import get_user_providers
+            connected_providers = get_user_providers(user_id) or []
+            has_cloud_provider = any(p.lower() in _CLOUD_PROVIDERS for p in connected_providers)
+        except Exception:
+            logger.exception("select_skills: failed to resolve connected providers for tags")
         tools = get_cloud_tools()
         tags: set = set()
         for t in tools:
             tool_name = getattr(t, "name", "")
             if tool_name in skill_owned and tool_name not in connected:
-                continue
+                if not (tool_name == "cloud_exec" and has_cloud_provider):
+                    continue
             meta = _get_tool_meta(t)
             tags.update(meta.get("capability_tags", []))
         return tags
@@ -181,7 +197,6 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
     # `cloud_exec` is a built-in (not skill-owned) but only useful when the
     # user has at least one cloud provider connected. Otherwise the brief
     # already tells the LLM not to call it — strip it to save tokens.
-    _CLOUD_PROVIDERS = {"aws", "gcp", "azure", "ovh", "scaleway"}
     has_cloud_provider = False
     try:
         from chat.background.rca_prompt_builder import get_user_providers
@@ -201,8 +216,15 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
             continue
         tool_name = getattr(tool, "name", "")
         if tool_name in skill_owned and tool_name not in connected:
-            dropped_unconnected.append(tool_name)
-            continue
+            # cloud_exec is special — some skills (ovh/scaleway/tailscale) claim
+            # it via their SKILL.md, but it ALSO works for first-class cloud
+            # providers (gcp/aws/azure) which aren't skills. Let it through
+            # whenever any cloud provider is connected.
+            if tool_name == "cloud_exec" and has_cloud_provider:
+                pass
+            else:
+                dropped_unconnected.append(tool_name)
+                continue
         if tool_name == "cloud_exec" and not has_cloud_provider:
             dropped_cloud_exec = True
             continue

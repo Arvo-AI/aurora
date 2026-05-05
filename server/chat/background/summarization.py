@@ -768,17 +768,19 @@ def _update_incident_summary(
         UUID(incident_id)  # Validate UUID format
         
         with db_pool.get_admin_connection() as conn:
+            resolved_org_id = None
             with conn.cursor() as cursor:
                 if user_id:
-                    if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                    if not resolved_org_id:
                         return
-                
+
                 # If status is None, only update summary and preserve current aurora_status
                 if status is None:
                     cursor.execute(
                         """
-                        UPDATE incidents 
-                        SET aurora_summary = %s, 
+                        UPDATE incidents
+                        SET aurora_summary = %s,
                             updated_at = %s
                         WHERE id = %s
                         """,
@@ -787,8 +789,8 @@ def _update_incident_summary(
                 else:
                     cursor.execute(
                         """
-                        UPDATE incidents 
-                        SET aurora_summary = %s, 
+                        UPDATE incidents
+                        SET aurora_summary = %s,
                             aurora_status = %s,
                             status = CASE WHEN status = 'investigating' AND %s = 'complete' THEN 'analyzed' ELSE status END,
                             analyzed_at = CASE WHEN analyzed_at IS NULL THEN %s ELSE analyzed_at END,
@@ -797,7 +799,7 @@ def _update_incident_summary(
                         """,
                         (summary, status, status, datetime.now(), datetime.now(), incident_id),
                     )
-                
+
                 rows_updated = cursor.rowcount
             conn.commit()
 
@@ -809,6 +811,24 @@ def _update_incident_summary(
                 logger.warning(
                     f"{_LOG_PREFIX} No rows updated for incident {incident_id}"
                 )
+
+            # Record rca_completed lifecycle event when the status transitions to complete.
+            # Only emit on real updates (rows_updated > 0) and when we have user_id/org_id
+            # for RLS attribution (insert_by_org policy requires non-null matching org_id).
+            if status == 'complete' and rows_updated > 0 and user_id and resolved_org_id:
+                try:
+                    with conn.cursor() as cursor:
+                        # RLS already set above when user_id is provided
+                        cursor.execute(
+                            """INSERT INTO incident_lifecycle_events
+                               (incident_id, user_id, org_id, event_type, new_value)
+                               VALUES (%s, %s, %s, %s, %s)""",
+                            (incident_id, user_id, resolved_org_id, 'rca_completed', 'complete')
+                        )
+                    conn.commit()
+                    logger.info(f"{_LOG_PREFIX} Recorded lifecycle event 'rca_completed' for incident {incident_id}")
+                except Exception as le:
+                    logger.error(f"{_LOG_PREFIX} Failed to record lifecycle event 'rca_completed' for incident {incident_id}: {le}")
 
     except Exception as e:
         logger.error(

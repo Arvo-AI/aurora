@@ -27,17 +27,49 @@ class WriteFindingsArgs(BaseModel):
 _SCHEMA_RETRY_LIMIT = 2
 
 
+def _mirror_capture_tool_end(output: str, is_error: bool) -> None:
+    """Best-effort mirror of capture_tool_end so the execution_steps row created
+    by capture_tool_start (in agent.py's sub-agent stream loop) flips from
+    running -> success/error. Never raises — tracking failure must not break
+    the actual write_findings return value.
+
+    Needed because make_write_findings_tool builds the StructuredTool directly
+    (bypassing wrap_func_with_capture in cloud_tools.py), so nothing else flips
+    the execution_steps row to a terminal state.
+    """
+    try:
+        from chat.backend.agent.tools.cloud_tools import get_current_tool_call_id
+        from utils.cloud.cloud_utils import get_tool_capture
+        _tc = get_tool_capture()
+        if _tc is None:
+            return
+        _tcid = get_current_tool_call_id(tool_name="write_findings")
+        if _tcid:
+            _tc.capture_tool_end(_tcid, output, is_error=is_error)
+    except Exception:
+        logging.debug("write_findings: capture_tool_end mirror failed", exc_info=True)
+
+
 def make_write_findings_tool(agent_id: str, role_name: str, incident_id: str,
                               user_id: str,
                               child_session_id: str) -> StructuredTool:
     schema_failures = {"n": 0}  # closure-bound; bounded by _SCHEMA_RETRY_LIMIT
 
     def write_findings(body: str) -> str:
-        return _write_findings_impl(
-            body=body, agent_id=agent_id, role_name=role_name,
-            incident_id=incident_id, user_id=user_id,
-            child_session_id=child_session_id, failures=schema_failures,
-        )
+        try:
+            return _write_findings_impl(
+                body=body, agent_id=agent_id, role_name=role_name,
+                incident_id=incident_id, user_id=user_id,
+                child_session_id=child_session_id, failures=schema_failures,
+            )
+        except Exception as _exc:
+            # Safety net: any uncaught exception inside _write_findings_impl
+            # must still flip the execution_steps row to error before
+            # propagating, otherwise the write_findings step stays stuck at
+            # status=running forever. Mirrors wrap_func_with_capture's
+            # error-path behavior in cloud_tools.py.
+            _mirror_capture_tool_end(f"ERROR: {_exc}", is_error=True)
+            raise
 
     return StructuredTool.from_function(
         func=write_findings,
@@ -74,12 +106,16 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
         if failures["n"] >= _SCHEMA_RETRY_LIMIT:
             # Hard cap: force a stub so the agent stops retrying broken markdown
             # and synthesis sees status=failed deterministically.
-            return _force_stub_after_retry_exhaustion(
+            stub_result = _force_stub_after_retry_exhaustion(
                 agent_id=agent_id, role_name=role_name, incident_id=incident_id,
                 user_id=user_id, child_session_id=child_session_id,
                 error_message=str(exc),
             )
-        return f"ERROR (attempt {failures['n']}/{_SCHEMA_RETRY_LIMIT}): findings.md schema validation failed: {exc}. Please fix and call write_findings again."
+            _mirror_capture_tool_end(stub_result, is_error=True)
+            return stub_result
+        retry_msg = f"ERROR (attempt {failures['n']}/{_SCHEMA_RETRY_LIMIT}): findings.md schema validation failed: {exc}. Please fix and call write_findings again."
+        _mirror_capture_tool_end(retry_msg, is_error=True)
+        return retry_msg
 
     storage_uri = f"rca/{incident_id}/findings/{agent_id}.md"
     try:
@@ -89,7 +125,9 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
         logger.info("write_findings: uploaded findings for agent %s", agent_id)
     except Exception:
         logger.exception("write_findings: storage upload failed for agent %s", agent_id)
-        return "ERROR: storage upload failed. Please retry."
+        upload_err = "ERROR: storage upload failed. Please retry."
+        _mirror_capture_tool_end(upload_err, is_error=True)
+        return upload_err
 
     db_ok = _update_finding_row(
         agent_id=agent_id, incident_id=incident_id, user_id=user_id,
@@ -108,14 +146,18 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
                 "(DB update failed and cleanup also failed)",
                 storage_uri, agent_id,
             )
-        return "ERROR: failed to persist findings row. Please retry."
+        db_err = "ERROR: failed to persist findings row. Please retry."
+        _mirror_capture_tool_end(db_err, is_error=True)
+        return db_err
 
     # Reset on confirmed success: only consecutive validation failures should
     # count toward the retry cap. Without this, a successful write followed by
     # one bad call would force-stub and overwrite the just-saved findings.md.
     failures["n"] = 0
 
-    return f"findings.md saved successfully. strength={meta.get('self_assessed_strength')} status={meta.get('status')}"
+    success_msg = f"findings.md saved successfully. strength={meta.get('self_assessed_strength')} status={meta.get('status')}"
+    _mirror_capture_tool_end(success_msg, is_error=False)
+    return success_msg
 
 
 def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,

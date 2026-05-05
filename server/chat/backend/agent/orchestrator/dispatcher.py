@@ -120,7 +120,7 @@ def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
                 "agent_id": inp.agent_id,
                 "role_name": inp.role_name,
                 "purpose": inp.purpose,
-                "child_session_id": f"{parent_session_id}::sa_{inp.agent_id}",
+                "child_session_id": f"{parent_session_id}::{inp.agent_id}",
                 "wave": wave,
                 "time_window": inp.time_window,
             },

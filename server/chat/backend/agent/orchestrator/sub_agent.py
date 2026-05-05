@@ -223,7 +223,7 @@ async def _run(input_dict: dict) -> FindingRef:
     user_id = input_dict.get("parent_user_id", "")
     org_id = input_dict.get("parent_org_id")
     parent_session_id = input_dict.get("parent_session_id", "") or ""
-    child_session_id = f"{parent_session_id}::sa_{inp.agent_id}"
+    child_session_id = f"{parent_session_id}::{inp.agent_id}"
     inc_hash = hash_for_log(incident_id)
 
     logger.info(

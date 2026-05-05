@@ -1155,6 +1155,20 @@ class Workflow:
                 # Handle model turn completion — extract thinking/text as fallback
                 # when on_chat_model_stream didn't fire (LangGraph + Gemini bug)
                 elif event_type == "on_chat_model_end":
+                    # Skip sub-agent / triage / synthesis model-end events: their
+                    # tool calls must register into the sub-agent's own
+                    # tool_capture (handled in agent.py), not the lead's.
+                    # Use checkpoint_ns (full nested namespace, e.g. "sub_agent:abc|agent:xyz")
+                    # because langgraph_node only reports the *immediate* node name —
+                    # for events bubbled from nested graphs (create_agent), it would
+                    # be "agent"/"tools" rather than the outer "sub_agent".
+                    _meta = event.get("metadata") or {}
+                    _node = _meta.get("langgraph_node") or ""
+                    _ns = _meta.get("langgraph_checkpoint_ns") or ""
+                    if _node in ("sub_agent", "triage", "synthesis") or any(
+                        seg in _ns for seg in ("sub_agent:", "triage:", "synthesis:")
+                    ):
+                        continue
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
                     if output:

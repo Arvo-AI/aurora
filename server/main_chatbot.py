@@ -378,6 +378,11 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                         "VALUES (%s, %s, %s, %s)",
                                         (incident_id, datetime.now(), cleaned_text, "analysis")
                                     )
+                                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                                    cursor.execute(
+                                        "UPDATE incidents SET updated_at = %s WHERE id = %s",
+                                        (datetime.now(), incident_id),
+                                    )
                                 conn.commit()
                                 logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
                                 accumulated_thought.clear()

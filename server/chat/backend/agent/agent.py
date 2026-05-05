@@ -70,6 +70,11 @@ class Agent:
         logging.debug(f"WEBSOCKET DEBUG: Updated Agent websocket_sender to {self.websocket_sender}")
     def _cleanup_terraform_files(self, user_id: str = None, session_id: str = None):
         """Clean up terraform files to prevent conflicts and reduce context size."""
+        # Sub-agent sessions (id format: "{parent}::sa_*") are read-only and never
+        # produce terraform files — skip cleanup so we don't trigger path validation
+        # errors on the "::" separator.
+        if session_id and "::" in session_id:
+            return
         try:
             from chat.backend.agent.tools.iac.iac_write_tool import get_terraform_directory
             
@@ -819,8 +824,17 @@ class Agent:
                                                     tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
                                                     tc_name = tc.get('name') if isinstance(tc, dict) else getattr(tc, 'name', None)
                                                     tc_args = tc.get('args') if isinstance(tc, dict) else getattr(tc, 'args', {})
-                                                    if not tc_id or not tc_name:
+                                                    if not tc_id or not tc_name or tc_args is None:
                                                         continue
+                                                    # Register into current_tool_calls so the
+                                                    # cloud_tools wrapper can match this call
+                                                    # on completion and fire capture_tool_end.
+                                                    # Without this, sub-agent execution_steps
+                                                    # rows stay status='running' forever.
+                                                    try:
+                                                        tool_capture.capture_tool_start(tc_name, tc_args, tool_call_id=tc_id)
+                                                    except Exception:
+                                                        logging.debug("agent: capture_tool_start mirror failed", exc_info=True)
                                                     if not hasattr(tool_capture, 'tool_history'):
                                                         continue
                                                     tool_capture.tool_history.append({
