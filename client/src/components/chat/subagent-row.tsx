@@ -85,15 +85,19 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-label={`Open sub-agent ${parsed.role_name}`}
-      onClick={handleSelect}
-      onKeyDown={handleKeyDown}
+      {...(clickable
+        ? {
+            role: "button",
+            tabIndex: 0,
+            "aria-label": `Open sub-agent ${parsed.role_name}`,
+            onClick: handleSelect,
+            onKeyDown: handleKeyDown,
+          }
+        : {})}
       className={cn(
-        "flex items-center gap-2 px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring",
+        "flex items-center gap-2 px-3 py-2 text-sm",
         clickable
-          ? "cursor-pointer hover:bg-muted/50"
+          ? "cursor-pointer transition-colors hover:bg-muted/50 focus:outline-none focus:ring-1 focus:ring-ring"
           : "cursor-default opacity-90",
       )}
     >
