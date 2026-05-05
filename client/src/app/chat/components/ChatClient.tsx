@@ -70,6 +70,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const initialMessageSentRef = useRef<boolean>(false);
   const [activeIncidentContext, setActiveIncidentContext] = useState<string | undefined>(incidentContext);
   const [selectedAction, setSelectedAction] = useState<{ id: string; name: string } | null>(null);
+  const clearSelectedAction = useCallback(() => setSelectedAction(null), []);
   
   
   // Modular streaming message handling
@@ -155,7 +156,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     images,
     availableActions,
     selectedAction,
-    clearSelectedAction: () => setSelectedAction(null),
+    clearSelectedAction,
   });
 
   const onSendingStateChange = useCallback((sending: boolean) => {
