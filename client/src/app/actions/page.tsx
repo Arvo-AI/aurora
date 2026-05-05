@@ -77,7 +77,7 @@ const actionDetailFetcher = async (key: string, signal: AbortSignal) => {
 // -- Shared style primitives (matching monitor page) --
 
 function getTriggerDescription(type: string): string {
-  if (type === 'on_incident') return 'Fires automatically when a new incident is created.';
+  if (type === 'on_incident') return 'Fires automatically when a new incident comes in.';
   if (type === 'on_schedule') return 'Runs automatically on a recurring interval.';
   return 'Only runs when triggered from the Actions page or Incident Detail page.';
 }
@@ -421,6 +421,9 @@ function ActionFormView({ onBack, onSaved, action }: {
   const [instructions, setInstructions] = useState(action?.instructions || '');
   const [triggerType, setTriggerType] = useState(action?.trigger_type || 'manual');
   const [mode, setMode] = useState(action?.mode || 'agent');
+  const [incidentTiming, setIncidentTiming] = useState<'immediate' | 'after_rca'>(
+    () => (action?.trigger_config?.timing as 'immediate' | 'after_rca') || 'after_rca'
+  );
   const [intervalValue, setIntervalValue] = useState(() => {
     const s = Number(action?.trigger_config?.interval_seconds || 3600);
     if (s >= 86400 && s % 86400 === 0) return s / 86400;
@@ -450,6 +453,8 @@ function ActionFormView({ onBack, onSaved, action }: {
       };
       if (triggerType === 'on_schedule') {
         body.trigger_config = { interval_seconds: getIntervalSeconds() };
+      } else if (triggerType === 'on_incident') {
+        body.trigger_config = { timing: incidentTiming };
       } else {
         body.trigger_config = {};
       }
@@ -532,6 +537,19 @@ function ActionFormView({ onBack, onSaved, action }: {
                   {getTriggerDescription(triggerType)}
                 </p>
               </div>
+
+              {triggerType === 'on_incident' && (
+                <div className="space-y-2">
+                  <Label className="text-xs text-zinc-400">When to trigger</Label>
+                  <Select value={incidentTiming} onValueChange={(v) => setIncidentTiming(v as 'immediate' | 'after_rca')}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="immediate">Immediately on incident creation</SelectItem>
+                      <SelectItem value="after_rca">After RCA investigation completes</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {triggerType === 'on_schedule' && (
                 <div className="space-y-2">

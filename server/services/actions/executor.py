@@ -103,17 +103,20 @@ def dispatch_action(
     return run_id
 
 
-def dispatch_on_incident_actions(user_id: str, incident_id: str) -> None:
-    """Dispatch all enabled on_incident actions for a user. Fire-and-forget."""
+def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "immediate") -> None:
+    """Dispatch enabled on_incident actions matching the given timing. Fire-and-forget."""
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[Actions:on_incident]")
             cur.execute(
-                "SELECT id FROM actions WHERE trigger_type = 'on_incident' AND enabled = true"
+                "SELECT id, trigger_config FROM actions WHERE trigger_type = 'on_incident' AND enabled = true"
             )
             rows = cur.fetchall()
 
-    for (action_id,) in rows:
+    for action_id, trigger_config in rows:
+        action_timing = (trigger_config or {}).get("timing", "immediate")
+        if action_timing != timing:
+            continue
         try:
             dispatch_action(
                 action_id=str(action_id),

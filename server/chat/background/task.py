@@ -528,7 +528,7 @@ def run_background_chat(
                     if source and source != 'action':
                         try:
                             from services.actions.executor import dispatch_on_incident_actions
-                            dispatch_on_incident_actions(user_id, str(incident_id))
+                            dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
                         except Exception:
                             logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
                     
@@ -676,6 +676,14 @@ def run_background_chat(
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+        # Dispatch on_incident actions configured for after_rca timing
+        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+            try:
+                from services.actions.executor import dispatch_on_incident_actions
+                dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
         completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
