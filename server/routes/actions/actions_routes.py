@@ -63,6 +63,46 @@ def _validate_instructions(body):
     return instructions, None
 
 
+def _validate_description(body):
+    return (body["description"] or "").strip() or None, None
+
+
+def _validate_trigger_type(body):
+    val = body["trigger_type"]
+    if val not in _VALID_TRIGGER_TYPES:
+        return None, f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"
+    return val, None
+
+
+def _validate_mode(body):
+    val = body["mode"]
+    if val not in _VALID_MODES:
+        return None, f"mode must be one of {_VALID_MODES}"
+    return val, None
+
+
+def _validate_enabled(body):
+    return bool(body["enabled"]), None
+
+
+def _validate_trigger_config_json(body):
+    tc, err = _validate_trigger_config(body)
+    if err:
+        return None, err
+    return json.dumps(tc), None
+
+
+_FIELD_VALIDATORS = [
+    ("name", _validate_name),
+    ("description", _validate_description),
+    ("instructions", _validate_instructions),
+    ("trigger_type", _validate_trigger_type),
+    ("trigger_config", _validate_trigger_config_json),
+    ("mode", _validate_mode),
+    ("enabled", _validate_enabled),
+]
+
+
 def _parse_update_fields(body):
     """Validate and extract update columns/vals from request body.
 
@@ -70,40 +110,14 @@ def _parse_update_fields(body):
     columns contains only names from _COL_FRAGMENTS.
     """
     columns, vals = [], []
-    if "name" in body:
-        val, err = _validate_name(body)
+    for field, validator in _FIELD_VALIDATORS:
+        if field not in body:
+            continue
+        val, err = validator(body)
         if err:
             return None, None, err
-        columns.append("name")
+        columns.append(field)
         vals.append(val)
-    if "description" in body:
-        columns.append("description")
-        vals.append((body["description"] or "").strip() or None)
-    if "instructions" in body:
-        val, err = _validate_instructions(body)
-        if err:
-            return None, None, err
-        columns.append("instructions")
-        vals.append(val)
-    if "trigger_type" in body:
-        if body["trigger_type"] not in _VALID_TRIGGER_TYPES:
-            return None, None, f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"
-        columns.append("trigger_type")
-        vals.append(body["trigger_type"])
-    if "trigger_config" in body:
-        tc, err = _validate_trigger_config(body)
-        if err:
-            return None, None, err
-        columns.append("trigger_config")
-        vals.append(json.dumps(tc))
-    if "mode" in body:
-        if body["mode"] not in _VALID_MODES:
-            return None, None, f"mode must be one of {_VALID_MODES}"
-        columns.append("mode")
-        vals.append(body["mode"])
-    if "enabled" in body:
-        columns.append("enabled")
-        vals.append(bool(body["enabled"]))
     return columns, vals, None
 
 
