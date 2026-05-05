@@ -21,7 +21,7 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
   const listRef = useRef<HTMLDivElement>(null);
 
   const query = useMemo(() => {
-    const m = input.match(/\/actions?\s+(.*?)$/i);
+    const m = input.match(/\/actions?\s(.*)$/i);
     return m?.[1]?.toLowerCase() ?? '';
   }, [input]);
 
@@ -32,7 +32,7 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
   }, [actions, query, stage]);
 
   useEffect(() => {
-    const offset = stage === 'command' ? 1 : 1;
+    const offset = 1;
     const el = listRef.current?.children[highlightedIndex + offset] as HTMLElement | undefined;
     el?.scrollIntoView({ block: 'nearest' });
   }, [highlightedIndex, stage]);
@@ -80,7 +80,7 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
 }
 
 export function getFilteredActions(input: string, actions: ActionItem[]): ActionItem[] {
-  const match = input.match(/\/actions?\s+(.*?)$/i);
+  const match = input.match(/\/actions?\s(.*)$/i);
   if (match) {
     const query = match[1]?.toLowerCase() ?? '';
     if (!query) return actions;

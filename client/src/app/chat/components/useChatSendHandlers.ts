@@ -171,7 +171,7 @@ export function useChatSendHandlers({
     // Action trigger: chip-selected action takes priority, text fallback second
     const actionToTrigger = selectedAction
       || (() => {
-        const m = trimmed.match(/^\/actions?\s+(.+)$/i);
+        const m = trimmed.match(/^\/actions?\s(.*)$/i);
         if (!m) return null;
         const name = m[1].trim();
         return availableActions.find(a => a.name.toLowerCase() === name.toLowerCase()) || { id: '', name };
