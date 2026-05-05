@@ -49,6 +49,20 @@ def _validate_trigger_config(body):
     return tc, None
 
 
+def _validate_name(body):
+    name = (body["name"] or "").strip()
+    if not name or len(name) > 255:
+        return None, "name must be 1-255 characters"
+    return name, None
+
+
+def _validate_instructions(body):
+    instructions = (body["instructions"] or "").strip()
+    if not instructions:
+        return None, "instructions cannot be empty"
+    return instructions, None
+
+
 def _parse_update_fields(body):
     """Validate and extract update columns/vals from request body.
 
@@ -57,20 +71,20 @@ def _parse_update_fields(body):
     """
     columns, vals = [], []
     if "name" in body:
-        name = (body["name"] or "").strip()
-        if not name or len(name) > 255:
-            return None, None, "name must be 1-255 characters"
+        val, err = _validate_name(body)
+        if err:
+            return None, None, err
         columns.append("name")
-        vals.append(name)
+        vals.append(val)
     if "description" in body:
         columns.append("description")
         vals.append((body["description"] or "").strip() or None)
     if "instructions" in body:
-        instructions = (body["instructions"] or "").strip()
-        if not instructions:
-            return None, None, "instructions cannot be empty"
+        val, err = _validate_instructions(body)
+        if err:
+            return None, None, err
         columns.append("instructions")
-        vals.append(instructions)
+        vals.append(val)
     if "trigger_type" in body:
         if body["trigger_type"] not in _VALID_TRIGGER_TYPES:
             return None, None, f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"
