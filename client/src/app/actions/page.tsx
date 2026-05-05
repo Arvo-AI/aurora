@@ -263,13 +263,17 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
   );
 
   const handleToggle = useCallback(async (enabled: boolean) => {
-    await fetchR(`/api/actions/${actionId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-    mutate();
-  }, [actionId, mutate]);
+    try {
+      await fetchR(`/api/actions/${actionId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      mutate();
+    } catch {
+      toast({ title: 'Failed to update action', variant: 'destructive' });
+    }
+  }, [actionId, mutate, toast]);
 
   const handleRunNow = useCallback(async () => {
     try {
@@ -282,9 +286,14 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
   }, [actionId, mutate, toast]);
 
   const handleDelete = useCallback(async () => {
-    await fetchR(`/api/actions/${actionId}`, { method: 'DELETE' });
-    onBack();
-  }, [actionId, onBack]);
+    if (!confirm('Delete this action? This cannot be undone.')) return;
+    try {
+      await fetchR(`/api/actions/${actionId}`, { method: 'DELETE' });
+      onBack();
+    } catch {
+      toast({ title: 'Failed to delete action', variant: 'destructive' });
+    }
+  }, [actionId, onBack, toast]);
 
   if (!action) {
     return <div className="text-zinc-500 text-sm py-12 text-center">Loading...</div>;
