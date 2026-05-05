@@ -25,6 +25,7 @@ def dispatch_action(
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[Actions:dispatch]")
             cur.execute(
                 "SELECT id, org_id, name, instructions, mode FROM actions WHERE id = %s",
                 (action_id,),
@@ -171,6 +172,7 @@ def _create_run(
     run_id = str(uuid.uuid4())
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[Actions:create_run]")
             cur.execute(
                 """INSERT INTO action_runs (id, action_id, org_id, user_id, incident_id,
                    status, trigger_context, error, completed_at)
@@ -209,6 +211,7 @@ def _update_run(
     vals.append(run_id)
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[Actions:update_run]")
             cur.execute(f"UPDATE action_runs SET {', '.join(sets)} WHERE id = %s", vals)
             conn.commit()
 

@@ -2315,15 +2315,19 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             orphaned_count += 1
                         conn.commit()
 
-            # --- 4. Stale action runs (cross-org, no per-user iteration needed) ---
+            # --- 4. Stale action runs (per-org, action_runs is RLS-protected) ---
             stale_actions_count = 0
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    UPDATE action_runs SET status = 'error', completed_at = NOW(),
-                           error = 'Stale: background chat did not complete'
-                    WHERE status IN ('running', 'pending') AND started_at < %s
-                """, (stale_threshold,))
-                stale_actions_count = cursor.rowcount
+                cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
+                org_ids = [r[0] for r in cursor.fetchall()]
+                for oid in org_ids:
+                    cursor.execute("SET myapp.current_org_id = %s;", (oid,))
+                    cursor.execute("""
+                        UPDATE action_runs SET status = 'error', completed_at = NOW(),
+                               error = 'Stale: background chat did not complete'
+                        WHERE status IN ('running', 'pending') AND started_at < %s
+                    """, (stale_threshold,))
+                    stale_actions_count += cursor.rowcount
                 if stale_actions_count > 0:
                     conn.commit()
 
