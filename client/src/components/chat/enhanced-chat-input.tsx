@@ -88,9 +88,9 @@ export default function EnhancedChatInput({
 
   const handleSelect = useCallback((action: ActionItem) => {
     onActionSelect?.(action);
-    // Replace /action... portion with the action name inline in the textarea
-    const replaced = input.replace(/(^|\s)\/actions?\s*\S*$/i, `$1/action ${action.name} `);
-    setInput(replaced === input ? `/action ${action.name} ` : replaced);
+    const idx = input.search(/(^|\s)\/actions?\s/i);
+    const replaced = idx !== -1 ? input.slice(0, idx === 0 ? 0 : idx + 1) + `/action ${action.name} ` : `/action ${action.name} `;
+    setInput(replaced);
     setHighlightedIndex(0);
   }, [onActionSelect, setInput, input]);
 
