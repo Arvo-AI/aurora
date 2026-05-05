@@ -77,7 +77,7 @@ const actionDetailFetcher = async (key: string, signal: AbortSignal) => {
 // -- Shared style primitives (matching monitor page) --
 
 function getTriggerDescription(type: string): string {
-  if (type === 'on_incident') return 'Fires automatically after every incident RCA completes.';
+  if (type === 'on_incident') return 'Fires automatically when a new incident is created.';
   if (type === 'on_schedule') return 'Runs automatically on a recurring interval.';
   return 'Only runs when triggered from the Actions page or Incident Detail page.';
 }
@@ -524,7 +524,7 @@ function ActionFormView({ onBack, onSaved, action }: {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="manual">Manual only</SelectItem>
-                    <SelectItem value="on_incident">On Incident (after RCA completes)</SelectItem>
+                    <SelectItem value="on_incident">On Incident</SelectItem>
                     <SelectItem value="on_schedule">On Schedule</SelectItem>
                   </SelectContent>
                 </Select>
