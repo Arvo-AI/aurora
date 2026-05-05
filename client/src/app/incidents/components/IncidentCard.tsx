@@ -18,7 +18,7 @@ import {
   Activity,
   Workflow,
 } from 'lucide-react';
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
@@ -112,6 +112,16 @@ function RunActionDropdown({ incidentId, incidentTitle }: { readonly incidentId:
   const [actions, setActions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
 
   const handleOpen = async () => {
     if (open) { setOpen(false); return; }
@@ -123,7 +133,9 @@ function RunActionDropdown({ incidentId, incidentTitle }: { readonly incidentId:
         const data = await res.json();
         setActions((data.actions || []).filter((a: { enabled: boolean }) => a.enabled));
       }
-    } catch { /* ignore */ }
+    } catch {
+      toast({ title: 'Failed to load actions', variant: 'destructive' });
+    }
     setLoading(false);
   };
 
@@ -142,7 +154,7 @@ function RunActionDropdown({ incidentId, incidentTitle }: { readonly incidentId:
   };
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <button
         onClick={handleOpen}
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800/80 border border-zinc-700/50 text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/80 transition-all"
