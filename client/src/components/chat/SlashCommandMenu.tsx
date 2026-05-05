@@ -9,12 +9,12 @@ export interface ActionItem {
 }
 
 interface SlashCommandMenuProps {
-  input: string;
-  actions: ActionItem[];
-  onSelect: (action: ActionItem) => void;
-  onCommandSelect: () => void;
-  highlightedIndex: number;
-  stage: 'command' | 'action';
+  readonly input: string;
+  readonly actions: ActionItem[];
+  readonly onSelect: (action: ActionItem) => void;
+  readonly onCommandSelect: () => void;
+  readonly highlightedIndex: number;
+  readonly stage: 'command' | 'action';
 }
 
 export default function SlashCommandMenu({ input, actions, onSelect, onCommandSelect, highlightedIndex, stage }: SlashCommandMenuProps) {
@@ -58,26 +58,41 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
             <span className="text-zinc-500 ml-2">Run a configured action</span>
           </div>
         </button>
-      ) : actions.length === 0 ? (
-        <div className="px-3 py-3 text-xs text-zinc-500">No actions configured. Create one in Settings.</div>
-      ) : filtered.length === 0 ? (
-        <div className="px-3 py-3 text-xs text-zinc-500">No matching actions</div>
       ) : (
-        filtered.slice(0, 8).map((action, i) => (
-          <button
-            key={action.id}
-            type="button"
-            onMouseDown={e => { e.preventDefault(); onSelect(action); }}
-            className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 transition-colors text-left ${
-              i === highlightedIndex ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-            }`}
-          >
-            <Workflow className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
-            <span className="truncate">{action.name}</span>
-          </button>
-        ))
+        <ActionsList actions={actions} filtered={filtered} highlightedIndex={highlightedIndex} onSelect={onSelect} />
       )}
     </div>
+  );
+}
+
+function ActionsList({ actions, filtered, highlightedIndex, onSelect }: {
+  readonly actions: ActionItem[];
+  readonly filtered: ActionItem[];
+  readonly highlightedIndex: number;
+  readonly onSelect: (action: ActionItem) => void;
+}) {
+  if (actions.length === 0) {
+    return <div className="px-3 py-3 text-xs text-zinc-500">No actions configured. Create one in Settings.</div>;
+  }
+  if (filtered.length === 0) {
+    return <div className="px-3 py-3 text-xs text-zinc-500">No matching actions</div>;
+  }
+  return (
+    <>
+      {filtered.slice(0, 8).map((action, i) => (
+        <button
+          key={action.id}
+          type="button"
+          onMouseDown={e => { e.preventDefault(); onSelect(action); }}
+          className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 transition-colors text-left ${
+            i === highlightedIndex ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+          }`}
+        >
+          <Workflow className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+          <span className="truncate">{action.name}</span>
+        </button>
+      ))}
+    </>
   );
 }
 

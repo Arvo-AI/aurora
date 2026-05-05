@@ -7,6 +7,8 @@ from flask import jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 
+_ERR_NOT_FOUND = "Action not found"
+
 from . import actions_bp
 
 logger = logging.getLogger(__name__)
@@ -120,7 +122,7 @@ def _get_action_response(action_id):
             cols = [d[0] for d in cur.description]
             row = cur.fetchone()
             if not row:
-                return jsonify({"error": "Action not found"}), 404
+                return jsonify({"error": _ERR_NOT_FOUND}), 404
             action = dict(zip(cols, row))
 
             cur.execute(
@@ -210,7 +212,7 @@ def update_action(user_id, action_id):
                 vals,
             )
             if not cur.fetchone():
-                return jsonify({"error": "Action not found"}), 404
+                return jsonify({"error": _ERR_NOT_FOUND}), 404
             conn.commit()
 
     return _get_action_response(action_id)
@@ -223,7 +225,7 @@ def delete_action(user_id, action_id):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM actions WHERE id = %s RETURNING id", (action_id,))
             if not cur.fetchone():
-                return jsonify({"error": "Action not found"}), 404
+                return jsonify({"error": _ERR_NOT_FOUND}), 404
             conn.commit()
     return "", 204
 

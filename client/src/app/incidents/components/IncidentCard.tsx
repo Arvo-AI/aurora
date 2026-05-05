@@ -107,7 +107,7 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
-function RunActionDropdown({ incidentId, incidentTitle }: { incidentId: string; incidentTitle: string }) {
+function RunActionDropdown({ incidentId, incidentTitle }: { readonly incidentId: string; readonly incidentTitle: string }) {
   const [open, setOpen] = useState(false);
   const [actions, setActions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -153,24 +153,32 @@ function RunActionDropdown({ incidentId, incidentTitle }: { incidentId: string; 
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 w-64 bg-zinc-900 border border-zinc-700/60 rounded-lg shadow-xl z-50 py-1">
-          {loading ? (
-            <p className="text-xs text-zinc-500 px-3 py-2">Loading...</p>
-          ) : actions.length === 0 ? (
-            <p className="text-xs text-zinc-500 px-3 py-2">No actions configured</p>
-          ) : (
-            actions.map(a => (
-              <button
-                key={a.id}
-                onClick={() => handleTrigger(a.id)}
-                className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-              >
-                {a.name}
-              </button>
-            ))
-          )}
+          <ActionDropdownContent loading={loading} actions={actions} onTrigger={handleTrigger} />
         </div>
       )}
     </div>
+  );
+}
+
+function ActionDropdownContent({ loading, actions, onTrigger }: {
+  readonly loading: boolean;
+  readonly actions: { id: string; name: string }[];
+  readonly onTrigger: (id: string) => void;
+}) {
+  if (loading) return <p className="text-xs text-zinc-500 px-3 py-2">Loading...</p>;
+  if (actions.length === 0) return <p className="text-xs text-zinc-500 px-3 py-2">No actions configured</p>;
+  return (
+    <>
+      {actions.map(a => (
+        <button
+          key={a.id}
+          onClick={() => onTrigger(a.id)}
+          className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
+        >
+          {a.name}
+        </button>
+      ))}
+    </>
   );
 }
 

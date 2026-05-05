@@ -65,7 +65,7 @@ export default function EnhancedChatInput({
   const [highlightedIndex, setHighlightedIndex] = useState(0);
 
   // Show menu as soon as "/" is typed (word-boundary: start of input or after space)
-  const slashMatch = !selectedAction && input.match(/(^|\s)(\/\S*)$/);
+  const slashMatch = !selectedAction ? (/(^|\s)(\/\S*)$/).exec(input) : null;
   const slashToken = slashMatch?.[2] ?? '';
   const isFullCommand = /^\/actions?$/i.test(slashToken);
   const isPartialCommand = !isFullCommand && '/action'.startsWith(slashToken.toLowerCase()) && slashToken.length >= 1;
@@ -75,6 +75,7 @@ export default function EnhancedChatInput({
   const menuStage: 'command' | 'action' = (isFullCommand || hasCompletedCommand) ? 'action' : 'command';
   const filteredActions = menuVisible && menuStage === 'action' ? getFilteredActions(input, actions).slice(0, 8) : [];
   const menuItemCount = menuStage === 'command' ? 1 : (filteredActions.length || 1);
+  const hasActiveOverlay = selectedAction != null && input.toLowerCase().includes('/action ' + selectedAction.name.toLowerCase());
 
   let parsedContext = null;
   try {
@@ -227,31 +228,16 @@ export default function EnhancedChatInput({
               stage={menuStage}
             />
           )}
-          {/* Styled overlay to highlight /action Name in bold blue */}
-          {selectedAction && (() => {
-            const pattern = new RegExp(`(\\/actions?\\s+${selectedAction.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'i');
-            const parts = input.split(pattern);
-            if (parts.length < 2) return null;
-            return (
-              <div
-                aria-hidden="true"
-                className="absolute inset-0 py-2 pl-2 pr-24 text-base whitespace-pre-wrap break-words pointer-events-none overflow-hidden"
-              >
-                {parts.map((part, i) =>
-                  pattern.test(part)
-                    ? <span key={i} className="text-blue-400">{part}</span>
-                    : <span key={i} className="text-foreground">{part}</span>
-                )}
-              </div>
-            );
-          })()}
+          {selectedAction && (
+            <ActionOverlay input={input} actionName={selectedAction.name} />
+          )}
           <AutoResizeTextarea
             placeholder={placeholder}
             value={input}
             onChange={(e) => { setInput(e.target.value); setHighlightedIndex(0); }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className={`w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none ${selectedAction && input.toLowerCase().includes(`/action ${selectedAction.name.toLowerCase()}`) ? 'caret-white text-transparent' : ''}`}
+            className={`w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none ${hasActiveOverlay ? 'caret-white text-transparent' : ''}`}
             maxRows={6}
           />
           
@@ -314,6 +300,23 @@ export default function EnhancedChatInput({
           onToggleRCA={onToggleRCA}
         />
       </div>
+    </div>
+  );
+}
+
+function ActionOverlay({ input, actionName }: { readonly input: string; readonly actionName: string }) {
+  const escaped = actionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(\\/actions?\\s+${escaped})`, 'i');
+  const parts = input.split(pattern);
+  if (parts.length < 2) return null;
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute inset-0 py-2 pl-2 pr-24 text-base whitespace-pre-wrap break-words pointer-events-none overflow-hidden"
+    >
+      {parts.map((part, idx) => (
+        <span key={part + String(idx)} className={pattern.test(part) ? 'text-blue-400' : 'text-foreground'}>{part}</span>
+      ))}
     </div>
   );
 }

@@ -76,11 +76,17 @@ const actionDetailFetcher = async (key: string, signal: AbortSignal) => {
 
 // -- Shared style primitives (matching monitor page) --
 
+function getTriggerDescription(type: string): string {
+  if (type === 'on_incident') return 'Fires automatically after every incident RCA completes.';
+  if (type === 'on_schedule') return 'Runs automatically on a recurring interval.';
+  return 'Only runs when triggered from the Actions page or Incident Detail page.';
+}
+
 function StatCard({ label, value, sub, icon: Icon }: {
-  label: string;
-  value: string;
-  sub?: string;
-  icon?: React.ComponentType<{ className?: string }>;
+  readonly label: string;
+  readonly value: string;
+  readonly sub?: string;
+  readonly icon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
     <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-4 hover:ring-1 hover:ring-white/5 transition-all duration-200">
@@ -97,9 +103,9 @@ function StatCard({ label, value, sub, icon: Icon }: {
 }
 
 function Panel({ title, subtitle, children }: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly children: React.ReactNode;
 }) {
   return (
     <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5">
@@ -112,7 +118,7 @@ function Panel({ title, subtitle, children }: {
   );
 }
 
-function TriggerBadge({ type }: { type: Action['trigger_type'] }) {
+function TriggerBadge({ type }: { readonly type: Action['trigger_type'] }) {
   const styles: Record<string, string> = {
     on_incident: 'bg-blue-500/10 text-blue-400',
     manual: 'bg-zinc-500/10 text-zinc-400',
@@ -130,13 +136,13 @@ function TriggerBadge({ type }: { type: Action['trigger_type'] }) {
   );
 }
 
-function ModeBadge({ mode }: { mode: Action['mode'] }) {
+function ModeBadge({ mode }: { readonly mode: Action['mode'] }) {
   return mode === 'agent'
     ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400">Read-Write</span>
     : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-zinc-500/10 text-zinc-400">Read-Only</span>;
 }
 
-function StatusDot({ status }: { status: ActionRun['status'] }) {
+function StatusDot({ status }: { readonly status: ActionRun['status'] }) {
   switch (status) {
     case 'success': return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />;
     case 'error': return <XCircle className="h-3.5 w-3.5 text-red-400" />;
@@ -148,9 +154,9 @@ function StatusDot({ status }: { status: ActionRun['status'] }) {
 // -- List view --
 
 function ActionsListView({ actions, onSelect, onCreate }: {
-  actions: Action[];
-  onSelect: (a: Action) => void;
-  onCreate: () => void;
+  readonly actions: Action[];
+  readonly onSelect: (a: Action) => void;
+  readonly onCreate: () => void;
 }) {
   const active = actions.filter(a => a.enabled).length;
   const totalRuns = actions.reduce((s, a) => s + (a.run_count || 0), 0);
@@ -235,7 +241,7 @@ function ActionsListView({ actions, onSelect, onCreate }: {
 
 // -- Detail view --
 
-function ActionDetailView({ actionId, onBack, onEdit }: { actionId: string; onBack: () => void; onEdit: () => void }) {
+function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: string; readonly onBack: () => void; readonly onEdit: () => void }) {
   const { toast } = useToast();
   const { data, mutate } = useQuery<{ action: ActionDetail; recent_runs: ActionRun[] }>(
     `/api/actions/${actionId}`, actionDetailFetcher, { staleTime: 5_000 }
@@ -371,7 +377,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { actionId: string; onBa
                       {run.started_at ? formatTimeAgo(run.started_at) : '-'}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-zinc-500" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '-'}
+                      {run.duration_ms !== null && run.duration_ms !== undefined ? `${(run.duration_ms / 1000).toFixed(1)}s` : '-'}
                     </td>
                     <td className="px-4 py-2.5">
                       {run.chat_session_id && (run.status === 'success' || run.status === 'error') && (
@@ -394,11 +400,13 @@ function ActionDetailView({ actionId, onBack, onEdit }: { actionId: string; onBa
 // -- Form view (create + edit) --
 
 function ActionFormView({ onBack, onSaved, action }: {
-  onBack: () => void;
-  onSaved: () => void;
-  action?: ActionDetail;
+  readonly onBack: () => void;
+  readonly onSaved: () => void;
+  readonly action?: ActionDetail;
 }) {
   const isEdit = !!action;
+  const submitLabel = isEdit ? 'Save Changes' : 'Create Action';
+  const submittingLabel = isEdit ? 'Saving...' : 'Creating...';
   const [name, setName] = useState(action?.name || '');
   const [description, setDescription] = useState(action?.description || '');
   const [instructions, setInstructions] = useState(action?.instructions || '');
@@ -512,11 +520,7 @@ function ActionFormView({ onBack, onSaved, action }: {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-zinc-600">
-                  {triggerType === 'on_incident'
-                    ? 'Fires automatically after every incident RCA completes.'
-                    : triggerType === 'on_schedule'
-                      ? 'Runs automatically on a recurring interval.'
-                      : 'Only runs when triggered from the Actions page or Incident Detail page.'}
+                  {getTriggerDescription(triggerType)}
                 </p>
               </div>
 
@@ -572,7 +576,7 @@ function ActionFormView({ onBack, onSaved, action }: {
               onClick={handleSubmit}
               className="flex-1 px-3 py-2 rounded-lg bg-zinc-100 text-zinc-900 text-xs font-medium hover:bg-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              {submitting ? (isEdit ? 'Saving...' : 'Creating...') : (isEdit ? 'Save Changes' : 'Create Action')}
+              {submitting ? submittingLabel : submitLabel}
             </button>
             <button onClick={onBack} className="px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/80 transition-all">
               Cancel
@@ -596,6 +600,22 @@ export function ActionsContent() {
   );
   const actions: Action[] = Array.isArray(rawActions) ? rawActions : (rawActions?.actions ?? []);
 
+  const renderView = () => {
+    if (editingActionId) {
+      return <EditActionWrapper actionId={editingActionId} onBack={() => { setEditingActionId(null); setSelectedActionId(editingActionId); }} onSaved={() => { setEditingActionId(null); mutate(); }} />;
+    }
+    if (createOpen) {
+      return <ActionFormView onBack={() => setCreateOpen(false)} onSaved={() => { setCreateOpen(false); mutate(); }} />;
+    }
+    if (selectedActionId) {
+      return <ActionDetailView actionId={selectedActionId} onBack={() => { setSelectedActionId(null); mutate(); }} onEdit={() => { setEditingActionId(selectedActionId); setSelectedActionId(null); }} />;
+    }
+    if (isLoading) {
+      return <div className="text-sm text-zinc-500 py-12 text-center">Loading...</div>;
+    }
+    return <ActionsListView actions={actions} onSelect={(a) => setSelectedActionId(a.id)} onCreate={() => setCreateOpen(true)} />;
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -613,17 +633,7 @@ export function ActionsContent() {
         )}
       </div>
 
-      {editingActionId ? (
-        <EditActionWrapper actionId={editingActionId} onBack={() => { setEditingActionId(null); setSelectedActionId(editingActionId); }} onSaved={() => { setEditingActionId(null); mutate(); }} />
-      ) : createOpen ? (
-        <ActionFormView onBack={() => setCreateOpen(false)} onSaved={() => { setCreateOpen(false); mutate(); }} />
-      ) : selectedActionId ? (
-        <ActionDetailView actionId={selectedActionId} onBack={() => { setSelectedActionId(null); mutate(); }} onEdit={() => { setEditingActionId(selectedActionId); setSelectedActionId(null); }} />
-      ) : isLoading ? (
-        <div className="text-sm text-zinc-500 py-12 text-center">Loading...</div>
-      ) : (
-        <ActionsListView actions={actions} onSelect={(a) => setSelectedActionId(a.id)} onCreate={() => setCreateOpen(true)} />
-      )}
+      {renderView()}
     </div>
   );
 }
@@ -634,7 +644,7 @@ export default function ActionsPage() {
   return <ActionsContent />;
 }
 
-function EditActionWrapper({ actionId, onBack, onSaved }: { actionId: string; onBack: () => void; onSaved: () => void }) {
+function EditActionWrapper({ actionId, onBack, onSaved }: { readonly actionId: string; readonly onBack: () => void; readonly onSaved: () => void }) {
   const { data } = useQuery<{ action: ActionDetail; recent_runs: ActionRun[] }>(
     `/api/actions/${actionId}`, actionDetailFetcher, { staleTime: 5_000 }
   );
