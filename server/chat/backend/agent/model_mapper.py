@@ -12,6 +12,11 @@ from typing import Dict, Optional, Tuple
 
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
+    "openai/gpt-5.5": {
+        "openrouter": "openai/gpt-5.5",
+        "openai": "gpt-5.5",
+        "provider": "openai",
+    },
     "openai/gpt-5.2": {
         "openrouter": "openai/gpt-5.2",
         "openai": "gpt-5.2",
@@ -52,6 +57,11 @@ MODEL_MAPPINGS = {
     "anthropic/claude-sonnet-4-6": {
         "openrouter": "anthropic/claude-sonnet-4.6",
         "anthropic": "claude-sonnet-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-opus-4.7": {
+        "openrouter": "anthropic/claude-opus-4.7",
+        "anthropic": "claude-opus-4-7",
         "provider": "anthropic",
     },
     "anthropic/claude-opus-4.6": {

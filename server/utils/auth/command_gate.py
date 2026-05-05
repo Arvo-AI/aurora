@@ -329,8 +329,8 @@ def _user_is_org_admin(user_id: str, org_id: Optional[str]) -> bool:
     if not user_id or not org_id:
         return False
     try:
-        from utils.auth.enforcer import get_enforcer
-        return bool(get_enforcer().enforce(user_id, org_id, "admin", "access"))
+        from utils.auth.enforcer import enforce_with_reload
+        return enforce_with_reload(user_id, org_id, "admin", "access")
     except Exception as e:
         logger.warning(f"[CommandGate] admin check failed for {user_id}/{org_id}: {e}")
         return False

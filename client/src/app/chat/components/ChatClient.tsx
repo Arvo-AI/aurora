@@ -214,6 +214,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     },
     onDisconnect: () => {
       console.log('Chat WebSocket disconnected');
+      setIsSending(false);
     },
     onError: (error) => {
       console.error('Chat WebSocket error:', error);

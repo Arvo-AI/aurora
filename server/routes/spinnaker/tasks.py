@@ -288,6 +288,7 @@ def process_spinnaker_deployment(
                             broadcast_incident_update_to_user_connections(
                                 user_id,
                                 {"type": "incident_update", "incident_id": str(incident_id), "source": "spinnaker"},
+                                org_id=org_id,
                             )
                         except Exception as e:
                             logger.warning("%s SSE notify failed: %s", log_prefix, e)

@@ -378,6 +378,7 @@ def process_grafana_alert(
                                     source_alert_id=per_alert_source_id, alert_title=per_alert_title,
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
+                                    org_id=org_id,
                                 )
                                 cursor.execute("RELEASE SAVEPOINT sp_correlation")
                             except Exception as exc:
@@ -486,6 +487,7 @@ def process_grafana_alert(
                                 from routes.incidents_sse import broadcast_incident_update_to_user_connections
                                 broadcast_incident_update_to_user_connections(
                                     user_id, {"type": "incident_update", "incident_id": str(incident_id), "source": "grafana"},
+                                    org_id=org_id,
                                 )
                             except Exception as e:
                                 logger.warning("[GRAFANA][ALERT] Failed to notify SSE: %s", e)

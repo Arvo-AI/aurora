@@ -37,6 +37,7 @@ class LLMUsageTracker:
     MODEL_PRICING = {
         # OpenAI (direct API pricing per 1K tokens)
         # cached_input = automatic prompt caching discount
+        "openai/gpt-5.5": {"input": 0.005, "output": 0.030, "cached_input": 0.00125},
         "openai/gpt-5.4": {"input": 0.0025, "output": 0.015, "cached_input": 0.000625},
         "openai/gpt-5.2": {"input": 0.00175, "output": 0.014, "cached_input": 0.0004375},
         "openai/o3": {"input": 0.002, "output": 0.008, "cached_input": 0.0005},
@@ -47,6 +48,8 @@ class LLMUsageTracker:
         "openai/gpt-4o": {"input": 0.0025, "output": 0.01, "cached_input": 0.00125},
         "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006, "cached_input": 0.000075},
         # Anthropic (cached input = 90% discount)
+        "anthropic/claude-opus-4.7": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
+        "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-opus-4-6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-sonnet-4.6": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},

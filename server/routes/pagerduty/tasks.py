@@ -224,6 +224,7 @@ def _process_custom_field_update(
                         "source": "pagerduty",
                         "custom_fields_updated": True,
                     },
+                    org_id=org_id,
                 )
             except Exception as e:
                 logger.warning(
@@ -774,6 +775,7 @@ def process_pagerduty_event(
                                 "incident_id": str(incident_db_id),
                                 "source": "pagerduty",
                             },
+                            org_id=org_id,
                         )
                     except Exception as e:
                         logger.warning(
