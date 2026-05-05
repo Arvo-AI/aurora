@@ -192,6 +192,6 @@ def build_action_mode_segment(state: Optional[Any]) -> str:
             if skills_content:
                 parts.append(skills_content)
         except Exception as e:
-            logger.warning(f"Failed to load skills for action: {e}")
+            logger.warning("Failed to load skills for action: %s", e)
 
     return "\n\n".join(parts)
