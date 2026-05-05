@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/select';
 import { useQuery, fetchR } from '@/lib/query';
 import { useToast } from '@/hooks/use-toast';
+import { formatTimeAgo } from '@/lib/utils/time-format';
 
 interface Action {
   id: string;
@@ -212,7 +213,7 @@ function ActionsListView({ actions, onSelect, onCreate }: {
                       {action.last_run_at ? (
                         <div className="flex items-center gap-1.5">
                           <StatusDot status={action.last_run_status || 'pending'} />
-                          <span className="text-xs text-zinc-500">{new Date(action.last_run_at).toLocaleDateString()}</span>
+                          <span className="text-xs text-zinc-500">{formatTimeAgo(action.last_run_at)}</span>
                         </div>
                       ) : (
                         <span className="text-xs text-zinc-600">Never</span>
@@ -367,7 +368,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { actionId: string; onBa
                       {run.error && <p className="text-xs text-red-400/70 mt-0.5 truncate max-w-xs">{run.error}</p>}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-zinc-500" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {run.started_at ? new Date(run.started_at).toLocaleString() : '-'}
+                      {run.started_at ? formatTimeAgo(run.started_at) : '-'}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-zinc-500" style={{ fontVariantNumeric: 'tabular-nums' }}>
                       {run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '-'}
@@ -590,9 +591,10 @@ export function ActionsContent() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
 
-  const { data: actions = [], isLoading, mutate } = useQuery<Action[]>(
+  const { data: rawActions, isLoading, mutate } = useQuery<Action[] | { actions: Action[] }>(
     '/api/actions', actionsFetcher, { staleTime: 10_000 }
   );
+  const actions: Action[] = Array.isArray(rawActions) ? rawActions : (rawActions?.actions ?? []);
 
   return (
     <div>

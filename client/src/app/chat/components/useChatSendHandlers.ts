@@ -190,15 +190,40 @@ export function useChatSendHandlers({
         toast({ description: 'Connection not ready. Please wait and try again.', variant: 'destructive' });
         return false;
       }
-      // Send as a tool-like trigger through websocket
+
+      setIsSending(true);
+      onNewMessage({ id: Date.now(), sender: 'user', text: trimmed });
+
+      // Ensure a session exists (same as normal send flow)
+      let actualSessionId = currentSessionId;
+      if (!hasCreatedSession) {
+        try {
+          const title = trimmed.length > 50 ? trimmed.substring(0, 50).trimEnd() + '...' : trimmed;
+          const newSessionId = await createSession(title);
+          if (newSessionId) {
+            actualSessionId = newSessionId;
+            onSessionCreated?.(newSessionId);
+            setCurrentSessionId(newSessionId);
+            setHasCreatedSession(true);
+            justCreatedSessionRef.current = newSessionId;
+            startTransition(() => {
+              router.replace(`/chat?sessionId=${newSessionId}`);
+            });
+          }
+        } catch (error) {
+          console.error('Error creating session:', error);
+        }
+      }
+
       socket.send({
         type: 'message',
         query: trimmed,
         user_id: userId,
-        session_id: currentSessionId || undefined,
+        session_id: actualSessionId || undefined,
+        model: selectedModel,
+        mode: 'agent',
         trigger_action: actionToTrigger.id,
       });
-      onNewMessage({ id: Date.now(), sender: 'user', text: trimmed });
       clearSelectedAction?.();
       return true;
     }

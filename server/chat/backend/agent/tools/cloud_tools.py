@@ -1302,7 +1302,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((trigger_rca, "trigger_rca"))
 
     # Only include trigger_action when the user explicitly used /action command
-    if state_context and getattr(state_context, 'trigger_action_id', None):
+    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
+    if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
     
     # Process Aurora native tools
@@ -1471,8 +1472,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 name=name,
                 description=(
                     "Trigger an Aurora Action to run as a background task. "
-                    "Use this when the user explicitly requests to run an action via /action command. "
-                    "Parameters: action_id (required UUID of the action)."
+                    f"Call with action_id=\"{_action_id}\"."
                 ),
                 args_schema=TriggerActionArgs,
             )

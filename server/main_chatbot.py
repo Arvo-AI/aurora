@@ -1517,17 +1517,6 @@ async def handle_connection(websocket) -> None:
                 elif isinstance(human_message.content, list):
                     human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
 
-            if trigger_action_id:
-                action_instruction = (
-                    "[ACTION TRIGGER REQUESTED]\n"
-                    f"The user wants to trigger an Aurora Action (ID: {trigger_action_id}). "
-                    "You MUST call the trigger_action tool with this action_id first, then respond to the rest of their message normally.\n\n"
-                )
-                if isinstance(human_message.content, str):
-                    human_message = HumanMessage(content=action_instruction + human_message.content)
-                elif isinstance(human_message.content, list):
-                    human_message = HumanMessage(content=[{"type": "text", "text": action_instruction}] + human_message.content)
-
             messages_list = [human_message]
 
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query

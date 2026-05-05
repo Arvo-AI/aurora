@@ -37,9 +37,9 @@ def list_actions(user_id):
 
     for r in rows:
         r["id"] = str(r["id"])
-        r["created_at"] = r["created_at"].isoformat() if r["created_at"] else None
-        r["updated_at"] = r["updated_at"].isoformat() if r["updated_at"] else None
-        r["last_run_at"] = r["last_run_at"].isoformat() if r["last_run_at"] else None
+        r["created_at"] = (r["created_at"].isoformat() + "Z") if r["created_at"] else None
+        r["updated_at"] = (r["updated_at"].isoformat() + "Z") if r["updated_at"] else None
+        r["last_run_at"] = (r["last_run_at"].isoformat() + "Z") if r["last_run_at"] else None
         r["run_count"] = r["run_count"] or 0
 
     return jsonify({"actions": rows})
@@ -98,7 +98,7 @@ def create_action(user_id):
         "trigger_type": trigger_type,
         "mode": mode,
         "enabled": True,
-        "created_at": row[1].isoformat() if row[1] else None,
+        "created_at": (row[1].isoformat() + "Z") if row[1] else None,
     }), 201
 
 
@@ -134,15 +134,15 @@ def _get_action_response(action_id):
             runs = [dict(zip(run_cols, r)) for r in cur.fetchall()]
 
     action["id"] = str(action["id"])
-    action["created_at"] = action["created_at"].isoformat() if action["created_at"] else None
-    action["updated_at"] = action["updated_at"].isoformat() if action["updated_at"] else None
+    action["created_at"] = (action["created_at"].isoformat() + "Z") if action["created_at"] else None
+    action["updated_at"] = (action["updated_at"].isoformat() + "Z") if action["updated_at"] else None
 
     for r in runs:
         r["id"] = str(r["id"])
         r["incident_id"] = str(r["incident_id"]) if r["incident_id"] else None
         r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
-        r["started_at"] = r["started_at"].isoformat() if r["started_at"] else None
-        r["completed_at"] = r["completed_at"].isoformat() if r["completed_at"] else None
+        r["started_at"] = (r["started_at"].isoformat() + "Z") if r["started_at"] else None
+        r["completed_at"] = (r["completed_at"].isoformat() + "Z") if r["completed_at"] else None
         if r["started_at"] and r["completed_at"]:
             sa = datetime.fromisoformat(r["started_at"])
             ca = datetime.fromisoformat(r["completed_at"])
@@ -272,7 +272,7 @@ def list_runs(user_id, action_id):
         r["id"] = str(r["id"])
         r["incident_id"] = str(r["incident_id"]) if r["incident_id"] else None
         r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
-        r["started_at"] = r["started_at"].isoformat() if r["started_at"] else None
-        r["completed_at"] = r["completed_at"].isoformat() if r["completed_at"] else None
+        r["started_at"] = (r["started_at"].isoformat() + "Z") if r["started_at"] else None
+        r["completed_at"] = (r["completed_at"].isoformat() + "Z") if r["completed_at"] else None
 
     return jsonify({"runs": runs})
