@@ -22,7 +22,7 @@ _TOOL_METADATA: dict = {
     # per-command by the guardrails layer (signature matcher + LLM judge), not
     # by this static flag. Sub-agents need cloud_exec to actually query state.
     "cloud_exec": {"capability_tags": ["runtime_state", "metrics", "logs", "observability"], "mutates": False, "cacheable": False},
-    "kubectl_onprem": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": False},
+    "on_prem_kubectl": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": False},
     "terminal_exec": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": False},
     "tailscale_ssh": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": False},
     # Observability platforms — read-only query tools
@@ -51,6 +51,67 @@ _TOOL_METADATA: dict = {
     "get_incidentio_timeline": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     # General research
     "web_search": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
+    # Bitbucket — source control + CI (mirror of github tagging)
+    "bitbucket_repos": {"capability_tags": ["source_control_read"], "mutates": False, "cacheable": True},
+    "bitbucket_branches": {"capability_tags": ["source_control_read"], "mutates": False, "cacheable": True},
+    "bitbucket_pull_requests": {"capability_tags": ["source_control_read", "ci_cd"], "mutates": False, "cacheable": True},
+    "bitbucket_pipelines": {"capability_tags": ["ci_cd"], "mutates": False, "cacheable": True},
+    "bitbucket_issues": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},
+    # CI/CD providers (alongside spinnaker_rca above)
+    "cloudbees_rca": {"capability_tags": ["ci_cd"], "mutates": False, "cacheable": True},
+    "jenkins_rca": {"capability_tags": ["ci_cd"], "mutates": False, "cacheable": True},
+    # Cloudflare — read-only query tools; cloudflare_action mutates
+    "query_cloudflare": {"capability_tags": ["metrics", "observability", "logs"], "mutates": False, "cacheable": True},
+    "cloudflare_list_zones": {"capability_tags": ["observability"], "mutates": False, "cacheable": True},
+    "cloudflare_action": {"capability_tags": [], "mutates": True, "cacheable": False},
+    # Confluence runbook-search (confluence_runbook_parse already above)
+    "confluence_search_similar": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "confluence_search_runbooks": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "confluence_fetch_page": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    # Coroot — observability platform
+    "coroot_get_incidents": {"capability_tags": ["ticket_history", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_incident_detail": {"capability_tags": ["ticket_history", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_applications": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_app_detail": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_app_logs": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_traces": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_service_map": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "coroot_query_metrics": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_deployments": {"capability_tags": ["ci_cd"], "mutates": False, "cacheable": True},
+    "coroot_get_nodes": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "coroot_get_overview_logs": {"capability_tags": ["logs", "observability"], "mutates": False, "cacheable": True},
+    "coroot_get_node_detail": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "coroot_get_risks": {"capability_tags": ["observability"], "mutates": False, "cacheable": True},
+    # Jira — ticket history (read) vs mutate (write)
+    "jira_search_issues": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},
+    "jira_get_issue": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},
+    "jira_add_comment": {"capability_tags": [], "mutates": True, "cacheable": False},
+    "jira_create_issue": {"capability_tags": [], "mutates": True, "cacheable": False},
+    "jira_update_issue": {"capability_tags": [], "mutates": True, "cacheable": False},
+    "jira_link_issues": {"capability_tags": [], "mutates": True, "cacheable": False},
+    # Notion — read-only investigation tools (write tools default to mutates=True via the catch-all below)
+    "notion_search": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "notion_fetch": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "notion_query_database": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
+    "notion_query_data_source": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
+    "notion_get_block_children": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
+    # SharePoint
+    "sharepoint_search": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "sharepoint_fetch_page": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "sharepoint_fetch_document": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "sharepoint_create_page": {"capability_tags": [], "mutates": True, "cacheable": False},
+    # ThousandEyes — network observability
+    "thousandeyes_list_tests": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_test_detail": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_test_results": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_alerts": {"capability_tags": ["ticket_history", "observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_alert_rules": {"capability_tags": ["observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_agents": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_endpoint_agents": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_internet_insights": {"capability_tags": ["observability", "metrics"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_dashboards": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_dashboard_widget": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
+    "thousandeyes_get_bgp_monitors": {"capability_tags": ["observability"], "mutates": False, "cacheable": True},
 }
 
 
