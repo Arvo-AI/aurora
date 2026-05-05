@@ -122,7 +122,7 @@ export default function EnhancedChatInput({
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();
       if (menuStage === 'command') handleCommandSelect();
-      else handleSelect(filteredActions[highlightedIndex]);
+      else if (filteredActions[highlightedIndex]) handleSelect(filteredActions[highlightedIndex]);
       return true;
     }
     if (e.key === 'Escape') {
