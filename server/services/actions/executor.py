@@ -53,7 +53,7 @@ def dispatch_action(
 
     if trigger_context.get("incident_id"):
         trigger_context["incident"] = _load_incident_context(
-            trigger_context["incident_id"]
+            trigger_context["incident_id"], user_id
         )
 
     full_prompt, rail_text = build_action_prompt(action, trigger_context)
@@ -213,11 +213,12 @@ def _update_run(
             conn.commit()
 
 
-def _load_incident_context(incident_id: str) -> Dict[str, Any]:
+def _load_incident_context(incident_id: str, user_id: str) -> Dict[str, Any]:
     """Load incident data for prompt context."""
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Actions:incident_ctx]")
                 cur.execute(
                     """SELECT alert_title, severity, source_type, alert_service,
                               alert_environment, aurora_summary

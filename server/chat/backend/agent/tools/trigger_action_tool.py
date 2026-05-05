@@ -47,7 +47,8 @@ def trigger_action(
             "message": "Action dispatched successfully. It will run in the background. Track progress in Settings > Actions.",
         })
     except ValueError as e:
-        return json.dumps({"error": str(e)})
-    except Exception as e:
-        logger.exception(f"[TriggerAction] Failed to dispatch action {action_id}: {e}")
-        return json.dumps({"error": f"Failed to dispatch action: {e}"})
+        msg = "Action not found" if "not found" in str(e) else "Failed to dispatch action"
+        return json.dumps({"error": msg})
+    except Exception:
+        logger.exception("[TriggerAction] Failed to dispatch action %s", action_id)
+        return json.dumps({"error": "Failed to dispatch action"})

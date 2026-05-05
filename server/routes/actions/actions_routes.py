@@ -274,8 +274,11 @@ def trigger_action(user_id, action_id):
 @actions_bp.route("/<action_id>/runs", methods=["GET"])
 @require_permission("actions", "read")
 def list_runs(user_id, action_id):
-    limit = min(int(request.args.get("limit", 50)), 200)
-    offset = int(request.args.get("offset", 0))
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+        offset = max(int(request.args.get("offset", 0)), 0)
+    except (ValueError, TypeError):
+        return jsonify({"error": "limit and offset must be integers"}), 400
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
