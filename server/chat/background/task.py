@@ -2315,10 +2315,22 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             orphaned_count += 1
                         conn.commit()
 
-            if cleaned_count or dead_task_count or orphaned_count:
-                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d",
-                            cleaned_count, dead_task_count, orphaned_count)
-            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count}
+            # --- 4. Stale action runs (cross-org, no per-user iteration needed) ---
+            stale_actions_count = 0
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE action_runs SET status = 'error', completed_at = NOW(),
+                           error = 'Stale: background chat did not complete'
+                    WHERE status IN ('running', 'pending') AND started_at < %s
+                """, (stale_threshold,))
+                stale_actions_count = cursor.rowcount
+                if stale_actions_count > 0:
+                    conn.commit()
+
+            if cleaned_count or dead_task_count or orphaned_count or stale_actions_count:
+                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d stale_actions=%d",
+                            cleaned_count, dead_task_count, orphaned_count, stale_actions_count)
+            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count, "stale_actions": stale_actions_count}
 
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
