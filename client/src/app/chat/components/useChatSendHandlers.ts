@@ -171,9 +171,11 @@ export function useChatSendHandlers({
     // Action trigger: chip-selected action takes priority, text fallback second
     const actionToTrigger = selectedAction
       || (() => {
-        const m = trimmed.match(/^\/actions?\s(.*)$/i);
-        if (!m) return null;
-        const name = m[1].trim();
+        const lower = trimmed.toLowerCase();
+        const prefix = lower.startsWith('/actions ') ? '/actions ' : lower.startsWith('/action ') ? '/action ' : null;
+        if (!prefix) return null;
+        const name = trimmed.slice(prefix.length).trim();
+        if (!name) return null;
         return availableActions.find(a => a.name.toLowerCase() === name.toLowerCase()) || { id: '', name };
       })();
 
@@ -227,7 +229,8 @@ export function useChatSendHandlers({
       clearSelectedAction?.();
       return true;
     }
-    if (/^\/actions?\s*$/i.test(trimmed)) {
+    const bareCmd = trimmed.trim().toLowerCase();
+    if (bareCmd === '/action' || bareCmd === '/actions') {
       toast({ description: 'Usage: /action <name>. Type /action and see suggestions.' });
       return false;
     }

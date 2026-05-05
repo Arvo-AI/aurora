@@ -21,8 +21,10 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
   const listRef = useRef<HTMLDivElement>(null);
 
   const query = useMemo(() => {
-    const m = input.match(/\/actions?\s(.*)$/i);
-    return m?.[1]?.toLowerCase() ?? '';
+    const idx = input.search(/\/actions?\s/i);
+    if (idx === -1) return '';
+    const afterCmd = input.slice(idx).replace(/^\/actions?\s/i, '');
+    return afterCmd.toLowerCase();
   }, [input]);
 
   const filtered = useMemo(() => {
@@ -80,9 +82,9 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
 }
 
 export function getFilteredActions(input: string, actions: ActionItem[]): ActionItem[] {
-  const match = input.match(/\/actions?\s(.*)$/i);
-  if (match) {
-    const query = match[1]?.toLowerCase() ?? '';
+  const idx = input.search(/\/actions?\s/i);
+  if (idx !== -1) {
+    const query = input.slice(idx).replace(/^\/actions?\s/i, '').toLowerCase();
     if (!query) return actions;
     return actions.filter(a => a.name.toLowerCase().includes(query));
   }
