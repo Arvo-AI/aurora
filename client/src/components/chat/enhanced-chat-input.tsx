@@ -204,16 +204,14 @@ export default function EnhancedChatInput({
         {/* Context chips */}
         {parsedContext && (
           <div className="flex flex-wrap gap-2">
-            {parsedContext && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
                 <span className="text-orange-400 font-medium">Incident {parsedContext.title}</span>
                 {onRemoveContext && (
                   <button onClick={onRemoveContext} className="text-orange-400 hover:text-orange-300">
                     <X className="h-3 w-3" />
                   </button>
                 )}
-              </div>
-            )}
+            </div>
           </div>
         )}
         
