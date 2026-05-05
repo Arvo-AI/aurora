@@ -583,9 +583,9 @@ function ActionFormView({ onBack, onSaved, action }: {
   );
 }
 
-// -- Page --
+// -- Content (used by SettingsModal) --
 
-export default function ActionsPage() {
+export function ActionsContent() {
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
@@ -595,10 +595,10 @@ export default function ActionsPage() {
   );
 
   return (
-    <div className="max-w-[1400px] mx-auto py-8 px-4 sm:px-6">
-      <div className="flex items-center justify-between mb-8">
+    <div>
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Actions</h1>
+          <h2 className="text-2xl font-bold">Actions</h2>
           <p className="text-sm text-zinc-500 mt-1">Background agent tasks that follow your instructions</p>
         </div>
         {!createOpen && !selectedActionId && !editingActionId && (
@@ -624,6 +624,12 @@ export default function ActionsPage() {
       )}
     </div>
   );
+}
+
+// -- Page (redirects to settings) --
+
+export default function ActionsPage() {
+  return <ActionsContent />;
 }
 
 function EditActionWrapper({ actionId, onBack, onSaved }: { actionId: string; onBack: () => void; onSaved: () => void }) {
