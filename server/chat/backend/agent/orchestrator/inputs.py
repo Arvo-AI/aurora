@@ -10,8 +10,10 @@ _MAX_TURNS_DEFAULT = 8
 _REQUIRED_FINDINGS_SECTIONS = ["## Summary", "## Evidence", "## Reasoning", "## What I ruled out"]
 _HARD_CONSTRAINTS = [
     "You are READ-ONLY. Never call any tool marked as mutating.",
-    f"Maximum {_MAX_TURNS_DEFAULT} turns. Budget each turn carefully.",
-    "You MUST end by calling the `write_findings` tool with a valid findings.md body.",
+    f"Maximum {_MAX_TURNS_DEFAULT} tool-calling turns. Budget each turn carefully — leave at least one turn for `write_findings`.",
+    "Your investigation ENDS ONLY when you call `write_findings`. Do NOT reply with plain text under any circumstance — every response must be either a tool call or a `write_findings` call.",
+    "If a tool errors, returns no data, or you cannot make further progress, call `write_findings` immediately with `status: inconclusive` and explain in the Reasoning section what you tried.",
+    "Even with zero findings, call `write_findings` with a populated body (status: inconclusive) — never just stop.",
     "findings.md must have YAML frontmatter followed by ## Summary, ## Evidence, ## Reasoning, ## What I ruled out.",
 ]
 

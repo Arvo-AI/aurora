@@ -27,38 +27,57 @@ def _truncate(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
 def _extract_tool_call_history(tool_capture) -> list[dict]:
     """Serialize ToolContextCapture's per-session tool calls as a small list.
 
+    Reads from `tool_history` (append-only, survives GC) primarily; falls back
+    to `current_tool_calls` for any in-flight (not-yet-completed) entries so a
+    timeout still surfaces calls that hadn't finished.
+
     Best-effort: anything unexpected returns an empty list rather than raising.
     """
     if tool_capture is None:
         return []
     try:
-        raw = getattr(tool_capture, "current_tool_calls", {}) or {}
         items: list[dict] = []
+        seen_ids: set = set()
+
+        history = getattr(tool_capture, "tool_history", []) or []
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            call_id = entry.get("tool_call_id")
+            if call_id and call_id in seen_ids:
+                continue
+            if call_id:
+                seen_ids.add(call_id)
+            items.append({
+                "tool_name": _truncate(entry.get("tool_name") or "unknown", 128),
+                "args": _truncate(entry.get("input"), _MAX_HISTORY_FIELD_CHARS),
+                "output_excerpt": _truncate(entry.get("output_excerpt") or "", _MAX_HISTORY_FIELD_CHARS),
+                "is_error": bool(entry.get("is_error", False)),
+                "status": "completed",
+                "started_at": entry.get("started_at"),
+                "completed_at": entry.get("completed_at"),
+            })
+
+        # Pull in any still-running calls that never completed (e.g. timeout).
+        raw = getattr(tool_capture, "current_tool_calls", {}) or {}
         for call_id, info in raw.items():
-            if not isinstance(info, dict):
+            if not isinstance(info, dict) or call_id in seen_ids:
                 continue
             started = info.get("start_time")
-            completed = info.get("completion_time")
             try:
                 started_iso = started.isoformat() if started else None
             except Exception:
                 started_iso = None
-            try:
-                completed_iso = completed.isoformat() if completed else None
-            except Exception:
-                completed_iso = None
-            status = "completed" if info.get("completed") else "running"
             items.append({
                 "tool_name": _truncate(info.get("tool_name") or "unknown", 128),
                 "args": _truncate(info.get("input"), _MAX_HISTORY_FIELD_CHARS),
-                "output_excerpt": _truncate(info.get("output_excerpt") or "", _MAX_HISTORY_FIELD_CHARS),
-                "is_error": bool(info.get("is_error", False)),
-                "status": status,
+                "output_excerpt": "",
+                "is_error": False,
+                "status": "running",
                 "started_at": started_iso,
-                "completed_at": completed_iso,
+                "completed_at": None,
             })
 
-        # Order by started_at, fall back to insertion order
         try:
             items.sort(key=lambda d: d.get("started_at") or "")
         except Exception:
@@ -274,9 +293,15 @@ async def _run(input_dict: dict) -> FindingRef:
         from chat.backend.agent.utils.state import State
         from langchain_core.messages import HumanMessage
 
+        kickoff = (
+            "Begin your investigation now. Use the tools available to gather "
+            "evidence, then call `write_findings` exactly once with your final "
+            "findings.md body. Do not respond with plain text — every reply "
+            "must be either a tool call or the terminating `write_findings` call."
+        )
         sub_state = State(
-            question=brief,
-            messages=[HumanMessage(content=brief)],
+            question=kickoff,
+            messages=[HumanMessage(content=kickoff)],
             user_id=user_id,
             session_id=child_session_id,
             incident_id=incident_id,

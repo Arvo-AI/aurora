@@ -86,6 +86,10 @@ class ToolContextCapture:
                 logger.warning(f"Failed to resolve org_id for user {user_id}, execution-step persistence disabled: {e}")
         self._persist_steps = bool(self.incident_id and self.org_id)
         self.current_tool_calls = {}  # Track ongoing tool calls
+        # Append-only audit log of completed tool calls. current_tool_calls is GC'd
+        # after 60s of staleness, so consumers that run later (e.g. orchestrator
+        # sub-agents that finish after 2+ minutes) cannot rely on it for history.
+        self.tool_history: list = []
         self.collected_tool_messages = []  # Store tool messages for batch addition
         self.tool_execution_signatures = set()  # Track unique tool executions to prevent duplicates
         # Map message content to correct tool_call_id (survives LangGraph mutations)
@@ -249,6 +253,21 @@ class ToolContextCapture:
         tool_info["completed_at"] = datetime.now(timezone.utc).isoformat()
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]
+
+        # Mirror into append-only history for consumers that may read this after
+        # current_tool_calls has been GC'd (orchestrator sub-agents).
+        try:
+            self.tool_history.append({
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "input": tool_input,
+                "output_excerpt": tool_info["output_excerpt"],
+                "is_error": tool_info["is_error"],
+                "started_at": tool_info.get("start_time").isoformat() if tool_info.get("start_time") else None,
+                "completed_at": tool_info["completed_at"],
+            })
+        except Exception:
+            logger.debug("tool_history append failed", exc_info=True)
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
         
         self._record_step_end(tool_info.get("step_id"), output, is_error)

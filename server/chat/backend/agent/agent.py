@@ -15,6 +15,7 @@ from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, asse
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 import time
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional
 
 # Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
@@ -542,7 +543,10 @@ class Agent:
                 # Get recursion limit from environment variable (required)
                 max_iterations = int(os.environ["AGENT_RECURSION_LIMIT"])
                 if max_turns is not None:
-                    max_iterations = min(max_turns, max_iterations)
+                    # max_turns is logical ReAct turns (LLM call + tool node = 1 turn).
+                    # LangGraph counts each super-step toward recursion_limit, so we
+                    # need ~2x + a small buffer for the terminal write_findings call.
+                    max_iterations = min(max_turns * 2 + 2, max_iterations)
 
                 # Prepare chat history for the agent - handle LangChain message objects
                 chat_history = []
@@ -800,6 +804,57 @@ class Agent:
                                     output = chunk_data.get("output")
                                     if output and hasattr(output, 'tool_calls') and output.tool_calls:
                                         logging.debug(f"Detected {len(output.tool_calls)} tool calls at model end")
+                                        # Mirror tool calls into the locally-bound tool_capture so
+                                        # sub-agents (whose tool_capture isn't reachable from the
+                                        # parent workflow's _process_tool_calls_from_chunk) still
+                                        # build a per-sub-agent tool_history. Lead-agent flows
+                                        # already populate via workflow.py — duplicates are
+                                        # deduped by tool_call_id in _extract_tool_call_history.
+                                        if tool_capture is not None:
+                                            for tc in output.tool_calls:
+                                                try:
+                                                    tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
+                                                    tc_name = tc.get('name') if isinstance(tc, dict) else getattr(tc, 'name', None)
+                                                    tc_args = tc.get('args') if isinstance(tc, dict) else getattr(tc, 'args', {})
+                                                    if not tc_id or not tc_name:
+                                                        continue
+                                                    if not hasattr(tool_capture, 'tool_history'):
+                                                        continue
+                                                    tool_capture.tool_history.append({
+                                                        "tool_call_id": tc_id,
+                                                        "tool_name": tc_name,
+                                                        "input": tc_args,
+                                                        "output_excerpt": "",
+                                                        "is_error": False,
+                                                        "started_at": datetime.now(timezone.utc).isoformat(),
+                                                        "completed_at": None,
+                                                    })
+                                                except Exception:
+                                                    logging.debug("agent: tool_history mirror failed", exc_info=True)
+                                elif event_type == "on_tool_end":
+                                    # Update the matching tool_history entry with output excerpt.
+                                    if tool_capture is not None and hasattr(tool_capture, 'tool_history'):
+                                        try:
+                                            data = event.get("data", {}) or {}
+                                            tc_id = (event.get("run_id")
+                                                     or (data.get("input", {}) or {}).get("tool_call_id"))
+                                            output = data.get("output")
+                                            output_str = ""
+                                            is_error = False
+                                            if output is not None:
+                                                content = getattr(output, 'content', output)
+                                                output_str = content if isinstance(content, str) else str(content)
+                                                is_error = bool(getattr(output, 'is_error', False) or getattr(output, 'status', '') == 'error')
+                                            # Find matching entry by tool_call_id (last write wins)
+                                            for entry in reversed(tool_capture.tool_history):
+                                                entry_id = entry.get("tool_call_id")
+                                                if entry_id and tc_id and entry_id == tc_id and not entry.get("completed_at"):
+                                                    entry["output_excerpt"] = output_str[:1000]
+                                                    entry["is_error"] = is_error
+                                                    entry["completed_at"] = datetime.now(timezone.utc).isoformat()
+                                                    break
+                                        except Exception:
+                                            logging.debug("agent: on_tool_end update failed", exc_info=True)
                                 
                                 # Capture final state from chain end events
                                 elif event_type == "on_chain_end" and event_name == "LangGraph":
