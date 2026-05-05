@@ -31,6 +31,7 @@ import { useChatCancellation } from '@/hooks/useChatCancellation';
 import SessionUsagePanel from "@/components/SessionUsagePanel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
+import { useQuery, fetchR } from "@/lib/query";
 
 interface ChatClientProps {
   initialSessionId?: string;
@@ -140,7 +141,19 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     justCreatedSessionRef,
     onSessionCreated: refreshChatHistory,
     images,
+    availableActions,
   });
+
+  const { data: actionsData } = useQuery<{ actions: { id: string; name: string }[] }>(
+    '/api/actions',
+    async (key: string, signal: AbortSignal) => {
+      const res = await fetch(key, { credentials: 'include', signal });
+      if (!res.ok) return { actions: [] };
+      return res.json();
+    },
+    { staleTime: 60_000 },
+  );
+  const availableActions = actionsData?.actions ?? [];
 
   const onSendingStateChange = useCallback((sending: boolean) => {
     setIsSending(sending);
@@ -470,6 +483,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               onRemoveContext={() => setActiveIncidentContext(undefined)}
               images={images}
               onImagesChange={setImages}
+              actions={availableActions}
             />
             )}
           </div>
@@ -510,6 +524,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             onRemoveContext={() => setActiveIncidentContext(undefined)}
             images={images}
             onImagesChange={setImages}
+            actions={availableActions}
           />
           
           <div className="w-full max-w-3xl mt-6">

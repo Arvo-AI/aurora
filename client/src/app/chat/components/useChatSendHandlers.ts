@@ -24,6 +24,7 @@ interface ChatSendHandlerParams {
   justCreatedSessionRef: MutableRefObject<string | null>;
   onSessionCreated?: (sessionId: string) => void;
   images?: Array<{file: File, preview: string}>;
+  availableActions?: { id: string; name: string }[];
 }
 
 interface ChatSendHandlerResult {
@@ -61,6 +62,7 @@ export function useChatSendHandlers({
   justCreatedSessionRef,
   onSessionCreated,
   images = [],
+  availableActions = [],
 }: ChatSendHandlerParams): ChatSendHandlerResult {
   const { toast } = useToast();
   const { providerIds, isProviderConnected } = useConnectedAccounts();
@@ -162,6 +164,43 @@ export function useChatSendHandlers({
     const trimmed = messageText.trim();
     if (!trimmed || isSending || !userId) return false;
 
+    // Slash command: /action <name>
+    const actionMatch = trimmed.match(/^\/actions?\s+(.+)$/i);
+    if (actionMatch) {
+      const actionName = actionMatch[1].trim();
+      if (!availableActions.length) {
+        toast({ description: 'No actions configured. Create one in Settings > Actions.', variant: 'destructive' });
+        return false;
+      }
+      const action = availableActions.find(a => a.name.toLowerCase() === actionName.toLowerCase());
+      if (!action) {
+        toast({ description: `Action "${actionName}" not found. Type /action to see suggestions.`, variant: 'destructive' });
+        return false;
+      }
+      try {
+        const res = await fetch(`/api/actions/${action.id}/run`, { method: 'POST', credentials: 'include' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const msgs: Record<number, string> = {
+            429: 'Action rate limited. Try again shortly.',
+            403: 'You do not have permission to run this action.',
+            404: 'Action no longer exists. Refresh to update.',
+          };
+          toast({ description: msgs[res.status] || err.error || 'Failed to trigger action.', variant: 'destructive' });
+          return false;
+        }
+        onNewMessage({ id: Date.now(), sender: 'bot', text: `Triggered action "${action.name}". Check Settings > Actions for progress.` });
+        return true;
+      } catch {
+        toast({ description: 'Network error triggering action. Try again.', variant: 'destructive' });
+        return false;
+      }
+    }
+    if (/^\/actions?\s*$/i.test(trimmed)) {
+      toast({ description: 'Usage: /action <name>. Type /action and see suggestions.' });
+      return false;
+    }
+
     const effectiveMode = normalizeMode(modeOverride || selectedMode);
     const connectedProviders = getConnectedProviders();
     const providersForMode = providersOverride ?? selectedProviders;
@@ -247,7 +286,7 @@ export function useChatSendHandlers({
     createSession, currentSessionId, hasCreatedSession, justCreatedSessionRef,
     onNewMessage, router, selectedMode, selectedModel, selectedProviders,
     syncProvidersWithMode, toast, userId, setCurrentSessionId, 
-    setHasCreatedSession, isSending, getConnectedProviders, images
+    setHasCreatedSession, isSending, getConnectedProviders, images, availableActions
   ]);
 
   const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string, options?: { triggerRca?: boolean }) => {

@@ -5,6 +5,7 @@ import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
+import SlashCommandMenu from "./SlashCommandMenu";
 
 export interface ImageAttachment {
   file: File;
@@ -31,6 +32,7 @@ interface EnhancedChatInputProps {
   onRemoveContext?: () => void;
   images?: ImageAttachment[];
   onImagesChange?: (images: ImageAttachment[]) => void;
+  actions?: { id: string; name: string }[];
 }
 
 export default function EnhancedChatInput({
@@ -52,7 +54,8 @@ export default function EnhancedChatInput({
   incidentContext,
   onRemoveContext,
   images = [],
-  onImagesChange
+  onImagesChange,
+  actions = [],
 }: EnhancedChatInputProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   
@@ -154,6 +157,11 @@ export default function EnhancedChatInput({
         
         {/* Text input area */}
         <div className="relative">
+          <SlashCommandMenu
+            input={input}
+            actions={actions}
+            onSelect={(a) => setInput(`/action ${a.name}`)}
+          />
           <AutoResizeTextarea
             placeholder={placeholder}
             value={input}
