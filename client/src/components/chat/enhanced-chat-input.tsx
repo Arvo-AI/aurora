@@ -89,7 +89,13 @@ export default function EnhancedChatInput({
   const handleSelect = useCallback((action: ActionItem) => {
     onActionSelect?.(action);
     const idx = input.search(/(^|\s)\/actions?\s/i);
-    const replaced = idx !== -1 ? input.slice(0, idx === 0 ? 0 : idx + 1) + `/action ${action.name} ` : `/action ${action.name} `;
+    let replaced: string;
+    if (idx >= 0) {
+      const keepUntil = idx === 0 ? 0 : idx + 1;
+      replaced = input.slice(0, keepUntil) + `/action ${action.name} `;
+    } else {
+      replaced = `/action ${action.name} `;
+    }
     setInput(replaced);
     setHighlightedIndex(0);
   }, [onActionSelect, setInput, input]);
