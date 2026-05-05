@@ -8,6 +8,17 @@ from utils.db.connection_pool import db_pool
 logger = logging.getLogger(__name__)
 
 
+def _is_due(interval_seconds, last_run_at, now):
+    """Return True if the action should be dispatched based on its interval."""
+    if not interval_seconds or interval_seconds < 300:
+        return False
+    if not last_run_at:
+        return True
+    if last_run_at.tzinfo is None:
+        last_run_at = last_run_at.replace(tzinfo=timezone.utc)
+    return (now - last_run_at).total_seconds() >= interval_seconds
+
+
 @celery_app.task(name="services.actions.scheduler.run_scheduled_actions")
 def run_scheduled_actions():
     """Check all on_schedule actions and dispatch any that are due."""
@@ -31,17 +42,9 @@ def run_scheduled_actions():
     now = datetime.now(timezone.utc)
     dispatched = 0
 
-    for action_id, org_id, created_by, interval_seconds, last_run_at in rows:
-        if not interval_seconds or interval_seconds < 300:
+    for action_id, _org_id, created_by, interval_seconds, last_run_at in rows:
+        if not _is_due(interval_seconds, last_run_at, now):
             continue
-
-        if last_run_at:
-            if last_run_at.tzinfo is None:
-                last_run_at = last_run_at.replace(tzinfo=timezone.utc)
-            elapsed = (now - last_run_at).total_seconds()
-            if elapsed < interval_seconds:
-                continue
-
         try:
             from services.actions.executor import dispatch_action
             dispatch_action(

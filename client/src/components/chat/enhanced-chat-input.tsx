@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
@@ -64,17 +64,19 @@ export default function EnhancedChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
 
-  // Show menu as soon as "/" is typed (word-boundary: start of input or after space)
-  const slashMatch = !selectedAction ? (/(^|\s)(\/\S*)$/).exec(input) : null;
-  const slashToken = slashMatch?.[2] ?? '';
-  const isFullCommand = /^\/actions?$/i.test(slashToken);
-  const isPartialCommand = !isFullCommand && '/action'.startsWith(slashToken.toLowerCase()) && slashToken.length >= 1;
-  // Also detect when command is complete and user is picking an action (e.g. "/action " or "/action qu")
-  const hasCompletedCommand = !selectedAction && /(^|\s)\/actions?\s/i.test(input);
-  const menuVisible = isFullCommand || isPartialCommand || hasCompletedCommand;
-  const menuStage: 'command' | 'action' = (isFullCommand || hasCompletedCommand) ? 'action' : 'command';
-  const filteredActions = menuVisible && menuStage === 'action' ? getFilteredActions(input, actions).slice(0, 8) : [];
-  const menuItemCount = menuStage === 'command' ? 1 : (filteredActions.length || 1);
+  const { menuVisible, menuStage, filteredActions, menuItemCount } = useMemo(() => {
+    const match = selectedAction ? null : (/(^|\s)(\/\S*)$/).exec(input);
+    const token = match?.[2] ?? '';
+    const isFull = /^\/actions?$/i.test(token);
+    const isPartial = !isFull && '/action'.startsWith(token.toLowerCase()) && token.length >= 1;
+    const hasCompleted = !selectedAction && /(^|\s)\/actions?\s/i.test(input);
+    const visible = isFull || isPartial || hasCompleted;
+    const stage: 'command' | 'action' = (isFull || hasCompleted) ? 'action' : 'command';
+    const filtered = visible && stage === 'action' ? getFilteredActions(input, actions).slice(0, 8) : [];
+    const itemCount = stage === 'command' ? 1 : (filtered.length || 1);
+    return { menuVisible: visible, menuStage: stage, filteredActions: filtered, menuItemCount: itemCount };
+  }, [input, actions, selectedAction]);
+
   const hasActiveOverlay = selectedAction != null && input.toLowerCase().includes('/action ' + selectedAction.name.toLowerCase());
 
   let parsedContext = null;
@@ -99,40 +101,41 @@ export default function EnhancedChatInput({
     setHighlightedIndex(0);
   }, [input, setInput]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (menuVisible && menuItemCount > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setHighlightedIndex(i => (i + 1) % menuItemCount);
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setHighlightedIndex(i => (i - 1 + menuItemCount) % menuItemCount);
-        return;
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        if (menuStage === 'command') {
-          handleCommandSelect();
-        } else {
-          handleSelect(filteredActions[highlightedIndex]);
-        }
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setInput('');
-        return;
-      }
+  const handleMenuKey = useCallback((e: React.KeyboardEvent): boolean => {
+    if (!menuVisible || menuItemCount === 0) return false;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex(i => (i + 1) % menuItemCount);
+      return true;
     }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex(i => (i - 1 + menuItemCount) % menuItemCount);
+      return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      if (menuStage === 'command') handleCommandSelect();
+      else handleSelect(filteredActions[highlightedIndex]);
+      return true;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setInput('');
+      return true;
+    }
+    return false;
+  }, [menuVisible, menuItemCount, menuStage, filteredActions, highlightedIndex, handleSelect, handleCommandSelect, setInput]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (handleMenuKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if ((input.trim() || selectedAction) && !isSending && !disabled) {
         onSend();
       }
     }
-  }, [input, isSending, disabled, onSend, menuVisible, menuItemCount, menuStage, filteredActions, highlightedIndex, handleSelect, handleCommandSelect, setInput, selectedAction]);
+  }, [input, isSending, disabled, onSend, selectedAction, handleMenuKey]);
 
   const processImageFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -305,8 +308,8 @@ export default function EnhancedChatInput({
 }
 
 function ActionOverlay({ input, actionName }: { readonly input: string; readonly actionName: string }) {
-  const escaped = actionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`(\\/actions?\\s+${escaped})`, 'i');
+  const escaped = actionName.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const pattern = new RegExp(String.raw`(\/actions?\s+${escaped})`, 'i');
   const parts = input.split(pattern);
   if (parts.length < 2) return null;
   return (

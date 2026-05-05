@@ -161,7 +161,9 @@ export function useChatSendHandlers({
   // Extract action from text input (fallback when no chip-selected action)
   const parseActionFromText = useCallback((text: string) => {
     const lower = text.toLowerCase();
-    const prefix = lower.startsWith('/actions ') ? '/actions ' : lower.startsWith('/action ') ? '/action ' : null;
+    let prefix: string | null = null;
+    if (lower.startsWith('/actions ')) prefix = '/actions ';
+    else if (lower.startsWith('/action ')) prefix = '/action ';
     if (!prefix) return null;
     const name = text.slice(prefix.length).trim();
     if (!name) return null;

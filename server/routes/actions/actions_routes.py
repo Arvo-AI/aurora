@@ -17,6 +17,65 @@ _VALID_TRIGGER_TYPES = ("manual", "on_incident", "on_schedule")
 _VALID_MODES = ("agent", "ask")
 
 
+def _parse_update_fields(body):
+    """Validate and extract update field sets/vals from request body. Returns (sets, vals, error_response)."""
+    sets, vals = [], []
+    if "name" in body:
+        name = (body["name"] or "").strip()
+        if not name or len(name) > 255:
+            return None, None, (jsonify({"error": "name must be 1-255 characters"}), 400)
+        sets.append("name = %s")
+        vals.append(name)
+    if "description" in body:
+        sets.append("description = %s")
+        vals.append((body["description"] or "").strip() or None)
+    if "instructions" in body:
+        instructions = (body["instructions"] or "").strip()
+        if not instructions:
+            return None, None, (jsonify({"error": "instructions cannot be empty"}), 400)
+        sets.append("instructions = %s")
+        vals.append(instructions)
+    if "trigger_type" in body:
+        if body["trigger_type"] not in _VALID_TRIGGER_TYPES:
+            return None, None, (jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400)
+        sets.append("trigger_type = %s")
+        vals.append(body["trigger_type"])
+    if "trigger_config" in body:
+        tc = body["trigger_config"]
+        effective_type = body.get("trigger_type") or None
+        if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
+            interval = (tc or {}).get("interval_seconds")
+            if not isinstance(interval, (int, float)) or int(interval) < 300:
+                return None, None, (jsonify({"error": "on_schedule requires trigger_config.interval_seconds >= 300"}), 400)
+            tc = {"interval_seconds": int(interval)}
+        sets.append("trigger_config = %s")
+        vals.append(json.dumps(tc))
+    if "mode" in body:
+        if body["mode"] not in _VALID_MODES:
+            return None, None, (jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400)
+        sets.append("mode = %s")
+        vals.append(body["mode"])
+    if "enabled" in body:
+        sets.append("enabled = %s")
+        vals.append(bool(body["enabled"]))
+    return sets, vals, None
+
+
+def _validate_create_fields(name, instructions, body):
+    """Return error response tuple if validation fails, else None."""
+    if not name or not instructions:
+        return jsonify({"error": "name and instructions are required"}), 400
+    if len(name) > 255:
+        return jsonify({"error": "name must be 255 characters or fewer"}), 400
+    trigger_type = body.get("trigger_type", "manual")
+    mode = body.get("mode", "agent")
+    if trigger_type not in _VALID_TRIGGER_TYPES:
+        return jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400
+    if mode not in _VALID_MODES:
+        return jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400
+    return None
+
+
 @actions_bp.route("", methods=["GET"])
 @require_permission("actions", "read")
 def list_actions(user_id):
@@ -54,19 +113,13 @@ def create_action(user_id):
 
     name = (body.get("name") or "").strip()
     instructions = (body.get("instructions") or "").strip()
-    if not name or not instructions:
-        return jsonify({"error": "name and instructions are required"}), 400
-    if len(name) > 255:
-        return jsonify({"error": "name must be 255 characters or fewer"}), 400
-
-    trigger_type = body.get("trigger_type", "manual")
-    mode = body.get("mode", "agent")
-    if trigger_type not in _VALID_TRIGGER_TYPES:
-        return jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400
-    if mode not in _VALID_MODES:
-        return jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400
+    err = _validate_create_fields(name, instructions, body)
+    if err:
+        return err
 
     description = (body.get("description") or "").strip() or None
+    trigger_type = body.get("trigger_type", "manual")
+    mode = body.get("mode", "agent")
     trigger_config = body.get("trigger_config", {})
 
     if trigger_type == "on_schedule":
@@ -158,45 +211,9 @@ def _get_action_response(action_id):
 def update_action(user_id, action_id):
     body = request.get_json(silent=True) or {}
 
-    sets, vals = [], []
-    if "name" in body:
-        name = (body["name"] or "").strip()
-        if not name or len(name) > 255:
-            return jsonify({"error": "name must be 1-255 characters"}), 400
-        sets.append("name = %s")
-        vals.append(name)
-    if "description" in body:
-        sets.append("description = %s")
-        vals.append((body["description"] or "").strip() or None)
-    if "instructions" in body:
-        instructions = (body["instructions"] or "").strip()
-        if not instructions:
-            return jsonify({"error": "instructions cannot be empty"}), 400
-        sets.append("instructions = %s")
-        vals.append(instructions)
-    if "trigger_type" in body:
-        if body["trigger_type"] not in _VALID_TRIGGER_TYPES:
-            return jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400
-        sets.append("trigger_type = %s")
-        vals.append(body["trigger_type"])
-    if "trigger_config" in body:
-        tc = body["trigger_config"]
-        effective_type = body.get("trigger_type") or None
-        if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
-            interval = (tc or {}).get("interval_seconds")
-            if not isinstance(interval, (int, float)) or int(interval) < 300:
-                return jsonify({"error": "on_schedule requires trigger_config.interval_seconds >= 300"}), 400
-            tc = {"interval_seconds": int(interval)}
-        sets.append("trigger_config = %s")
-        vals.append(json.dumps(tc))
-    if "mode" in body:
-        if body["mode"] not in _VALID_MODES:
-            return jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400
-        sets.append("mode = %s")
-        vals.append(body["mode"])
-    if "enabled" in body:
-        sets.append("enabled = %s")
-        vals.append(bool(body["enabled"]))
+    sets, vals, err = _parse_update_fields(body)
+    if err:
+        return err
 
     if not sets:
         return jsonify({"error": "no fields to update"}), 400
