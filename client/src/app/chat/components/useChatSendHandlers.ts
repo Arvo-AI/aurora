@@ -232,7 +232,7 @@ export function useChatSendHandlers({
       return true;
     }
 
-    const bareCmd = trimmed.trim().toLowerCase();
+    const bareCmd = trimmed.toLowerCase();
     if (bareCmd === '/action' || bareCmd === '/actions') {
       toast({ description: 'Usage: /action <name>. Type /action and see suggestions.' });
       return false;
