@@ -259,7 +259,7 @@ def _get_action_response(action_id):
         r["incident_id"] = str(r["incident_id"]) if r["incident_id"] else None
         r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
         if r["started_at"] and r["completed_at"]:
-            r["duration_ms"] = int((r["completed_at"] - r["started_at"]).total_seconds() * 1000)
+            r["duration_ms"] = max(0, int((r["completed_at"] - r["started_at"]).total_seconds() * 1000))
         r["started_at"] = (r["started_at"].isoformat() + "Z") if r["started_at"] else None
         r["completed_at"] = (r["completed_at"].isoformat() + "Z") if r["completed_at"] else None
 

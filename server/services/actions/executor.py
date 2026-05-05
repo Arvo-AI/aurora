@@ -167,17 +167,18 @@ def _create_run(
     error: Optional[str] = None,
 ) -> str:
     run_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[Actions:create_run]")
             cur.execute(
                 """INSERT INTO action_runs (id, action_id, org_id, user_id, incident_id,
-                   status, trigger_context, error, completed_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                   status, trigger_context, error, started_at, completed_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     run_id, action_id, org_id, user_id, incident_id,
                     status, json.dumps(trigger_context or {}), error,
-                    datetime.now(timezone.utc) if status in ("error", "success") else None,
+                    now, now if status in ("error", "success") else None,
                 ),
             )
             conn.commit()
