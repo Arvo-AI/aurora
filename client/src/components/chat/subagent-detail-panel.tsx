@@ -12,7 +12,6 @@ interface SubAgentDetailPanelProps {
   agentId: string;
   roleName?: string;
   purpose?: string;
-  childSessionId?: string;
   onClose: () => void;
   className?: string;
 }
@@ -58,7 +57,7 @@ function abbreviateValue(value: unknown, max = 200): string {
   return s.length > max ? `${s.slice(0, max)}...` : s;
 }
 
-function ToolCallStatusIcon({ status }: { status: string }) {
+function ToolCallStatusIcon({ status }: Readonly<{ status: string }>) {
   if (status === "running" || status === "pending") {
     return <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-muted-foreground" />;
   }
@@ -143,12 +142,11 @@ const SubAgentDetailPanel = ({
   const timeWindow = finding?.time_window;
 
   return (
-    <div
+    <aside
       className={cn(
         "flex max-h-[60vh] w-full flex-col overflow-hidden rounded-md border border-border bg-background",
         className,
       )}
-      role="complementary"
       aria-label="Sub-agent details"
     >
       {/* Header */}
@@ -255,40 +253,51 @@ const SubAgentDetailPanel = ({
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Findings
           </h3>
-          {loading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-1/2" />
-              <Skeleton className="h-4 w-5/6" />
-            </div>
-          ) : error ? (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
-              <AlertCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-              <span className="flex-1 text-muted-foreground">
-                Couldn&apos;t load findings
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setReloadKey((k) => k + 1)}
-                className="h-7 px-2 text-xs"
-              >
-                Retry
-              </Button>
-            </div>
-          ) : finding?.body ? (
-            <div className="text-sm">
-              <MarkdownRenderer content={finding.body} />
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>Waiting for findings...</span>
-            </div>
-          )}
+          {(() => {
+            if (loading) {
+              return (
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-4 w-5/6" />
+                </div>
+              );
+            }
+            if (error) {
+              return (
+                <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                  <span className="flex-1 text-muted-foreground">
+                    Couldn&apos;t load findings
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setReloadKey((k) => k + 1)}
+                    className="h-7 px-2 text-xs"
+                  >
+                    Retry
+                  </Button>
+                </div>
+              );
+            }
+            if (finding?.body) {
+              return (
+                <div className="text-sm">
+                  <MarkdownRenderer content={finding.body} />
+                </div>
+              );
+            }
+            return (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Waiting for findings...</span>
+              </div>
+            );
+          })()}
         </section>
       </div>
-    </div>
+    </aside>
   );
 };
 

@@ -11,6 +11,16 @@ import { copyToClipboard } from "@/lib/utils";
 import ToolCallWidget from "../tool-calls/ToolCallWidget";
 import DispatchGroupWidget from "./dispatch-group-widget";
 
+// Hoisted to keep the JSX render below from nesting more than 4 levels deep.
+function applyToolCallUpdate(message: Message, toolCallId: string, updates: Partial<any>): Message {
+  return {
+    ...message,
+    toolCalls: message.toolCalls?.map((tc: any) =>
+      tc.id === toolCallId ? { ...tc, ...updates } : tc,
+    ),
+  };
+}
+
 interface MessageItemProps {
   message: Message;
   sendRaw?: (data: string) => boolean;
@@ -150,12 +160,9 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
                 userId={userId}
                 onToolUpdate={(updates) => {
                   // Update this specific tool call in the message
-                  onUpdateMessage?.(message.id, (msg) => ({
-                    ...msg,
-                    toolCalls: msg.toolCalls?.map(tc =>
-                      tc.id === toolCall.id ? { ...tc, ...updates } : tc
-                    )
-                  }));
+                  onUpdateMessage?.(message.id, (msg) =>
+                    applyToolCallUpdate(msg, toolCall.id, updates),
+                  );
                 }}
               />
             ))}

@@ -528,7 +528,6 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               <SubAgentDetailPanel
                 incidentId={linkedIncidentId}
                 agentId={selectedSubAgent.agentId}
-                childSessionId={selectedSubAgent.childSessionId}
                 roleName={selectedSubAgent.roleName}
                 purpose={selectedSubAgent.purpose}
                 onClose={() => setSelectedSubAgent(null)}

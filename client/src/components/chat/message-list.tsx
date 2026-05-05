@@ -14,7 +14,7 @@ interface MessageListProps {
   onSelectSubAgent?: (agentId: string, childSessionId: string) => void;
 }
 
-export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId, incidentId, onSelectSubAgent }: MessageListProps) {
+export function MessageList({ messages, sendRaw, onUpdateMessage, sessionId, userId, incidentId, onSelectSubAgent }: Readonly<MessageListProps>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);

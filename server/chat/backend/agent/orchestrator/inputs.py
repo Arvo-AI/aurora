@@ -39,7 +39,7 @@ class FindingRef(BaseModel):
 
     agent_id: str
     role_name: str
-    storage_uri: Optional[str]
+    storage_uri: Optional[str] = None
     status: Literal["succeeded", "failed", "timeout", "cancelled", "inconclusive"]
     self_assessed_strength: Optional[Literal["strong", "moderate", "weak", "inconclusive"]] = None
     error_message: Optional[str] = None

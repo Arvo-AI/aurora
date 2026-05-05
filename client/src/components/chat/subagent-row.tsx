@@ -16,7 +16,7 @@ interface SubAgentRowProps {
   onSelect?: (agentId: string, childSessionId: string) => void;
 }
 
-function StatusIcon({ toolCall }: { toolCall: ToolCall }) {
+function StatusIcon({ toolCall }: Readonly<{ toolCall: ToolCall }>) {
   if (toolCall.status === "running" || toolCall.status === "pending") {
     return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />;
   }
@@ -33,15 +33,14 @@ function StatusIcon({ toolCall }: { toolCall: ToolCall }) {
   return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />;
 }
 
-function StrengthChip({ strength }: { strength: NonNullable<ToolCall["self_assessed_strength"]> }) {
-  const tone =
-    strength === "strong"
-      ? "text-emerald-700 dark:text-emerald-400 border-emerald-700/30 dark:border-emerald-400/30"
-      : strength === "moderate"
-        ? "text-foreground border-input"
-        : strength === "weak"
-          ? "text-amber-700 dark:text-amber-400 border-amber-700/30 dark:border-amber-400/30"
-          : "text-muted-foreground border-input";
+const STRENGTH_TONE_CLASSES: Record<string, string> = {
+  strong: "text-emerald-700 dark:text-emerald-400 border-emerald-700/30 dark:border-emerald-400/30",
+  moderate: "text-foreground border-input",
+  weak: "text-amber-700 dark:text-amber-400 border-amber-700/30 dark:border-amber-400/30",
+};
+
+function StrengthChip({ strength }: Readonly<{ strength: NonNullable<ToolCall["self_assessed_strength"]> }>) {
+  const tone = STRENGTH_TONE_CLASSES[strength] ?? "text-muted-foreground border-input";
   return (
     <span
       className={cn(

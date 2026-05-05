@@ -45,7 +45,7 @@ function aggregateStatus(toolCalls: ToolCall[]): Aggregate {
   return "succeeded";
 }
 
-function AggregateIcon({ status }: { status: Aggregate }) {
+function AggregateIcon({ status }: Readonly<{ status: Aggregate }>) {
   if (status === "running") {
     return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
   }
@@ -77,20 +77,13 @@ const DispatchGroupWidget = ({
         className,
       )}
     >
-      <div
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
         aria-expanded={expanded}
         onClick={toggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggle();
-          }
-        }}
-        className="flex cursor-pointer items-center justify-between px-4 py-3 transition-colors hover:bg-muted/40"
+        className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left transition-colors hover:bg-muted/40"
       >
-        <div className="flex min-w-0 items-center gap-2 text-foreground">
+        <span className="flex min-w-0 items-center gap-2 text-foreground">
           <AggregateIcon status={status} />
           <span className="text-sm">
             Ran {count} agent{count === 1 ? "" : "s"}
@@ -100,7 +93,7 @@ const DispatchGroupWidget = ({
               Open an incident to view details
             </span>
           )}
-        </div>
+        </span>
         <span
           aria-label={expanded ? "Collapse agents" : "Expand agents"}
           className="flex flex-shrink-0 items-center justify-center text-muted-foreground"
@@ -111,7 +104,7 @@ const DispatchGroupWidget = ({
             <ChevronDown className="h-4 w-4" />
           )}
         </span>
-      </div>
+      </button>
 
       {expanded && (
         <div className="border-t border-border">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, memo, type KeyboardEvent } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -75,7 +75,7 @@ function isTerminal(status: string): boolean {
   return TERMINAL_STATUSES.has(status as FindingStatus);
 }
 
-function StatusIcon({ status }: { status: FindingStatus }) {
+function StatusIcon({ status }: Readonly<{ status: FindingStatus }>) {
   if (status === 'running') {
     return <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-orange-400" />;
   }
@@ -88,7 +88,7 @@ function StatusIcon({ status }: { status: FindingStatus }) {
   return <MinusCircle className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />;
 }
 
-function StrengthChip({ strength }: { strength: FindingStrength }) {
+function StrengthChip({ strength }: Readonly<{ strength: FindingStrength }>) {
   const tone =
     strength === 'strong'
       ? 'text-emerald-400 border-emerald-400/30'
@@ -106,7 +106,7 @@ function StrengthChip({ strength }: { strength: FindingStrength }) {
   );
 }
 
-function ToolCallStatusIcon({ status }: { status: string }) {
+function ToolCallStatusIcon({ status }: Readonly<{ status: string }>) {
   if (status === 'running' || status === 'pending') {
     return <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-zinc-500" />;
   }
@@ -197,16 +197,6 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
     setExpanded((v) => !v);
   }, []);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        toggleExpand();
-      }
-    },
-    [toggleExpand],
-  );
-
   const subtitle =
     finding.status === 'running'
       ? finding.current_action || 'Investigating...'
@@ -220,27 +210,25 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
 
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-900/30">
-      <div
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
         aria-expanded={expanded}
         aria-label={`Sub-agent ${finding.role_name}`}
         onClick={toggleExpand}
-        onKeyDown={handleKeyDown}
-        className="flex cursor-pointer items-center gap-2 px-2.5 py-2 hover:bg-zinc-800/40 focus:outline-none focus:ring-1 focus:ring-zinc-700"
+        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left hover:bg-zinc-800/40 focus:outline-none focus:ring-1 focus:ring-zinc-700"
       >
         <StatusIcon status={finding.status} />
         <span className="rounded-sm border border-zinc-700 bg-zinc-800/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
           {finding.role_name}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs text-zinc-300" title={finding.purpose}>
+        <span className="block min-w-0 flex-1">
+          <span className="block truncate text-xs text-zinc-300" title={finding.purpose}>
             {finding.purpose}
-          </div>
+          </span>
           {subtitle && (
-            <div className="mt-0.5 truncate text-[11px] text-zinc-500">{subtitle}</div>
+            <span className="mt-0.5 block truncate text-[11px] text-zinc-500">{subtitle}</span>
           )}
-        </div>
+        </span>
         {finding.self_assessed_strength && isParentTerminal && (
           <StrengthChip strength={finding.self_assessed_strength} />
         )}
@@ -249,7 +237,7 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
         ) : (
           <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
         )}
-      </div>
+      </button>
 
       {expanded && (
         <div className="border-t border-zinc-800 px-3 py-3">
@@ -362,7 +350,7 @@ export default function SubAgentInvestigationsSection({
   incidentId,
   isActive,
   onHasFindings,
-}: SubAgentInvestigationsSectionProps) {
+}: Readonly<SubAgentInvestigationsSectionProps>) {
   const [findings, setFindings] = useState<Finding[]>([]);
 
   // Notify parent whenever the presence of findings changes so the parent can
