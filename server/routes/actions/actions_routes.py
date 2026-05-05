@@ -1,11 +1,19 @@
 """CRUD + trigger routes for Aurora Actions."""
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
+
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+
+
+def _validate_uuid(value: str) -> bool:
+    return bool(_UUID_RE.match(value))
+
 
 _ERR_NOT_FOUND = "Action not found"
 
@@ -17,28 +25,34 @@ _VALID_TRIGGER_TYPES = ("manual", "on_incident", "on_schedule")
 _VALID_MODES = ("agent", "ask")
 
 
+_UPDATABLE_COLUMNS = frozenset({"name", "description", "instructions", "trigger_type", "trigger_config", "mode", "enabled"})
+
+
 def _parse_update_fields(body):
-    """Validate and extract update field sets/vals from request body. Returns (sets, vals, error_response)."""
-    sets, vals = [], []
+    """Validate and extract update field sets/vals from request body. Returns (columns, vals, error_response).
+    
+    columns is a list of column names from _UPDATABLE_COLUMNS (never user-controlled strings).
+    """
+    columns, vals = [], []
     if "name" in body:
         name = (body["name"] or "").strip()
         if not name or len(name) > 255:
             return None, None, (jsonify({"error": "name must be 1-255 characters"}), 400)
-        sets.append("name = %s")
+        columns.append("name")
         vals.append(name)
     if "description" in body:
-        sets.append("description = %s")
+        columns.append("description")
         vals.append((body["description"] or "").strip() or None)
     if "instructions" in body:
         instructions = (body["instructions"] or "").strip()
         if not instructions:
             return None, None, (jsonify({"error": "instructions cannot be empty"}), 400)
-        sets.append("instructions = %s")
+        columns.append("instructions")
         vals.append(instructions)
     if "trigger_type" in body:
         if body["trigger_type"] not in _VALID_TRIGGER_TYPES:
             return None, None, (jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400)
-        sets.append("trigger_type = %s")
+        columns.append("trigger_type")
         vals.append(body["trigger_type"])
     if "trigger_config" in body:
         tc = body["trigger_config"]
@@ -48,17 +62,17 @@ def _parse_update_fields(body):
             if not isinstance(interval, (int, float)) or int(interval) < 300:
                 return None, None, (jsonify({"error": "on_schedule requires trigger_config.interval_seconds >= 300"}), 400)
             tc = {"interval_seconds": int(interval)}
-        sets.append("trigger_config = %s")
+        columns.append("trigger_config")
         vals.append(json.dumps(tc))
     if "mode" in body:
         if body["mode"] not in _VALID_MODES:
             return None, None, (jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400)
-        sets.append("mode = %s")
+        columns.append("mode")
         vals.append(body["mode"])
     if "enabled" in body:
-        sets.append("enabled = %s")
+        columns.append("enabled")
         vals.append(bool(body["enabled"]))
-    return sets, vals, None
+    return columns, vals, None
 
 
 def _validate_create_fields(name, instructions, body):
@@ -160,6 +174,8 @@ def create_action(user_id):
 @actions_bp.route("/<action_id>", methods=["GET"])
 @require_permission("actions", "read")
 def get_action(user_id, action_id):
+    if not _validate_uuid(action_id):
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
     return _get_action_response(action_id)
 
 
@@ -209,23 +225,28 @@ def _get_action_response(action_id):
 @actions_bp.route("/<action_id>", methods=["PUT"])
 @require_permission("actions", "write")
 def update_action(user_id, action_id):
+    if not _validate_uuid(action_id):
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
     body = request.get_json(silent=True) or {}
 
-    sets, vals, err = _parse_update_fields(body)
+    columns, vals, err = _parse_update_fields(body)
     if err:
         return err
 
-    if not sets:
+    if not columns:
         return jsonify({"error": "no fields to update"}), 400
 
-    sets.append("updated_at = %s")
+    columns.append("updated_at")
     vals.append(datetime.now(timezone.utc))
     vals.append(action_id)
+
+    _ALLOWED = _UPDATABLE_COLUMNS | {"updated_at"}
+    set_clause = ", ".join(f"{col} = %s" for col in columns if col in _ALLOWED)
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"UPDATE actions SET {', '.join(sets)} WHERE id = %s RETURNING id",
+                f"UPDATE actions SET {set_clause} WHERE id = %s RETURNING id",
                 vals,
             )
             if not cur.fetchone():
@@ -238,6 +259,8 @@ def update_action(user_id, action_id):
 @actions_bp.route("/<action_id>", methods=["DELETE"])
 @require_permission("actions", "write")
 def delete_action(user_id, action_id):
+    if not _validate_uuid(action_id):
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM actions WHERE id = %s RETURNING id", (action_id,))
@@ -250,6 +273,8 @@ def delete_action(user_id, action_id):
 @actions_bp.route("/<action_id>/trigger", methods=["POST"])
 @require_permission("actions", "write")
 def trigger_action(user_id, action_id):
+    if not _validate_uuid(action_id):
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
     body = request.get_json(silent=True) or {}
     trigger_context = {}
     if body.get("incident_id"):
@@ -274,6 +299,8 @@ def trigger_action(user_id, action_id):
 @actions_bp.route("/<action_id>/runs", methods=["GET"])
 @require_permission("actions", "read")
 def list_runs(user_id, action_id):
+    if not _validate_uuid(action_id):
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
     try:
         limit = min(int(request.args.get("limit", 50)), 200)
         offset = max(int(request.args.get("offset", 0)), 0)
