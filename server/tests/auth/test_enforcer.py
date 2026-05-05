@@ -3,28 +3,16 @@
 A regression where ``assign_role_to_user`` no longer removes stale roles
 is silent privilege accumulation; a regression in ``_domain_match`` is a
 silent cross-tenant leak. This file pins both contracts.
+
+POSTGRES_* env vars and sys.path setup are handled by ``tests/conftest.py``.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-# POSTGRES_* must be set before importing the enforcer module: ``_build_db_url``
-# reads them eagerly the first time ``get_enforcer`` is called.
-os.environ.setdefault("POSTGRES_DB", "aurora_test")
-os.environ.setdefault("POSTGRES_USER", "test_user")
-os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
-os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
-
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
-
-from utils.auth import enforcer as enforcer_module  # noqa: E402
-from utils.auth.enforcer import assign_role_to_user  # noqa: E402
+from utils.auth import enforcer as enforcer_module
+from utils.auth.enforcer import assign_role_to_user
 
 
 # ---------------------------------------------------------------------------

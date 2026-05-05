@@ -4,28 +4,16 @@ A regression where this helper silently skips a ``SET``, forgets to commit,
 or stamps the connection without resolving an org_id is a cross-tenant
 leak: every Celery task downstream inherits whichever RLS context was
 attached last. This file pins the contract.
+
+POSTGRES_* env vars and sys.path setup are handled by ``tests/conftest.py``.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-# POSTGRES_* must be set before importing stateless_auth: it pulls in
-# utils.db.db_utils which reads these env vars eagerly at import time.
-os.environ.setdefault("POSTGRES_DB", "aurora_test")
-os.environ.setdefault("POSTGRES_USER", "test_user")
-os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
-os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
-
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
-
-from utils.auth import stateless_auth as stateless_auth_module  # noqa: E402
-from utils.auth.stateless_auth import set_rls_context  # noqa: E402
+from utils.auth import stateless_auth as stateless_auth_module
+from utils.auth.stateless_auth import set_rls_context
 
 
 # ---------------------------------------------------------------------------
