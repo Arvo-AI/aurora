@@ -70,6 +70,13 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
+  const pollStartRef = useRef<number>(0);
+
+  const failSession = useCallback((sid: string) => {
+    setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+      s.id === sid ? { ...s, status: 'failed' } : s
+    ));
+  }, []);
   
   // Track session IDs we're currently creating to avoid state conflicts with parent component.
   // When we send a message, we create an optimistic session in local state (chatSessions).
@@ -207,14 +214,23 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
   // Poll for session updates when a session is in progress
   useEffect(() => {
-    if (!pollingSessionId) return;
+    if (!pollingSessionId) { pollStartRef.current = 0; return; }
+    pollStartRef.current = Date.now();
+    let lastMsgCount = -1;
 
     let isCancelled = false;
     const abortController = new AbortController();
-    const sessionIdToFetch = pollingSessionId; // Capture value to avoid stale closure
+    const sessionIdToFetch = pollingSessionId;
+
+    const markSessionFailed = () => {
+      setPollingSessionId(null);
+      setIsLoading(false);
+      failSession(sessionIdToFetch);
+    };
 
     const pollInterval = setInterval(async () => {
       if (isCancelled) return;
+      if (Date.now() - pollStartRef.current > 5 * 60 * 1000) { markSessionFailed(); return; }
       
       try {
         const sessionResp = await fetch(`/api/chat-sessions/${sessionIdToFetch}`, {
@@ -224,8 +240,13 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
         const sessionData = await sessionResp.json();
         if (isCancelled) return;
-        
-        // Update the session in our local state
+
+        const msgCount = sessionData.messages?.length ?? 0;
+        if (msgCount !== lastMsgCount) {
+          lastMsgCount = msgCount;
+          pollStartRef.current = Date.now();
+        }
+
         setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) => 
           s.id === sessionIdToFetch 
             ? { ...s, messages: sessionData.messages || [], status: sessionData.status }

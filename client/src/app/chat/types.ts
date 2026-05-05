@@ -1,4 +1,17 @@
 // Message type for deploy page chat
+export interface PolicyChange {
+  action: 'disable_deny_rule' | 'add_allow_rule';
+  rule_id?: number | null;
+  pattern?: string | null;
+  description?: string | null;
+  editable: boolean;
+}
+
+export interface YesAlwaysEffect {
+  summary: string;
+  changes: PolicyChange[];
+}
+
 export interface ToolCall {
   id: string;
   tool_name: string;
@@ -9,6 +22,10 @@ export interface ToolCall {
   timestamp: string;
   confirmation_id?: string;
   confirmation_message?: string;
+  // Set when the confirmation originates from the command gate. Drives the
+  // Yes-Always button visibility and the policy-change disclosure.
+  block_layer?: string;
+  yes_always_effect?: YesAlwaysEffect;
   command?: string; // Add command field to store final_command
   isExpanded?: boolean; // Track whether the tool output is expanded
 }

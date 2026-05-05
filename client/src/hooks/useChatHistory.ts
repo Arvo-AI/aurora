@@ -51,6 +51,11 @@ export interface ChatMessage {
     error?: string | null;
     status: 'running' | 'completed' | 'error' | 'cancelled' | 'awaiting_confirmation';
     timestamp: string;
+    confirmation_id?: string;
+    confirmation_message?: string;
+    command?: string;
+    block_layer?: string;
+    yes_always_effect?: unknown;
   }>;
   images?: Array<{
     data: string;
@@ -223,8 +228,36 @@ export function useChatHistory(): UseChatHistoryReturn {
       const rawMessages = data.messages || [];
       const cleanedMessages = cleanupStaleToolCalls(rawMessages, data.updated_at);
       const cleanupTime = performance.now() - cleanupStart;
+      // If the server has a live HITL confirmation pending for this session,
+      // append a synthetic bot message with an awaiting_confirmation tool
+      // call so the user sees the prompt immediately on reload. The card is
+      // driven entirely by chat_sessions.pending_turn -- history remains
+      // append-only and contains no mid-turn snapshot.
+      const pending = data.is_own ? data.pending_turn : null;
+      const messagesWithPending: ChatMessage[] = pending && pending.confirmation_id
+        ? [
+            ...(cleanedMessages as ChatMessage[]),
+            {
+              id: Date.now(),
+              sender: 'bot',
+              text: '',
+              toolCalls: [{
+                id: `pending-${pending.confirmation_id}`,
+                tool_name: pending.tool_name || 'action',
+                input: '',
+                status: 'awaiting_confirmation',
+                timestamp: pending.created_at || new Date().toISOString(),
+                confirmation_id: pending.confirmation_id,
+                confirmation_message: pending.message,
+                command: pending.command,
+                block_layer: pending.block_layer,
+                yes_always_effect: pending.yes_always_effect,
+              }],
+            } as ChatMessage,
+          ]
+        : (cleanedMessages as ChatMessage[]);
       // DON'T refresh sessions when just loading - this prevents sessions from moving to top
-      return { messages: cleanedMessages as ChatMessage[], uiState, incidentId: data.incident_id || null, status: data.status || null };
+      return { messages: messagesWithPending, uiState, incidentId: data.incident_id || null, status: data.status || null };
     } catch (err) {
       console.error('[useChatHistory] Error loading chat session:', err);
       setCrudError(err instanceof Error ? err.message : 'Failed to load chat session');

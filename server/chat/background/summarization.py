@@ -790,11 +790,12 @@ def _update_incident_summary(
                         UPDATE incidents 
                         SET aurora_summary = %s, 
                             aurora_status = %s,
+                            status = CASE WHEN status = 'investigating' AND %s = 'complete' THEN 'analyzed' ELSE status END,
                             analyzed_at = CASE WHEN analyzed_at IS NULL THEN %s ELSE analyzed_at END,
                             updated_at = %s
                         WHERE id = %s
                         """,
-                        (summary, status, datetime.now(), datetime.now(), incident_id),
+                        (summary, status, status, datetime.now(), datetime.now(), incident_id),
                     )
                 
                 rows_updated = cursor.rowcount

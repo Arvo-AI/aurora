@@ -378,6 +378,7 @@ def process_grafana_alert(
                                     source_alert_id=per_alert_source_id, alert_title=per_alert_title,
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
+                                    org_id=org_id,
                                 )
                                 cursor.execute("RELEASE SAVEPOINT sp_correlation")
                             except Exception as exc:
@@ -486,6 +487,7 @@ def process_grafana_alert(
                                 from routes.incidents_sse import broadcast_incident_update_to_user_connections
                                 broadcast_incident_update_to_user_connections(
                                     user_id, {"type": "incident_update", "incident_id": str(incident_id), "source": "grafana"},
+                                    org_id=org_id,
                                 )
                             except Exception as e:
                                 logger.warning("[GRAFANA][ALERT] Failed to notify SSE: %s", e)
@@ -515,12 +517,13 @@ def process_grafana_alert(
                                             user_id=user_id, title=chat_title,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
                                         )
-                                        rca_prompt = build_grafana_rca_prompt(alert_payload, user_id=user_id)
+                                        rca_prompt, rail_text = build_grafana_rca_prompt(alert_payload, user_id=user_id)
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
                                                               "alert_title": per_alert_title, "alert_state": alert_state},
                                             incident_id=str(incident_id) if incident_id else None,
+                                            rail_text=rail_text,
                                         )
                                         if incident_id:
                                             cursor.execute(

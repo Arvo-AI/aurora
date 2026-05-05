@@ -9,7 +9,7 @@ import shutil
 from typing import Dict, Any, Optional, Tuple
 from routes.terraform.terraform_generator import TerraformGenerator
 import logging
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import hash_for_log, sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
         except Exception as e:
             logger.warning(f"Failed to create credentials file for Terraform: {e}")
 
-        logger.info(f"GCP Terraform isolated environment configured for project: {project_id}")
+        logger.info("GCP Terraform isolated environment configured for project: %s", hash_for_log(project_id))
         return True, project_id, cached_env
 
     except Exception as e:

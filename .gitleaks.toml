@@ -24,6 +24,16 @@ paths = [
   # Test fixtures
   '''docker-compose\.test\.yaml$''',
 
+  # Output-redaction engine tests use synthetic secrets as assertion
+  # fixtures. These are never real credentials; the file exists to prove
+  # the engine detects them.
+  '''server/tests/test_output_redaction\.py$''',
+
+  # Frozen translation of the upstream Gitleaks rule corpus. Contains
+  # illustrative example tokens from the upstream rule definitions, not
+  # real credentials. See LICENSE-THIRD-PARTY.md.
+  '''server/utils/security/_generated_patterns\.py$''',
+
   # Helm templates (contain template variables, not real secrets)
   '''k8s/templates/.*\.tpl$''',
   '''k8s/templates/.*\.yaml$''',

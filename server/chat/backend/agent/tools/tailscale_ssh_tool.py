@@ -223,30 +223,16 @@ def tailscale_ssh(
             "error": "Command cannot be empty"
         })
 
-    # Org command policy check (shared allow/deny firewall across all tools)
-    from utils.auth.command_policy import evaluate_compound_command
-    from utils.auth.stateless_auth import get_org_id_for_user
-    org_id = get_org_id_for_user(user_id) if user_id else None
-    verdict = evaluate_compound_command(org_id, command)
-    if not verdict.allowed:
-        reason = (verdict.rule_description or "Matched organization policy")[:200]
-        logger.warning("Policy denied tailscale_ssh command for user %s (%s)",
-                        user_id, reason)
+    # Unified gate: signature + org policy + LLM judge + HITL (foreground).
+    from utils.auth.command_gate import gate_command
+    gate = gate_command(user_id=user_id, tool_name="tailscale_ssh", command=command)
+    if not gate.allowed:
+        logger.warning("tailscale_ssh blocked for user %s (%s): %s",
+                       user_id, gate.code, gate.block_reason[:200])
         return json.dumps({
             "success": False,
-            "error": f"Command blocked by organization policy: {reason}",
-            "code": "POLICY_DENIED",
-            "provider": "tailscale_ssh",
-        })
-
-    from utils.security.command_safety import evaluate_command
-    decision = evaluate_command(command, tool="tailscale_ssh", user_id=user_id, session_id=session_id)
-    if decision.blocked:
-        code = "SIGNATURE_MATCHED" if decision.layer == "signature_match" else "SAFETY_BLOCKED"
-        return json.dumps({
-            "success": False,
-            "error": f"Command blocked by safety guardrail: {decision.reason}",
-            "code": code,
+            "error": gate.block_reason,
+            "code": gate.code,
             "provider": "tailscale_ssh",
         })
 

@@ -64,6 +64,10 @@ Typical choices:
 | `google/gemini-2.5-flash-lite` | Lowest cost (OpenRouter default) |
 | `ollama/llama3.1:8b` | Free, local (requires `OLLAMA_BASE_URL`) |
 
+:::warning Use a non-reasoning model
+The safety judge is a binary Yes/No classifier. **Reasoning models** (e.g. `gpt-5.4-mini`, `gemini-2.5-pro`, `o3-mini`) spend their output token budget on internal chain-of-thought before emitting the answer. This adds 2-5 seconds of latency per message and can exhaust the token cap, returning an empty response that the rail treats as a block. Stick to fast, non-reasoning models like the ones listed above.
+:::
+
 ## Environment variables
 
 | Variable | Default | Description |

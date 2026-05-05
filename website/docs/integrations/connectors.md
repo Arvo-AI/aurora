@@ -14,9 +14,70 @@ Aurora works without any cloud provider accounts. You only need an LLM API key t
 
 ### GCP (Google Cloud Platform)
 
-OAuth 2.0 authentication for Google Cloud Platform.
+Two authentication methods are available: **OAuth 2.0** (interactive, per-user consent) or **Service Account Key** (non-interactive, ideal for automation and cross-project setups).
 
-#### 1. Create OAuth Credentials
+#### Option A: Service Account Key
+
+Upload a GCP service account JSON key directly — no OAuth consent screen, no redirect URIs, no browser flow. The uploaded key becomes the working identity (Aurora skips its per-user SA impersonation chain).
+
+##### 1. Create a Service Account
+
+```bash
+gcloud iam service-accounts create aurora-connector \
+  --project=YOUR_PROJECT_ID \
+  --display-name="Aurora Connector"
+```
+
+##### 2. Grant Roles
+
+At minimum, grant read-only roles for investigation:
+
+```bash
+SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/logging.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/monitoring.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/container.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/compute.viewer"
+```
+
+For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
+
+##### 3. Download Key
+
+```bash
+gcloud iam service-accounts keys create aurora-sa-key.json \
+  --iam-account=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+##### 4. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **GCP**
+2. Select **Service Account** authentication
+3. Upload or paste the JSON key file contents
+4. Aurora validates the key, lists accessible projects, and connects
+
+##### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Service account key is malformed" | Verify the JSON file is complete and `private_key` is a valid PEM |
+| "Credential refresh failed" | The SA may be disabled or the key revoked — create a new key |
+| "No accessible projects" | Grant at least `roles/viewer` on the target project |
+
+---
+
+#### Option B: OAuth 2.0
+
+Interactive OAuth flow — best for development or when users connect their own GCP accounts.
+
+##### 1. Create OAuth Credentials
 
 1. Go to [GCP Console > Credentials](https://console.cloud.google.com/apis/credentials)
 2. If this is your first OAuth app, configure the **OAuth consent screen**:
@@ -32,7 +93,7 @@ OAuth 2.0 authentication for Google Cloud Platform.
    - Authorized redirect URIs: `http://localhost:5080/callback`
 4. Copy the **Client ID** and **Client Secret**
 
-#### 2. Configure Environment
+##### 2. Configure Environment
 
 Add to your `.env`:
 
@@ -41,7 +102,7 @@ CLIENT_ID=123456789-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
 CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-#### 3. Enable Required APIs
+##### 3. Enable Required APIs
 
 In GCP Console, enable these APIs for your project:
 - Cloud Resource Manager API
@@ -49,7 +110,7 @@ In GCP Console, enable these APIs for your project:
 - Cloud Logging API
 - Cloud Monitoring API
 
-#### Troubleshooting
+##### Troubleshooting
 
 | Error | Solution |
 |-------|----------|

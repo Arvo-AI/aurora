@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from langchain_core.tools import StructuredTool
+from utils.log_sanitizer import hash_for_log
 from ..cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.iac_templates import (
     generate_gcp_provider_config,
@@ -141,7 +142,7 @@ def _resolve_project_id(user_id: str | None = None) -> str:
             token_resp = generate_contextual_access_token(user_id, selected_project_id=selected_project_id)
             project_id = token_resp.get("project_id")
             if project_id:
-                logger.info(f"Resolved project ID: {project_id}")
+                logger.info("Resolved project ID: %s", hash_for_log(project_id))
                 return project_id
     except Exception:
         # Fall through to next strategies

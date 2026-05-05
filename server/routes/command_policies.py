@@ -102,6 +102,8 @@ def create_policy(user_id):
         return jsonify({"error": "mode must be 'allow' or 'deny'"}), 400
     if not pattern:
         return jsonify({"error": "pattern is required"}), 400
+    if not description:
+        return jsonify({"error": "description is required"}), 400
 
     err = validate_pattern(pattern)
     if err:
@@ -150,6 +152,8 @@ def update_policy(user_id, rule_id):
                 err = validate_pattern(data[field])
                 if err:
                     return jsonify({"error": "Invalid regex pattern"}), 400
+            if field == "description" and not str(data[field] or "").strip():
+                return jsonify({"error": "description is required"}), 400
             updates.append(f"{col} = %s")
             params.append(data[field])
 

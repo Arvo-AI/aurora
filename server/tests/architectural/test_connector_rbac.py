@@ -19,7 +19,7 @@ import pytest
 
 from utils.providers import CONNECTOR_DIRS
 
-ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
+ROUTES_DIR = Path(__file__).resolve().parent.parent.parent / "routes"
 
 # Files that are legitimately exempt from RBAC (webhook receivers that
 # validate via HMAC/signing secret, internal task modules, helpers, etc.).

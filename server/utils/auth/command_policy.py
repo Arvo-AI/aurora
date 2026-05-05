@@ -11,12 +11,17 @@ Compound shell expressions (;, &&, ||, |, subshells) are decomposed and each
 atomic command is evaluated independently. One denied sub-command blocks the
 entire expression.
 
-Default for new orgs: both lists OFF (no enforcement until configured).
+Default for new orgs: both lists enabled, seeded with the Observability Only
+template (read-only cloud/k8s/git/system commands allowed; universal deny
+rules for dangerous patterns). Seeding happens at org creation time so every
+org is protected from day one without any admin action.
 Fail-open on DB error: if rules cannot be fetched, commands are allowed.
 """
 
+import collections
 import logging
 import re
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -26,6 +31,7 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL = 30  # seconds
+_CACHE_MAX = 512  # max orgs in cache before LRU eviction
 
 _CacheEntry = Tuple[
     List["PolicyRule"],  # allow rules
@@ -33,13 +39,17 @@ _CacheEntry = Tuple[
     "ListStates",
     float,               # monotonic timestamp
 ]
-_cache: Dict[str, _CacheEntry] = {}
+_cache: "collections.OrderedDict[str, _CacheEntry]" = collections.OrderedDict()
 
 
 @dataclass(frozen=True)
 class CommandVerdict:
     allowed: bool
     rule_description: Optional[str] = None
+    # Populated only when denylist blocked the command (id of the matched deny rule).
+    deny_rule_id: Optional[int] = None
+    # True when allowlist was enabled and no allow rule matched.
+    allowlist_exhausted: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,15 +130,26 @@ def _get_cached(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListSt
     if entry is not None:
         allow, deny, states, ts = entry
         if time.monotonic() - ts < _CACHE_TTL:
+            _cache.move_to_end(org_id)
             return allow, deny, states
 
     allow, deny, states = _fetch(org_id)
     _cache[org_id] = (allow, deny, states, time.monotonic())
+    _cache.move_to_end(org_id)
+    if len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)  # evict LRU
     return allow, deny, states
 
 
 def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
-    """Core gate. Returns whether *command* is allowed for *org_id*."""
+    """Core gate. Returns whether *command* is allowed for *org_id*.
+
+    Both lists are evaluated independently so the verdict carries the full
+    picture: a deny-list hit still reports whether the allowlist would have
+    matched, which is what the Yes-Always planner needs to decide whether
+    clicking ``Always`` should also add an allow rule alongside disabling
+    the deny rule.
+    """
     if not org_id:
         logger.info("policy_check_skipped reason=no_org_context func=evaluate_command")
         return CommandVerdict(allowed=True)
@@ -138,18 +159,35 @@ def evaluate_command(org_id: Optional[str], command: str) -> CommandVerdict:
     if not states.denylist_enabled and not states.allowlist_enabled:
         return CommandVerdict(allowed=True, rule_description="Policy lists are disabled")
 
-    if states.denylist_enabled:
-        for rule in deny_rules:
-            if rule.compiled.search(command):
-                return CommandVerdict(allowed=False, rule_description=rule.description)
+    deny_hit = next(
+        (r for r in deny_rules if r.compiled.search(command)),
+        None,
+    ) if states.denylist_enabled else None
 
-    if states.allowlist_enabled:
-        for rule in allow_rules:
-            if rule.compiled.search(command):
-                return CommandVerdict(allowed=True, rule_description=rule.description)
-        return CommandVerdict(allowed=False, rule_description="No matching allow rule")
+    allow_hit = next(
+        (r for r in allow_rules if r.compiled.search(command)),
+        None,
+    ) if states.allowlist_enabled else None
 
-    return CommandVerdict(allowed=True)
+    if deny_hit:
+        return CommandVerdict(
+            allowed=False,
+            rule_description=deny_hit.description,
+            deny_rule_id=deny_hit.id,
+            allowlist_exhausted=(states.allowlist_enabled and allow_hit is None),
+        )
+
+    if states.allowlist_enabled and allow_hit is None:
+        return CommandVerdict(
+            allowed=False,
+            rule_description="No matching allow rule",
+            allowlist_exhausted=True,
+        )
+
+    return CommandVerdict(
+        allowed=True,
+        rule_description=allow_hit.description if allow_hit else None,
+    )
 
 
 _UNSPLITTABLE_SHELL_RE = re.compile(r"<<-?\s*\w+|<\(|>\(")
@@ -277,13 +315,196 @@ def evaluate_compound_command(
     return last_verdict
 
 
+_PATTERN_MAX_LEN = 500
+
+
+def _has_nested_quantifiers(pattern: str) -> bool:
+    """Character-scan heuristic for (X+)+ style ReDoS patterns.
+
+    Walks the pattern without running any regex on user data (avoids the
+    CodeQL "polynomial regex on uncontrolled input" warning). Tracks open
+    groups and flags when a quantifier follows a closing group that itself
+    contained a quantifier.
+    """
+    group_has_quant: list[bool] = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            i += 2  # skip escaped char
+            continue
+        if ch == "(":
+            group_has_quant.append(False)
+        elif ch == ")":
+            if group_has_quant:
+                had = group_has_quant.pop()
+                j = i + 1
+                # skip non-greedy modifier
+                if j < len(pattern) and pattern[j] == "?":
+                    j += 1
+                if had and j < len(pattern) and pattern[j] in "+*":
+                    return True
+        elif ch in "+*{" and group_has_quant:
+            group_has_quant[-1] = True
+        i += 1
+    return False
+
+
 def validate_pattern(pattern: str) -> Optional[str]:
-    """Return an error string if *pattern* is not valid regex, else None."""
+    """Return an error string if *pattern* is not a safe, valid regex, else None."""
+    if len(pattern) > _PATTERN_MAX_LEN:
+        return f"pattern too long (max {_PATTERN_MAX_LEN} chars)"
+    if _has_nested_quantifiers(pattern):
+        return "pattern contains nested quantifiers that could cause ReDoS"
     try:
         re.compile(pattern)
         return None
     except re.error as exc:
         return str(exc)
+
+
+# Leading `VAR=value` env assignments the user didn't intend as the "command".
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+
+# Shell keywords / operators that mean "the first token is not a CLI name".
+# When we see one of these at position 0 (after stripping sudo / env assigns),
+# the command is a shell compound statement, pipeline, subshell, or similar
+# construct whose first token is not a useful anchor for an allow rule. In
+# that case we fall back to the full regex-escaped command so the proposed
+# rule only matches this exact invocation -- the user can relax it in the
+# editable UI field.
+_SHELL_NON_CLI_LEADERS = frozenset({
+    "for", "while", "until", "if", "case", "select", "time", "function",
+    "{", "(", "[", "[[", "!", "coproc",
+})
+
+
+def derive_pattern_from_command(command: str) -> str:
+    """Propose a conservative allow-rule regex for *command*.
+
+    Strips leading ``sudo`` and leading ``VAR=value`` env assignments, then
+    anchors on the CLI name plus its first non-flag subcommand.
+
+    When the leading token after stripping is a shell keyword (``for``,
+    ``while``, ``if``, subshell ``(``, brace group ``{`` ...) the first token
+    is not a CLI name, so instead we anchor on the full regex-escaped command.
+    That pattern only matches the exact invocation; it is intentionally narrow
+    because the user can loosen it in the edit box before confirming.
+
+    Examples:
+        "sudo kubectl delete pod foo"            -> ^kubectl delete pod\\b
+        "sudo -u root aws ec2 terminate"         -> ^aws ec2 terminate\\b
+        "KUBECONFIG=/x kubectl get pods"         -> ^kubectl get pods\\b
+        "aws ec2 terminate-instances --id"       -> ^aws ec2 terminate-instances\\b
+        "for i in {1..10}; do echo $i; done"     -> ^for i in \\{1\\.\\.10\\}; do echo \\$i; done$
+    """
+    stripped = command.strip()
+    try:
+        tokens = shlex.split(stripped, posix=True)
+    except ValueError:
+        tokens = stripped.split()
+    # Strip leading env assignments (VAR=value) and sudo with its flags/values.
+    while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
+        tokens.pop(0)
+    if tokens and tokens[0] == "sudo":
+        tokens.pop(0)
+        # Consume sudo's own flags (e.g. -u root, -E, --user=root) until we
+        # reach the actual CLI token.
+        while tokens and tokens[0].startswith("-"):
+            flag = tokens.pop(0)
+            # Flags without embedded '=' consume the next token as a value.
+            if "=" not in flag and tokens and not tokens[0].startswith("-"):
+                tokens.pop(0)
+        # Strip any remaining env assignments set after sudo (sudo VAR=val cmd).
+        while tokens and _ENV_ASSIGN_RE.match(tokens[0]):
+            tokens.pop(0)
+    if not tokens or tokens[0] in _SHELL_NON_CLI_LEADERS:
+        return r"^" + re.escape(stripped) + r"$"
+    parts = [tokens[0]]
+    for tok in tokens[1:]:
+        if tok.startswith("-"):
+            break
+        parts.append(tok)
+        # Stop after CLI + up to two subcommand tokens so multi-word
+        # subcommands like "aws ec2 terminate-instances" match the docstring
+        # example rather than collapsing to "^aws\s+ec2\b". Users can still
+        # tighten or loosen in the editable UI field.
+        if len(parts) >= 3:
+            break
+    return r"^" + r"\s+".join(re.escape(p) for p in parts) + r"\b"
+
+
+@dataclass(frozen=True)
+class PolicyChange:
+    """One mutation that Yes-Always will apply to org_command_policies."""
+    action: str  # "disable_deny_rule" | "add_allow_rule"
+    rule_id: Optional[int] = None
+    pattern: Optional[str] = None
+    description: Optional[str] = None
+    editable: bool = False
+
+
+def plan_yes_always(verdict: CommandVerdict, command: str) -> List[PolicyChange]:
+    """Build the list of policy mutations implied by clicking Yes-Always.
+
+    Pure function — returns the plan without touching the DB. The caller
+    renders this to the user and then calls :func:`apply_yes_always` with
+    (optionally edited) patterns.
+    """
+    changes: List[PolicyChange] = []
+    if verdict.deny_rule_id is not None:
+        changes.append(PolicyChange(
+            action="disable_deny_rule",
+            rule_id=verdict.deny_rule_id,
+            description=verdict.rule_description or "",
+            editable=False,
+        ))
+    if verdict.allowlist_exhausted:
+        changes.append(PolicyChange(
+            action="add_allow_rule",
+            pattern=derive_pattern_from_command(command),
+            description="Auto-approved from chat",
+            editable=True,
+        ))
+    return changes
+
+
+def apply_yes_always(
+    org_id: str,
+    changes: List[PolicyChange],
+    user_id: str,
+) -> None:
+    """Persist Yes-Always mutations atomically and invalidate the cache.
+
+    Each change in ``changes`` is either ``disable_deny_rule`` (soft-disable the
+    referenced rule) or ``add_allow_rule`` (insert a new allow rule with the
+    user-confirmed pattern). Patterns must already be validated by the caller.
+    """
+    if not changes:
+        return
+    from utils.db.connection_pool import db_pool
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET myapp.current_org_id = %s", (org_id,))
+            for ch in changes:
+                if ch.action == "disable_deny_rule" and ch.rule_id is not None:
+                    cur.execute(
+                        "UPDATE org_command_policies "
+                        "SET enabled = false, updated_at = NOW(), updated_by = %s "
+                        "WHERE id = %s AND org_id = %s AND mode = 'deny'",
+                        (user_id, ch.rule_id, org_id),
+                    )
+                elif ch.action == "add_allow_rule" and ch.pattern:
+                    cur.execute(
+                        "INSERT INTO org_command_policies "
+                        "(org_id, mode, pattern, description, priority, updated_by, source) "
+                        "VALUES (%s, 'allow', %s, %s, %s, %s, 'custom') "
+                        "ON CONFLICT (org_id, mode, pattern, source) DO NOTHING",
+                        (org_id, ch.pattern, ch.description or "Auto-approved from chat",
+                         50, user_id),
+                    )
+        conn.commit()
+    invalidate_cache(org_id)
 
 
 def get_policy_prompt_text(org_id: str) -> str:
@@ -627,3 +848,54 @@ def get_policy_templates() -> List[dict]:
 
 def invalidate_cache(org_id: str) -> None:
     _cache.pop(org_id, None)
+
+
+def seed_default_command_policy(org_id: str, created_by: str) -> None:
+    """Insert the Observability Only template and enable both lists for a new org.
+
+    Called immediately after org creation so every org is protected from day
+    one without requiring any admin action. Uses an independent admin
+    connection (the org INSERT has already committed by the time this runs).
+    Idempotent: skips insertion if the org already has policy rows (e.g.
+    retried registration).
+    """
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import store_org_preference
+
+    tpl = next((t for t in get_policy_templates() if t["id"] == "observability_only"), None)
+    if tpl is None:
+        raise ValueError("observability_only policy template not found")
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                # Skip if rules already exist (idempotency).
+                cur.execute(
+                    "SELECT 1 FROM org_command_policies WHERE org_id = %s LIMIT 1",
+                    (org_id,),
+                )
+                if cur.fetchone():
+                    return
+
+                cur.execute("SET myapp.current_org_id = %s", (org_id,))
+                for mode_key in ("allow", "deny"):
+                    for rule in tpl[mode_key]:
+                        cur.execute(
+                            "INSERT INTO org_command_policies "
+                            "(org_id, mode, pattern, description, priority, updated_by, source) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, 'template')",
+                            (org_id, mode_key, rule["pattern"],
+                             rule["description"], rule["priority"], created_by),
+                        )
+                store_org_preference(org_id, "command_policy_allowlist", "on", cursor=cur)
+                store_org_preference(org_id, "command_policy_denylist", "on", cursor=cur)
+                store_org_preference(org_id, "command_policy_active_template", tpl["id"], cursor=cur)
+            conn.commit()
+        logger.info(
+            "Seeded default command policy (observability_only) for new org %s", org_id
+        )
+    except Exception:
+        # Non-fatal: org was created successfully; policy can be applied
+        # manually via Settings > Security. Log and continue.
+        logger.exception(
+            "Failed to seed default command policy for org %s; org creation continues", org_id
+        )

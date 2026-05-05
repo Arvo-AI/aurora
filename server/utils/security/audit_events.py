@@ -52,3 +52,55 @@ def emit_block_event(
         "latency_ms": round(latency_ms, 2),
     }
     logger.warning("GUARDRAIL_AUDIT %s", json.dumps(event, separators=(",", ":")))
+
+
+def emit_redaction_event(
+    *,
+    user_id: str,
+    session_id: str,
+    rule_id: str,
+    value_hash: str,
+    location: str,
+    tool: str = "",
+    latency_ms: float = 0,
+) -> None:
+    """Emit a structured audit log for an output-redaction event.
+
+    ``location`` is the hook identifier ("tool_completion", "ui_message",
+    or "db_save"). ``tool_completion`` is the primary hook on the outbound
+    WebSocket / LLM-context path; ``ui_message`` is the hook that scrubs
+    ``tool_call['output']`` as it is stitched onto the persisted UI
+    transcript; ``db_save`` is the belt-and-suspenders pass immediately
+    before write. Non-zero rates at later hooks indicate that tool output
+    reached a downstream path without going through an earlier one and
+    should be treated as an operational signal, which is why this logs
+    at WARNING -- matching ``emit_block_event`` so SIEM/alert rules
+    filtered at WARN pick the stream up.
+
+    ``value_hash`` is the truncated (64-bit / 16-hex-char) sha256 already
+    computed by the scanner; the raw secret value is never passed to this
+    function. 64 bits is sufficient for short-window correlation of the
+    same secret across hooks on a single request but hits birthday-bound
+    collisions across a large user population, so dashboards pivoting on
+    this field should scope to a single session / request or combine with
+    ``rule_id`` + ``tool`` for better specificity.
+
+    ``latency_ms`` is the scanner latency for the whole redact pass, so
+    callers MUST emit it on only the first finding in a batch (zero on
+    subsequent findings) to avoid N-fold overcount on dashboards summing
+    the field across events from a single call.
+    """
+    event = {
+        "event_type": "guardrail_redaction",
+        "timestamp": time.time(),
+        "user_id": user_id or "",
+        "session_id": session_id or "",
+        "layer": "output_redaction",
+        "decision": "redacted",
+        "rule_id": rule_id,
+        "value_hash": value_hash,
+        "location": location,
+        "tool": tool,
+        "latency_ms": round(latency_ms, 2),
+    }
+    logger.warning("GUARDRAIL_AUDIT %s", json.dumps(event, separators=(",", ":")))

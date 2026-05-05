@@ -56,9 +56,9 @@ export async function makeAuthenticatedRequest(
     throw new Error('User not authenticated')
   }
 
-  // Default 10s timeout unless caller provides their own signal
+  // Default 30s timeout unless caller provides their own signal
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10_000)
+  const timeout = setTimeout(() => controller.abort(), 30_000)
   if (options.signal) {
     options.signal.addEventListener('abort', () => controller.abort())
   }

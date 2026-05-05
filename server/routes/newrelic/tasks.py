@@ -383,6 +383,7 @@ def process_newrelic_event(
                         broadcast_incident_update_to_user_connections(
                             user_id,
                             {"type": "incident_update", "incident_id": str(incident_id), "source": "newrelic"},
+                            org_id=org_id,
                         )
                     except Exception as e:
                         logger.warning("[NEWRELIC][WEBHOOK] Failed to notify SSE: %s", e)
@@ -423,7 +424,7 @@ def process_newrelic_event(
                                 incident_id=str(incident_id),
                             )
 
-                            rca_prompt = build_newrelic_rca_prompt(payload, user_id=user_id)
+                            rca_prompt, rail_text = build_newrelic_rca_prompt(payload, user_id=user_id)
 
                             task = run_background_chat.delay(
                                 user_id=user_id,
@@ -435,6 +436,7 @@ def process_newrelic_event(
                                     "status": status_str,
                                 },
                                 incident_id=str(incident_id),
+                                rail_text=rail_text,
                             )
 
                             cursor.execute(

@@ -194,7 +194,7 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import ContextTrimMiddleware
+            from .middleware import ContextTrimMiddleware, _ForceToolChoice
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -511,11 +511,15 @@ class Agent:
             # Tool outputs are capped/summarized upstream (utils/tool_output_cap.py).
             # ContextSafetyMiddleware is a lightweight safety net that also injects
             # correlated RCA context updates into background sessions.
+            middlewares = [ContextTrimMiddleware(model_name=model_name)]
+            if getattr(state, "trigger_rca_requested", False):
+                middlewares.insert(0, _ForceToolChoice("trigger_rca"))
+
             agent_graph = create_agent(
                 model=streaming_llm,
                 tools=tools,
                 system_prompt=system_prompt_text,
-                middleware=[ContextTrimMiddleware(model_name=model_name)],
+                middleware=middlewares,
             )
 
       

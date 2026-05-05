@@ -121,6 +121,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
+  const sourceIconSrc = alert.source === 'chat' ? null : `/${alert.source}.svg`;
 
   const handleResolveIncident = async () => {
     setResolvingIncident(true);
@@ -349,13 +350,15 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               </Badge>
             )}
             <div className="flex items-center gap-2">
-              <Image 
-                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : alert.source === 'dynatrace' ? '/dynatrace.png' : `/${alert.source}.svg`}
-                alt={alert.source}
-                width={20}
-                height={20}
-                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
-              />
+              {sourceIconSrc && (
+                <Image 
+                  src={sourceIconSrc}
+                  alt={alert.source}
+                  width={20}
+                  height={20}
+                  className={`object-contain${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+                />
+              )}
               {isSafeUrl(alert.sourceUrl) ? (
                 <a 
                   href={alert.sourceUrl}

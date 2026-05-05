@@ -1252,25 +1252,19 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Check if this is a destructive MCP tool and ask for confirmation
                 if is_destructive_mcp_tool(original_tool_name):
                     try:
-                        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+                        from utils.auth.command_gate import gate_action
                         from utils.cloud.cloud_utils import get_user_context
-                        from chat.backend.agent.tools.cloud_tools import get_state_context
-                        
-                        # Get user context
+
                         context = get_user_context()
                         user_id = context.get('user_id') if isinstance(context, dict) else context
-                        state_context = get_state_context()
-                        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-                        
+
                         if user_id:
                             summary_msg = summarize_mcp_tool_action(original_tool_name, kwargs)
-                            if not wait_for_user_confirmation(
+                            if not gate_action(
                                 user_id=user_id,
-                                message=summary_msg,
                                 tool_name=tool_name,
-                                session_id=session_id
-                            ):
-                                # User cancelled the action
+                                summary=summary_msg,
+                            ).allowed:
                                 cancellation_result = f"MCP tool {original_tool_name} cancelled by user."
                                 try:
                                     if send_tool_completion:

@@ -158,7 +158,7 @@ const logos = {
   ),
   dynatrace: (
     <img
-      src="/dynatrace.png"
+      src="/dynatrace.svg"
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="Dynatrace"
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}

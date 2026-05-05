@@ -94,13 +94,16 @@ async def handle_kubectl_agent(websocket) -> None:
         conn = connect_to_db_as_admin()
         try:
             cursor = conn.cursor()
-            # No RLS needed — webhook bootstrap, no user_id
-            cursor.execute("SELECT cluster_name, status, expires_at, user_id FROM kubectl_agent_tokens WHERE token = %s", (token,))
+            # Token verification is a bootstrap auth query — no org context yet.
+            # kubectl_agent_tokens has FORCE RLS; opt in to the permissive
+            # select_by_token_resolve policy (same pattern as mcp_tokens).
+            cursor.execute("SET LOCAL myapp.kubectl_token_resolve = 'true'")
+            cursor.execute("SELECT cluster_name, status, expires_at, user_id, org_id FROM kubectl_agent_tokens WHERE token = %s", (token,))
             result = cursor.fetchone()
             if not result:
                 await websocket.close(code=1008, reason="Invalid token")
                 return
-            cluster_name, status, expires_at, user_id = result
+            cluster_name, status, expires_at, user_id, org_id = result
             if status != 'active':
                 await websocket.close(code=1008, reason="Token revoked")
                 return

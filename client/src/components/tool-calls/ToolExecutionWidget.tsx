@@ -5,8 +5,9 @@ import type { JSX } from "react"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
-import { ChevronDown, ChevronUp, X, Check, AlertCircle } from "lucide-react"
+import { ChevronDown, ChevronUp, AlertCircle, Settings2 } from "lucide-react"
 import CommandLogo from "./CommandLogo"
 import { useTheme } from "next-themes"
 import { GitHubCommitTool } from "@/components/GitHubCommitTool"
@@ -233,7 +234,13 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // cloud_exec parsing
   else if (tool.tool_name === "cloud_exec") {
     const parsed = parseCloudExecCommand(normalizedInput, tool.output, defaultCliCommand)
-    command = parsed.command
+    // Prefer the authoritative command from the gate's confirmation payload
+    // when the tool is paused for approval -- parseCloudExecCommand returns a
+    // placeholder ("cloud exec") when there's no final_command in the output
+    // yet, which is exactly the state we're in while awaiting confirmation.
+    command = tool.command && parsed.command === defaultCliCommand
+      ? tool.command
+      : parsed.command
   }
   // GitHub MCP tools parsing
   else if (tool.tool_name.startsWith("mcp_") && typeof command === "string" && command.trim().startsWith("{")) {
@@ -466,56 +473,14 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
 
             {/* Show message when awaiting confirmation */}
             {tool.status === "awaiting_confirmation" && !tool.output && !tool.error && (
-              <div className="border-t border-border bg-muted/30 px-4 py-3 flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">
-                  {(tool as any).confirmation_message || "This action requires confirmation"}
-                </span>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-2 text-xs font-medium hover:bg-background"
-                    onClick={() => {
-                      const confirmationId = (tool as any).confirmation_id
-                      if (!confirmationId || !sendRaw || !userId) return
-                      
-                      sendRaw(JSON.stringify({
-                        type: 'confirmation_response',
-                        confirmation_id: confirmationId,
-                        decision: 'cancel',
-                        user_id: userId,
-                        session_id: sessionId,
-                      }))
-                      
-                      onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
-                    }}
-                  >
-                    <X className="h-3 w-3 mr-1" />
-                    Decline
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-6 px-2 text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    onClick={() => {
-                      const confirmationId = (tool as any).confirmation_id
-                      if (!confirmationId || !sendRaw || !userId) return
-                      
-                      sendRaw(JSON.stringify({
-                        type: 'confirmation_response',
-                        confirmation_id: confirmationId,
-                        decision: 'execute',
-                        user_id: userId,
-                        session_id: sessionId,
-                      }))
-                      
-                      onToolUpdate?.({ status: 'running' })
-                    }}
-                  >
-                    <Check className="h-3 w-3 mr-1" />
-                    Confirm
-                  </Button>
-                </div>
-              </div>
+              <ConfirmationPanel
+                tool={tool}
+                command={command}
+                userId={userId}
+                sessionId={sessionId}
+                sendRaw={sendRaw}
+                onToolUpdate={onToolUpdate}
+              />
             )}
 
             {/* Show shimmer effect while tool is running and no output yet */}
@@ -586,3 +551,152 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
 }
 
 export default ToolExecutionWidget
+
+interface ConfirmationPanelProps {
+  tool: ToolCall
+  command: string
+  userId?: string
+  sessionId?: string
+  sendRaw?: (data: string) => boolean
+  onToolUpdate?: (updatedTool: Partial<ToolCall>) => void
+}
+
+// Compact human summary of a shell command: CLI name + first non-flag
+// subcommand (e.g. "aws ec2 describe-instances --query ..." -> "aws ec2
+// describe-instances"). Falls back to the raw command if it doesn't parse.
+const summarizeCommand = (cmd: string): string => {
+  if (!cmd) return "this command"
+  const trimmed = cmd.trim()
+  const tokens = trimmed.split(/\s+/)
+  const parts: string[] = []
+  for (const tok of tokens) {
+    if (tok.startsWith("-")) break
+    parts.push(tok)
+    if (parts.length >= 3) break
+  }
+  return parts.join(" ") || trimmed.slice(0, 40)
+}
+
+const ConfirmationPanel = ({ tool, command, userId, sessionId, sendRaw, onToolUpdate }: ConfirmationPanelProps) => {
+  const effect = tool.yes_always_effect
+  const allowYesAlways = !!(effect && effect.changes.length > 0)
+  const summary = summarizeCommand(command)
+
+  const [edited, setEdited] = React.useState<Record<string, string>>(() => {
+    const m: Record<string, string> = {}
+    if (effect) {
+      effect.changes.forEach((c, i) => {
+        if (c.editable && c.pattern) m[String(i)] = c.pattern
+      })
+    }
+    return m
+  })
+  const [alwaysOpen, setAlwaysOpen] = React.useState(false)
+
+  const respond = (decision: 'execute' | 'cancel' | 'execute_always') => {
+    const confirmationId = tool.confirmation_id
+    if (!confirmationId || !sendRaw || !userId) return
+    const payload: Record<string, unknown> = {
+      type: 'confirmation_response',
+      confirmation_id: confirmationId,
+      decision,
+      user_id: userId,
+      session_id: sessionId,
+    }
+    if (decision === 'execute_always') payload.edited_patterns = edited
+    const sent = sendRaw(JSON.stringify(payload))
+    if (!sent) return
+    if (decision === 'cancel') {
+      onToolUpdate?.({ status: 'completed', output: 'Operation cancelled by user' })
+    } else {
+      onToolUpdate?.({ status: 'running' })
+    }
+  }
+
+  return (
+    <div className="border-t border-border bg-muted/30 px-4 py-2 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 min-w-0 text-sm text-muted-foreground">
+        <AlertCircle className="h-4 w-4 flex-shrink-0" />
+        <span className="truncate">
+          Approval needed for <code className="font-mono text-foreground">{summary}</code>
+        </span>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+          onClick={() => respond('cancel')}
+        >
+          Deny
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-3 text-xs font-medium text-foreground hover:text-foreground"
+          onClick={() => respond('execute')}
+        >
+          Allow
+        </Button>
+        {allowYesAlways && effect && (
+          <Popover open={alwaysOpen} onOpenChange={setAlwaysOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                size="sm"
+                className="h-7 px-3 text-xs font-medium gap-1 bg-blue-600 text-white hover:bg-blue-600/90 dark:bg-blue-500 dark:hover:bg-blue-500/90"
+              >
+                Always
+                <Settings2 className="h-3 w-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" sideOffset={6} className="w-80 p-3 flex flex-col gap-2">
+              <div className="text-xs font-medium">{effect.summary}</div>
+              <ul className="flex flex-col gap-2">
+                {effect.changes.map((c, i) => (
+                  <li key={i} className="flex flex-col gap-1">
+                    {c.action === 'disable_deny_rule' ? (
+                      <>
+                        <div className="text-xs text-muted-foreground">
+                          Disable deny rule: <span className="text-foreground">{c.description || 'rule'}</span>
+                        </div>
+                        {c.pattern && (
+                          <code className="rounded border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] break-all">
+                            {c.pattern}
+                          </code>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <label className="text-xs text-muted-foreground" htmlFor={`allow-pattern-${i}`}>
+                          Pattern to allow
+                        </label>
+                        <input
+                          id={`allow-pattern-${i}`}
+                          type="text"
+                          className="w-full rounded border border-border bg-transparent px-2 py-1 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                          value={edited[String(i)] ?? c.pattern ?? ''}
+                          onChange={(e) => setEdited(prev => ({ ...prev, [String(i)]: e.target.value }))}
+                          spellCheck={false}
+                          aria-label="Allow-rule regex pattern"
+                        />
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="flex justify-end pt-1">
+                <Button
+                  size="sm"
+                  className="h-7 px-3 text-xs font-medium bg-blue-600 text-white hover:bg-blue-600/90 dark:bg-blue-500 dark:hover:bg-blue-500/90"
+                  onClick={() => { setAlwaysOpen(false); respond('execute_always') }}
+                >
+                  Save
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+    </div>
+  )
+}

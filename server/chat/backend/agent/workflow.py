@@ -10,10 +10,14 @@ import logging
 import json
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
 from utils.security.audit_events import emit_block_event
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +65,13 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
                 text_parts.append(part)
         return "".join(text_parts)
     return str(content)
+
+
+def _get_input_rail_text(question: Any, message_content: Any) -> str:
+    """Return the user-authored text that should be evaluated by input rails."""
+    if isinstance(question, str):
+        return question
+    return _extract_text_from_content(message_content)
 
 
 class Workflow:
@@ -967,7 +978,13 @@ class Workflow:
         from guardrails.input_rail import check_input
         last_msg = input_state.messages[-1] if input_state.messages else None
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
-            msg_text = _extract_text_from_content(last_msg.content)
+            # RCA chat turns may prepend internal routing instructions to the
+            # HumanMessage so the agent calls trigger_rca. Guardrails and chat
+            # persistence should evaluate the user's original text only.
+            msg_text = _get_input_rail_text(
+                getattr(input_state, "question", None),
+                last_msg.content,
+            )
             rail_result = await check_input(msg_text)
             if rail_result.blocked:
                 emit_block_event(
@@ -979,8 +996,23 @@ class Workflow:
                     reason=rail_result.reason,
                     latency_ms=rail_result.latency_ms,
                 )
-                yield ("token", "Your message was blocked by our safety system. Please rephrase your request.")
-                return
+                from guardrails.input_rail import _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
+                _RAIL_USER_MESSAGES = {
+                    _BLOCKED_REASON: "Your message was blocked by our safety system. Please rephrase your request.",
+                    _FAIL_CLOSED_AUTH: "There is an issue with the AI service configuration. Please try again later.",
+                    _FAIL_CLOSED_CONNECTIVITY: "The AI service is temporarily unavailable. Please try again in a moment.",
+                }
+                # Background chats have no interactive user: hard block stays.
+                # Foreground chats that were genuinely blocked: taint the session
+                # so every subsequent tool call goes through the command gate.
+                if getattr(input_state, "is_background", False) or rail_result.reason != _BLOCKED_REASON:
+                    yield ("token", _RAIL_USER_MESSAGES.get(rail_result.reason, "Something went wrong. Please try again."))
+                    return
+                from utils.auth.command_gate import mark_session_tainted
+                mark_session_tainted(
+                    getattr(input_state, "session_id", None),
+                    getattr(input_state, "user_id", None),
+                )
 
             # Rail passed: NOW it's safe to persist the user message.
             # Kept inside the rail gate so blocked messages never touch
@@ -1588,8 +1620,16 @@ class Workflow:
                         break
                 if already_present:
                     continue
+
+                # Output redaction (Hook 3): RCA context payloads come from
+                # PagerDuty incident bodies which can carry tokens. Every
+                # other writer to tool_call['output'] in this file runs
+                # through _redact_for_ui; skipping it here would let raw
+                # secrets land in chat_sessions.messages unredacted.
+                redacted_content = self._redact_for_ui(
+                    content, tool_name="rca_context_update"
+                )
                 
-                # Create a new bot message for the context update
                 context_update_message = {
                     "message_number": len(ui_messages) + 1,
                     "text": "",
@@ -1605,7 +1645,7 @@ class Workflow:
                             "source": update.get("source", "pagerduty"),
                             "injected_at": injected_at,
                         }),
-                        "output": content,
+                        "output": redacted_content,
                         "status": "completed",
                         "timestamp": injected_at or datetime.now().isoformat(),
                     }],
@@ -1751,6 +1791,68 @@ class Workflow:
             logger.error(f"Error appending UI messages: {e}")
             return False
 
+    def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
+        """Output redaction (Hook 3) on tool output as it is stitched onto
+        the persisted UI transcript.
+
+        Hook 1 redacts ``send_tool_completion``'s outbound payload; this hook
+        covers the parallel assignment to ``tool_call['output']`` that lands
+        in ``chat_sessions.messages`` (rendered by the UI on reload) and that
+        Hook 1 never sees. Idempotent; fail-open on any unexpected error.
+        """
+        text = str(content or "")
+        if not text or not _guardrails_config.enabled:
+            return text
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _redact(text)
+            if not findings:
+                return redacted
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            session_id = ""
+            user_id = ""
+            try:
+                session_id = self.config["configurable"]["thread_id"]
+            except Exception as e:
+                logger.debug(
+                    "Output redaction (ui_message): thread_id unavailable; defaulting session_id='': %s",
+                    e,
+                )
+            try:
+                user_id = self._get_state_attr(self._last_state, "user_id") or ""
+            except Exception as e:
+                logger.debug(
+                    "Output redaction (ui_message): user_id unavailable; defaulting user_id='': %s",
+                    e,
+                )
+            for idx, f in enumerate(findings):
+                try:
+                    _emit_redaction(
+                        user_id=user_id,
+                        session_id=session_id,
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="ui_message",
+                        tool=tool_name,
+                        # Per-call scan latency only on the first finding;
+                        # remaining events report 0 so dashboards summing
+                        # the field do not overcount by a factor of N.
+                        latency_ms=latency_ms if idx == 0 else 0.0,
+                    )
+                except Exception as audit_err:
+                    # Audit emit is best-effort: never let a logger/transport
+                    # failure escape and trigger the outer fail-open, which
+                    # would return the un-redacted text.
+                    logger.warning(
+                        "output-redaction ui_message audit emit failed for %s: %s",
+                        tool_name,
+                        audit_err,
+                    )
+            return redacted
+        except Exception as e:
+            logger.error(f"Output redaction (ui_message) failed open: {e}")
+            return text
+
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
         """Associate tool calls with output in the UI messages."""
 
@@ -1804,7 +1906,10 @@ class Workflow:
                                     continue
                             
                             # Update the tool call with output (ID match is sufficient)
-                            tool_call['output'] = str(getattr(msg, 'content', ''))
+                            tool_call['output'] = self._redact_for_ui(
+                                getattr(msg, 'content', ''),
+                                tool_name=tool_call.get('tool_name') or '',
+                            )
                             tool_call['status'] = 'completed'
                             tool_call['timestamp'] = datetime.now().isoformat()  # Update timestamp to completion time
                             updated = True
@@ -1835,7 +1940,10 @@ class Workflow:
                     f"extras will be dropped"
                 )
             for msg, tc in zip(unmatched_tool_messages, running_tool_calls):
-                tc['output'] = str(getattr(msg, 'content', ''))
+                tc['output'] = self._redact_for_ui(
+                    getattr(msg, 'content', ''),
+                    tool_name=tc.get('tool_name') or '',
+                )
                 tc['status'] = 'completed'
                 tc['timestamp'] = datetime.now().isoformat()
 

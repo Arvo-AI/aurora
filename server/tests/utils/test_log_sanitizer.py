@@ -6,7 +6,7 @@ import sys
 import pytest
 
 # Ensure server/ is on sys.path
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir)
+_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
 
