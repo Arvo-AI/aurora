@@ -29,15 +29,16 @@ _UPDATABLE_COLUMNS = frozenset({"name", "description", "instructions", "trigger_
 
 
 def _parse_update_fields(body):
-    """Validate and extract update field sets/vals from request body. Returns (columns, vals, error_response).
-    
-    columns is a list of column names from _UPDATABLE_COLUMNS (never user-controlled strings).
+    """Validate and extract update columns/vals from request body.
+
+    Returns (columns, vals, error_msg) where error_msg is a string on failure.
+    columns contains only names from _UPDATABLE_COLUMNS.
     """
     columns, vals = [], []
     if "name" in body:
         name = (body["name"] or "").strip()
         if not name or len(name) > 255:
-            return None, None, (jsonify({"error": "name must be 1-255 characters"}), 400)
+            return None, None, "name must be 1-255 characters"
         columns.append("name")
         vals.append(name)
     if "description" in body:
@@ -46,12 +47,12 @@ def _parse_update_fields(body):
     if "instructions" in body:
         instructions = (body["instructions"] or "").strip()
         if not instructions:
-            return None, None, (jsonify({"error": "instructions cannot be empty"}), 400)
+            return None, None, "instructions cannot be empty"
         columns.append("instructions")
         vals.append(instructions)
     if "trigger_type" in body:
         if body["trigger_type"] not in _VALID_TRIGGER_TYPES:
-            return None, None, (jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400)
+            return None, None, f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"
         columns.append("trigger_type")
         vals.append(body["trigger_type"])
     if "trigger_config" in body:
@@ -60,13 +61,13 @@ def _parse_update_fields(body):
         if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
             interval = (tc or {}).get("interval_seconds")
             if not isinstance(interval, (int, float)) or int(interval) < 300:
-                return None, None, (jsonify({"error": "on_schedule requires trigger_config.interval_seconds >= 300"}), 400)
+                return None, None, "on_schedule requires trigger_config.interval_seconds >= 300"
             tc = {"interval_seconds": int(interval)}
         columns.append("trigger_config")
         vals.append(json.dumps(tc))
     if "mode" in body:
         if body["mode"] not in _VALID_MODES:
-            return None, None, (jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400)
+            return None, None, f"mode must be one of {_VALID_MODES}"
         columns.append("mode")
         vals.append(body["mode"])
     if "enabled" in body:
@@ -76,17 +77,17 @@ def _parse_update_fields(body):
 
 
 def _validate_create_fields(name, instructions, body):
-    """Return error response tuple if validation fails, else None."""
+    """Return error message string if validation fails, else None."""
     if not name or not instructions:
-        return jsonify({"error": "name and instructions are required"}), 400
+        return "name and instructions are required"
     if len(name) > 255:
-        return jsonify({"error": "name must be 255 characters or fewer"}), 400
+        return "name must be 255 characters or fewer"
     trigger_type = body.get("trigger_type", "manual")
     mode = body.get("mode", "agent")
     if trigger_type not in _VALID_TRIGGER_TYPES:
-        return jsonify({"error": f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"}), 400
+        return f"trigger_type must be one of {_VALID_TRIGGER_TYPES}"
     if mode not in _VALID_MODES:
-        return jsonify({"error": f"mode must be one of {_VALID_MODES}"}), 400
+        return f"mode must be one of {_VALID_MODES}"
     return None
 
 
@@ -129,7 +130,7 @@ def create_action(user_id):
     instructions = (body.get("instructions") or "").strip()
     err = _validate_create_fields(name, instructions, body)
     if err:
-        return err
+        return jsonify({"error": err}), 400
 
     description = (body.get("description") or "").strip() or None
     trigger_type = body.get("trigger_type", "manual")
@@ -231,7 +232,7 @@ def update_action(user_id, action_id):
 
     columns, vals, err = _parse_update_fields(body)
     if err:
-        return err
+        return jsonify({"error": err}), 400
 
     if not columns:
         return jsonify({"error": "no fields to update"}), 400
@@ -240,15 +241,13 @@ def update_action(user_id, action_id):
     vals.append(datetime.now(timezone.utc))
     vals.append(action_id)
 
-    _ALLOWED = _UPDATABLE_COLUMNS | {"updated_at"}
-    set_clause = ", ".join(f"{col} = %s" for col in columns if col in _ALLOWED)
+    # Whitelist filter ensures only known column names enter the query
+    safe_columns = [col for col in columns if col in (_UPDATABLE_COLUMNS | {"updated_at"})]
+    query = "UPDATE actions SET " + ", ".join(col + " = %s" for col in safe_columns) + " WHERE id = %s RETURNING id"
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                f"UPDATE actions SET {set_clause} WHERE id = %s RETURNING id",
-                vals,
-            )
+            cur.execute(query, vals)
             if not cur.fetchone():
                 return jsonify({"error": _ERR_NOT_FOUND}), 404
             conn.commit()
@@ -261,12 +260,16 @@ def update_action(user_id, action_id):
 def delete_action(user_id, action_id):
     if not _validate_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
-    with db_pool.get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM actions WHERE id = %s RETURNING id", (action_id,))
-            if not cur.fetchone():
-                return jsonify({"error": _ERR_NOT_FOUND}), 404
-            conn.commit()
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM actions WHERE id = %s RETURNING id", (action_id,))
+                if not cur.fetchone():
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+                conn.commit()
+    except Exception:
+        logger.exception("Failed to delete action")
+        return jsonify({"error": "Failed to delete action"}), 500
     return "", 204
 
 
