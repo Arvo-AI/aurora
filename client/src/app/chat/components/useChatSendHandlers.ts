@@ -158,6 +158,38 @@ export function useChatSendHandlers({
     };
   }, [selectedMode, syncProvidersWithMode]);
 
+  // Extract action from text input (fallback when no chip-selected action)
+  const parseActionFromText = useCallback((text: string) => {
+    const lower = text.toLowerCase();
+    const prefix = lower.startsWith('/actions ') ? '/actions ' : lower.startsWith('/action ') ? '/action ' : null;
+    if (!prefix) return null;
+    const name = text.slice(prefix.length).trim();
+    if (!name) return null;
+    return availableActions.find(a => a.name.toLowerCase() === name.toLowerCase()) || { id: '', name };
+  }, [availableActions]);
+
+  // Ensure a chat session exists, creating one if needed
+  const ensureSession = useCallback(async (title: string): Promise<string | undefined> => {
+    if (hasCreatedSession) return currentSessionId;
+    try {
+      const sessionTitle = title.length > 50 ? title.substring(0, 50).trimEnd() + '...' : title;
+      const newSessionId = await createSession(sessionTitle);
+      if (newSessionId) {
+        onSessionCreated?.(newSessionId);
+        setCurrentSessionId(newSessionId);
+        setHasCreatedSession(true);
+        justCreatedSessionRef.current = newSessionId;
+        startTransition(() => {
+          router.replace(`/chat?sessionId=${newSessionId}`);
+        });
+        return newSessionId;
+      }
+    } catch (error) {
+      console.error('Error creating session:', error);
+    }
+    return currentSessionId;
+  }, [createSession, currentSessionId, hasCreatedSession, justCreatedSessionRef, onSessionCreated, router, setCurrentSessionId, setHasCreatedSession]);
+
   const sendMessage = useCallback(async (
     messageText: string,
     socket: ChatWebSocket,
@@ -169,23 +201,11 @@ export function useChatSendHandlers({
     if ((!trimmed && !selectedAction) || isSending || !userId) return false;
 
     // Action trigger: chip-selected action takes priority, text fallback second
-    const actionToTrigger = selectedAction
-      || (() => {
-        const lower = trimmed.toLowerCase();
-        const prefix = lower.startsWith('/actions ') ? '/actions ' : lower.startsWith('/action ') ? '/action ' : null;
-        if (!prefix) return null;
-        const name = trimmed.slice(prefix.length).trim();
-        if (!name) return null;
-        return availableActions.find(a => a.name.toLowerCase() === name.toLowerCase()) || { id: '', name };
-      })();
+    const actionToTrigger = selectedAction || parseActionFromText(trimmed);
 
     if (actionToTrigger) {
       if (!actionToTrigger.id) {
         toast({ description: `Action "${actionToTrigger.name}" not found. Type /action to see suggestions.`, variant: 'destructive' });
-        return false;
-      }
-      if (!availableActions.length && !selectedAction) {
-        toast({ description: 'No actions configured. Create one in Settings > Actions.', variant: 'destructive' });
         return false;
       }
       if (!socket.isReady) {
@@ -195,27 +215,7 @@ export function useChatSendHandlers({
 
       setIsSending(true);
       onNewMessage({ id: Date.now(), sender: 'user', text: trimmed });
-
-      // Ensure a session exists (same as normal send flow)
-      let actualSessionId = currentSessionId;
-      if (!hasCreatedSession) {
-        try {
-          const title = trimmed.length > 50 ? trimmed.substring(0, 50).trimEnd() + '...' : trimmed;
-          const newSessionId = await createSession(title);
-          if (newSessionId) {
-            actualSessionId = newSessionId;
-            onSessionCreated?.(newSessionId);
-            setCurrentSessionId(newSessionId);
-            setHasCreatedSession(true);
-            justCreatedSessionRef.current = newSessionId;
-            startTransition(() => {
-              router.replace(`/chat?sessionId=${newSessionId}`);
-            });
-          }
-        } catch (error) {
-          console.error('Error creating session:', error);
-        }
-      }
+      const actualSessionId = await ensureSession(trimmed);
 
       socket.send({
         type: 'message',
@@ -229,6 +229,7 @@ export function useChatSendHandlers({
       clearSelectedAction?.();
       return true;
     }
+
     const bareCmd = trimmed.trim().toLowerCase();
     if (bareCmd === '/action' || bareCmd === '/actions') {
       toast({ description: 'Usage: /action <name>. Type /action and see suggestions.' });
@@ -236,15 +237,11 @@ export function useChatSendHandlers({
     }
 
     const effectiveMode = normalizeMode(modeOverride || selectedMode);
-    const connectedProviders = getConnectedProviders();
     const providersForMode = providersOverride ?? selectedProviders;
     const finalProviders = syncProvidersWithMode(effectiveMode, providersForMode);
 
     if (!socket.isReady) {
-      toast({
-        description: "Connection not ready. Please wait a moment and try again.",
-        variant: "destructive"
-      });
+      toast({ description: "Connection not ready. Please wait a moment and try again.", variant: "destructive" });
       return false;
     }
 
@@ -262,34 +259,13 @@ export function useChatSendHandlers({
       })) : undefined
     };
 
-    let actualSessionId = currentSessionId;
-    if (!hasCreatedSession) {
-      try {
-        const title = trimmed.length > 50 ? trimmed.substring(0, 50).trimEnd() + '...' : trimmed;
-        const newSessionId = await createSession(title);
-        if (newSessionId) {
-          actualSessionId = newSessionId;
-          onSessionCreated?.(newSessionId);
-
-          setCurrentSessionId(newSessionId);
-          setHasCreatedSession(true);
-          justCreatedSessionRef.current = newSessionId;
-
-          startTransition(() => {
-            router.replace(`/chat?sessionId=${newSessionId}`);
-          });
-        }
-      } catch (error) {
-        console.error('Error creating session:', error);
-      }
-    }
-
+    const actualSessionId = await ensureSession(trimmed);
     onNewMessage(userMessage);
 
     // Convert images to attachments
     const attachments = await Promise.all(
       images.map(async (img) => {
-        const base64 = img.preview.split(',')[1]; // Remove data URL prefix
+        const base64 = img.preview.split(',')[1];
         return {
           file_type: img.file.type,
           file_data: base64,
@@ -317,11 +293,9 @@ export function useChatSendHandlers({
 
     return true;
   }, [
-    createSession, currentSessionId, hasCreatedSession, justCreatedSessionRef,
-    onNewMessage, router, selectedMode, selectedModel, selectedProviders,
-    syncProvidersWithMode, toast, userId, setCurrentSessionId, 
-    setHasCreatedSession, isSending, getConnectedProviders, images,
-    availableActions, selectedAction, clearSelectedAction
+    ensureSession, parseActionFromText, onNewMessage, selectedMode, selectedModel,
+    selectedProviders, syncProvidersWithMode, toast, userId, isSending,
+    images, selectedAction, clearSelectedAction
   ]);
 
   const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string, options?: { triggerRca?: boolean }) => {
