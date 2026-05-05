@@ -323,6 +323,18 @@ const logos = {
       <line x1="18" y1="12" x2="22" y2="12" />
     </svg>
   ),
+  triggerAction: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-blue-500"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+    </svg>
+  ),
   github: <GitHubLogo />,
   default: (
     <span className="text-green-600 dark:text-green-400 select-none font-bold">$</span>
@@ -541,6 +553,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool === 'trigger_rca') {
     return 'triggerRca'
+  }
+
+  if (tool === 'trigger_action') {
+    return 'triggerAction'
   }
 
   return 'default'

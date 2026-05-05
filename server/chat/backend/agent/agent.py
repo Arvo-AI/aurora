@@ -514,6 +514,8 @@ class Agent:
             middlewares = [ContextTrimMiddleware(model_name=model_name)]
             if getattr(state, "trigger_rca_requested", False):
                 middlewares.insert(0, _ForceToolChoice("trigger_rca"))
+            if getattr(state, "trigger_action_id", None):
+                middlewares.insert(0, _ForceToolChoice("trigger_action"))
 
             agent_graph = create_agent(
                 model=streaming_llm,

@@ -1220,6 +1220,7 @@ async def handle_connection(websocket) -> None:
             mode_input = data.get('mode')    # Extract chat mode (agent / ask)
             attachments = data.get('attachments', []) # Extract file attachments if present
             trigger_rca_requested = data.get('trigger_rca') is True
+            trigger_action_id = data.get('trigger_action')
 
             mode = _normalize_mode(mode_input)
 
@@ -1516,6 +1517,17 @@ async def handle_connection(websocket) -> None:
                 elif isinstance(human_message.content, list):
                     human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
 
+            if trigger_action_id:
+                action_instruction = (
+                    "[ACTION TRIGGER REQUESTED]\n"
+                    f"The user wants to trigger an Aurora Action (ID: {trigger_action_id}). "
+                    "You MUST call the trigger_action tool with this action_id first, then respond to the rest of their message normally.\n\n"
+                )
+                if isinstance(human_message.content, str):
+                    human_message = HumanMessage(content=action_instruction + human_message.content)
+                elif isinstance(human_message.content, list):
+                    human_message = HumanMessage(content=[{"type": "text", "text": action_instruction}] + human_message.content)
+
             messages_list = [human_message]
 
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
@@ -1534,6 +1546,7 @@ async def handle_connection(websocket) -> None:
                 model=model,
                 mode=mode,
                 trigger_rca_requested=bool(trigger_rca_requested),
+                trigger_action_id=trigger_action_id or None,
             )
 
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")

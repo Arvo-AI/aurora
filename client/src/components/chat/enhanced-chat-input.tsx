@@ -64,8 +64,17 @@ export default function EnhancedChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
 
-  const menuVisible = !selectedAction && /^\/actions?\s*/i.test(input);
-  const filteredActions = menuVisible ? getFilteredActions(input, actions).slice(0, 8) : [];
+  // Show menu as soon as "/" is typed (word-boundary: start of input or after space)
+  const slashMatch = !selectedAction && input.match(/(^|\s)(\/\S*)$/);
+  const slashToken = slashMatch?.[2] ?? '';
+  const isFullCommand = /^\/actions?$/i.test(slashToken);
+  const isPartialCommand = !isFullCommand && '/action'.startsWith(slashToken.toLowerCase()) && slashToken.length >= 1;
+  // Also detect when command is complete and user is picking an action (e.g. "/action " or "/action qu")
+  const hasCompletedCommand = !selectedAction && /(^|\s)\/actions?\s/i.test(input);
+  const menuVisible = isFullCommand || isPartialCommand || hasCompletedCommand;
+  const menuStage: 'command' | 'action' = (isFullCommand || hasCompletedCommand) ? 'action' : 'command';
+  const filteredActions = menuVisible && menuStage === 'action' ? getFilteredActions(input, actions).slice(0, 8) : [];
+  const menuItemCount = menuStage === 'command' ? 1 : (filteredActions.length || 1);
 
   let parsedContext = null;
   try {
@@ -76,25 +85,38 @@ export default function EnhancedChatInput({
 
   const handleSelect = useCallback((action: ActionItem) => {
     onActionSelect?.(action);
-    setInput('');
+    // Replace /action... portion with the action name inline in the textarea
+    const replaced = input.replace(/(^|\s)\/actions?\s*\S*$/i, `$1/action ${action.name} `);
+    setInput(replaced === input ? `/action ${action.name} ` : replaced);
     setHighlightedIndex(0);
-  }, [onActionSelect, setInput]);
+  }, [onActionSelect, setInput, input]);
+
+  const handleCommandSelect = useCallback(() => {
+    // Replace the partial slash token with the full /action command
+    const replaced = input.replace(/(^|\s)(\/\S*)$/, '$1/action ');
+    setInput(replaced);
+    setHighlightedIndex(0);
+  }, [input, setInput]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (menuVisible && filteredActions.length > 0) {
+    if (menuVisible && menuItemCount > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setHighlightedIndex(i => (i + 1) % filteredActions.length);
+        setHighlightedIndex(i => (i + 1) % menuItemCount);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setHighlightedIndex(i => (i - 1 + filteredActions.length) % filteredActions.length);
+        setHighlightedIndex(i => (i - 1 + menuItemCount) % menuItemCount);
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        handleSelect(filteredActions[highlightedIndex]);
+        if (menuStage === 'command') {
+          handleCommandSelect();
+        } else {
+          handleSelect(filteredActions[highlightedIndex]);
+        }
         return;
       }
       if (e.key === 'Escape') {
@@ -109,7 +131,7 @@ export default function EnhancedChatInput({
         onSend();
       }
     }
-  }, [input, isSending, disabled, onSend, menuVisible, filteredActions, highlightedIndex, handleSelect, setInput, selectedAction]);
+  }, [input, isSending, disabled, onSend, menuVisible, menuItemCount, menuStage, filteredActions, highlightedIndex, handleSelect, handleCommandSelect, setInput, selectedAction]);
 
   const processImageFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -180,7 +202,7 @@ export default function EnhancedChatInput({
         onDragLeave={handleDragLeave}
       >
         {/* Context chips */}
-        {(parsedContext || selectedAction) && (
+        {parsedContext && (
           <div className="flex flex-wrap gap-2">
             {parsedContext && (
               <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
@@ -190,14 +212,6 @@ export default function EnhancedChatInput({
                     <X className="h-3 w-3" />
                   </button>
                 )}
-              </div>
-            )}
-            {selectedAction && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg text-xs w-fit">
-                <span className="text-purple-400 font-medium">/action {selectedAction.name}</span>
-                <button onClick={() => onActionSelect?.(null)} className="text-purple-400 hover:text-purple-300">
-                  <X className="h-3 w-3" />
-                </button>
               </div>
             )}
           </div>
@@ -210,16 +224,36 @@ export default function EnhancedChatInput({
               input={input}
               actions={actions}
               onSelect={handleSelect}
+              onCommandSelect={handleCommandSelect}
               highlightedIndex={highlightedIndex}
+              stage={menuStage}
             />
           )}
+          {/* Styled overlay to highlight /action Name in bold blue */}
+          {selectedAction && (() => {
+            const pattern = new RegExp(`(\\/actions?\\s+${selectedAction.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'i');
+            const parts = input.split(pattern);
+            if (parts.length < 2) return null;
+            return (
+              <div
+                aria-hidden="true"
+                className="absolute inset-0 py-2 pl-2 pr-24 text-base whitespace-pre-wrap break-words pointer-events-none overflow-hidden"
+              >
+                {parts.map((part, i) =>
+                  pattern.test(part)
+                    ? <span key={i} className="text-blue-400">{part}</span>
+                    : <span key={i} className="text-foreground">{part}</span>
+                )}
+              </div>
+            );
+          })()}
           <AutoResizeTextarea
-            placeholder={selectedAction ? `Add context for "${selectedAction.name}" (optional)...` : placeholder}
+            placeholder={placeholder}
             value={input}
             onChange={(e) => { setInput(e.target.value); setHighlightedIndex(0); }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className="w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none"
+            className={`w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none ${selectedAction && input.toLowerCase().includes(`/action ${selectedAction.name.toLowerCase()}`) ? 'caret-white text-transparent' : ''}`}
             maxRows={6}
           />
           

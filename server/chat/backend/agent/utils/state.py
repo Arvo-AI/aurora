@@ -17,6 +17,7 @@ class State(BaseModel):
     model: Optional[str] = None  # Selected model from frontend
     mode: Optional[str] = None  # Chat mode: 'agent' or 'ask'
     trigger_rca_requested: bool = False  # True when user explicitly clicked "Trigger RCA" button
+    trigger_action_id: Optional[str] = None  # Action ID when user triggered /action command
     is_background: bool = (
         False  # True for background chats (webhook-triggered, no user interaction)
     )

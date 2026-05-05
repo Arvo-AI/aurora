@@ -186,25 +186,21 @@ export function useChatSendHandlers({
         toast({ description: 'No actions configured. Create one in Settings > Actions.', variant: 'destructive' });
         return false;
       }
-      try {
-        const res = await fetch(`/api/actions/${actionToTrigger.id}/run`, { method: 'POST', credentials: 'include' });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          const msgs: Record<number, string> = {
-            429: 'Action rate limited. Try again shortly.',
-            403: 'You do not have permission to run this action.',
-            404: 'Action no longer exists. Refresh to update.',
-          };
-          toast({ description: msgs[res.status] || err.error || 'Failed to trigger action.', variant: 'destructive' });
-          return false;
-        }
-        onNewMessage({ id: Date.now(), sender: 'bot', text: `Triggered action "${actionToTrigger.name}". Check Settings > Actions for progress.` });
-        clearSelectedAction?.();
-        return true;
-      } catch {
-        toast({ description: 'Network error triggering action. Try again.', variant: 'destructive' });
+      if (!socket.isReady) {
+        toast({ description: 'Connection not ready. Please wait and try again.', variant: 'destructive' });
         return false;
       }
+      // Send as a tool-like trigger through websocket
+      socket.send({
+        type: 'message',
+        query: trimmed,
+        user_id: userId,
+        session_id: currentSessionId || undefined,
+        trigger_action: actionToTrigger.id,
+      });
+      onNewMessage({ id: Date.now(), sender: 'user', text: trimmed });
+      clearSelectedAction?.();
+      return true;
     }
     if (/^\/actions?\s*$/i.test(trimmed)) {
       toast({ description: 'Usage: /action <name>. Type /action and see suggestions.' });

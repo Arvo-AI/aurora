@@ -38,6 +38,7 @@ from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
 from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
+from .trigger_action_tool import trigger_action, TriggerActionArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -1299,6 +1300,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Only include trigger_rca when the user explicitly requested it via the UI button
     if state_context and getattr(state_context, 'trigger_rca_requested', False):
         tool_functions.append((trigger_rca, "trigger_rca"))
+
+    # Only include trigger_action when the user explicitly used /action command
+    if state_context and getattr(state_context, 'trigger_action_id', None):
+        tool_functions.append((trigger_action, "trigger_action"))
     
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1459,6 +1464,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "severity (optional: critical/high/medium/low)."
                 ),
                 args_schema=TriggerRCAArgs,
+            )
+        elif name == 'trigger_action':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Trigger an Aurora Action to run as a background task. "
+                    "Use this when the user explicitly requests to run an action via /action command. "
+                    "Parameters: action_id (required UUID of the action)."
+                ),
+                args_schema=TriggerActionArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
