@@ -522,6 +522,15 @@ def run_background_chat(
                             logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
                     except Exception as le:
                         logger.error(f"[BackgroundChat] Failed to record lifecycle event 'rca_started' for incident {incident_id}: {le}")
+
+                    # Dispatch on_incident actions for this incident (fire-and-forget)
+                    source = trigger_metadata.get('source', '') if trigger_metadata else ''
+                    if source and source != 'action':
+                        try:
+                            from services.actions.executor import dispatch_on_incident_actions
+                            dispatch_on_incident_actions(user_id, str(incident_id))
+                        except Exception:
+                            logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
                     
                     # Send investigation started notifications (if enabled)
                     # Skip notifications if explicitly disabled (e.g., for Slack @mentions)

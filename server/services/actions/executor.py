@@ -103,6 +103,27 @@ def dispatch_action(
     return run_id
 
 
+def dispatch_on_incident_actions(user_id: str, incident_id: str) -> None:
+    """Dispatch all enabled on_incident actions for a user. Fire-and-forget."""
+    with db_pool.get_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[Actions:on_incident]")
+            cur.execute(
+                "SELECT id FROM actions WHERE trigger_type = 'on_incident' AND enabled = true"
+            )
+            rows = cur.fetchall()
+
+    for (action_id,) in rows:
+        try:
+            dispatch_action(
+                action_id=str(action_id),
+                user_id=user_id,
+                trigger_context={"source": "on_incident", "incident_id": incident_id},
+            )
+        except Exception:
+            logger.debug("[Actions] Failed to dispatch on_incident action %s", action_id)
+
+
 def build_action_prompt(
     action: Dict[str, Any],
     trigger_context: Dict[str, Any],
