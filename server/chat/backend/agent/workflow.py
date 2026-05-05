@@ -978,6 +978,9 @@ class Workflow:
         from guardrails.input_rail import check_input
         last_msg = input_state.messages[-1] if input_state.messages else None
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
+            # Skip persistence for scaffold messages (background prompts, not user input)
+            is_scaffold = getattr(last_msg, 'additional_kwargs', {}).get('is_rca_scaffold', False)
+
             # RCA chat turns may prepend internal routing instructions to the
             # HumanMessage so the agent calls trigger_rca. Guardrails and chat
             # persistence should evaluate the user's original text only.
@@ -1018,7 +1021,7 @@ class Workflow:
             # Kept inside the rail gate so blocked messages never touch
             # chat_sessions.messages (which legacy migration rehydrates into
             # llm_context_history on the next turn).
-            if input_state.session_id and input_state.user_id:
+            if input_state.session_id and input_state.user_id and not is_scaffold:
                 from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
                 handle_immediate_save(input_state.session_id, input_state.user_id, msg_text)
 
@@ -1496,6 +1499,10 @@ class Workflow:
                 content = str(getattr(msg, 'content', ''))
                 # Do not include our special cancellation message in the UI
                 if '[URGENT CANCELLATION]' in content:
+                    continue
+
+                # Skip scaffold messages (background chat prompts not authored by the user)
+                if getattr(msg, 'additional_kwargs', {}).get('is_rca_scaffold'):
                     continue
 
                 # Strip context wrapper — backend wraps user questions in

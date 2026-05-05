@@ -160,3 +160,38 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         _append_background_segment(parts, "background_source_general_footer")
 
     return "\n".join(parts)
+
+
+def build_action_mode_segment(state: Optional[Any]) -> str:
+    """Build action mode segment: eager-loaded skills, no RCA mandates."""
+    if not state:
+        return ""
+
+    rca_context = getattr(state, 'rca_context', None)
+    if not rca_context:
+        return ""
+
+    providers = rca_context.get('providers', [])
+    integrations = rca_context.get('integrations', {})
+    user_id = rca_context.get('user_id', '')
+
+    parts: List[str] = [
+        "INTEGRATIONS PRE-LOADED — do NOT call load_skill(), skills are already available.",
+    ]
+
+    if user_id:
+        try:
+            from chat.backend.agent.skills.registry import SkillRegistry
+            registry = SkillRegistry.get_instance()
+            skills_content = registry.load_skills_for_rca(
+                user_id=user_id,
+                source='action',
+                providers=providers,
+                integrations=integrations,
+            )
+            if skills_content:
+                parts.append(skills_content)
+        except Exception as e:
+            logger.warning(f"Failed to load skills for action: {e}")
+
+    return "\n\n".join(parts)

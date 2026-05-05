@@ -9,7 +9,7 @@ The original monolithic prompt builder was split into focused modules:
 - cache_registration.py
 """
 
-from .background import build_background_mode_segment
+from .background import build_background_mode_segment, build_action_mode_segment
 from .cache_registration import (
     PREFIX_CACHE_EPHEMERAL_TTL,
     register_prompt_cache_breakpoints,
@@ -42,6 +42,7 @@ __all__ = [
     "PREFIX_CACHE_EPHEMERAL_TTL",
     "PromptSegments",
     "assemble_system_prompt",
+    "build_action_mode_segment",
     "build_background_mode_segment",
     "build_ephemeral_rules",
     "build_failure_recovery_segment",

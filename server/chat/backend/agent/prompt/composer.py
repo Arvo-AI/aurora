@@ -71,9 +71,13 @@ def build_prompt_segments(
 ) -> PromptSegments:
     _, _, provider_constraints = build_provider_constraints(provider_preference)
 
-    # Build system invariant — trimmed in background mode to free tokens for skills
+    # Detect background type: actions get full invariant, RCA gets trimmed
     is_background = bool(state and getattr(state, 'is_background', False))
-    system_invariant = build_system_invariant(is_background=is_background)
+    rca_context = getattr(state, 'rca_context', None) or {}
+    is_action = rca_context.get('source') == 'action'
+
+    # Actions need tool_selection, cloud_access, ssh_access — use full invariant
+    system_invariant = build_system_invariant(is_background=is_background and not is_action)
 
     provider_context = build_provider_context_segment(
         provider_preference=provider_preference,
@@ -96,8 +100,12 @@ def build_prompt_segments(
     failure_recovery = build_failure_recovery_segment(state)
     manual_vm_access = build_manual_vm_access_segment(getattr(state, "user_id", None))
 
-    # Build background mode segment if applicable (for RCA background chats)
-    background_mode = build_background_mode_segment(state)
+    # Build background mode segment: action-specific or RCA
+    if is_action:
+        from .background import build_action_mode_segment
+        background_mode = build_action_mode_segment(state)
+    else:
+        background_mode = build_background_mode_segment(state)
 
     # Build skills index for interactive chat — agent calls load_skill on demand
     integration_index = ""
@@ -178,9 +186,13 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
     parts.append(segments.regional_rules)
     if segments.long_documents_note:
         parts.append(segments.long_documents_note)
-    if segments.terraform_validation and not segments.background_mode:
+    # Terraform validation and failure recovery are excluded for RCA (read-only)
+    # but included for actions (may write IaC). Detect RCA by checking for the
+    # RCA header marker in background_mode.
+    is_rca_background = segments.background_mode and "BACKGROUND RCA MODE" in segments.background_mode
+    if segments.terraform_validation and not is_rca_background:
         parts.append(segments.terraform_validation)
-    if segments.failure_recovery and not segments.background_mode:
+    if segments.failure_recovery and not is_rca_background:
         parts.append(segments.failure_recovery)
     if segments.security_policy:
         parts.append("REMINDER: Commands that violate the organization policy will be rejected. Do not attempt workarounds.")

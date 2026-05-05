@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   Play,
   Plus,
@@ -242,6 +242,18 @@ function ActionDetailView({ actionId, onBack, onEdit }: { actionId: string; onBa
 
   const action = data?.action;
   const runs = data?.recent_runs || [];
+
+  const hasActiveRuns = useMemo(
+    () => runs.some(r => r.status === 'pending' || r.status === 'running'),
+    [runs],
+  );
+
+  // Poll while runs are in-flight so the UI updates when they finish
+  useQuery<{ action: ActionDetail; recent_runs: ActionRun[] }>(
+    hasActiveRuns ? `/api/actions/${actionId}` : null,
+    actionDetailFetcher,
+    { refreshInterval: 3_000, staleTime: 2_000 },
+  );
 
   const handleToggle = useCallback(async (enabled: boolean) => {
     await fetchR(`/api/actions/${actionId}`, {
