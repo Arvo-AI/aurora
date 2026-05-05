@@ -23,6 +23,17 @@ _server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
 
+# The root conftest.py stubs flask/psycopg2 with MagicMock for tests that don't
+# need them. This module needs real Flask (installed in CI) and a mock psycopg2
+# pool, so we evict the stubs and re-import fresh.
+for _mod in list(sys.modules):
+    if _mod == "flask" or _mod.startswith("flask."):
+        del sys.modules[_mod]
+    if _mod == "dotenv":
+        del sys.modules[_mod]
+    if _mod.startswith("utils.db"):
+        del sys.modules[_mod]
+
 from flask import Flask, g  # noqa: E402
 
 from utils.db import connection_pool as cp_module  # noqa: E402
