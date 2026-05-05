@@ -5,7 +5,7 @@ generation, user/password changes, credential file reads, and
 authorized_keys writes.
 """
 
-import os
+import importlib
 import sys
 import types
 from unittest.mock import patch
@@ -128,7 +128,7 @@ class TestEnvSanitization:
     """terminal_exec_tool strips secrets from the child-process environment."""
 
     @staticmethod
-    def _stub_heavy_deps():
+    def _stub_heavy_deps() -> dict[str, types.ModuleType]:
         """Stub transitive imports so terminal_exec_tool can load in CI
         without Flask, werkzeug, psycopg2, etc."""
         stubs = {}
@@ -147,8 +147,12 @@ class TestEnvSanitization:
 
     def test_safe_env_keys_excludes_secrets(self):
         stubs = self._stub_heavy_deps()
+        module_name = "chat.backend.agent.tools.terminal_exec_tool"
+        sys.modules.pop(module_name, None)
         with patch.dict(sys.modules, stubs):
-            from chat.backend.agent.tools.terminal_exec_tool import _SAFE_ENV_KEYS
+            mod = importlib.import_module(module_name)
+            _SAFE_ENV_KEYS = mod._SAFE_ENV_KEYS
+        sys.modules.pop(module_name, None)
 
         dangerous_keys = {
             "VAULT_TOKEN", "DATABASE_URL", "SECRET_KEY",
@@ -160,8 +164,12 @@ class TestEnvSanitization:
 
     def test_build_sanitized_env_omits_secrets(self, monkeypatch):
         stubs = self._stub_heavy_deps()
+        module_name = "chat.backend.agent.tools.terminal_exec_tool"
+        sys.modules.pop(module_name, None)
         with patch.dict(sys.modules, stubs):
-            from chat.backend.agent.tools.terminal_exec_tool import _build_sanitized_env
+            mod = importlib.import_module(module_name)
+            _build_sanitized_env = mod._build_sanitized_env
+        sys.modules.pop(module_name, None)
 
         monkeypatch.setenv("VAULT_TOKEN", "test-secret-token")
         monkeypatch.setenv("DATABASE_URL", "postgres://secret@localhost/db")

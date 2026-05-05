@@ -40,6 +40,10 @@ class TestCompoundSmuggling:
     ])
     def test_compound_commands_are_decomposed(self, cmd):
         parts = _split_compound_command(cmd)
+        assert parts, f"Splitter returned no parts for: {cmd!r}"
+        assert any(p.strip() != cmd.strip() for p in parts), (
+            f"Command was not decomposed: {cmd!r} -> {parts!r}"
+        )
         assert any(any_layer_blocks(p) for p in parts), (
             f"No sub-command blocked in compound expression: {cmd!r}"
         )
