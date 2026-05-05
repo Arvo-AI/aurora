@@ -110,7 +110,9 @@ class TestAllowlistOnlyMode:
 
     @pytest.fixture(scope="class")
     def observability_allow_rules(self):
-        tpl = next(t for t in get_policy_templates() if t["id"] == "observability_only")
+        tpl = next((t for t in get_policy_templates() if t["id"] == "observability_only"), None)
+        if tpl is None:
+            pytest.fail("policy template 'observability_only' not found in get_policy_templates()")
         rules = []
         for i, raw in enumerate(tpl["allow"]):
             compiled = _compile_safe(raw["pattern"])
