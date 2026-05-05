@@ -11,8 +11,6 @@ from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
-_VALID_TRIGGER_TYPES = frozenset(("manual", "on_incident"))
-
 
 def dispatch_action(
     action_id: str,
@@ -44,7 +42,7 @@ def dispatch_action(
 
     from chat.background.task import is_background_chat_allowed
     if not is_background_chat_allowed(user_id):
-        run_id = _create_run(
+        _create_run(
             action_id, org_id, user_id,
             incident_id=trigger_context.get("incident_id"),
             trigger_context=trigger_context,

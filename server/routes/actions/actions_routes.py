@@ -242,9 +242,9 @@ def trigger_action(user_id, action_id):
         from services.actions.executor import dispatch_action
         run_id = dispatch_action(action_id, user_id, trigger_context)
     except ValueError as e:
-        err_str = str(e)
-        status = 429 if "Rate limited" in err_str else 400
-        return jsonify({"error": err_str}), status
+        if "Rate limited" in str(e):
+            return jsonify({"error": "Rate limited — try again later"}), 429
+        return jsonify({"error": "Invalid action configuration"}), 400
     except Exception:
         logger.exception("Failed to trigger action")
         return jsonify({"error": "Failed to trigger action"}), 500

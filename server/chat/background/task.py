@@ -683,7 +683,7 @@ def run_background_chat(
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
             except Exception:
-                pass
+                logger.debug("Failed to update action run status after timeout")
         return {
             "session_id": session_id,
             "status": "failed",
