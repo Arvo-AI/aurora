@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from utils.db.connection_pool import db_pool
@@ -148,7 +148,7 @@ def update_action_run_status(
                 set_rls_context(cur, conn, user_id, log_prefix="[Actions]")
                 cur.execute(
                     "UPDATE action_runs SET status = %s, completed_at = %s, error = %s WHERE id = %s",
-                    (status, datetime.utcnow(), error_message, run_id),
+                    (status, datetime.now(timezone.utc), error_message, run_id),
                 )
                 conn.commit()
     except Exception:
@@ -180,7 +180,7 @@ def _create_run(
                 (
                     run_id, action_id, org_id, user_id, incident_id,
                     status, json.dumps(trigger_context or {}), error,
-                    datetime.utcnow() if status in ("error", "success") else None,
+                    datetime.now(timezone.utc) if status in ("error", "success") else None,
                 ),
             )
             conn.commit()
@@ -205,7 +205,7 @@ def _update_run(
         sets.append("error = %s")
         vals.append(error)
         sets.append("completed_at = %s")
-        vals.append(datetime.utcnow())
+        vals.append(datetime.now(timezone.utc))
     if not sets:
         return
     vals.append(run_id)

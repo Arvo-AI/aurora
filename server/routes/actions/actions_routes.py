@@ -1,7 +1,7 @@
 """CRUD + trigger routes for Aurora Actions."""
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
@@ -105,6 +105,10 @@ def create_action(user_id):
 @actions_bp.route("/<action_id>", methods=["GET"])
 @require_permission("actions", "read")
 def get_action(user_id, action_id):
+    return _get_action_response(action_id)
+
+
+def _get_action_response(action_id):
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -196,7 +200,7 @@ def update_action(user_id, action_id):
         return jsonify({"error": "no fields to update"}), 400
 
     sets.append("updated_at = %s")
-    vals.append(datetime.utcnow())
+    vals.append(datetime.now(timezone.utc))
     vals.append(action_id)
 
     with db_pool.get_connection() as conn:
@@ -209,7 +213,7 @@ def update_action(user_id, action_id):
                 return jsonify({"error": "Action not found"}), 404
             conn.commit()
 
-    return get_action(user_id, action_id)
+    return _get_action_response(action_id)
 
 
 @actions_bp.route("/<action_id>", methods=["DELETE"])
