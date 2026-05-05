@@ -159,36 +159,28 @@ def build_prompt_segments(
 
 def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
     parts: List[str] = []
-    # Security policy included early for visibility
-    if segments.security_policy:
-        parts.append(segments.security_policy)
-    # Background mode comes first if present (important RCA context)
-    if segments.background_mode:
-        parts.append(segments.background_mode)
-    # Knowledge base memory comes early (user-provided context for all investigations)
-    if segments.knowledge_base_memory:
-        parts.append(segments.knowledge_base_memory)
-    if segments.ephemeral_rules:
-        parts.append(segments.ephemeral_rules)
-    if segments.model_overlay:
-        parts.append(segments.model_overlay)
-    if segments.provider_context:
-        parts.append(segments.provider_context)
-    if segments.manual_vm_access:
-        parts.append(segments.manual_vm_access)
-    # Skills-based: compact index of connected integrations
-    if segments.integration_index:
-        parts.append(segments.integration_index)
-    if segments.prerequisite_checks:
-        parts.append(segments.prerequisite_checks)
+
+    # Ordered optional segments
+    for segment in (
+        segments.security_policy,
+        segments.background_mode,
+        segments.knowledge_base_memory,
+        segments.ephemeral_rules,
+        segments.model_overlay,
+        segments.provider_context,
+        segments.manual_vm_access,
+        segments.integration_index,
+        segments.prerequisite_checks,
+    ):
+        if segment:
+            parts.append(segment)
+
     parts.append(segments.system_invariant)
     parts.append(segments.provider_constraints)
     parts.append(segments.regional_rules)
     if segments.long_documents_note:
         parts.append(segments.long_documents_note)
-    # Terraform validation and failure recovery are excluded for RCA (read-only)
-    # but included for actions (may write IaC). Detect RCA by checking for the
-    # RCA header marker in background_mode.
+
     is_rca_background = segments.background_mode and "BACKGROUND RCA MODE" in segments.background_mode
     if segments.terraform_validation and not is_rca_background:
         parts.append(segments.terraform_validation)

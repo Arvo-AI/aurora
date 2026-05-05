@@ -37,11 +37,23 @@ _COL_FRAGMENTS = {
 }
 
 
+def _validate_trigger_config(body):
+    """Validate trigger_config field. Returns (sanitized_config, error_msg)."""
+    tc = body["trigger_config"]
+    effective_type = body.get("trigger_type") or None
+    if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
+        interval = (tc or {}).get("interval_seconds")
+        if not isinstance(interval, (int, float)) or int(interval) < 300:
+            return None, "on_schedule requires trigger_config.interval_seconds >= 300"
+        tc = {"interval_seconds": int(interval)}
+    return tc, None
+
+
 def _parse_update_fields(body):
     """Validate and extract update columns/vals from request body.
 
     Returns (columns, vals, error_msg) where error_msg is a string on failure.
-    columns contains only names from _UPDATABLE_COLUMNS.
+    columns contains only names from _COL_FRAGMENTS.
     """
     columns, vals = [], []
     if "name" in body:
@@ -65,13 +77,9 @@ def _parse_update_fields(body):
         columns.append("trigger_type")
         vals.append(body["trigger_type"])
     if "trigger_config" in body:
-        tc = body["trigger_config"]
-        effective_type = body.get("trigger_type") or None
-        if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
-            interval = (tc or {}).get("interval_seconds")
-            if not isinstance(interval, (int, float)) or int(interval) < 300:
-                return None, None, "on_schedule requires trigger_config.interval_seconds >= 300"
-            tc = {"interval_seconds": int(interval)}
+        tc, err = _validate_trigger_config(body)
+        if err:
+            return None, None, err
         columns.append("trigger_config")
         vals.append(json.dumps(tc))
     if "mode" in body:
