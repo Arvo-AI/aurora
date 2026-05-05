@@ -336,7 +336,7 @@ class Workflow:
                 existing_call.setdefault("tool_name", tool_name)
                 existing_call.setdefault("call_id", tool_call_id)
                 existing_call.setdefault("run_id", run_id)
-                existing_call.setdefault("start_time", datetime.now())
+                existing_call.setdefault("start_time", datetime.now(timezone.utc))
 
                 if meaningful_input:
                     existing_call["input"] = tool_input

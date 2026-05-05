@@ -63,17 +63,6 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
     onSelect?.(parsed.agent_id, parsed.child_session_id);
   }, [clickable, onSelect, parsed]);
 
-  const handleKeyDown = React.useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!clickable) return;
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        handleSelect();
-      }
-    },
-    [clickable, handleSelect],
-  );
-
   if (!parsed) {
     return (
       <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -82,24 +71,8 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
     );
   }
 
-  return (
-    <div
-      {...(clickable
-        ? {
-            role: "button",
-            tabIndex: 0,
-            "aria-label": `Open sub-agent ${parsed.role_name}`,
-            onClick: handleSelect,
-            onKeyDown: handleKeyDown,
-          }
-        : {})}
-      className={cn(
-        "flex items-center gap-2 px-3 py-2 text-sm",
-        clickable
-          ? "cursor-pointer transition-colors hover:bg-muted/50 focus:outline-none focus:ring-1 focus:ring-ring"
-          : "cursor-default opacity-90",
-      )}
-    >
+  const content = (
+    <>
       <StatusIcon toolCall={toolCall} />
       <span className="rounded-sm border border-input bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
         {parsed.role_name}
@@ -113,6 +86,33 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
       {clickable && (
         <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
       )}
+    </>
+  );
+
+  if (clickable) {
+    return (
+      <button
+        type="button"
+        aria-label={`Open sub-agent ${parsed.role_name}`}
+        onClick={handleSelect}
+        className={cn(
+          "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
+          "cursor-pointer transition-colors hover:bg-muted/50 focus:outline-none focus:ring-1 focus:ring-ring",
+        )}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 px-3 py-2 text-sm",
+        "cursor-default opacity-90",
+      )}
+    >
+      {content}
     </div>
   );
 };

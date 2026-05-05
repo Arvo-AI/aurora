@@ -52,7 +52,11 @@ def cache_decorator(coro_fn: Callable[..., Coroutine], *, tool_name: str,
             return await coro_fn(*args, **kwargs)
 
         key = _cache_key(incident_id, tool_name, args, kwargs)
-        client = _get_redis()
+        try:
+            client = _get_redis()
+        except Exception:
+            logger.exception("RCA tool cache: failed to initialize Redis client")
+            client = None
         if client:
             try:
                 cached = await asyncio.to_thread(client.get, key)

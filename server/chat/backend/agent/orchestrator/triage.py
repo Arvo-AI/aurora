@@ -54,7 +54,7 @@ async def _triage(state: State) -> TriageDecision:
         from chat.backend.agent.orchestrator.role_registry import RoleRegistry
         user_id = getattr(state, "user_id", None) or ""
         if user_id:
-            available_roles = RoleRegistry.get_instance().list_available_roles()
+            available_roles = RoleRegistry.get_instance().list_available_roles(user_id)
     except Exception:
         logger.exception("triage: failed to enumerate available roles — falling back to single")
 
@@ -84,6 +84,20 @@ async def _triage(state: State) -> TriageDecision:
 
         incident_summary = _build_triage_prompt(state, available_roles)
         decision: TriageDecision = await structured.ainvoke(incident_summary)
+
+        # Defense-in-depth: clamp to the role allowlist. Mirrors synthesis_node.
+        valid_role_names = {role.name for role in available_roles}
+        if decision.mode != "fanout":
+            decision.inputs = []
+        else:
+            decision.inputs = [
+                inp for inp in decision.inputs if inp.role_name in valid_role_names
+            ]
+            if not decision.inputs:
+                return TriageDecision(
+                    mode="single",
+                    rationale="LLM returned no valid sub-agent roles",
+                )
 
         if len(decision.inputs) > _MAX_SUBAGENTS:
             logger.warning(

@@ -11,10 +11,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # V1 hardcoded constants
 # ---------------------------------------------------------------------------
-_MAX_TURNS_DEFAULT = 8
 _HARD_CONSTRAINTS = [
     "You are READ-ONLY. Never call any tool marked as mutating.",
-    f"Maximum {_MAX_TURNS_DEFAULT} tool-calling turns. Budget each turn carefully — leave at least one turn for `write_findings`.",
     "Your investigation ENDS ONLY when you call `write_findings`. Do NOT reply with plain text under any circumstance — every response must be either a tool call or a `write_findings` call.",
     "If a tool errors, returns no data, or you cannot make further progress, call `write_findings` immediately with `status: inconclusive` and explain in the Reasoning section what you tried.",
     "Even with zero findings, call `write_findings` with a populated body (status: inconclusive) — never just stop.",
@@ -106,10 +104,9 @@ def render_brief(
         if other:
             lines.append(f"- Other connected integrations: {', '.join(other)}")
 
-    lines += [
-        "",
-        "## Hard Constraints",
-    ]
+    lines += ["", "## Hard Constraints"]
+    max_turns = getattr(role_meta, "max_turns", 8)
+    lines.append(f"- Maximum {max_turns} tool-calling turns. Budget each turn carefully — leave at least one turn for `write_findings`.")
     for c in _HARD_CONSTRAINTS:
         lines.append(f"- {c}")
 

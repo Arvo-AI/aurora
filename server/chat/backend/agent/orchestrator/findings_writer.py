@@ -61,6 +61,10 @@ def _write_findings_impl(*, body: str, agent_id: str, role_name: str,
 
     try:
         meta = parse_findings(body)
+        if str(meta.get("agent_id")) != agent_id:
+            raise FindingsValidationError(
+                f"findings.md agent_id must be {agent_id!r}, got {meta.get('agent_id')!r}"
+            )
     except FindingsValidationError as exc:
         failures["n"] += 1
         logger.warning(

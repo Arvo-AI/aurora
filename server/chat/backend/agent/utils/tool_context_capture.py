@@ -211,7 +211,7 @@ class ToolContextCapture:
                     normalized_existing_input = str(call_info['input'])
                 existing_signature = f"{call_info['tool_name']}_{normalized_existing_input}"
                 if existing_signature == tool_signature:
-                    time_diff = (datetime.now() - call_info['start_time']).total_seconds()
+                    time_diff = (datetime.now(timezone.utc) - call_info['start_time']).total_seconds()
                     if time_diff < 30:
                         if "step_id" not in call_info:
                             call_info["step_id"] = self._record_step_start(
@@ -227,7 +227,7 @@ class ToolContextCapture:
         self.current_tool_calls[tool_call_id] = {
             "tool_name": tool_name,
             "input": tool_input,
-            "start_time": datetime.now(),
+            "start_time": datetime.now(timezone.utc),
             "call_id": tool_call_id,
             "signature": tool_signature,
             "step_id": self._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),

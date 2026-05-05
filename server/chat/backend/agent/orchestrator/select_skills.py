@@ -123,12 +123,23 @@ def _get_tool_meta(tool) -> dict:
     return {**base, **tool_md, **override}
 
 
-def get_available_capability_tags() -> set:
+def get_available_capability_tags(user_id: str) -> set:
+    """Return capability tags reachable for *this* user.
+
+    A tag is considered available only if it is contributed by a tool that
+    would survive ``select_tools_for_role``'s connection gate for ``user_id``:
+    either a non-skill-gated built-in (e.g. ``cloud_exec``, ``web_search``)
+    or a skill-owned tool whose owning skill the user has connected.
+    """
     try:
         from chat.backend.agent.tools.cloud_tools import get_cloud_tools
+        skill_owned, connected = _resolve_connected_tool_filter(user_id)
         tools = get_cloud_tools()
         tags: set = set()
         for t in tools:
+            tool_name = getattr(t, "name", "")
+            if tool_name in skill_owned and tool_name not in connected:
+                continue
             meta = _get_tool_meta(t)
             tags.update(meta.get("capability_tags", []))
         return tags
@@ -166,8 +177,22 @@ def _resolve_connected_tool_filter(user_id: str) -> tuple[set, set]:
 def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
     role_tags = set(role.tools)
     skill_owned, connected = _resolve_connected_tool_filter(user_id)
+
+    # `cloud_exec` is a built-in (not skill-owned) but only useful when the
+    # user has at least one cloud provider connected. Otherwise the brief
+    # already tells the LLM not to call it — strip it to save tokens.
+    _CLOUD_PROVIDERS = {"aws", "gcp", "azure", "ovh", "scaleway"}
+    has_cloud_provider = False
+    try:
+        from chat.background.rca_prompt_builder import get_user_providers
+        connected_providers = get_user_providers(user_id) or []
+        has_cloud_provider = any(p.lower() in _CLOUD_PROVIDERS for p in connected_providers)
+    except Exception:
+        logger.exception("select_skills: failed to resolve connected providers for user")
+
     candidates = []
     dropped_unconnected: list = []
+    dropped_cloud_exec = False
     for tool in all_tools:
         meta = _get_tool_meta(tool)
         if meta.get("mutates"):
@@ -178,11 +203,19 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
         if tool_name in skill_owned and tool_name not in connected:
             dropped_unconnected.append(tool_name)
             continue
+        if tool_name == "cloud_exec" and not has_cloud_provider:
+            dropped_cloud_exec = True
+            continue
         candidates.append(tool)
     if dropped_unconnected:
         logger.info(
             "select_skills: role=%s dropped %d unconnected tools: %s",
             role.name, len(dropped_unconnected), sorted(set(dropped_unconnected)),
+        )
+    if dropped_cloud_exec:
+        logger.info(
+            "select_skills: role=%s dropped cloud_exec (no cloud providers connected)",
+            role.name,
         )
 
     _CHARS_PER_TOKEN = 4

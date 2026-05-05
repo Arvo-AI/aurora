@@ -105,7 +105,7 @@ async def _synthesis(state: State) -> dict:
         # the LLM from hallucinating role names that aren't in the registry.
         from chat.backend.agent.orchestrator.role_registry import RoleRegistry
         try:
-            available_roles = RoleRegistry.get_instance().list_available_roles()
+            available_roles = RoleRegistry.get_instance().list_available_roles(user_id)
         except Exception:
             available_roles = []
 
@@ -113,8 +113,10 @@ async def _synthesis(state: State) -> dict:
         decision: SynthesisDecision = await structured.ainvoke(prompt)
 
         # Defense-in-depth: drop follow-up inputs whose role_name isn't registered.
+        # If `available_roles` is empty (registry lookup failed), this drops ALL
+        # follow-ups — preferable to dispatching hallucinated roles that fail in wave 2.
         valid_role_names = {r.name for r in available_roles}
-        if valid_role_names and decision.follow_up_inputs:
+        if decision.follow_up_inputs:
             before = len(decision.follow_up_inputs)
             decision.follow_up_inputs = [
                 inp for inp in decision.follow_up_inputs if inp.role_name in valid_role_names
@@ -124,6 +126,8 @@ async def _synthesis(state: State) -> dict:
                 logger.warning(
                     "synthesis_node: dropped %d follow_up_inputs with unknown role names", dropped,
                 )
+            if not decision.follow_up_inputs:
+                decision.needs_more_research = False
 
         logger.info(
             "synthesis_node: incident=%s wave=%d needs_more=%s follow_ups=%d",

@@ -63,6 +63,7 @@ interface FindingsListResponse {
 interface SubAgentInvestigationsSectionProps {
   incidentId: string;
   isActive: boolean;
+  onHasFindings?: (hasFindings: boolean) => void;
 }
 
 interface SubAgentInvestigationRowProps {
@@ -360,8 +361,15 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
 export default function SubAgentInvestigationsSection({
   incidentId,
   isActive,
+  onHasFindings,
 }: SubAgentInvestigationsSectionProps) {
   const [findings, setFindings] = useState<Finding[]>([]);
+
+  // Notify parent whenever the presence of findings changes so the parent can
+  // gate its own empty-state UI without duplicating the data fetch.
+  useEffect(() => {
+    onHasFindings?.(findings.length > 0);
+  }, [findings.length, onHasFindings]);
 
   // Poll findings list. Cadence: 3s. The interval callback self-stops once the
   // incident is inactive AND no findings are running, so the closure-driven

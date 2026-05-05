@@ -70,11 +70,11 @@ def parse_findings(body: str) -> dict:
         raise FindingsValidationError(
             f"findings.md self_assessed_strength must be one of {sorted(_VALID_STRENGTHS)}, got {strength!r}"
         )
-    for section in _REQUIRED_SECTIONS:
-        if section not in content:
-            raise FindingsValidationError(
-                f"findings.md missing required section: {section!r}"
-            )
+    missing = sorted(s for s in _REQUIRED_SECTIONS if s not in content)
+    if missing:
+        raise FindingsValidationError(
+            f"findings.md missing required sections: {missing}"
+        )
     for list_key in ("tools_used", "citations", "follow_ups_suggested"):
         if not isinstance(meta.get(list_key), list):
             raise FindingsValidationError(

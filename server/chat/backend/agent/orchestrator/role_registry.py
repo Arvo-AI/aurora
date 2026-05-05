@@ -102,9 +102,15 @@ class RoleRegistry:
     def get(self, name: str) -> Optional[RoleMeta]:
         return self._roles.get(name)
 
-    def list_available_roles(self) -> list[RoleMeta]:
+    def list_available_roles(self, user_id: str) -> list[RoleMeta]:
+        """Return roles whose capability tags intersect the user's reachable tags.
+
+        Per-user filtering: a role is included only if at least one of its
+        ``tools`` (capability tags) is contributed by a tool the user can
+        actually invoke (built-in, or skill-owned and connected).
+        """
         from chat.backend.agent.orchestrator.select_skills import get_available_capability_tags
-        available_tags = get_available_capability_tags()
+        available_tags = get_available_capability_tags(user_id)
         result = []
         for role in self.list_all():
             if any(tag in available_tags for tag in role.tools):

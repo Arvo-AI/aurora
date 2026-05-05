@@ -53,7 +53,7 @@ def _extract_tool_call_history(tool_capture) -> list[dict]:
                 "args": _truncate(entry.get("input"), _MAX_HISTORY_FIELD_CHARS),
                 "output_excerpt": _truncate(entry.get("output_excerpt") or "", _MAX_HISTORY_FIELD_CHARS),
                 "is_error": bool(entry.get("is_error", False)),
-                "status": "completed",
+                "status": "error" if entry.get("is_error", False) else "completed",
                 "started_at": entry.get("started_at"),
                 "completed_at": entry.get("completed_at"),
             })
