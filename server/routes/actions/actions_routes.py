@@ -241,13 +241,23 @@ def update_action(user_id, action_id):
     vals.append(datetime.now(timezone.utc))
     vals.append(action_id)
 
-    # Whitelist filter ensures only known column names enter the query
-    safe_columns = [col for col in columns if col in (_UPDATABLE_COLUMNS | {"updated_at"})]
-    query = "UPDATE actions SET " + ", ".join(col + " = %s" for col in safe_columns) + " WHERE id = %s RETURNING id"
+    # Build SET clause exclusively from constant strings; columns only determines which are included
+    _COL_FRAGMENTS = {
+        "name": "name = %s",
+        "description": "description = %s",
+        "instructions": "instructions = %s",
+        "trigger_type": "trigger_type = %s",
+        "trigger_config": "trigger_config = %s",
+        "mode": "mode = %s",
+        "enabled": "enabled = %s",
+        "updated_at": "updated_at = %s",
+    }
+    set_parts = [_COL_FRAGMENTS[col] for col in columns if col in _COL_FRAGMENTS]
+    sql = "UPDATE actions SET " + ", ".join(set_parts) + " WHERE id = %s RETURNING id"
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, vals)
+            cur.execute(sql, vals)
             if not cur.fetchone():
                 return jsonify({"error": _ERR_NOT_FOUND}), 404
             conn.commit()
