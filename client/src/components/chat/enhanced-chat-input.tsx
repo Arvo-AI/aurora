@@ -5,7 +5,7 @@ import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
-import SlashCommandMenu from "./SlashCommandMenu";
+import SlashCommandMenu, { ActionItem, getFilteredActions } from "./SlashCommandMenu";
 
 export interface ImageAttachment {
   file: File;
@@ -32,7 +32,9 @@ interface EnhancedChatInputProps {
   onRemoveContext?: () => void;
   images?: ImageAttachment[];
   onImagesChange?: (images: ImageAttachment[]) => void;
-  actions?: { id: string; name: string }[];
+  actions?: ActionItem[];
+  selectedAction?: ActionItem | null;
+  onActionSelect?: (action: ActionItem | null) => void;
 }
 
 export default function EnhancedChatInput({
@@ -56,9 +58,15 @@ export default function EnhancedChatInput({
   images = [],
   onImagesChange,
   actions = [],
+  selectedAction = null,
+  onActionSelect,
 }: EnhancedChatInputProps) {
   const [isDragOver, setIsDragOver] = useState(false);
-  
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+
+  const menuVisible = !selectedAction && /^\/actions?\s*/i.test(input);
+  const filteredActions = menuVisible ? getFilteredActions(input, actions).slice(0, 8) : [];
+
   let parsedContext = null;
   try {
     parsedContext = incidentContext ? JSON.parse(incidentContext) : null;
@@ -66,14 +74,42 @@ export default function EnhancedChatInput({
     console.error('Failed to parse incident context:', e);
   }
 
+  const handleSelect = useCallback((action: ActionItem) => {
+    onActionSelect?.(action);
+    setInput('');
+    setHighlightedIndex(0);
+  }, [onActionSelect, setInput]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (menuVisible && filteredActions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightedIndex(i => (i + 1) % filteredActions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightedIndex(i => (i - 1 + filteredActions.length) % filteredActions.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        handleSelect(filteredActions[highlightedIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setInput('');
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (input.trim() && !isSending && !disabled) {
+      if ((input.trim() || selectedAction) && !isSending && !disabled) {
         onSend();
       }
     }
-  }, [input, isSending, disabled, onSend]);
+  }, [input, isSending, disabled, onSend, menuVisible, filteredActions, highlightedIndex, handleSelect, setInput, selectedAction]);
 
   const processImageFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -143,29 +179,44 @@ export default function EnhancedChatInput({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
       >
-        {/* Incident context chip */}
-        {parsedContext && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
-            <span className="text-orange-400 font-medium">Incident {parsedContext.title}</span>
-            {onRemoveContext && (
-              <button onClick={onRemoveContext} className="text-orange-400 hover:text-orange-300">
-                <X className="h-3 w-3" />
-              </button>
+        {/* Context chips */}
+        {(parsedContext || selectedAction) && (
+          <div className="flex flex-wrap gap-2">
+            {parsedContext && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
+                <span className="text-orange-400 font-medium">Incident {parsedContext.title}</span>
+                {onRemoveContext && (
+                  <button onClick={onRemoveContext} className="text-orange-400 hover:text-orange-300">
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            )}
+            {selectedAction && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg text-xs w-fit">
+                <span className="text-purple-400 font-medium">/action {selectedAction.name}</span>
+                <button onClick={() => onActionSelect?.(null)} className="text-purple-400 hover:text-purple-300">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
             )}
           </div>
         )}
         
         {/* Text input area */}
         <div className="relative">
-          <SlashCommandMenu
-            input={input}
-            actions={actions}
-            onSelect={(a) => setInput(`/action ${a.name}`)}
-          />
+          {menuVisible && (
+            <SlashCommandMenu
+              input={input}
+              actions={actions}
+              onSelect={handleSelect}
+              highlightedIndex={highlightedIndex}
+            />
+          )}
           <AutoResizeTextarea
-            placeholder={placeholder}
+            placeholder={selectedAction ? `Add context for "${selectedAction.name}" (optional)...` : placeholder}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setHighlightedIndex(0); }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             className="w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none"
@@ -185,7 +236,7 @@ export default function EnhancedChatInput({
             ) : (
               <Button
                 onClick={onSend}
-                disabled={!input.trim() || isSending || disabled}
+                disabled={!(input.trim() || selectedAction) || isSending || disabled}
                 className="rounded-full h-8 w-8 p-0 bg-muted hover:bg-muted/80 border-0 shadow-none text-muted-foreground hover:text-foreground"
                 size="sm"
               >

@@ -69,6 +69,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const lastLoadedSessionRef = useRef<string | null>(null);
   const initialMessageSentRef = useRef<boolean>(false);
   const [activeIncidentContext, setActiveIncidentContext] = useState<string | undefined>(incidentContext);
+  const [selectedAction, setSelectedAction] = useState<{ id: string; name: string } | null>(null);
   
   
   // Modular streaming message handling
@@ -118,6 +119,17 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     router.push('/chat');
   }, [router]);
 
+  const { data: actionsData } = useQuery<{ actions: { id: string; name: string }[] }>(
+    '/api/actions',
+    async (key: string, signal: AbortSignal) => {
+      const res = await fetch(key, { credentials: 'include', signal });
+      if (!res.ok) return { actions: [] };
+      return res.json();
+    },
+    { staleTime: 60_000 },
+  );
+  const availableActions = actionsData?.actions ?? [];
+
   const {
     selectedModel,
     setSelectedModel,
@@ -142,18 +154,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     onSessionCreated: refreshChatHistory,
     images,
     availableActions,
+    selectedAction,
+    clearSelectedAction: () => setSelectedAction(null),
   });
-
-  const { data: actionsData } = useQuery<{ actions: { id: string; name: string }[] }>(
-    '/api/actions',
-    async (key: string, signal: AbortSignal) => {
-      const res = await fetch(key, { credentials: 'include', signal });
-      if (!res.ok) return { actions: [] };
-      return res.json();
-    },
-    { staleTime: 60_000 },
-  );
-  const availableActions = actionsData?.actions ?? [];
 
   const onSendingStateChange = useCallback((sending: boolean) => {
     setIsSending(sending);
@@ -484,6 +487,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               images={images}
               onImagesChange={setImages}
               actions={availableActions}
+              selectedAction={selectedAction}
+              onActionSelect={setSelectedAction}
             />
             )}
           </div>
@@ -525,6 +530,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             images={images}
             onImagesChange={setImages}
             actions={availableActions}
+            selectedAction={selectedAction}
+            onActionSelect={setSelectedAction}
           />
           
           <div className="w-full max-w-3xl mt-6">

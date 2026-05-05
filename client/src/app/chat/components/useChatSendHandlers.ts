@@ -25,6 +25,8 @@ interface ChatSendHandlerParams {
   onSessionCreated?: (sessionId: string) => void;
   images?: Array<{file: File, preview: string}>;
   availableActions?: { id: string; name: string }[];
+  selectedAction?: { id: string; name: string } | null;
+  clearSelectedAction?: () => void;
 }
 
 interface ChatSendHandlerResult {
@@ -63,6 +65,8 @@ export function useChatSendHandlers({
   onSessionCreated,
   images = [],
   availableActions = [],
+  selectedAction = null,
+  clearSelectedAction,
 }: ChatSendHandlerParams): ChatSendHandlerResult {
   const { toast } = useToast();
   const { providerIds, isProviderConnected } = useConnectedAccounts();
@@ -162,23 +166,28 @@ export function useChatSendHandlers({
     options?: { triggerRca?: boolean },
   ) => {
     const trimmed = messageText.trim();
-    if (!trimmed || isSending || !userId) return false;
+    if ((!trimmed && !selectedAction) || isSending || !userId) return false;
 
-    // Slash command: /action <name>
-    const actionMatch = trimmed.match(/^\/actions?\s+(.+)$/i);
-    if (actionMatch) {
-      const actionName = actionMatch[1].trim();
-      if (!availableActions.length) {
+    // Action trigger: chip-selected action takes priority, text fallback second
+    const actionToTrigger = selectedAction
+      || (() => {
+        const m = trimmed.match(/^\/actions?\s+(.+)$/i);
+        if (!m) return null;
+        const name = m[1].trim();
+        return availableActions.find(a => a.name.toLowerCase() === name.toLowerCase()) || { id: '', name };
+      })();
+
+    if (actionToTrigger) {
+      if (!actionToTrigger.id) {
+        toast({ description: `Action "${actionToTrigger.name}" not found. Type /action to see suggestions.`, variant: 'destructive' });
+        return false;
+      }
+      if (!availableActions.length && !selectedAction) {
         toast({ description: 'No actions configured. Create one in Settings > Actions.', variant: 'destructive' });
         return false;
       }
-      const action = availableActions.find(a => a.name.toLowerCase() === actionName.toLowerCase());
-      if (!action) {
-        toast({ description: `Action "${actionName}" not found. Type /action to see suggestions.`, variant: 'destructive' });
-        return false;
-      }
       try {
-        const res = await fetch(`/api/actions/${action.id}/run`, { method: 'POST', credentials: 'include' });
+        const res = await fetch(`/api/actions/${actionToTrigger.id}/run`, { method: 'POST', credentials: 'include' });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           const msgs: Record<number, string> = {
@@ -189,7 +198,8 @@ export function useChatSendHandlers({
           toast({ description: msgs[res.status] || err.error || 'Failed to trigger action.', variant: 'destructive' });
           return false;
         }
-        onNewMessage({ id: Date.now(), sender: 'bot', text: `Triggered action "${action.name}". Check Settings > Actions for progress.` });
+        onNewMessage({ id: Date.now(), sender: 'bot', text: `Triggered action "${actionToTrigger.name}". Check Settings > Actions for progress.` });
+        clearSelectedAction?.();
         return true;
       } catch {
         toast({ description: 'Network error triggering action. Try again.', variant: 'destructive' });
@@ -286,12 +296,13 @@ export function useChatSendHandlers({
     createSession, currentSessionId, hasCreatedSession, justCreatedSessionRef,
     onNewMessage, router, selectedMode, selectedModel, selectedProviders,
     syncProvidersWithMode, toast, userId, setCurrentSessionId, 
-    setHasCreatedSession, isSending, getConnectedProviders, images, availableActions
+    setHasCreatedSession, isSending, getConnectedProviders, images,
+    availableActions, selectedAction, clearSelectedAction
   ]);
 
   const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string, options?: { triggerRca?: boolean }) => {
     const trimmed = messageText.trim();
-    if (!trimmed) return false;
+    if (!trimmed && !selectedAction) return false;
 
     const targetMode = modeOverride || selectedMode;
     // Show warning if no providers connected
@@ -304,7 +315,7 @@ export function useChatSendHandlers({
 
     // Let sendMessage handle provider enforcement and normalization
     return await sendMessage(messageText, socket, targetMode, undefined, options);
-  }, [anyProviderConnected, selectedMode, sendMessage, toast]);
+  }, [anyProviderConnected, selectedMode, sendMessage, toast, selectedAction]);
 
   const handleSend = useCallback(async (messageText: string, socket: ChatWebSocket, overrideMode?: string, options?: { triggerRca?: boolean }) => {
     return await initiateSend(messageText, socket, overrideMode, options);
