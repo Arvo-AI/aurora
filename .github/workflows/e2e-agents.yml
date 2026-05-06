@@ -31,7 +31,7 @@ jobs:
     needs: check-labels
     if: needs.check-labels.outputs.should_run == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -40,6 +40,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git diff context
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,14 +54,14 @@ jobs:
         run: pip install ./tests/e2e-agents/
 
       - name: Install Playwright browsers
-        run: python -m playwright install chromium
+        run: python -m playwright install chromium --with-deps
 
       - name: Prepare environment
         env:
           ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
         run: |
           if [ -z "$ENV_CONTENT" ]; then
-            echo "Warning: ENV_CONTENT not set, using defaults"
+            echo "Warning: ENV_CONTENT not set, relying on env vars"
           else
             echo "$ENV_CONTENT" > .env
           fi
@@ -77,6 +79,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           LABELS: ${{ needs.check-labels.outputs.labels }}
           CI: "true"
+          RESULTS_DIR: ${{ github.workspace }}/tests/e2e-agents/results
         run: python -m e2e_agents.ci_entrypoint
 
       - name: Upload results artifact
