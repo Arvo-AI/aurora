@@ -1,11 +1,9 @@
-"""Tests for utils.auth.stateless_auth.set_rls_context.
-
-A regression where this helper silently skips a ``SET``, forgets to commit,
-or stamps the connection without resolving an org_id is a cross-tenant
-leak: every Celery task downstream inherits whichever RLS context was
-attached last. This file pins the contract.
-
-POSTGRES_* env vars and sys.path setup are handled by ``tests/conftest.py``.
+"""Tests the Postgres Row-Level Security bootstrap that Celery workers,
+LangGraph tasks, and other non-Flask callers must run before querying
+RLS-protected tables. Pins the happy path (set user_id, set org_id,
+commit) and the fail-closed path (org unresolved -> no SET, no commit,
+return None) so a half-stamped connection can't leak rows across
+tenants.
 """
 
 from unittest.mock import MagicMock

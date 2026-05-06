@@ -1,4 +1,11 @@
-"""Tests for guardrails.input_rail -- fail-closed semantics and the Gemini compat shim."""
+"""Tests the NeMo Guardrails input rail that screens user prompts for
+prompt injection before the LangGraph agent starts planning. Pins
+fail-closed semantics (any rail error -- auth, connectivity, init --
+blocks the request, never lets it through), the structured
+``triggered_input_rail`` signal (so block detection isn't fooled by
+model-specific refusal wording), and the Gemini max-tokens
+compatibility shim that lets the rail run on Gemini models.
+"""
 
 import asyncio
 import os

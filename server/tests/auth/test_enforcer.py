@@ -1,10 +1,8 @@
-"""Tests for utils.auth.enforcer -- role replacement and org isolation.
-
-A regression where ``assign_role_to_user`` no longer removes stale roles
-is silent privilege accumulation; a regression in ``_domain_match`` is a
-silent cross-tenant leak. This file pins both contracts.
-
-POSTGRES_* env vars and sys.path setup are handled by ``tests/conftest.py``.
+"""Tests the Casbin RBAC enforcer behind ``@require_permission`` on every
+authenticated route. Pins single-role-per-(user, org) replacement (so a
+demotion can't leave the old role in place -- silent privilege
+escalation) and the per-org domain matcher (so policies scoped to one
+org can't leak across tenants).
 """
 
 from unittest.mock import MagicMock

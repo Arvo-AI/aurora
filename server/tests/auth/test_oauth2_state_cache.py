@@ -1,9 +1,8 @@
-"""Tests for utils.auth.oauth2_state_cache -- OAuth2 CSRF state storage.
-
-A regression that drops atomic ``GETDEL`` permits state-token replay; a
-regression that silently falls back to in-memory storage when Redis is
-down defeats both load-balancer compatibility and replay protection.
-This file pins the store/retrieve contract and the no-fallback rule.
+"""Tests the OAuth2 CSRF state cache shared by every OAuth2 connector
+(Atlassian, Bitbucket, Confluence, Google Chat, Notion, OVH, SharePoint).
+Pins atomic single-use retrieval (replay protection) and the no-silent-
+in-memory-fallback rule -- both regressions would compromise the
+authorize/callback handshake for all OAuth2 integrations at once.
 """
 
 import importlib
@@ -17,10 +16,6 @@ import pytest
 # REDIS_URL must be set before import: the module pings Redis at import time
 # and raises RuntimeError if the env var is missing.
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
 
 from utils.auth import oauth2_state_cache as cache_module  # noqa: E402
 from utils.auth.oauth2_state_cache import (  # noqa: E402

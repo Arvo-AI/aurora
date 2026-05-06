@@ -1,6 +1,8 @@
-"""Tests for utils.web.webhook_signature -- HMAC-SHA256 webhook verification.
-
-sys.path setup is handled by ``tests/conftest.py``.
+"""Tests webhook ingestion security for the CI/CD pipeline integrations
+(Jenkins, CloudBees, Spinnaker), which all share the HMAC-SHA256 verifier
+in ``utils.web.webhook_signature``. Pins the accept/reject contract,
+constant-time comparison, and one externally-known digest so the suite
+can't pass on a same-direction drift in both signer and verifier.
 """
 
 import hashlib
@@ -26,6 +28,48 @@ _JENKINS_HMAC_KEY = "jenkins-test-key"  # noqa: S105
 def _sign(payload: bytes, key: str) -> str:
     """Produce the canonical HMAC-SHA256 hex digest for a payload."""
     return hmac.new(key.encode(), payload, hashlib.sha256).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Known-answer test vector (anchor to external truth)
+# ---------------------------------------------------------------------------
+
+
+class TestKnownAnswerVector:
+    """Externally-published HMAC-SHA256 vector (Wikipedia HMAC article).
+
+    The other tests sign and verify with our own code, so a same-direction
+    drift (e.g. both flipped to SHA-512) would still pass. Anchoring one
+    test to a digest published outside this repo catches that.
+    """
+
+    KNOWN_KEY = "key"  # noqa: S105
+    KNOWN_PAYLOAD = b"The quick brown fox jumps over the lazy dog"
+    KNOWN_HMAC_SHA256_HEX = (
+        "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+    )
+
+    def test_local_sign_helper_matches_published_vector(self):
+        """Sanity-check the test helper itself against external truth."""
+        assert _sign(self.KNOWN_PAYLOAD, self.KNOWN_KEY) == self.KNOWN_HMAC_SHA256_HEX
+
+    def test_verifier_accepts_published_vector(self):
+        """Production verifier must accept the externally-known digest."""
+        assert (
+            verify_webhook_signature(
+                self.KNOWN_PAYLOAD, self.KNOWN_HMAC_SHA256_HEX, self.KNOWN_KEY,
+            )
+            is True
+        )
+
+    def test_verifier_rejects_published_vector_with_wrong_key(self):
+        """Same payload + same digest, different key must fail."""
+        assert (
+            verify_webhook_signature(
+                self.KNOWN_PAYLOAD, self.KNOWN_HMAC_SHA256_HEX, "not-the-key",
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------

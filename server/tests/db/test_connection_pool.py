@@ -1,8 +1,9 @@
-"""Tests for utils.db.connection_pool -- RLS session variable handling.
-
-Locks down the ``DatabaseConnectionPool.get_connection`` /
-``_set_rls_vars`` contract so a connection is never returned to the pool
-with another tenant's RLS context still attached.
+"""Tests the Flask connection pool that stamps every request's DB session
+with tenant identity (current_user_id, current_org_id) on entry and
+RESETs it on release. Pins the SET-on-entry / RESET-on-exit contract so
+a connection can't be returned to the pool with another tenant's RLS
+context still attached -- the foundation that makes RLS safe across
+shared connections.
 """
 
 import os
