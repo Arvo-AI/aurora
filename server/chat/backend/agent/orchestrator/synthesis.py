@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.orchestrator.usage import track_orchestrator_call
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.orchestrator.inputs import SubAgentInput
 from chat.backend.agent.orchestrator.dispatcher import dispatch_tool_call_id
@@ -111,7 +113,7 @@ async def _synthesis(state: State) -> dict:
         # The user-facing summary is appended below as an AIMessage that the
         # existing chat pipeline handles.
         llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
-        structured = llm.with_structured_output(SynthesisDecision)
+        structured = llm.with_structured_output(SynthesisDecision, include_raw=True)
 
         # Pass available role names to constrain follow-up dispatch — prevents
         # the LLM from hallucinating role names that aren't in the registry.
@@ -122,7 +124,19 @@ async def _synthesis(state: State) -> dict:
             available_roles = []
 
         prompt = _build_synthesis_prompt(state, combined, current_wave, available_roles)
-        decision: SynthesisDecision = await structured.ainvoke(prompt)
+        start_time = time.time()
+        result = await structured.ainvoke(prompt)
+
+        decision = result.get("parsed") or SynthesisDecision(
+            needs_more_research=False,
+            rationale="synthesis parse error fallback",
+            summary="Synthesis parse error; please review the sub-agent findings directly.",
+        )
+        await asyncio.to_thread(
+            track_orchestrator_call,
+            state, result.get("raw"), prompt,
+            "synthesis_decision", start_time,
+        )
 
         # Defense-in-depth: drop follow-up inputs whose role_name isn't registered.
         # If `available_roles` is empty (registry lookup failed), this drops ALL

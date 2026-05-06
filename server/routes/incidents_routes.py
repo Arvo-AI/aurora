@@ -801,9 +801,15 @@ def get_incident(user_id, incident_id: str):
                     usage_params = None
 
                     if all_session_ids:
+                        # Match parent sessions + child sub-agent sessions ({parent}::sa_N).
                         placeholders = ",".join(["%s"] * len(all_session_ids))
-                        session_where = f"session_id IN ({placeholders})"
-                        session_params = tuple(all_session_ids)
+                        session_where = (
+                            f"(session_id IN ({placeholders}) "
+                            f"OR session_id LIKE ANY(ARRAY[{placeholders}]))"
+                        )
+                        session_params = tuple(all_session_ids) + tuple(
+                            f"{sid}::%" for sid in all_session_ids
+                        )
 
                         cursor.execute(
                             f"""

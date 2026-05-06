@@ -1,10 +1,13 @@
 """Triage node: decides single-agent vs fan-out before the first RCA wave."""
 
+import asyncio
 import logging
+import time
 from typing import Literal
 
 from pydantic import BaseModel
 
+from chat.backend.agent.orchestrator.usage import track_orchestrator_call
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.orchestrator.inputs import SubAgentInput
 from utils.log_sanitizer import hash_for_log
@@ -80,10 +83,20 @@ async def _triage(state: State) -> TriageDecision:
         # Non-streaming: triage's structured output is internal — must not
         # leak token chunks into the user-facing chat stream.
         llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
-        structured = llm.with_structured_output(TriageDecision)
+        structured = llm.with_structured_output(TriageDecision, include_raw=True)
 
         incident_summary = _build_triage_prompt(state, available_roles)
-        decision: TriageDecision = await structured.ainvoke(incident_summary)
+        start_time = time.time()
+        result = await structured.ainvoke(incident_summary)
+
+        decision = result.get("parsed") or TriageDecision(
+            mode="single", rationale="triage parse error fallback"
+        )
+        await asyncio.to_thread(
+            track_orchestrator_call,
+            state, result.get("raw"), incident_summary,
+            "triage_decision", start_time,
+        )
 
         # Defense-in-depth: clamp to the role allowlist. Mirrors synthesis_node.
         valid_role_names = {role.name for role in available_roles}
