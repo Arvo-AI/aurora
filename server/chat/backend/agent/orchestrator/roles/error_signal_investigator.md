@@ -3,8 +3,8 @@ name: error_signal_investigator
 description: Use when the incident references service errors, exceptions, stack traces, or HTTP 5xx spikes
 tools: [logs, error_tracking, observability]
 model:
-max_turns: 8
-max_seconds: 180
+max_turns: 12
+max_seconds: 600
 rca_priority: 10
 ---
 

@@ -3,8 +3,8 @@ name: runbook_lookup
 description: Use when incident type matches a known failure pattern that may have an existing runbook or SOP
 tools: [runbooks, knowledge_base]
 model:
-max_turns: 8
-max_seconds: 180
+max_turns: 12
+max_seconds: 600
 rca_priority: 30
 ---
 

@@ -3,8 +3,8 @@ name: runtime_state_investigator
 description: Use when infrastructure metrics (CPU, memory, saturation, latency) may explain the incident
 tools: [runtime_state, metrics, observability]
 model:
-max_turns: 8
-max_seconds: 180
+max_turns: 12
+max_seconds: 600
 rca_priority: 15
 ---
 

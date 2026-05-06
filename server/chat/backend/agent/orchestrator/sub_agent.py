@@ -1,6 +1,8 @@
 """Sub-agent node: runs one bounded ReAct investigation and writes findings.md."""
 
 import asyncio
+import copy
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -11,10 +13,118 @@ from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT_SECONDS = 180
+_DEFAULT_TIMEOUT_SECONDS = 600
 _MAX_HISTORY_ENTRIES = 30
 _MAX_HISTORY_FIELD_CHARS = 1000
 _FINDING_REF_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled", "inconclusive"})
+
+# Loop-guard thresholds: number of consecutive empty/error results from the
+# same tool before we append a soft/hard nudge to the tool output. The agent
+# has been trained to follow these structured warnings; we never break the
+# StructuredTool contract — the original output is preserved, we just append.
+_LOOP_GUARD_SOFT_THRESHOLD = 3
+_LOOP_GUARD_HARD_THRESHOLD = 5
+
+
+def _classify_tool_output_empty(output) -> bool:
+    """Return True if the tool output looks empty/error-y.
+
+    Defensive: any parse error returns False (treat as non-empty).
+    """
+    try:
+        text = output if isinstance(output, str) else str(output)
+        if not text or not text.strip():
+            return True
+        try:
+            data = json.loads(text)
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        if data.get("success") is False:
+            return True
+        if data.get("error"):
+            return True
+        # query_datadog / similar empty-series shape
+        if data.get("count", -1) == 0:
+            return True
+        results = data.get("results")
+        if isinstance(results, list) and len(results) == 0:
+            return True
+        series = data.get("series")
+        if isinstance(series, list) and len(series) == 0:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _build_loop_guard_warning(tool_name: str, n: int) -> str:
+    if n >= _LOOP_GUARD_HARD_THRESHOLD:
+        return (
+            f"\n\n[LOOP-GUARD] {n}th consecutive empty/error result from "
+            f"{tool_name}. STOP retrying this source — your next call MUST "
+            "be write_findings. Document what you ruled out and submit "
+            "findings now."
+        )
+    return (
+        f"\n\n[LOOP-GUARD] {n}rd consecutive empty/error result from "
+        f"{tool_name}. Stop trying the same source — pivot to a different "
+        "tool or call write_findings."
+    )
+
+
+def _wrap_tool_with_loop_guard(tool, counters: dict):
+    """Append a [LOOP-GUARD] suffix to tool output after N consecutive
+    empty/error results from the same tool name.
+
+    Never wraps `write_findings` (the terminal call). Returns a shallow copy
+    of the StructuredTool so we don't mutate the cached/shared instances
+    returned by `get_cloud_tools()`.
+    """
+    if getattr(tool, "name", None) == "write_findings":
+        return tool
+
+    try:
+        wrapped = copy.copy(tool)
+    except Exception:
+        # If copy fails for any reason, fall back to the original tool
+        # un-wrapped rather than risk breaking the agent.
+        logger.debug("sub_agent: copy.copy(tool) failed for %s — skipping loop guard", getattr(tool, "name", "?"), exc_info=True)
+        return tool
+
+    tool_name = getattr(wrapped, "name", "unknown_tool")
+    original_coroutine = getattr(wrapped, "coroutine", None)
+    original_func = getattr(wrapped, "func", None)
+
+    def _post_process(output):
+        try:
+            is_empty = _classify_tool_output_empty(output)
+            if is_empty:
+                counters[tool_name] = counters.get(tool_name, 0) + 1
+            else:
+                counters[tool_name] = 0
+            n = counters.get(tool_name, 0)
+            if n >= _LOOP_GUARD_SOFT_THRESHOLD and isinstance(output, str):
+                return output + _build_loop_guard_warning(tool_name, n)
+            return output
+        except Exception:
+            logger.debug("sub_agent: loop-guard post-process failed for %s", tool_name, exc_info=True)
+            return output
+
+    if original_coroutine is not None:
+        async def wrapped_coroutine(*args, **kwargs):
+            result = await original_coroutine(*args, **kwargs)
+            return _post_process(result)
+        wrapped.coroutine = wrapped_coroutine
+
+    if original_func is not None:
+        def wrapped_func(*args, **kwargs):
+            result = original_func(*args, **kwargs)
+            return _post_process(result)
+        wrapped.func = wrapped_func
+
+    return wrapped
 
 
 def _truncate(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
@@ -301,6 +411,12 @@ async def _run(input_dict: dict) -> FindingRef:
         child_session_id=child_session_id,
     )
     tools = role_tools + [write_tool]
+
+    # Per-sub-agent loop guard: track consecutive empty/error results per tool
+    # name and append a structured warning to subsequent outputs once we cross
+    # the soft/hard thresholds. write_findings is excluded inside the wrapper.
+    _loop_counters: dict = {}
+    tools = [_wrap_tool_with_loop_guard(t, _loop_counters) for t in tools]
 
     try:
         from chat.backend.agent.agent import Agent
