@@ -32,6 +32,10 @@ def run_scheduled_actions():
                     FROM actions a
                     LEFT JOIN action_runs r ON r.action_id = a.id
                     WHERE a.trigger_type = 'on_schedule' AND a.enabled = true
+                      AND NOT EXISTS (
+                        SELECT 1 FROM action_runs ar
+                        WHERE ar.action_id = a.id AND ar.status IN ('pending', 'running')
+                      )
                     GROUP BY a.id
                 """)
                 rows = cur.fetchall()

@@ -76,11 +76,15 @@ def dispatch_action(
         "run_id": run_id,
     }
 
-    session_id = create_background_chat_session(
-        user_id=user_id,
-        title=f"Action: {action['name']}",
-        trigger_metadata=trigger_meta,
-    )
+    try:
+        session_id = create_background_chat_session(
+            user_id=user_id,
+            title=f"Action: {action['name']}",
+            trigger_metadata=trigger_meta,
+        )
+    except Exception:
+        _update_run(run_id, user_id, status="error", error="Failed to create chat session")
+        raise
 
     _update_run(run_id, user_id, chat_session_id=session_id, status="running")
 
@@ -148,7 +152,7 @@ def build_action_prompt(
     parts += [
         "",
         "## Guidelines",
-        "- Use your available tools (Terraform/IaC, GitHub, Datadog, cloud CLI, terminal) to complete the task.",
+        "- Use your available tools to complete the task.",
         "- If you need to make infrastructure changes, open a PR rather than applying directly.",
         "- Report what you did and any issues encountered.",
     ]

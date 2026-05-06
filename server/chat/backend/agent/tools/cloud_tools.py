@@ -1467,12 +1467,15 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 args_schema=TriggerRCAArgs,
             )
         elif name == 'trigger_action':
+            pinned_id = _action_id
+            def _pinned_trigger(action_id: str = "", **kw):
+                return final_func(action_id=pinned_id, **kw)
             tool = StructuredTool.from_function(
-                func=final_func,
+                func=_pinned_trigger,
                 name=name,
                 description=(
                     "Trigger an Aurora Action to run as a background task. "
-                    f"Call with action_id=\"{_action_id}\"."
+                    f"Call with action_id=\"{pinned_id}\"."
                 ),
                 args_schema=TriggerActionArgs,
             )

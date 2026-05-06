@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
@@ -63,8 +63,10 @@ export default function EnhancedChatInput({
 }: EnhancedChatInputProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const menuDismissed = useRef(false);
 
   const { menuVisible, menuStage, filteredActions, menuItemCount } = useMemo(() => {
+    if (menuDismissed.current) return { menuVisible: false, menuStage: 'command' as const, filteredActions: [] as ActionItem[], menuItemCount: 0 };
     const match = selectedAction ? null : (/(^|\s)(\/\S*)$/).exec(input);
     const token = match?.[2] ?? '';
     const isFull = /^\/actions?$/i.test(token);
@@ -127,7 +129,9 @@ export default function EnhancedChatInput({
     }
     if (e.key === 'Escape') {
       e.preventDefault();
-      setInput('');
+      menuDismissed.current = true;
+      onActionSelect?.(null);
+      setHighlightedIndex(0);
       return true;
     }
     return false;
@@ -243,7 +247,14 @@ export default function EnhancedChatInput({
           <AutoResizeTextarea
             placeholder={placeholder}
             value={input}
-            onChange={(e) => { setInput(e.target.value); setHighlightedIndex(0); }}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setHighlightedIndex(0);
+              menuDismissed.current = false;
+              if (selectedAction && !e.target.value.toLowerCase().includes(selectedAction.name.toLowerCase())) {
+                onActionSelect?.(null);
+              }
+            }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             className={`w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none ${hasActiveOverlay ? 'caret-white text-transparent' : ''}`}

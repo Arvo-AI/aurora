@@ -309,7 +309,7 @@ export function useQuery<T>(
   useEffect(() => {
     if (!active || !refreshInterval) return;
     const id = setInterval(() => {
-      queryClient.fetch(active, fetcherRef.current, optsRef.current).catch(() => {});
+      queryClient.invalidate(active, fetcherRef.current, optsRef.current).catch(() => {});
     }, refreshInterval);
     return () => clearInterval(id);
   }, [active, refreshInterval]);

@@ -127,7 +127,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       if (!res.ok) return { actions: [] };
       return res.json();
     },
-    { staleTime: 60_000 },
+    { staleTime: 60_000, revalidateOnEvents: ['actionsStateChanged'] },
   );
   const availableActions = actionsData?.actions ?? [];
 

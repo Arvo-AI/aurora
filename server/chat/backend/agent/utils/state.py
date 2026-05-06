@@ -34,5 +34,6 @@ class State(BaseModel):
     rca_ui_updates: Optional[List[Dict[str, Any]]] = (
         None  # Pending RCA context updates for UI injection
     )
+    guardrail_blocked: bool = False  # Set by workflow when input rail blocks the message
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

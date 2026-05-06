@@ -216,12 +216,13 @@ export function useChatSendHandlers({
       }
 
       setIsSending(true);
-      onNewMessage({ id: Date.now(), sender: 'user', text: trimmed });
-      const actualSessionId = await ensureSession(trimmed);
+      const displayText = trimmed || `Run action: ${actionToTrigger.name}`;
+      onNewMessage({ id: Date.now(), sender: 'user', text: displayText });
+      const actualSessionId = await ensureSession(displayText);
 
       socket.send({
         type: 'message',
-        query: trimmed,
+        query: displayText,
         user_id: userId,
         session_id: actualSessionId || undefined,
         model: selectedModel,

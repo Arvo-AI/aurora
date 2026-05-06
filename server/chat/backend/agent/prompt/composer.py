@@ -154,6 +154,7 @@ def build_prompt_segments(
         knowledge_base_memory=knowledge_base_memory,
         integration_index=integration_index,
         security_policy=security_policy,
+        is_rca_background=is_background and not is_action,
     )
 
 
@@ -181,7 +182,7 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
     if segments.long_documents_note:
         parts.append(segments.long_documents_note)
 
-    is_rca_background = segments.background_mode and "BACKGROUND RCA MODE" in segments.background_mode
+    is_rca_background = segments.is_rca_background
     if segments.terraform_validation and not is_rca_background:
         parts.append(segments.terraform_validation)
     if segments.failure_recovery and not is_rca_background:

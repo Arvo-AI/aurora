@@ -139,31 +139,35 @@ def _validate_create_fields(name, instructions, body):
 @actions_bp.route("", methods=["GET"])
 @require_permission("actions", "read")
 def list_actions(user_id):
-    with db_pool.get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT a.id, a.name, a.description, a.instructions, a.trigger_type,
-                       a.trigger_config, a.mode, a.enabled, a.created_at, a.updated_at,
-                       COUNT(r.id) AS run_count,
-                       MAX(r.started_at) AS last_run_at,
-                       (SELECT r2.status FROM action_runs r2
-                        WHERE r2.action_id = a.id ORDER BY r2.started_at DESC LIMIT 1) AS last_run_status
-                FROM actions a
-                LEFT JOIN action_runs r ON r.action_id = a.id
-                GROUP BY a.id
-                ORDER BY a.created_at DESC
-            """)
-            cols = [d[0] for d in cur.description]
-            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT a.id, a.name, a.description, a.instructions, a.trigger_type,
+                           a.trigger_config, a.mode, a.enabled, a.created_at, a.updated_at,
+                           COUNT(r.id) AS run_count,
+                           MAX(r.started_at) AS last_run_at,
+                           (SELECT r2.status FROM action_runs r2
+                            WHERE r2.action_id = a.id ORDER BY r2.started_at DESC LIMIT 1) AS last_run_status
+                    FROM actions a
+                    LEFT JOIN action_runs r ON r.action_id = a.id
+                    GROUP BY a.id
+                    ORDER BY a.created_at DESC
+                """)
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-    for r in rows:
-        r["id"] = str(r["id"])
-        r["created_at"] = (r["created_at"].isoformat() + "Z") if r["created_at"] else None
-        r["updated_at"] = (r["updated_at"].isoformat() + "Z") if r["updated_at"] else None
-        r["last_run_at"] = (r["last_run_at"].isoformat() + "Z") if r["last_run_at"] else None
-        r["run_count"] = r["run_count"] or 0
+        for r in rows:
+            r["id"] = str(r["id"])
+            r["created_at"] = (r["created_at"].isoformat() + "Z") if r["created_at"] else None
+            r["updated_at"] = (r["updated_at"].isoformat() + "Z") if r["updated_at"] else None
+            r["last_run_at"] = (r["last_run_at"].isoformat() + "Z") if r["last_run_at"] else None
+            r["run_count"] = r["run_count"] or 0
 
-    return jsonify({"actions": rows})
+        return jsonify({"actions": rows})
+    except Exception:
+        logger.exception("Failed to list actions")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @actions_bp.route("", methods=["POST"])
@@ -193,6 +197,9 @@ def create_action(user_id):
             cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
             row = cur.fetchone()
             org_id = row[0] if row else None
+
+            if not org_id:
+                return jsonify({"error": "User has no organization"}), 400
 
             cur.execute(
                 """INSERT INTO actions (org_id, created_by, name, description, instructions,
@@ -284,15 +291,19 @@ def update_action(user_id, action_id):
     vals.append(datetime.now(timezone.utc))
     vals.append(action_id)
 
-    set_parts = [_COL_FRAGMENTS[col] for col in columns if col in _COL_FRAGMENTS]
+    set_parts = [_COL_FRAGMENTS[col] for col in columns]
     sql = "UPDATE actions SET " + ", ".join(set_parts) + " WHERE id = %s RETURNING id"
 
-    with db_pool.get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, vals)
-            if not cur.fetchone():
-                return jsonify({"error": _ERR_NOT_FOUND}), 404
-            conn.commit()
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, vals)
+                if not cur.fetchone():
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+                conn.commit()
+    except Exception:
+        logger.exception("Failed to update action")
+        return jsonify({"error": "Internal server error"}), 500
 
     return _get_action_response(action_id)
 
@@ -323,6 +334,8 @@ def trigger_action(user_id, action_id):
     body = request.get_json(silent=True) or {}
     trigger_context = {}
     if body.get("incident_id"):
+        if not _validate_uuid(body["incident_id"]):
+            return jsonify({"error": "Invalid incident_id format"}), 400
         trigger_context["incident_id"] = body["incident_id"]
     if body.get("trigger_label"):
         trigger_context["trigger_label"] = body["trigger_label"]
@@ -352,25 +365,29 @@ def list_runs(user_id, action_id):
     except (ValueError, TypeError):
         return jsonify({"error": "limit and offset must be integers"}), 400
 
-    with db_pool.get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """SELECT id, status, incident_id, chat_session_id, trigger_context,
-                          started_at, completed_at, error
-                   FROM action_runs WHERE action_id = %s
-                   ORDER BY started_at DESC LIMIT %s OFFSET %s""",
-                (action_id, limit, offset),
-            )
-            cols = [d[0] for d in cur.description]
-            runs = [dict(zip(cols, r)) for r in cur.fetchall()]
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT id, status, incident_id, chat_session_id, trigger_context,
+                              started_at, completed_at, error
+                       FROM action_runs WHERE action_id = %s
+                       ORDER BY started_at DESC LIMIT %s OFFSET %s""",
+                    (action_id, limit, offset),
+                )
+                cols = [d[0] for d in cur.description]
+                runs = [dict(zip(cols, r)) for r in cur.fetchall()]
 
-    for r in runs:
-        r["id"] = str(r["id"])
-        r["incident_id"] = str(r["incident_id"]) if r["incident_id"] else None
-        r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
-        if r["started_at"] and r["completed_at"]:
-            r["duration_ms"] = max(0, int((r["completed_at"] - r["started_at"]).total_seconds() * 1000))
-        r["started_at"] = (r["started_at"].isoformat() + "Z") if r["started_at"] else None
-        r["completed_at"] = (r["completed_at"].isoformat() + "Z") if r["completed_at"] else None
+        for r in runs:
+            r["id"] = str(r["id"])
+            r["incident_id"] = str(r["incident_id"]) if r["incident_id"] else None
+            r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
+            if r["started_at"] and r["completed_at"]:
+                r["duration_ms"] = max(0, int((r["completed_at"] - r["started_at"]).total_seconds() * 1000))
+            r["started_at"] = (r["started_at"].isoformat() + "Z") if r["started_at"] else None
+            r["completed_at"] = (r["completed_at"].isoformat() + "Z") if r["completed_at"] else None
 
-    return jsonify({"runs": runs})
+        return jsonify({"runs": runs})
+    except Exception:
+        logger.exception("Failed to list runs")
+        return jsonify({"error": "Internal server error"}), 500

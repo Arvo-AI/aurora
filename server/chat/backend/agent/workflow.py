@@ -1009,6 +1009,7 @@ class Workflow:
                 # Foreground chats that were genuinely blocked: taint the session
                 # so every subsequent tool call goes through the command gate.
                 if getattr(input_state, "is_background", False) or rail_result.reason != _BLOCKED_REASON:
+                    input_state.guardrail_blocked = True
                     yield ("token", _RAIL_USER_MESSAGES.get(rail_result.reason, "Something went wrong. Please try again."))
                     return
                 from utils.auth.command_gate import mark_session_tainted

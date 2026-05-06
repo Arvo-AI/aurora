@@ -525,6 +525,7 @@ def run_background_chat(
 
                     # Dispatch on_incident actions for this incident (fire-and-forget)
                     source = trigger_metadata.get('source', '') if trigger_metadata else ''
+                    # Prevent infinite loops: actions must not trigger other on_incident actions
                     if source and source != 'action':
                         try:
                             from services.actions.executor import dispatch_on_incident_actions
@@ -673,7 +674,13 @@ def run_background_chat(
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
-                update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+                if result.get("guardrail_blocked"):
+                    update_action_run_status(
+                        run_id=trigger_metadata['run_id'], status='error',
+                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                    )
+                else:
+                    update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
 
@@ -1127,9 +1134,12 @@ async def _execute_background_chat(
 
         # Create the initial message; tag it so the UI layer can skip the
         # synthesized RCA scaffold (internal instructions, not user input).
+        # Slack/Google Chat messages are user-authored and should NOT be hidden.
+        source = trigger_metadata.get("source", "") if trigger_metadata else ""
+        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat')
         human_message = HumanMessage(
             content=initial_message,
-            additional_kwargs={"is_rca_scaffold": True},
+            additional_kwargs={"is_rca_scaffold": is_scaffold},
         )
 
         # Import centralized model config
@@ -1228,6 +1238,7 @@ async def _execute_background_chat(
             "status": "completed",
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
+            "guardrail_blocked": getattr(state, "guardrail_blocked", False),
         }
         
     except Exception as e:
@@ -2334,6 +2345,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
 
             # --- 4. Stale action runs (per-org, action_runs is RLS-protected) ---
             stale_actions_count = 0
+            stale_action_threshold = datetime.now() - timedelta(minutes=35)
             with conn.cursor() as cursor:
                 cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
                 org_ids = [r[0] for r in cursor.fetchall()]
@@ -2343,7 +2355,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         UPDATE action_runs SET status = 'error', completed_at = NOW(),
                                error = 'Stale: background chat did not complete'
                         WHERE status IN ('running', 'pending') AND started_at < %s
-                    """, (stale_threshold,))
+                    """, (stale_action_threshold,))
                     stale_actions_count += cursor.rowcount
                 if stale_actions_count > 0:
                     conn.commit()

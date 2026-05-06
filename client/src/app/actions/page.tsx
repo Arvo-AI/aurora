@@ -289,6 +289,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
     if (!confirm('Delete this action? This cannot be undone.')) return;
     try {
       await fetchR(`/api/actions/${actionId}`, { method: 'DELETE' });
+      window.dispatchEvent(new Event('actionsStateChanged'));
       onBack();
     } catch {
       toast({ title: 'Failed to delete action', variant: 'destructive' });
@@ -441,8 +442,9 @@ function ActionFormView({ onBack, onSaved, action }: {
 
   const getIntervalSeconds = () => {
     const multipliers = { minutes: 60, hours: 3600, days: 86400 };
-    return Math.max(300, Math.round(intervalValue * multipliers[intervalUnit]));
+    return Math.round(intervalValue * multipliers[intervalUnit]);
   };
+  const intervalTooLow = triggerType === 'on_schedule' && getIntervalSeconds() < 300;
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -471,6 +473,7 @@ function ActionFormView({ onBack, onSaved, action }: {
         return;
       }
       toast({ title: isEdit ? 'Action updated' : 'Action created' });
+      window.dispatchEvent(new Event('actionsStateChanged'));
       onSaved();
     } catch {
       toast({ title: `Failed to ${isEdit ? 'update' : 'create'} action`, variant: 'destructive' });

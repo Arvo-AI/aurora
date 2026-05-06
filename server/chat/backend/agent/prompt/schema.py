@@ -18,3 +18,4 @@ class PromptSegments:
     knowledge_base_memory: str = ""  # User's knowledge base memory context
     integration_index: str = ""  # Skills-based: compact index of connected integrations
     security_policy: str = ""  # Org-level command allow/deny policy
+    is_rca_background: bool = False  # True when prompt is for a background RCA (not action)
