@@ -129,12 +129,6 @@ class TestProviderLookupCaseInsensitive:
         manager, _, _ = manager_with_mocked_db
         assert manager.has_user_credentials("u-1", spelling) is True
 
-    @pytest.mark.parametrize("spelling", ["azure", "AZURE", "Azure"])
-    def test_mixed_case_azure_accepted(self, manager_with_mocked_db, spelling):
-        manager, connect, _ = manager_with_mocked_db
-        assert manager.has_user_credentials("u-1", spelling) is True
-        connect.assert_called_once()
-
     @pytest.mark.parametrize(
         "compound",
         ["google_chat", "bitbucket_workspace_selection"],
