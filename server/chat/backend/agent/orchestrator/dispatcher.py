@@ -142,10 +142,11 @@ def _pre_emit_rows(state: State) -> None:
     org_id = getattr(state, "org_id", None)
     wave = (getattr(state, "synthesis_wave", 0) or 0) + 1
 
-    if not incident_id or not user_id:
-        logger.debug(
-            "Dispatcher exit: incident_id=%s user_id=%s",
-            incident_id, user_id,
+    if not incident_id or not user_id or not org_id:
+        # rca_findings is FORCE-RLS; missing org_id silently 0-rows the INSERT.
+        logger.warning(
+            "dispatcher: pre-emit skipped — incident_id=%s user_id=%s org_id=%s",
+            incident_id, user_id, org_id,
         )
         return
 

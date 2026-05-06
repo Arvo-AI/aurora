@@ -149,7 +149,17 @@ class Workflow:
         workflow.add_node("sub_agent", sub_agent_node)
         workflow.add_node("synthesis", synthesis_node)
 
-        workflow.add_edge(START, "triage")
+        # Only background RCA sessions enter the orchestrator. Foreground chats
+        # bypass triage so they don't pay the role-discovery + LLM call cost.
+        def _route_start(state) -> str:
+            is_bg = getattr(state, "is_background", False)
+            if isinstance(state, dict):
+                is_bg = state.get("is_background", False)
+            return "triage" if is_bg else "direct_react"
+
+        workflow.add_conditional_edges(
+            START, _route_start, {"triage": "triage", "direct_react": "direct_react"}
+        )
         workflow.add_conditional_edges(
             "triage",
             route_triage,

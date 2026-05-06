@@ -827,8 +827,11 @@ def _update_incident_summary(
                         )
                     conn.commit()
                     logger.info(f"{_LOG_PREFIX} Recorded lifecycle event 'rca_completed' for incident {incident_id}")
-                except Exception as le:
-                    logger.error(f"{_LOG_PREFIX} Failed to record lifecycle event 'rca_completed' for incident {incident_id}: {le}")
+                except Exception:
+                    logger.exception(
+                        "%s Failed to record lifecycle event 'rca_completed' for incident %s",
+                        _LOG_PREFIX, incident_id,
+                    )
 
     except Exception as e:
         logger.error(

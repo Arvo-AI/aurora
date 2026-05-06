@@ -282,17 +282,33 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
                 history = _extract_tool_call_history(partial_capture)
         except Exception:
             logger.exception("sub_agent: failed to recover tool_call_history on timeout")
-        await asyncio.to_thread(
-            _write_stub_to_storage, agent_id, role_name, incident_id, user_id, "timeout", "timed out"
+        # Narrow race: _run could have completed write_findings (storage upload +
+        # DB row to terminal status) just before the timeout deadline. Don't
+        # clobber a real findings.md with a stub in that case.
+        existing_status = await asyncio.to_thread(
+            _get_db_status, agent_id, incident_id, user_id
         )
-        await asyncio.to_thread(
-            _update_db_terminal, agent_id, incident_id, user_id, "timeout",
-            tool_call_history=history,
-        )
+        if existing_status in (None, "running"):
+            await asyncio.to_thread(
+                _write_stub_to_storage, agent_id, role_name, incident_id, user_id,
+                "timeout", "timed out",
+            )
+            await asyncio.to_thread(
+                _update_db_terminal, agent_id, incident_id, user_id, "timeout",
+                tool_call_history=history,
+            )
+            terminal_status = "timeout"
+        else:
+            # Already terminal; persist the partial history alongside whatever
+            # write_findings wrote, but don't downgrade the row.
+            await asyncio.to_thread(
+                _persist_tool_call_history, agent_id, incident_id, user_id, history
+            )
+            terminal_status = existing_status
         return FindingRef(
             agent_id=agent_id, role_name=role_name,
             storage_uri=f"rca/{incident_id}/findings/{agent_id}.md",
-            status="timeout",
+            status=terminal_status if terminal_status in _FINDING_REF_STATUSES else "timeout",
             summary=f"Sub-agent {agent_id} ({role_name}) timed out after {timeout}s",
         )
 
@@ -308,7 +324,7 @@ async def _run(input_dict: dict) -> FindingRef:
             extra_constraints=input_dict.get("extra_constraints"),
         )
     except Exception as exc:
-        logger.error("sub_agent: SubAgentInput validation failed: %s", exc)
+        logger.exception("sub_agent: SubAgentInput validation failed")
         agent_id = input_dict.get("agent_id", "unknown")
         role_name = input_dict.get("role_name", "")
         incident_id = input_dict.get("parent_incident_id", "")

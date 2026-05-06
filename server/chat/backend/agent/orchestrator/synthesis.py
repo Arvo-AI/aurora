@@ -58,25 +58,37 @@ async def _synthesis(state: State) -> dict:
     # final summary needs full context across waves; the needs_more decision
     # is steered by which findings are NEW (target_wave) via the prompt.
     finding_rows = await asyncio.to_thread(_fetch_finding_rows, incident_id, user_id, target_wave)
-    pending = [row for row in finding_rows if row.get("storage_uri")]
+    with_uri = [row for row in finding_rows if row.get("storage_uri")]
     raw_bodies = await asyncio.gather(
-        *(asyncio.to_thread(_download_finding, row["storage_uri"], user_id) for row in pending),
+        *(asyncio.to_thread(_download_finding, row["storage_uri"], user_id) for row in with_uri),
         return_exceptions=True,
-    ) if pending else []
-    bodies: list = []
-    for row, body in zip(pending, raw_bodies):
+    ) if with_uri else []
+    body_by_agent: dict = {}
+    for row, body in zip(with_uri, raw_bodies):
         if isinstance(body, BaseException):
             logger.warning(
                 "synthesis_node: finding download raised for agent %s: %s",
                 row.get("agent_id"), body,
             )
-            bodies.append(None)
+            continue
+        if body:
+            body_by_agent[row.get("agent_id")] = body
+
+    # Don't drop rows that have status but no body (timed out / failed before
+    # upload). Emit a synthetic stanza so the lead sees that the branch ran.
+    finding_bodies: list[str] = []
+    for row in finding_rows:
+        header = f"## Wave {row.get('wave', '?')} | Agent: {row.get('agent_id')} ({row.get('role_name')})"
+        body = body_by_agent.get(row.get("agent_id"))
+        if body:
+            finding_bodies.append(f"{header}\n\n{body}")
         else:
-            bodies.append(body)
-    finding_bodies: list[str] = [
-        f"## Wave {row.get('wave', '?')} | Agent: {row.get('agent_id')} ({row.get('role_name')})\n\n{body}"
-        for row, body in zip(pending, bodies) if body
-    ]
+            status = row.get("status") or "unknown"
+            strength = row.get("self_assessed_strength") or "n/a"
+            err = row.get("error_message") or "no findings body uploaded"
+            finding_bodies.append(
+                f"{header}\n\nstatus: {status}\nstrength: {strength}\nbody unavailable ({err})"
+            )
 
     new_wave = current_wave + 1
 
@@ -252,7 +264,7 @@ def _fetch_finding_rows(incident_id: str, user_id: str, max_wave: int) -> list:
                 set_rls_context(cur, conn, user_id, log_prefix="[Synthesis]")
                 cur.execute(
                     """SELECT agent_id, role_name, storage_uri, status,
-                              self_assessed_strength, wave
+                              self_assessed_strength, wave, error_message
                        FROM rca_findings
                        WHERE incident_id = %s AND wave <= %s
                        ORDER BY wave ASC, started_at ASC""",

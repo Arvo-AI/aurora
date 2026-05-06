@@ -95,7 +95,7 @@ const DispatchGroupWidget = ({
           )}
         </span>
         <span
-          aria-label={expanded ? "Collapse agents" : "Expand agents"}
+          aria-hidden="true"
           className="flex flex-shrink-0 items-center justify-center text-muted-foreground"
         >
           {expanded ? (

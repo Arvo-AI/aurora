@@ -248,7 +248,10 @@ class ToolContextCapture:
         tool_info = self.current_tool_calls[tool_call_id]
         # Compute excerpt outside the lock — pure string processing, no shared state.
         output_excerpt = _build_excerpt(output)
-        is_err_bool = bool(is_error)
+        # Mirror _record_step_end's payload-shape classification so the history
+        # entry (and downstream rca_findings.tool_call_history) matches the
+        # execution_steps row's status.
+        is_err_bool = bool(is_error) or self._output_indicates_error(output)
         completed_at_iso = datetime.now(timezone.utc).isoformat()
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]

@@ -157,6 +157,10 @@ def get_available_capability_tags(user_id: str) -> set:
                 if not (tool_name == "cloud_exec" and has_cloud_provider):
                     continue
             meta = _get_tool_meta(t)
+            # Sub-agents are read-only; mutating tools never reach select_tools_for_role,
+            # so they shouldn't contribute capability tags either.
+            if meta.get("mutates"):
+                continue
             tags.update(meta.get("capability_tags", []))
         return tags
     except Exception:

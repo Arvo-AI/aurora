@@ -167,7 +167,11 @@ def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
         now = datetime.now(timezone.utc)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[FindingsWriter]")
+                if not set_rls_context(cur, conn, user_id, log_prefix="[FindingsWriter]"):
+                    logger.warning(
+                        "write_findings: failed to set RLS context for agent %s", agent_id
+                    )
+                    return False
                 cur.execute(
                     """
                     UPDATE rca_findings SET

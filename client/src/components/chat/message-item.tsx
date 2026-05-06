@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { DISPATCH_SUBAGENT_TOOL_NAME, Message } from "../../app/chat/types";
+import { DISPATCH_SUBAGENT_TOOL_NAME, Message, ToolCall } from "../../app/chat/types";
 import { MarkdownRenderer } from "../ui/markdown-renderer";
 import { Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
@@ -12,10 +12,14 @@ import ToolCallWidget from "../tool-calls/ToolCallWidget";
 import DispatchGroupWidget from "./dispatch-group-widget";
 
 // Hoisted to keep the JSX render below from nesting more than 4 levels deep.
-function applyToolCallUpdate(message: Message, toolCallId: string, updates: Partial<any>): Message {
+function applyToolCallUpdate(
+  message: Message,
+  toolCallId: string,
+  updates: Partial<ToolCall>,
+): Message {
   return {
     ...message,
-    toolCalls: message.toolCalls?.map((tc: any) =>
+    toolCalls: message.toolCalls?.map((tc) =>
       tc.id === toolCallId ? { ...tc, ...updates } : tc,
     ),
   };
