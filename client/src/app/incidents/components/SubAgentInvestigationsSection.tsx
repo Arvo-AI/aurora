@@ -215,28 +215,39 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
         aria-expanded={expanded}
         aria-label={`Sub-agent ${finding.role_name}`}
         onClick={toggleExpand}
-        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left hover:bg-zinc-800/40 focus:outline-none focus:ring-1 focus:ring-zinc-700"
+        className="flex w-full cursor-pointer items-start gap-2 px-2.5 py-2 text-left hover:bg-zinc-800/40 focus:outline-none focus:ring-1 focus:ring-zinc-700"
       >
-        <StatusIcon status={finding.status} />
-        <span className="rounded-sm border border-zinc-700 bg-zinc-800/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
-          {finding.role_name}
+        <span className="mt-0.5">
+          <StatusIcon status={finding.status} />
         </span>
         <span className="block min-w-0 flex-1">
-          <span className="block truncate text-xs text-zinc-300" title={finding.purpose}>
+          <span className="mr-1.5 inline-block rounded-sm border border-zinc-700 bg-zinc-800/40 px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+            {finding.role_name}
+          </span>
+          <span
+            className="break-words align-middle text-xs text-zinc-300 [overflow-wrap:anywhere]"
+            title={finding.purpose}
+          >
             {finding.purpose}
           </span>
           {subtitle && (
-            <span className="mt-0.5 block truncate text-[11px] text-zinc-500">{subtitle}</span>
+            <span className="mt-0.5 block break-words text-[11px] text-zinc-500 [overflow-wrap:anywhere]">
+              {subtitle}
+            </span>
           )}
         </span>
         {finding.self_assessed_strength && isParentTerminal && (
-          <StrengthChip strength={finding.self_assessed_strength} />
+          <span className="mt-0.5">
+            <StrengthChip strength={finding.self_assessed_strength} />
+          </span>
         )}
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
-        )}
+        <span className="mt-0.5">
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
+          )}
+        </span>
       </button>
 
       {expanded && (
