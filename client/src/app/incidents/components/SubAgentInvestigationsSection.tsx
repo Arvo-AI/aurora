@@ -12,6 +12,8 @@ import {
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { stripFindingsFrontMatter } from '@/lib/findings-markdown';
 import type { ToolCallHistoryEntry } from '@/components/chat/subagent-detail-panel';
+import ToolCallWidget from '@/components/tool-calls/ToolCallWidget';
+import { historyEntryId, historyEntryToToolCall } from '@/components/tool-calls/history';
 
 const POLL_INTERVAL_MS = 3000;
 const FINDINGS_BODY_PREVIEW_LIMIT = 600;
@@ -107,31 +109,6 @@ function StrengthChip({ strength }: Readonly<{ strength: FindingStrength }>) {
   );
 }
 
-function ToolCallStatusIcon({ status }: Readonly<{ status: string }>) {
-  if (status === 'running' || status === 'pending') {
-    return <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-zinc-500" />;
-  }
-  if (status === 'error' || status === 'failed' || status === 'cancelled') {
-    return <AlertCircle className="h-3 w-3 flex-shrink-0 text-amber-500" />;
-  }
-  return <CheckCircle2 className="h-3 w-3 flex-shrink-0 text-emerald-500" />;
-}
-
-function abbreviateValue(value: unknown, max = 160): string {
-  if (value === null || value === undefined) return '';
-  let s: string;
-  if (typeof value === 'string') {
-    s = value;
-  } else {
-    try {
-      s = JSON.stringify(value) ?? '';
-    } catch {
-      s = '[unserializable value]';
-    }
-  }
-  return s.length > max ? `${s.slice(0, max)}...` : s;
-}
-
 const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
   finding,
   incidentId,
@@ -141,6 +118,18 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [showFullBody, setShowFullBody] = useState(false);
+  const [expandedToolIds, setExpandedToolIds] = useState<Set<string>>(() => new Set());
+
+  const setToolExpanded = useCallback((id: string, isExpanded: boolean) => {
+    setExpandedToolIds((prev) => {
+      const has = prev.has(id);
+      if (has === isExpanded) return prev;
+      const next = new Set(prev);
+      if (isExpanded) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
 
   const isParentTerminal = isTerminal(finding.status);
 
@@ -294,35 +283,23 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
                 );
               }
               return (
-                <ul className="space-y-1.5">
+                <div className="space-y-1.5">
                   {history.map((entry, idx) => {
-                    const argsPreview = abbreviateValue(entry.args, 140);
-                    const outputPreview = abbreviateValue(entry.output_excerpt, 140);
+                    const id = historyEntryId(entry, idx);
+                    const tool = historyEntryToToolCall(entry, id, expandedToolIds.has(id));
                     return (
-                      <li
-                        key={`${entry.tool_name}-${idx}`}
-                        className="rounded-sm border border-zinc-800 bg-zinc-900/40 px-2 py-1.5"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <ToolCallStatusIcon status={entry.status} />
-                          <span className="truncate font-mono text-[11px] font-medium text-zinc-300">
-                            {entry.tool_name}
-                          </span>
-                        </div>
-                        {argsPreview && (
-                          <div className="mt-0.5 break-all font-mono text-[10px] text-zinc-500">
-                            {argsPreview}
-                          </div>
-                        )}
-                        {outputPreview && (
-                          <div className="mt-0.5 break-all text-[10px] text-zinc-500">
-                            {outputPreview}
-                          </div>
-                        )}
-                      </li>
+                      <ToolCallWidget
+                        key={id}
+                        tool={tool}
+                        onToolUpdate={(patch) => {
+                          if (typeof patch.isExpanded === 'boolean') {
+                            setToolExpanded(id, patch.isExpanded);
+                          }
+                        }}
+                      />
                     );
                   })}
-                </ul>
+                </div>
               );
             })()}
           </div>

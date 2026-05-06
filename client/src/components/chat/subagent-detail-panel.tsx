@@ -2,11 +2,13 @@
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { AlertCircle, CheckCircle2, Loader2, X, XCircle } from "lucide-react";
+import { AlertCircle, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { stripFindingsFrontMatter } from "@/lib/findings-markdown";
+import ToolCallWidget from "@/components/tool-calls/ToolCallWidget";
+import { historyEntryId, historyEntryToToolCall } from "@/components/tool-calls/history";
 
 interface SubAgentDetailPanelProps {
   incidentId: string;
@@ -43,37 +45,6 @@ const TERMINAL_STATUSES = new Set([
   "inconclusive",
 ]);
 
-function abbreviateValue(value: unknown, max = 200): string {
-  if (value === null || value === undefined) return "";
-  let s: string;
-  if (typeof value === "string") {
-    s = value;
-  } else {
-    try {
-      s = JSON.stringify(value) ?? "";
-    } catch {
-      s = "[unserializable value]";
-    }
-  }
-  return s.length > max ? `${s.slice(0, max)}...` : s;
-}
-
-function ToolCallStatusIcon({ status }: Readonly<{ status: string }>) {
-  if (status === "running" || status === "pending") {
-    return <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-muted-foreground" />;
-  }
-  if (
-    status === "error" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "timeout" ||
-    status === "inconclusive"
-  ) {
-    return <XCircle className="h-3.5 w-3.5 flex-shrink-0 text-destructive" />;
-  }
-  return <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />;
-}
-
 const POLL_INTERVAL_MS = 5000;
 
 const SubAgentDetailPanel = ({
@@ -88,6 +59,18 @@ const SubAgentDetailPanel = ({
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [reloadKey, setReloadKey] = React.useState(0);
+  const [expandedToolIds, setExpandedToolIds] = React.useState<Set<string>>(() => new Set());
+
+  const setToolExpanded = React.useCallback((id: string, isExpanded: boolean) => {
+    setExpandedToolIds((prev) => {
+      const has = prev.has(id);
+      if (has === isExpanded) return prev;
+      const next = new Set(prev);
+      if (isExpanded) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -216,35 +199,23 @@ const SubAgentDetailPanel = ({
               );
             }
             return (
-              <ul className="space-y-2">
+              <div className="space-y-2">
                 {history.map((entry, idx) => {
-                  const argsPreview = abbreviateValue(entry.args, 160);
-                  const outputPreview = abbreviateValue(entry.output_excerpt, 160);
+                  const id = historyEntryId(entry, idx);
+                  const tool = historyEntryToToolCall(entry, id, expandedToolIds.has(id));
                   return (
-                    <li
-                      key={`${entry.tool_name}-${idx}`}
-                      className="rounded-md border border-border bg-muted/30 px-2.5 py-2"
-                    >
-                      <div className="flex items-center gap-2">
-                        <ToolCallStatusIcon status={entry.status} />
-                        <span className="truncate font-mono text-xs font-medium text-foreground">
-                          {entry.tool_name}
-                        </span>
-                      </div>
-                      {argsPreview && (
-                        <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
-                          {argsPreview}
-                        </div>
-                      )}
-                      {outputPreview && (
-                        <div className="mt-1 break-all text-[11px] text-muted-foreground">
-                          {outputPreview}
-                        </div>
-                      )}
-                    </li>
+                    <ToolCallWidget
+                      key={id}
+                      tool={tool}
+                      onToolUpdate={(patch) => {
+                        if (typeof patch.isExpanded === "boolean") {
+                          setToolExpanded(id, patch.isExpanded);
+                        }
+                      }}
+                    />
                   );
                 })}
-              </ul>
+              </div>
             );
           })()}
         </section>

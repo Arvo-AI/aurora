@@ -265,18 +265,34 @@ class ToolContextCapture:
 
             start_time = tool_info.get("start_time")
             try:
-                # Bound history defensively (sub-agents have ~8-turn budgets).
-                if len(self.tool_history) >= 256:
-                    self.tool_history.pop(0)
-                self.tool_history.append({
-                    "tool_call_id": tool_call_id,
-                    "tool_name": tool_name,
-                    "input": tool_input,
-                    "output_excerpt": output_excerpt,
-                    "is_error": is_err_bool,
-                    "started_at": start_time.isoformat() if start_time else None,
-                    "completed_at": completed_at_iso,
-                })
+                # Idempotent: agent.py's on_chat_model_end may have already pre-populated
+                # an empty stub for this tool_call_id. Update it in place if present so
+                # the extractor doesn't see two rows per call.
+                started_iso = start_time.isoformat() if start_time else None
+                updated = False
+                for existing in reversed(self.tool_history):
+                    if existing.get("tool_call_id") == tool_call_id and not existing.get("completed_at"):
+                        existing["tool_name"] = tool_name
+                        existing["input"] = tool_input
+                        existing["output_excerpt"] = output_excerpt
+                        existing["is_error"] = is_err_bool
+                        if started_iso and not existing.get("started_at"):
+                            existing["started_at"] = started_iso
+                        existing["completed_at"] = completed_at_iso
+                        updated = True
+                        break
+                if not updated:
+                    if len(self.tool_history) >= 256:
+                        self.tool_history.pop(0)
+                    self.tool_history.append({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "input": tool_input,
+                        "output_excerpt": output_excerpt,
+                        "is_error": is_err_bool,
+                        "started_at": started_iso,
+                        "completed_at": completed_at_iso,
+                    })
             except Exception:
                 logger.debug("tool_history append failed", exc_info=True)
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
