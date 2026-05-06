@@ -31,9 +31,10 @@ def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
     if not raw_findings:
         return issues
 
-    # Pattern 1: Structured bug reports (BUG #1, Bug #2, ISSUE, etc.)
+    # Pattern 1: Structured bug reports
+    # Matches: "BUG #1:", "### 1.", "### Bug:", "**BUG #2:", "Issue #3:", "## 1."
     bug_blocks = re.split(
-        r"(?:^|\n)(?:\*\*)?(?:BUG|Bug|ISSUE|Issue)\s*#?\d*[:\s]",
+        r"(?:^|\n)(?:#{1,3}\s*)?(?:\*\*)?(?:BUG|Bug|ISSUE|Issue)?\s*#?\d+[\.\):\s]",
         raw_findings,
     )
 
@@ -77,14 +78,30 @@ def _parse_bug_block(block: str) -> Issue | None:
     url = "unknown"
     severity = "medium"
 
-    for line in lines[:10]:  # Don't scan forever
+    for line in lines[:15]:  # Scan more lines to find URL/severity
         line_lower = line.lower().strip()
-        if any(k in line_lower for k in ["url:", "location:", "page:"]):
+        if any(k in line_lower for k in ["url:", "location:", "page:", "**url**"]):
             url = _extract_url(line) or url
-        elif "severity:" in line_lower:
+        elif "severity:" in line_lower or "(high)" in line_lower or "(critical)" in line_lower or "(medium)" in line_lower:
             severity = _detect_severity(line) or severity
-        elif "description:" in line_lower:
+        elif "description:" in line_lower or "issue:" in line_lower:
             description = line.split(":", 1)[-1].strip()
+        elif "**issue**:" in line_lower:
+            description = line.split(":", 1)[-1].strip()
+
+    # Try to extract URL from anywhere in the block if not found in labeled lines
+    if url == "unknown":
+        for line in lines[:15]:
+            found = _extract_url(line)
+            if found:
+                url = found
+                break
+
+    # Infer severity from title if "(HIGH)" or "(MEDIUM)" in first line
+    if severity == "medium" and lines[0]:
+        detected = _detect_severity(lines[0])
+        if detected:
+            severity = detected
 
     if not description:
         description = _clean_description(lines[0])
@@ -113,12 +130,18 @@ def _detect_severity(text: str) -> str | None:
 
 
 def _extract_url(text: str) -> str | None:
-    match = re.search(r"(https?://[^\s,)\"']+|/[a-z][a-z0-9/_\[\]-]*)", text)
+    # Match full URLs first, then path-only patterns
+    match = re.search(r"(https?://localhost[^\s,)\"']+)", text)
+    if match:
+        return match.group(1)
+    # Path pattern: must start with / and a letter, no brackets
+    match = re.search(r"(/[a-z][a-z0-9/_-]+)", text)
     if match:
         url = match.group(1)
-        if url.startswith("/"):
-            return f"http://localhost:3000{url}"
-        return url
+        # Skip false positives
+        if any(fp in url for fp in ["/null", "/undefined", "/object"]):
+            return None
+        return f"http://localhost:3000{url}"
     return None
 
 
