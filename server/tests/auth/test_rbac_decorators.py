@@ -387,7 +387,7 @@ class TestRequireAuthOnly:
             return jsonify(ok=True), 200
 
         with flask_app.test_request_context("/api/x"):
-            response, status = me()
+            _, status = me()
 
         assert status == 200
         assert seen == {"user_id": "u-1"}

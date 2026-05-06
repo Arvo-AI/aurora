@@ -34,13 +34,13 @@ class TestOrgClause:
         """Falsy values follow the same path as ``None``."""
         assert _org_clause("") == ("", ())
 
-    def test_concrete_org_returns_AND_clause_and_param_tuple(self):
+    def test_concrete_org_returns_and_clause_and_param_tuple(self):
         clause, params = _org_clause("org-7")
 
         assert clause == "AND (org_id = %s OR org_id IS NULL)"
         assert params == ("org-7",)
 
-    def test_clause_starts_with_AND_so_it_appends_to_existing_WHERE(self):
+    def test_clause_starts_with_and_so_it_appends_to_existing_where(self):
         """Callers concatenate this onto a WHERE; missing AND is a SyntaxError."""
         clause, _ = _org_clause("org-7")
         assert clause.startswith("AND ")
@@ -131,8 +131,9 @@ class TestProviderLookupCaseInsensitive:
 
     @pytest.mark.parametrize("spelling", ["azure", "AZURE", "Azure"])
     def test_mixed_case_azure_accepted(self, manager_with_mocked_db, spelling):
-        manager, _, _ = manager_with_mocked_db
+        manager, connect, _ = manager_with_mocked_db
         assert manager.has_user_credentials("u-1", spelling) is True
+        connect.assert_called_once()
 
     @pytest.mark.parametrize(
         "compound",
