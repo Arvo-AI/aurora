@@ -305,11 +305,15 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
                 _persist_tool_call_history, agent_id, incident_id, user_id, history
             )
             terminal_status = existing_status
+        if terminal_status == "timeout":
+            summary = f"Sub-agent {agent_id} ({role_name}) timed out after {timeout}s"
+        else:
+            summary = f"Sub-agent {agent_id} ({role_name}) completed with status {terminal_status}"
         return FindingRef(
             agent_id=agent_id, role_name=role_name,
             storage_uri=f"rca/{incident_id}/findings/{agent_id}.md",
             status=terminal_status if terminal_status in _FINDING_REF_STATUSES else "timeout",
-            summary=f"Sub-agent {agent_id} ({role_name}) timed out after {timeout}s",
+            summary=summary,
         )
 
 
@@ -581,7 +585,12 @@ def _update_db_terminal(agent_id: str, incident_id: str, user_id: str,
         storage_uri = f"rca/{incident_id}/findings/{agent_id}.md"
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[SubAgent]")
+                if set_rls_context(cur, conn, user_id, log_prefix="[SubAgent]") is None:
+                    logger.warning(
+                        "sub_agent: failed to set RLS context for terminal update agent=%s",
+                        agent_id,
+                    )
+                    return
                 cur.execute(
                     "UPDATE rca_findings SET status=%s, completed_at=%s, "
                     "tool_call_history=%s::jsonb, storage_uri=COALESCE(storage_uri, %s) "
@@ -604,7 +613,12 @@ def _persist_tool_call_history(agent_id: str, incident_id: str, user_id: str,
         history_json = _json.dumps(tool_call_history or [])
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[SubAgent:hist]")
+                if set_rls_context(cur, conn, user_id, log_prefix="[SubAgent:hist]") is None:
+                    logger.warning(
+                        "sub_agent: failed to set RLS context for history persist agent=%s",
+                        agent_id,
+                    )
+                    return
                 cur.execute(
                     "UPDATE rca_findings SET tool_call_history=%s::jsonb "
                     "WHERE incident_id=%s AND agent_id=%s",
@@ -624,7 +638,12 @@ def _get_db_status(agent_id: str, incident_id: str, user_id: str) -> Optional[st
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[SubAgent:status]")
+                if set_rls_context(cur, conn, user_id, log_prefix="[SubAgent:status]") is None:
+                    logger.warning(
+                        "sub_agent: failed to set RLS context for status read agent=%s",
+                        agent_id,
+                    )
+                    return None
                 cur.execute(
                     "SELECT status FROM rca_findings WHERE incident_id=%s AND agent_id=%s",
                     (incident_id, agent_id),

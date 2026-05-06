@@ -1112,8 +1112,10 @@ class Workflow:
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":
-                    # Suppress orchestrator-internal LLM chunks (triage / synthesis
-                    # produce structured output that's not meant to render in chat).
+                    # Suppress triage/synthesis chunks — they emit structured-output
+                    # JSON that would leak into chat. Sub-agent tokens are intentionally
+                    # allowed through so the user sees live progress in Thoughts while
+                    # N sub-agents run; routing them into per-agent panels is future work.
                     _node = (event.get("metadata") or {}).get("langgraph_node")
                     if _node in ("triage", "synthesis"):
                         continue
@@ -1181,8 +1183,21 @@ class Workflow:
                         _aux_output = (event.get("data") or {}).get("output")
                         _aux_usage = getattr(_aux_output, "usage_metadata", None) if _aux_output else None
                         if _aux_usage:
-                            _session_usage["total_input_tokens"] += _aux_usage.get("input_tokens", 0)
-                            _session_usage["total_output_tokens"] += _aux_usage.get("output_tokens", 0)
+                            input_tokens = _aux_usage.get("input_tokens", 0)
+                            output_tokens = _aux_usage.get("output_tokens", 0)
+                            input_details = _aux_usage.get("input_token_details", {})
+                            cached_input_tokens = (
+                                input_details.get("cache_read", 0)
+                                if isinstance(input_details, dict) else 0
+                            )
+                            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+                            estimated_cost = LLMUsageTracker.calculate_cost(
+                                input_tokens, output_tokens, input_state.model or "",
+                                cached_input_tokens=cached_input_tokens,
+                            )
+                            _session_usage["total_input_tokens"] += input_tokens
+                            _session_usage["total_output_tokens"] += output_tokens
+                            _session_usage["total_cost"] += estimated_cost
                             _session_usage["request_count"] += 1
                         continue
                     if _is_subagent:

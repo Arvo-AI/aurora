@@ -70,7 +70,8 @@ def _filter_known_roles(raw_inputs: list) -> list:
         from chat.backend.agent.orchestrator.role_registry import RoleRegistry
         valid = {r.name for r in RoleRegistry.get_instance().list_all()}
     except Exception:
-        return raw_inputs  # fail open — registry error shouldn't kill dispatch
+        logger.exception("dispatcher: role registry lookup failed — failing closed")
+        return []
     out = []
     for raw in raw_inputs:
         rn = raw.get("role_name") if isinstance(raw, dict) else getattr(raw, "role_name", None)
