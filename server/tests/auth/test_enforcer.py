@@ -18,7 +18,7 @@ from utils.auth.enforcer import assign_role_to_user
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_enforcer(monkeypatch):
     """Return a MagicMock standing in for ``get_enforcer()``."""
     fake = MagicMock(name="casbin_enforcer")
@@ -161,7 +161,7 @@ class TestPolicyPersistence:
 class TestDomainMatch:
     """``_domain_match`` enforces org isolation; ``*`` is the only wildcard."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def domain_match(self, monkeypatch):
         """Run ``get_enforcer`` and return the domain matcher closure it registers."""
         monkeypatch.setattr(enforcer_module, "_enforcer", None)

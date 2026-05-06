@@ -37,7 +37,7 @@ def _clear_org_cache(monkeypatch):
     monkeypatch.setattr(stateless_auth_module, "_user_org_cache", {})
 
 
-@pytest.fixture()
+@pytest.fixture
 def patch_org_lookup(monkeypatch):
     """Stub ``get_org_id_for_user`` with a configurable return value."""
     def _patch(return_value):

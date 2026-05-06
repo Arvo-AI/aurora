@@ -30,7 +30,7 @@ from utils.auth.oauth2_state_cache import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_redis(monkeypatch):
     """Replace the module's Redis client with a controllable MagicMock."""
     fake = MagicMock(name="redis_client")
@@ -38,7 +38,7 @@ def fake_redis(monkeypatch):
     return fake
 
 
-@pytest.fixture()
+@pytest.fixture
 def redis_exceptions(monkeypatch):
     """Swap ``redis.exceptions`` MagicMocks for real classes the cache can raise/catch."""
 
