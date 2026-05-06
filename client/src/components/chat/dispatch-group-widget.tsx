@@ -11,7 +11,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { ToolCall } from "@/app/chat/types";
-import SubAgentRow from "./subagent-row";
+import SubAgentRow from "@/components/chat/subagent-row";
 
 interface DispatchGroupWidgetProps {
   toolCalls: ToolCall[];

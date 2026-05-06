@@ -261,7 +261,12 @@ def _fetch_finding_rows(incident_id: str, user_id: str, max_wave: int) -> list:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[Synthesis]")
+                if set_rls_context(cur, conn, user_id, log_prefix="[Synthesis]") is None:
+                    logger.warning(
+                        "synthesis_node: failed to set RLS context for incident %s",
+                        hash_for_log(incident_id),
+                    )
+                    return []
                 cur.execute(
                     """SELECT agent_id, role_name, storage_uri, status,
                               self_assessed_strength, wave, error_message

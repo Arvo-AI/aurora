@@ -259,7 +259,12 @@ def _pre_emit_finding_rows(incident_id: str, inputs: list, user_id: str,
         ]
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[Dispatcher]")
+                if set_rls_context(cur, conn, user_id, log_prefix="[Dispatcher]") is None:
+                    logger.warning(
+                        "dispatcher: failed to set RLS context for incident %s",
+                        hash_for_log(incident_id or ""),
+                    )
+                    return
                 cur.executemany(
                     """
                     INSERT INTO rca_findings

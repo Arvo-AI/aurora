@@ -62,13 +62,13 @@ def _classify_tool_output_empty(output) -> bool:
 def _build_loop_guard_warning(tool_name: str, n: int) -> str:
     if n >= _LOOP_GUARD_HARD_THRESHOLD:
         return (
-            f"\n\n[LOOP-GUARD] {n}th consecutive empty/error result from "
+            f"\n\n[LOOP-GUARD] {n} consecutive empty/error results from "
             f"{tool_name}. STOP retrying this source — your next call MUST "
             "be write_findings. Document what you ruled out and submit "
             "findings now."
         )
     return (
-        f"\n\n[LOOP-GUARD] {n}rd consecutive empty/error result from "
+        f"\n\n[LOOP-GUARD] {n} consecutive empty/error results from "
         f"{tool_name}. Stop trying the same source — pivot to a different "
         "tool or call write_findings."
     )

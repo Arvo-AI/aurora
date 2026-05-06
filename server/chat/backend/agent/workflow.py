@@ -1165,19 +1165,27 @@ class Workflow:
                 # Handle model turn completion — extract thinking/text as fallback
                 # when on_chat_model_stream didn't fire (LangGraph + Gemini bug)
                 elif event_type == "on_chat_model_end":
-                    # Skip sub-agent / triage / synthesis model-end events: their
-                    # tool calls must register into the sub-agent's own
-                    # tool_capture (handled in agent.py), not the lead's.
-                    # Use checkpoint_ns (full nested namespace, e.g. "sub_agent:abc|agent:xyz")
-                    # because langgraph_node only reports the *immediate* node name —
-                    # for events bubbled from nested graphs (create_agent), it would
-                    # be "agent"/"tools" rather than the outer "sub_agent".
+                    # Don't render orchestrator-aux model turns into the lead's
+                    # chat: triage/synthesis use structured output that would
+                    # leak as JSON tokens, and sub-agents own their own
+                    # tool_capture. For triage/synthesis we still accumulate
+                    # usage; sub-agent usage is persisted under child sessions.
                     _meta = event.get("metadata") or {}
                     _node = _meta.get("langgraph_node") or ""
                     _ns = _meta.get("langgraph_checkpoint_ns") or ""
-                    if _node in ("sub_agent", "triage", "synthesis") or any(
-                        seg in _ns for seg in ("sub_agent:", "triage:", "synthesis:")
-                    ):
+                    _is_subagent = _node == "sub_agent" or "sub_agent:" in _ns
+                    _is_orch_aux = _node in ("triage", "synthesis") or any(
+                        seg in _ns for seg in ("triage:", "synthesis:")
+                    )
+                    if _is_orch_aux:
+                        _aux_output = (event.get("data") or {}).get("output")
+                        _aux_usage = getattr(_aux_output, "usage_metadata", None) if _aux_output else None
+                        if _aux_usage:
+                            _session_usage["total_input_tokens"] += _aux_usage.get("input_tokens", 0)
+                            _session_usage["total_output_tokens"] += _aux_usage.get("output_tokens", 0)
+                            _session_usage["request_count"] += 1
+                        continue
+                    if _is_subagent:
                         continue
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")

@@ -1,15 +1,15 @@
 "use client";
 
 import React, { useState } from "react";
-import { DISPATCH_SUBAGENT_TOOL_NAME, Message, ToolCall } from "../../app/chat/types";
-import { MarkdownRenderer } from "../ui/markdown-renderer";
+import { DISPATCH_SUBAGENT_TOOL_NAME, Message, ToolCall } from "@/app/chat/types";
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { Copy, Check } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/utils";
 
 // Import the tool call widget router (routes to custom widgets)
-import ToolCallWidget from "../tool-calls/ToolCallWidget";
-import DispatchGroupWidget from "./dispatch-group-widget";
+import ToolCallWidget from "@/components/tool-calls/ToolCallWidget";
+import DispatchGroupWidget from "@/components/chat/dispatch-group-widget";
 
 // Hoisted to keep the JSX render below from nesting more than 4 levels deep.
 function applyToolCallUpdate(
@@ -163,6 +163,7 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
                 sessionId={sessionId}
                 userId={userId}
                 onToolUpdate={(updates) => {
+                  if (!toolCall.id) return;
                   // Update this specific tool call in the message
                   onUpdateMessage?.(message.id, (msg) =>
                     applyToolCallUpdate(msg, toolCall.id, updates),

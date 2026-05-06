@@ -316,6 +316,7 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+    incident_id = incident_id or getattr(state, "incident_id", None)
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
@@ -1556,7 +1557,9 @@ async def handle_connection(websocket) -> None:
             # Set UI state in workflow before processing so it gets saved
             wf._ui_state = ui_state
             
-            task = asyncio.create_task(process_workflow_async(wf, state, websocket, user_id))
+            task = asyncio.create_task(
+                process_workflow_async(wf, state, websocket, user_id, incident_id=_incident_id)
+            )
             session_tasks[effective_session_id] = (task, wf)
             task.add_done_callback(lambda _t, _sid=effective_session_id: session_tasks.pop(_sid, None))
 
