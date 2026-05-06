@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -10,6 +10,7 @@ import {
   MinusCircle,
 } from 'lucide-react';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { stripFindingsFrontMatter } from '@/lib/findings-markdown';
 import type { ToolCallHistoryEntry } from '@/components/chat/subagent-detail-panel';
 
 const POLL_INTERVAL_MS = 3000;
@@ -202,7 +203,11 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
       ? finding.current_action || 'Investigating...'
       : null;
 
-  const body = detail?.body ?? null;
+  const rawBody = detail?.body ?? null;
+  const body = useMemo(
+    () => (rawBody ? stripFindingsFrontMatter(rawBody) : null),
+    [rawBody],
+  );
   const bodyTruncated =
     body && body.length > FINDINGS_BODY_PREVIEW_LIMIT && !showFullBody
       ? `${body.slice(0, FINDINGS_BODY_PREVIEW_LIMIT)}...`

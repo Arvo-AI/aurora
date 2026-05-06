@@ -6,6 +6,7 @@ import { AlertCircle, CheckCircle2, Loader2, X, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { stripFindingsFrontMatter } from "@/lib/findings-markdown";
 
 interface SubAgentDetailPanelProps {
   incidentId: string;
@@ -284,7 +285,7 @@ const SubAgentDetailPanel = ({
             if (finding?.body) {
               return (
                 <div className="text-sm">
-                  <MarkdownRenderer content={finding.body} />
+                  <MarkdownRenderer content={stripFindingsFrontMatter(finding.body)} />
                 </div>
               );
             }
