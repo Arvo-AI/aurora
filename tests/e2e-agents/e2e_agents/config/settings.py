@@ -1,5 +1,39 @@
+import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
+
+
+def _find_env_file() -> str | None:
+    """Locate .env file — works both locally and when installed as a package."""
+    candidates = [
+        Path.cwd() / ".env",
+        Path.cwd().parent / ".env",
+        Path.cwd() / "tests" / "e2e-agents" / ".env",
+    ]
+    # Also check relative to this file (only works in dev/editable installs)
+    try:
+        local = Path(__file__).resolve().parent.parent.parent.parent.parent / ".env"
+        candidates.append(local)
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def _default_results_dir() -> str:
+    """Results dir relative to cwd, not package install location."""
+    # In CI, cwd is the repo root
+    ci_path = Path.cwd() / "tests" / "e2e-agents" / "results"
+    if ci_path.parent.exists():
+        return str(ci_path)
+    # Fallback: relative to cwd
+    return str(Path.cwd() / "results")
 
 
 class Settings(BaseSettings):
@@ -7,6 +41,10 @@ class Settings(BaseSettings):
     base_url: str = "http://localhost:3000"
     test_email: str = "1@a.ca"
     test_password: str = "browsertest123"
+
+    # Multiple test users for parallel execution (JSON list)
+    # Format: [{"email": "user1@test.com", "password": "pass1"}, ...]
+    test_users: list[dict[str, str]] | None = None
 
     # LLM
     anthropic_api_key: str = ""
@@ -19,7 +57,7 @@ class Settings(BaseSettings):
     viewport_height: int = 900
 
     # Execution limits
-    max_total_steps: int = 150
+    max_total_steps: int = 200
     max_agents_parallel: int = 1
 
     # CI integration
@@ -28,14 +66,17 @@ class Settings(BaseSettings):
     pr_number: int | None = None
     repository: str | None = None
 
-    # Output
-    results_dir: str = str(Path(__file__).parent.parent.parent / "results")
+    # Diff context — injected into prompts so agents know what changed
+    diff_context: str | None = None
+
+    # Output (RESULTS_DIR env var overrides default)
+    results_dir: str = os.environ.get("RESULTS_DIR", _default_results_dir())
 
     # Labels (JSON list from CI, or comma-separated from CLI)
     labels: str = ""
 
     model_config = {
-        "env_file": str(Path(__file__).parent.parent.parent.parent.parent / ".env"),
+        "env_file": _find_env_file(),
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }

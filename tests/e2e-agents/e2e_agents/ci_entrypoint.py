@@ -5,6 +5,7 @@ Reads PR labels from environment, resolves agents, runs them, posts results.
 import asyncio
 import json
 import os
+import subprocess
 import sys
 
 from e2e_agents.agents.registry import resolve_agents_for_labels
@@ -34,13 +35,66 @@ def parse_labels() -> list[str]:
     return [l.strip() for l in raw.split(",") if l.strip()]
 
 
+def parse_pr_number() -> int | None:
+    """Safely parse PR number from environment."""
+    raw = os.environ.get("PR_NUMBER", "").strip()
+    if not raw:
+        return None
+    try:
+        num = int(raw)
+        return num if num > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def get_diff_context() -> str | None:
+    """Get the list of changed files in the PR for context injection.
+
+    Uses git diff against the base branch to find changed frontend files.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "origin/main...HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+
+        files = result.stdout.strip().split("\n")
+        # Filter to frontend-relevant files
+        relevant = [
+            f for f in files
+            if f.startswith("client/") and f.endswith((".tsx", ".ts", ".css"))
+        ]
+
+        if not relevant:
+            return None
+
+        # Limit to 30 files to keep prompt reasonable
+        if len(relevant) > 30:
+            relevant = relevant[:30] + [f"... and {len(relevant) - 30} more"]
+
+        return "\n".join(relevant)
+
+    except Exception:
+        return None
+
+
 async def main():
+    pr_number = parse_pr_number()
     settings = Settings(
         ci=True,
-        pr_number=int(os.environ.get("PR_NUMBER", "0")) or None,
+        pr_number=pr_number,
         repository=os.environ.get("REPOSITORY"),
         github_token=os.environ.get("GITHUB_TOKEN"),
     )
+
+    # Validate API key early
+    if not settings.anthropic_api_key:
+        print("Error: ANTHROPIC_API_KEY not set. Cannot run agents.", file=sys.stderr)
+        sys.exit(2)
 
     labels = parse_labels()
     if not labels:
@@ -57,6 +111,12 @@ async def main():
 
     print(f"Agents to run: {[a.name for a in agents_to_run]}")
 
+    # Inject diff context
+    diff = get_diff_context()
+    if diff:
+        settings.diff_context = diff
+        print(f"Diff context: {len(diff.splitlines())} changed files injected into prompts")
+
     # Health check
     print(f"Waiting for app at {settings.base_url}...")
     if not wait_for_app(settings.base_url, timeout=180):
@@ -71,8 +131,18 @@ async def main():
 
     print("App is ready. Starting agents...")
 
-    # Run agents
-    results = await run_agents(agents_to_run, settings)
+    # Run agents (wrapped to catch unexpected crashes)
+    try:
+        results = await run_agents(agents_to_run, settings)
+    except Exception as e:
+        print(f"Fatal error running agents: {e}", file=sys.stderr)
+        comment = (
+            "## 🔍 E2E Agent Test Results\n\n"
+            f"💥 **Framework crash**: `{type(e).__name__}: {e}`\n"
+            "Tests could not complete."
+        )
+        post_pr_comment(comment, settings)
+        sys.exit(2)
 
     # Output to terminal
     print(format_terminal_output(results))

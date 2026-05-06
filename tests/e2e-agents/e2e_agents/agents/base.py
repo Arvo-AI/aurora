@@ -5,10 +5,10 @@ class AgentDefinition(BaseModel):
     name: str
     area: str
     max_steps: int = 40
-    max_failures: int = 3
+    max_failures: int = 5
     prompt_template: str
     use_vision: bool = True
-    timeout_seconds: int = 600
+    timeout_seconds: int = 0  # 0 = auto-calculate from max_steps
     priority: int = 1
 
     def render_prompt(self, base_url: str, email: str, password: str) -> str:
