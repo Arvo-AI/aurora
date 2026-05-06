@@ -8,40 +8,51 @@ must skip the auth check or browser CORS would break the entire
 frontend while the backend looks healthy.
 """
 
-import os
 import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-# POSTGRES_* must be set before importing rbac_decorators -> stateless_auth ->
-# db_utils, which reads these env vars eagerly at import time.
-os.environ.setdefault("POSTGRES_DB", "aurora_test")
-os.environ.setdefault("POSTGRES_USER", "test_user")
-os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
-os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
+from flask import Flask, jsonify
+from werkzeug.exceptions import NotFound
 
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
-
-# ``routes.audit_routes`` is imported lazily by ``_audit_auth_failure``;
-# pre-stub it so we don't pull in the real DB-backed module.
-_audit_stub = MagicMock(name="routes.audit_routes")
-_audit_stub.record_audit_event = MagicMock(name="record_audit_event")
-_routes_pkg = sys.modules.setdefault("routes", MagicMock(name="routes"))
-_routes_pkg.audit_routes = _audit_stub
-sys.modules.setdefault("routes.audit_routes", _audit_stub)
-
-from flask import Flask, jsonify  # noqa: E402
-from werkzeug.exceptions import NotFound  # noqa: E402
-
-from utils.auth import rbac_decorators as rbac_module  # noqa: E402
-from utils.auth.rbac_decorators import (  # noqa: E402
+from utils.auth import rbac_decorators as rbac_module
+from utils.auth.rbac_decorators import (
     require_auth_only,
     require_permission,
 )
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped stub for ``routes.audit_routes`` -- the decorator lazily
+# imports this module in ``_audit_auth_failure``. Using a fixture with
+# monkeypatch ensures the real module (if loaded elsewhere) is restored
+# after this test module finishes.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True, scope="module")
+def _stub_audit_routes():
+    audit_stub = MagicMock(name="routes.audit_routes")
+    audit_stub.record_audit_event = MagicMock(name="record_audit_event")
+
+    orig_routes = sys.modules.get("routes")
+    orig_audit = sys.modules.get("routes.audit_routes")
+
+    routes_pkg = sys.modules.setdefault("routes", MagicMock(name="routes"))
+    routes_pkg.audit_routes = audit_stub
+    sys.modules["routes.audit_routes"] = audit_stub
+
+    yield audit_stub
+
+    if orig_routes is None:
+        sys.modules.pop("routes", None)
+    else:
+        sys.modules["routes"] = orig_routes
+
+    if orig_audit is None:
+        sys.modules.pop("routes.audit_routes", None)
+    else:
+        sys.modules["routes.audit_routes"] = orig_audit
 
 
 # ---------------------------------------------------------------------------
@@ -340,14 +351,16 @@ class TestWrappedFunctionErrors:
 class TestAuditFailureIsNonFatal:
     """A broken audit pipeline must not turn a 401 into a 500."""
 
-    def test_audit_exception_does_not_break_401(self, flask_app, monkeypatch):
+    def test_audit_exception_does_not_break_401(
+        self, flask_app, monkeypatch, _stub_audit_routes,
+    ):
         monkeypatch.setattr(
             rbac_module,
             "get_user_id_from_request",
             MagicMock(return_value=None),
         )
         boom = MagicMock(side_effect=RuntimeError("audit pipe down"))
-        monkeypatch.setattr(_audit_stub, "record_audit_event", boom)
+        monkeypatch.setattr(_stub_audit_routes, "record_audit_event", boom)
         view, _ = _build_view()
 
         with flask_app.test_request_context("/api/x"):

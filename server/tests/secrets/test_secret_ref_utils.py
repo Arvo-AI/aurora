@@ -7,25 +7,12 @@ rejection of malformed provider strings (path-traversal-shaped inputs
 must be refused before they reach the DB or Vault).
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-# POSTGRES_* must be set before import: db_utils reads them eagerly.
-os.environ.setdefault("POSTGRES_DB", "aurora_test")
-os.environ.setdefault("POSTGRES_USER", "test_user")
-os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
-os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
-
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
-
-from utils.secrets import secret_ref_utils as sru  # noqa: E402
-from utils.secrets.secret_ref_utils import (  # noqa: E402
+from utils.secrets import secret_ref_utils as sru
+from utils.secrets.secret_ref_utils import (
     SUPPORTED_SECRET_PROVIDERS,
     SecretRefManager,
     _org_clause,
