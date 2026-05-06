@@ -602,7 +602,7 @@ function ActionFormView({ onBack, onSaved, action }: {
 
           <div className="flex gap-2">
             <button
-              disabled={!name.trim() || !instructions.trim() || submitting || (triggerType === 'on_schedule' && getIntervalSeconds() < 300)}
+              disabled={!name.trim() || !instructions.trim() || submitting || intervalTooLow}
               onClick={handleSubmit}
               className="flex-1 px-3 py-2 rounded-lg bg-zinc-100 text-zinc-900 text-xs font-medium hover:bg-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             >
