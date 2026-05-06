@@ -146,7 +146,10 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
                 # Child sub-agent sessions (orchestrator fanout path).
                 # session_id format: `{parent}::{agent_id}` (e.g. `{uuid}::sa_1`,
                 # `{uuid}::sa_w2_1`). execution_steps is the canonical store of
-                # tool invocations and is indexed on session_id.
+                # tool invocations and is indexed on session_id. Bound the query
+                # so it doesn't scale with RCA history — fetch the most recent
+                # `limit` rows and reverse to chronological order for the
+                # visualization extractor.
                 child_calls: List[Dict] = []
                 child_pattern = f"{session_id}::%"
                 cursor.execute(
@@ -155,11 +158,12 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
                       FROM execution_steps
                      WHERE session_id LIKE %s
                        AND tool_name = ANY(%s)
-                     ORDER BY created_at ASC
+                     ORDER BY created_at DESC
+                     LIMIT %s
                     """,
-                    (child_pattern, list(INFRASTRUCTURE_TOOLS)),
+                    (child_pattern, list(INFRASTRUCTURE_TOOLS), limit),
                 )
-                for tname, toutput in cursor.fetchall():
+                for tname, toutput in reversed(cursor.fetchall()):
                     child_calls.append({
                         'tool': tname,
                         'output': str(toutput or '')[:MAX_TOOL_OUTPUT_CHARS],
