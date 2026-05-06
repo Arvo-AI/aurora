@@ -142,13 +142,32 @@ def _pre_emit_rows(state: State) -> None:
     org_id = getattr(state, "org_id", None)
     wave = (getattr(state, "synthesis_wave", 0) or 0) + 1
 
-    if not incident_id or not user_id or not org_id:
-        # rca_findings is FORCE-RLS; missing org_id silently 0-rows the INSERT.
+    if not incident_id or not user_id:
         logger.warning(
-            "dispatcher: pre-emit skipped — incident_id=%s user_id=%s org_id=%s",
-            incident_id, user_id, org_id,
+            "dispatcher: pre-emit skipped — incident_id=%s user_id=%s",
+            incident_id, user_id,
         )
         return
+
+    # rca_findings is FORCE-RLS and the INSERT writes org_id directly into the
+    # row, so a missing org_id silently 0-rows. State doesn't always carry it
+    # (depends on which trigger path created the chat session) — fall back to
+    # the canonical resolver, which reads users.org_id.
+    if not org_id:
+        try:
+            from utils.auth.stateless_auth import resolve_org_id
+            org_id = resolve_org_id(user_id)
+        except Exception:
+            logger.exception(
+                "dispatcher: resolve_org_id failed for user_id=%s incident=%s",
+                user_id, incident_id,
+            )
+        if not org_id:
+            logger.warning(
+                "dispatcher: pre-emit skipped — could not resolve org_id for user_id=%s incident=%s",
+                user_id, incident_id,
+            )
+            return
 
     valid_inputs: list[SubAgentInput] = []
     for raw in raw_inputs:
@@ -186,6 +205,20 @@ def _build_sends(state: State) -> list:
     org_id = getattr(state, "org_id", None)
     parent_session_id = getattr(state, "session_id", None)
     wave = (getattr(state, "synthesis_wave", 0) or 0) + 1
+
+    # Backfill org_id from users.org_id when state didn't propagate it.
+    # Sub-agents need parent_org_id for RLS context on every DB write
+    # (rca_findings, execution_steps, etc.) and matches the dispatcher
+    # pre-emit's resolution path.
+    if not org_id and user_id:
+        try:
+            from utils.auth.stateless_auth import resolve_org_id
+            org_id = resolve_org_id(user_id)
+        except Exception:
+            logger.exception(
+                "dispatcher: resolve_org_id failed for user_id=%s incident=%s",
+                user_id, incident_id,
+            )
 
     sends = []
     for raw in raw_inputs:
