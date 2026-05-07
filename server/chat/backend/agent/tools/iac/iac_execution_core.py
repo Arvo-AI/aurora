@@ -33,7 +33,9 @@ def run_terraform_command(
         if not success or isolated_env is None:
             return {"error": "Failed to setup Terraform environment"}
 
-        isolated_env.setdefault("TF_CLI_CONFIG_FILE", os.environ.get("TF_CLI_CONFIG_FILE", ""))
+        tf_config = os.environ.get("TF_CLI_CONFIG_FILE")
+        if tf_config:
+            isolated_env.setdefault("TF_CLI_CONFIG_FILE", tf_config)
 
         result = terminal_run(
             command,
