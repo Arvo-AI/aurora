@@ -290,12 +290,13 @@ services:
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
 
-      # GitHub App (alternative to OAuth)
+      # GitHub App (alternative to OAuth) — webhook secret intentionally
+      # NOT passed to the worker. The worker handles already-verified
+      # deliveries; HMAC validation lives in the route handler.
       GITHUB_APP_ID: ${GITHUB_APP_ID}
       GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
       GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
       GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
-      GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET}
       NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
 
       # Google Chat (service account needed to send responses)
