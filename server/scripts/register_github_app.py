@@ -415,10 +415,33 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  App ID:    {app_id}")
     print(f"  Client ID: {client_id}")
     print(f"  Slug:      {slug}")
-    print(f"  Webhook secret: {webhook_secret[:8]}… ({len(webhook_secret)} chars)")
+    print(f"  Webhook secret: *** ({len(webhook_secret)} chars)")
     print(f"  Private key:    {len(pem)} bytes")
 
-    print("\nWriting credentials to .env …")
+    # Try Vault first. If both writes succeed we don't have to write
+    # the webhook secret to .env at all (Vault is the canonical source
+    # for vault_keys.py; .env is only the fallback when Vault is
+    # unreachable). Keeping the secret out of .env keeps the on-disk
+    # plaintext footprint to zero in the happy path.
+    pem_in_vault = False
+    webhook_in_vault = False
+    if not args.no_vault:
+        print("\nStoring secrets in Vault …")
+        # Field name MUST be ``value`` — the project's Vault backend
+        # (utils/secrets/vault_backend.py) hard-codes that key when
+        # reading. Using any other field name silently returns "".
+        if store_secret_in_vault(VAULT_PEM_PATH, "value", pem):
+            print(f"  vault path: {VAULT_PEM_PATH}")
+            pem_in_vault = True
+        if store_secret_in_vault(VAULT_WEBHOOK_PATH, "value", webhook_secret):
+            print(f"  vault path: {VAULT_WEBHOOK_PATH}")
+            webhook_in_vault = True
+
+    # ``.env`` only holds non-secret config — IDs, URLs, slug. The
+    # webhook secret and the PEM live in Vault exclusively. If Vault
+    # writes failed we surface that and abort so we never end up with
+    # the secret on disk.
+    print("\nWriting non-secret credentials to .env …")
     update_env(
         {
             "GITHUB_APP_ID": app_id,
@@ -426,25 +449,19 @@ def main(argv: list[str] | None = None) -> int:
             "NEXT_PUBLIC_GITHUB_APP_SLUG": slug,
             "GITHUB_APP_WEBHOOK_URL": f"{public_url}/github/webhook",
             "GITHUB_APP_SETUP_URL": f"{public_url}/github/app/install/callback",
-            "GITHUB_APP_WEBHOOK_SECRET": webhook_secret,
         }
     )
     print(f"  {ENV_PATH} updated.")
 
-    pem_in_vault = False
-    if not args.no_vault:
-        print("\nStoring private key in Vault …")
-        # Field name MUST be ``value`` — the project's Vault backend
-        # (utils/secrets/vault_backend.py) hard-codes that key when
-        # reading. Using any other field name silently returns "".
-        if store_secret_in_vault(VAULT_PEM_PATH, "value", pem):
-            print(f"  vault path: {VAULT_PEM_PATH}")
-            pem_in_vault = True
-        # Mirror the webhook secret to Vault so vault_keys.py reads the
-        # canonical path first and falls back to the env var only if
-        # Vault is unreachable.
-        if store_secret_in_vault(VAULT_WEBHOOK_PATH, "value", webhook_secret):
-            print(f"  vault path: {VAULT_WEBHOOK_PATH}")
+    if not webhook_in_vault and not args.no_vault:
+        print(
+            "\nERROR: Vault webhook-secret write failed. The webhook secret "
+            "is intentionally NOT written to .env to keep it off disk. "
+            "Fix Vault auth (check VAULT_TOKEN, container running, policy "
+            f"allows write to {VAULT_WEBHOOK_PATH}) and rerun this script.",
+            file=sys.stderr,
+        )
+        return 1
 
     if not pem_in_vault:
         pem_path = REPO_ROOT / f"github-app-{slug}.pem"
@@ -452,7 +469,9 @@ def main(argv: list[str] | None = None) -> int:
         os.chmod(pem_path, 0o600)
         print(f"  PEM saved to {pem_path}")
         print("  Move it into Vault before shipping:")
-        print(f"    docker exec aurora-vault vault kv put {VAULT_PEM_PATH} pem=@{pem_path}")
+        # Field name MUST stay ``value`` to match utils/secrets/vault_backend.py;
+        # any other name silently reads back as "".
+        print(f"    docker exec aurora-vault vault kv put {VAULT_PEM_PATH} value=@{pem_path}")
 
     print("\nNext:")
     print("  1. make rebuild-server")
