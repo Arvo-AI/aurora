@@ -270,7 +270,7 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_github(user_id: str, org_id: str) -> Dict[str, Any]:
+def _check_github(user_id: str) -> Dict[str, Any]:
     """Mirrors /github/status — App-only.
 
     "Connected" means the user has at least one non-suspended GitHub App
@@ -782,7 +782,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
         if provider == "grafana":
             return provider, _check_grafana(user_id, org_id)
         if provider == "github":
-            return provider, _check_github(user_id, org_id)
+            return provider, _check_github(user_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
