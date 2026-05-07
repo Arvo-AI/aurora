@@ -1360,35 +1360,6 @@ class TerraformManager:
         and picked up via TF_CLI_CONFIG_FILE environment variable."""
         pass
 
-
-    def _verify_terraform_registry_access(self) -> bool:
-        """Verify that we can access the Terraform registry before attempting init."""
-        try:
-            import urllib.request
-            import socket
-            
-            # Quick connectivity test to registry.terraform.io
-            socket.setdefaulttimeout(30)  # 30 second timeout
-            
-            logger.info("Testing connectivity to Terraform registry...")
-            
-            # Test with a simple HEAD request to the main registry endpoint
-            req = urllib.request.Request('https://registry.terraform.io/v1/providers/hashicorp/aws')
-            req.add_header('User-Agent', 'Aurora-Terraform/1.0')
-            req.get_method = lambda: 'HEAD'  # Use HEAD to minimize data transfer
-            
-            with urllib.request.urlopen(req, timeout=60) as response:
-                if response.status == 200:
-                    logger.info(" Terraform registry is accessible")
-                    return True
-                else:
-                    logger.warning(f" Terraform registry returned status {response.status}")
-                    return False
-                    
-        except Exception as e:
-            logger.warning(f" Cannot reach Terraform registry: {e}")
-            return False
-
     def _fallback_terraform_init(self, env: dict) -> bool:
         """Fallback init method for when registry access fails."""
         try:

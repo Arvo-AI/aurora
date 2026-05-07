@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import type { JSX } from "react"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
