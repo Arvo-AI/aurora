@@ -25,6 +25,16 @@ async def _safe_stop_browser(browser_session, timeout: float = 10.0):
         pass
 
 
+# Each quantifier is bounded or separated by a required literal/digit, so the
+# regex runs in linear time (avoids the polynomial backtracking SonarQube S5852
+# flagged on the previous version).
+_BUG_HEADER_RE = re.compile(
+    r"(?:^|\n)[ \t]{0,8}(?:#{1,3}[ \t]+)?(?:\*\*)?"
+    r"(?:(?:bug|issue)[ \t]+)?#?\d{1,8}[.): \t]",
+    re.IGNORECASE,
+)
+
+
 def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
     """Parse the LLM's raw output into structured Issue objects."""
     issues: list[Issue] = []
@@ -33,10 +43,7 @@ def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
 
     # Pattern 1: Structured bug reports
     # Matches: "BUG #1:", "### 1.", "### Bug:", "**BUG #2:", "Issue #3:", "## 1."
-    bug_blocks = re.split(
-        r"(?:^|\n)(?:#{1,3}\s*)?(?:\*\*)?(?:BUG|Bug|ISSUE|Issue)?\s*#?\d+[\.\):\s]",
-        raw_findings,
-    )
+    bug_blocks = _BUG_HEADER_RE.split(raw_findings)
 
     for block in bug_blocks[1:]:
         issue = _parse_bug_block(block)
