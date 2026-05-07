@@ -5,7 +5,7 @@ import sys
 
 import click
 
-from e2e_agents.agents.registry import get_agent, get_all_agents, resolve_agents_for_labels
+from e2e_agents.agents.registry import get_agent, get_all_agents
 from e2e_agents.config.settings import Settings
 from e2e_agents.infra.wait_for_ready import wait_for_app
 from e2e_agents.reporting.formatter import format_terminal_output

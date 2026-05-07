@@ -24,6 +24,7 @@ def wait_for_app(url: str, timeout: int = 180) -> bool:
             if e.code < 500:
                 return True
         except Exception:
+            # Transient connection errors during startup are expected; retry until timeout.
             pass
 
         time.sleep(interval)
