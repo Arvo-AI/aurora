@@ -511,9 +511,15 @@ export default function GitHubProviderIntegration() {
             </div>
           )}
           {githubStatus.isAuthenticated && (
-            <div className="cursor-pointer p-1 hover:bg-muted rounded" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
+            <button
+              type="button"
+              className="p-1 hover:bg-muted rounded"
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              aria-label={expanded ? 'Collapse GitHub section' : 'Expand GitHub section'}
+              aria-expanded={expanded}
+            >
               {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
-            </div>
+            </button>
           )}
         </div>
       </div>

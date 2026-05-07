@@ -24,7 +24,7 @@ export function computeInstallationState(
   repos: InstallationRepoLike[],
   options: { reposLoaded?: boolean } = {}
 ): InstallationState {
-  const { reposLoaded = true } = options;
+  const { reposLoaded = false } = options;
   if (installation.suspended_at) return 'suspended';
   if (installation.permissions_pending_update) return 'pending_permissions';
   if (
