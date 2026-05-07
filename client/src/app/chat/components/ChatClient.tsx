@@ -476,8 +476,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
   if (hasMessages) {
     // Standard chat interface with messages
+    const showSubAgentPanel = !!(selectedSubAgent && linkedIncidentId);
     return (
-      <div className="flex flex-col h-full w-full overflow-hidden">
+      <div className="flex h-full w-full overflow-hidden">
+        <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
 
         {/* Messages — full-width so scrollbar sits at page edge */}
         <div className="flex-1 min-h-0">
@@ -525,17 +527,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         {/* Enhanced Input */}
         <div className="p-4 relative z-10 bg-background flex-shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
-            {selectedSubAgent && linkedIncidentId ? (
-              <SubAgentDetailPanel
-                incidentId={linkedIncidentId}
-                agentId={selectedSubAgent.agentId}
-                roleName={selectedSubAgent.roleName}
-                purpose={selectedSubAgent.purpose}
-                onClose={() => setSelectedSubAgent(null)}
-              />
-            ) : (
-              <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
-            )}
+            <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
             {isReadOnly ? (
               <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
             ) : (
@@ -562,6 +554,17 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             )}
           </div>
         </div>
+        </div>
+
+        {showSubAgentPanel && (
+          <SubAgentDetailPanel
+            incidentId={linkedIncidentId!}
+            agentId={selectedSubAgent!.agentId}
+            roleName={selectedSubAgent!.roleName}
+            purpose={selectedSubAgent!.purpose}
+            onClose={() => setSelectedSubAgent(null)}
+          />
+        )}
       </div>
     );
   }

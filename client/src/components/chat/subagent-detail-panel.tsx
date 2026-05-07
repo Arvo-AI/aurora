@@ -20,6 +20,24 @@ interface SubAgentDetailPanelProps {
   className?: string;
 }
 
+const PANEL_WIDTH_STORAGE_KEY = "subagent-panel-width";
+const PANEL_WIDTH_DEFAULT = 480;
+const PANEL_WIDTH_MIN = 360;
+const PANEL_WIDTH_MAX_RATIO = 0.7;
+
+function readStoredPanelWidth(): number {
+  if (typeof window === "undefined") return PANEL_WIDTH_DEFAULT;
+  const raw = window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY);
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= PANEL_WIDTH_MIN ? parsed : PANEL_WIDTH_DEFAULT;
+}
+
+function clampPanelWidth(value: number): number {
+  if (typeof window === "undefined") return Math.max(PANEL_WIDTH_MIN, value);
+  const max = Math.max(PANEL_WIDTH_MIN, Math.floor(window.innerWidth * PANEL_WIDTH_MAX_RATIO));
+  return Math.max(PANEL_WIDTH_MIN, Math.min(value, max));
+}
+
 export interface ToolCallHistoryEntry {
   tool_name: string;
   args?: unknown;
@@ -61,6 +79,52 @@ const SubAgentDetailPanel = ({
   const [error, setError] = React.useState<string | null>(null);
   const [reloadKey, setReloadKey] = React.useState(0);
   const [expandedToolIds, setExpandedToolIds] = React.useState<Set<string>>(() => new Set());
+
+  const [panelWidth, setPanelWidth] = React.useState<number>(PANEL_WIDTH_DEFAULT);
+  const panelWidthRef = React.useRef<number>(PANEL_WIDTH_DEFAULT);
+  const resizeStateRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
+
+  React.useEffect(() => {
+    panelWidthRef.current = panelWidth;
+  }, [panelWidth]);
+
+  React.useEffect(() => {
+    setPanelWidth(clampPanelWidth(readStoredPanelWidth()));
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onWindowResize = () => setPanelWidth((w) => clampPanelWidth(w));
+    window.addEventListener("resize", onWindowResize);
+    return () => window.removeEventListener("resize", onWindowResize);
+  }, []);
+
+  const handleResizeStart = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizeStateRef.current = { startX: e.clientX, startWidth: panelWidthRef.current };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: PointerEvent) => {
+      const state = resizeStateRef.current;
+      if (!state) return;
+      setPanelWidth(clampPanelWidth(state.startWidth + (state.startX - ev.clientX)));
+    };
+    const cleanup = () => {
+      resizeStateRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      try {
+        window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(panelWidthRef.current));
+      } catch { /* ignore quota errors */ }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+  }, []);
 
   const setToolExpanded = React.useCallback((id: string, isExpanded: boolean) => {
     setExpandedToolIds((prev) => {
@@ -130,13 +194,23 @@ const SubAgentDetailPanel = ({
   return (
     <aside
       className={cn(
-        "flex max-h-[60vh] w-full flex-col overflow-hidden rounded-md border border-border bg-background",
+        "relative flex h-full flex-shrink-0 flex-col overflow-hidden border-l border-border bg-background",
         className,
       )}
+      style={{ width: panelWidth }}
       aria-label="Sub-agent details"
     >
+      {/* Resize handle on left edge */}
+      <div
+        role="separator"
+        aria-label="Resize sub-agent panel"
+        aria-orientation="vertical"
+        onPointerDown={handleResizeStart}
+        className="absolute left-0 top-0 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-orange-500/40 transition-colors z-30"
+      />
+
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2 flex-shrink-0">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-foreground">
             {displayRole}
