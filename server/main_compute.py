@@ -185,7 +185,9 @@ _HEALTH_PATH = "/health"
 _OPEN_PREFIXES = (
     _HEALTH_PATH,
     "/callback",
-    "/github/callback",
+    # GitHub App install callback — verified via signed state token, not session.
+    "/github/app/install/callback",
+    "/github/webhook",
     "/bitbucket/callback",
     "/slack/callback",
     "/slack/events",
@@ -325,13 +327,11 @@ app.register_blueprint(org_bp)
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
 
-# --- GitHub Integration Routes ---
-from routes.github.github import github_bp
+# --- GitHub Integration Routes (App-only; OAuth removed in feat/github-app-only) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
 from routes.github.github_webhook import github_webhook_bp
 from routes.github.github_app import github_app_bp
-app.register_blueprint(github_bp, url_prefix="/github")
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")

@@ -443,3 +443,72 @@ def github_app_unlink_installation(user_id, installation_id):
         user_id, installation_id,
     )
     return jsonify({"success": True, "installation_id": installation_id})
+
+
+@github_app_bp.route("/status", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def github_status(user_id):
+    """Connection status for the GitHub connector.
+
+    Replaces the legacy OAuth-flavoured ``/github/status`` (deleted with
+    the OAuth flow). "Connected" now means the user has at least one
+    non-suspended GitHub App installation linked to them. Surfaces the
+    primary installation's ``account_login`` as ``username`` so the
+    frontend keeps showing a recognisable identifier without a separate
+    GitHub API call.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT gi.account_login
+                         FROM user_github_installations ugi
+                         JOIN github_installations gi
+                              ON gi.installation_id = ugi.installation_id
+                        WHERE ugi.user_id = %s
+                          AND gi.suspended_at IS NULL
+                        ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
+                        LIMIT 1""",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+    except Exception as exc:
+        logger.error(
+            "[GITHUB-STATUS] DB read failed user=%s: %s",
+            user_id, exc, exc_info=True,
+        )
+        return jsonify({"connected": False, "error": "Failed to check status"}), 500
+
+    if not row:
+        return jsonify({"connected": False})
+    return jsonify({"connected": True, "username": row[0]})
+
+
+@github_app_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def github_disconnect(user_id):
+    """Sever ALL GitHub App links for this user.
+
+    Removes every row in ``user_github_installations`` for ``user_id``.
+    Does NOT uninstall the App on GitHub's side — the user must do that
+    from their org settings if they want to fully revoke access.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """DELETE FROM user_github_installations
+                        WHERE user_id = %s""",
+                    (user_id,),
+                )
+                deleted = cur.rowcount
+                conn.commit()
+    except Exception as exc:
+        logger.error(
+            "[GITHUB-DISCONNECT] DB delete failed user=%s: %s",
+            user_id, exc, exc_info=True,
+        )
+        return jsonify({"error": "Failed to disconnect"}), 500
+
+    logger.info("[GITHUB-DISCONNECT] removed %d installation link(s) for user=%s", deleted, user_id)
+    return jsonify({"success": True, "removed": deleted})
