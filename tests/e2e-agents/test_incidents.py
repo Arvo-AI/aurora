@@ -134,7 +134,7 @@ IMPORTANT:
         try:
             await asyncio.wait_for(browser_session.stop(), timeout=10)
         except (asyncio.TimeoutError, Exception):
-            pass
+            pass  # Best-effort cleanup; don't mask the real error
 
 
 if __name__ == "__main__":

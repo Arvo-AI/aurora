@@ -276,7 +276,7 @@ async def _run_single_attempt(
             agent_name=definition.name,
             area=definition.area,
             status="timed_out",
-            steps_used=max(steps_completed, definition.max_steps),
+            steps_used=steps_completed if steps_completed > 0 else definition.max_steps,
             max_steps=definition.max_steps,
             duration_seconds=elapsed,
             raw_findings="Agent timed out before completing all tests.",

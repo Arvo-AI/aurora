@@ -29,7 +29,7 @@ def parse_labels() -> list[str]:
         if isinstance(labels, list):
             return [str(label) for label in labels]
     except (json.JSONDecodeError, TypeError):
-        pass
+        pass  # Not valid JSON; fall through to comma-separated parsing below
 
     # Fall back to comma-separated
     return [label.strip() for label in raw.split(",") if label.strip()]
