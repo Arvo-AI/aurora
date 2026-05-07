@@ -1,30 +1,40 @@
 /**
  * Code editor panel for IaC content (Terraform HCL).
- * Uses Monaco Editor with syntax highlighting.
- * Reusable for future Pulumi support (TypeScript/Python/YAML).
+ * Uses CodeMirror 6 with syntax highlighting.
  */
 
 import * as React from "react"
+import { useRef, useEffect, useCallback } from "react"
 import type { JSX } from "react"
-import dynamic from 'next/dynamic'
-import { configureMonaco } from "@/lib/monacoTerraform"
+import { EditorState } from "@codemirror/state"
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } from "@codemirror/view"
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands"
+import { syntaxHighlighting, defaultHighlightStyle, StreamLanguage } from "@codemirror/language"
+import { oneDark } from "@codemirror/theme-one-dark"
 
-// Lazy load Monaco Editor - only loads when IAC tools need syntax highlighting
-const Editor = dynamic(() => import('@monaco-editor/react'), {
-  ssr: false,
-  loading: () => <div className="bg-muted animate-pulse rounded-md h-full" />,
+const hclLanguage = StreamLanguage.define({
+  token(stream) {
+    if (stream.match(/\/\/.*/)) return "comment"
+    if (stream.match(/\/\*/)) {
+      while (!stream.match(/\*\//)) {
+        if (!stream.next()) break
+      }
+      return "comment"
+    }
+    if (stream.match(/#.*/)) return "comment"
+    if (stream.match(/"(?:[^"\\]|\\.)*"/)) return "string"
+    if (stream.match(/<<-?\w+/)) return "string"
+    if (stream.match(/\b(resource|provider|variable|output|data|module|terraform|locals|backend|required_providers|required_version)\b/)) return "keyword"
+    if (stream.match(/\b(string|number|bool|list|map|set|object|tuple|any)\b/)) return "typeName"
+    if (stream.match(/\b(true|false|null)\b/)) return "atom"
+    if (stream.match(/\b\d+(\.\d+)?\b/)) return "number"
+    if (stream.match(/[{}\[\]()=]/)) return "punctuation"
+    if (stream.match(/[a-zA-Z_][\w-]*/)) return "variableName"
+    stream.next()
+    return null
+  },
+  startState() { return {} },
 })
-
-type MonacoEditorLike = {
-  getDomNode: () => HTMLElement | null
-}
-
-type MonacoLike = {
-  editor: {
-    defineTheme: (themeName: string, themeData: unknown) => void
-    setTheme: (themeName: string) => void
-  }
-}
 
 interface IaCEditorPanelProps {
   value: string
@@ -35,105 +45,75 @@ interface IaCEditorPanelProps {
   language?: string
 }
 
-const applyMonacoTheming = (
-  editor: MonacoEditorLike,
-  monaco: MonacoLike,
-  themeMode: string
-) => {
-  // Register terraform language and syntax highlighting
-  configureMonaco(monaco)
-  
-  if (themeMode === 'dark') {
-    monaco.editor.defineTheme('custom-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [
-        { token: '', foreground: 'ffffff', background: '000000' },
-        { token: 'string', foreground: 'ce9178' },
-        { token: 'keyword', foreground: '569cd6' },
-        { token: 'number', foreground: 'b5cea8' },
-        { token: 'comment', foreground: '6a9955' }
-      ],
-      colors: {
-        'editor.background': '#000000',
-        'editor.foreground': '#ffffff',
-        'editor.lineHighlightBackground': '#0a0a0a',
-        'editorLineNumber.foreground': '#666666',
-        'editorLineNumber.activeForeground': '#ffffff',
-        'editorIndentGuide.background': '#404040',
-        'editorIndentGuide.activeBackground': '#707070'
-      }
-    })
-    monaco.editor.setTheme('custom-dark')
-  }
-
-  const domNode = editor.getDomNode()
-  if (!domNode) {
-    return
-  }
-
-  domNode.style.padding = '0px'
-  domNode.style.margin = '0px'
-
-  const selectors = [
-    '.monaco-editor',
-    '.overflow-guard',
-    '.monaco-scrollable-element',
-    '.view-lines',
-    '.view-line',
-    '.content-widgets',
-    '.overlays',
-    '.margin',
-    '.glyph-margin',
-    '.lines-content'
-  ]
-
-  selectors.forEach((selector) => {
-    const elements = domNode.querySelectorAll(selector)
-    elements.forEach((el: Element) => {
-      const element = el as HTMLElement
-      element.style.padding = '0px'
-      element.style.margin = '0px'
-    })
-  })
-}
-
 export const IaCEditorPanel = ({
   value,
   onChange,
   readOnly = false,
   height,
   themeMode,
-  language = 'terraform'
-}: IaCEditorPanelProps): JSX.Element => (
-  <div
-    className="overflow-hidden"
-    style={{ height: `${height}px`, backgroundColor: themeMode === 'dark' ? '#000000' : '#ffffff', padding: '0px' }}
-  >
-    <Editor
-      height={`${height}px`}
-      language={language}
-      theme={themeMode === 'dark' ? 'custom-dark' : 'vs-light'}
-      value={value}
-      onChange={(newValue: string | undefined) => onChange(newValue ?? '')}
-      options={{
-        readOnly,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        fontSize: 12,
-        lineNumbers: 'on',
-        lineNumbersMinChars: 3,
-        wordWrap: 'on',
-        automaticLayout: true,
-        padding: { top: 0, bottom: 0 },
-        scrollbar: {
-          vertical: 'auto',
-          horizontal: 'auto'
+}: IaCEditorPanelProps): JSX.Element => {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  const createExtensions = useCallback(() => {
+    const extensions = [
+      lineNumbers(),
+      highlightActiveLine(),
+      highlightSpecialChars(),
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      hclLanguage,
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      EditorView.lineWrapping,
+      EditorState.readOnly.of(readOnly),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          onChangeRef.current(update.state.doc.toString())
         }
-      }}
-      onMount={(editor: MonacoEditorLike, monacoInstance: MonacoLike) => {
-        applyMonacoTheming(editor, monacoInstance, themeMode)
-      }}
+      }),
+    ]
+    if (themeMode === "dark") {
+      extensions.push(oneDark)
+    }
+    return extensions
+  }, [readOnly, themeMode])
+
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const state = EditorState.create({
+      doc: value,
+      extensions: createExtensions(),
+    })
+
+    const view = new EditorView({
+      state,
+      parent: containerRef.current,
+    })
+
+    viewRef.current = view
+    return () => { view.destroy() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [themeMode, readOnly])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const current = view.state.doc.toString()
+    if (current !== value) {
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: value },
+      })
+    }
+  }, [value])
+
+  return (
+    <div
+      ref={containerRef}
+      className="overflow-hidden border border-border rounded-md"
+      style={{ height: `${height}px` }}
     />
-  </div>
-)
+  )
+}

@@ -7,11 +7,9 @@ import { Card } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
-import { configureMonaco } from "@/lib/monacoTerraform"
 import { cn, copyToClipboard } from "@/lib/utils"
 import { AlertTriangle, ChevronsLeft, Copy, Download, File, Folder } from "lucide-react"
-
-const MonacoEditor = React.lazy(() => import("@monaco-editor/react"))
+import { IaCEditorPanel } from "@/components/tool-calls/iac-editor-panel"
 
 export type IaCFileNode = {
   name: string
@@ -339,27 +337,20 @@ export function IaCWorkspace({ sessionId, onClose, onSave, onPlan }: IaCWorkspac
           </div>
         </div>
 
-        <div className="flex-1 overflow-hidden relative" style={{ backgroundColor: '#000000' }}>
-          <div className="h-full" style={{ backgroundColor: '#000000' }}>
+        <div className="flex-1 overflow-hidden relative">
+          <div className="h-full">
             {selectedFile ? (
-              <React.Suspense fallback={<Skeleton className="h-full w-full" />}>
-                <MonacoEditor
-                  value={fileContent}
-                  language="terraform"
-                  theme="terraform-dark"
-                  options={{ 
-                    minimap: { enabled: false }, 
-                    fontSize: 13, 
-                    readOnly: false, 
-                    automaticLayout: true,
-                  }}
-                  beforeMount={configureMonaco}
-                  onChange={(value) => {
-                    setFileContent(value ?? "")
-                    setHasUnsavedChanges(true)
-                  }}
-                />
-              </React.Suspense>
+              <IaCEditorPanel
+                value={fileContent}
+                onChange={(value) => {
+                  setFileContent(value)
+                  setHasUnsavedChanges(true)
+                }}
+                readOnly={false}
+                height={500}
+                themeMode="dark"
+                language="terraform"
+              />
             ) : (
               <div className="p-6 text-sm text-muted-foreground">Choose a file from the tree to start editing.</div>
             )}

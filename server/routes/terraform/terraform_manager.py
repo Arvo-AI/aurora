@@ -1283,13 +1283,9 @@ class TerraformManager:
             "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
             "http_proxy", "https_proxy", "no_proxy",
             "TMPDIR", "TMP", "TEMP",
+            "TF_CLI_CONFIG_FILE",
         }
         env = {k: v for k, v in os.environ.items() if k in _TERRAFORM_ENV_ALLOWLIST}
-
-        # Inject per-instance .terraformrc path (avoids mutating os.environ)
-        terraformrc = getattr(self, "_terraformrc_path", None)
-        if terraformrc:
-            env["TF_CLI_CONFIG_FILE"] = terraformrc
         
         # Add cloud provider credentials if authenticator is available
         if self.authenticator:
@@ -1360,59 +1356,9 @@ class TerraformManager:
         return env
 
     def _create_terraform_network_config(self) -> None:
-        """Create Terraform configuration file for maximum performance and reliability.
-
-        Stores the path in ``self._terraformrc_path`` so that
-        :meth:`_get_terraform_env` can inject it into subprocess
-        environments without mutating ``os.environ``.
-        """
-        try:
-            # Test DNS resolution first
-            self._test_network_connectivity()
-            
-            # Create .terraformrc file in working directory for network optimization
-            terraformrc_path = os.path.join(self.working_dir, ".terraformrc")
-            
-            terraformrc_content = """# Terraform Network Configuration for Maximum Performance and Reliability
-
-# Use direct downloads with performance optimization
-provider_installation {
-  direct {
-    exclude = []
-  }
-}
-
-# Plugin cache to avoid re-downloading (critical for performance)
-plugin_cache_dir = "/tmp/terraform-plugin-cache"
-
-# Performance optimizations
-disable_checkpoint = true
-disable_checkpoint_signature = true
-
-# Network performance settings
-provider_installation_direct_network_timeout = 300
-provider_installation_direct_parallelism = 10
-
-# Allow plugin cache optimizations that may break dependency lock files
-# This significantly speeds up subsequent runs
-plugin_cache_may_break_dependency_lock_file = true
-"""
-            
-            with open(terraformrc_path, 'w') as f:
-                f.write(terraformrc_content)
-            
-            # Create plugin cache directory with proper permissions
-            cache_dir = "/tmp/terraform-plugin-cache"
-            os.makedirs(cache_dir, exist_ok=True)
-            os.chmod(cache_dir, 0o750)  # Ensure proper permissions
-            
-            # Store path so _get_terraform_env can inject it per-subprocess
-            self._terraformrc_path = terraformrc_path
-            
-            logger.info(f"Created Terraform network configuration at {terraformrc_path} (direct downloads only)")
-            
-        except Exception as e:
-            logger.warning(f"Failed to create Terraform network config (proceeding anyway): {e}")
+        """No-op: Terraform config is baked into the image at /etc/terraform.rc
+        and picked up via TF_CLI_CONFIG_FILE environment variable."""
+        pass
 
     def _test_network_connectivity(self) -> None:
         """Test basic network connectivity to HashiCorp registry."""

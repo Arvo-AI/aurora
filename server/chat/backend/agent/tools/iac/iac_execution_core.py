@@ -6,6 +6,7 @@ Designed to be tool-agnostic for future Pulumi support.
 
 import json
 import logging
+import os
 import re
 import subprocess
 from utils.terminal.terminal_run import terminal_run
@@ -29,10 +30,10 @@ def run_terraform_command(
     """Execute a Terraform command in the specified directory."""
     try:
         success, resource_id, isolated_env = setup_terraform_environment_isolated(user_id)
-        # Only require success and isolated_env - resource_id can be None for OVH 
-        # where project is discovered dynamically via CLI
         if not success or isolated_env is None:
             return {"error": "Failed to setup Terraform environment"}
+
+        isolated_env.setdefault("TF_CLI_CONFIG_FILE", os.environ.get("TF_CLI_CONFIG_FILE", ""))
 
         result = terminal_run(
             command,
@@ -80,7 +81,7 @@ def initialize_terraform(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Initialize Terraform in the specified directory."""
-    return run_terraform_command("terraform init", directory, user_id, session_id)
+    return run_terraform_command("terraform init -input=false", directory, user_id, session_id, timeout=600)
 
 
 def collect_terraform_context(
