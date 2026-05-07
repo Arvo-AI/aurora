@@ -45,6 +45,7 @@ jobs:
         run: |
           tests=(
             tests/architectural/test_connector_rbac.py
+            tests/auth/test_command_policy.py
             tests/auth/test_enforcer.py
             tests/auth/test_oauth2_state_cache.py
             tests/auth/test_rbac_decorators.py
