@@ -38,18 +38,34 @@ _BUG_HEADER_RE = re.compile(
 )
 
 
+_BLOCK_SKIP_WORDS = ("recommend", "status", "what works", "testing status", "fix needed", "urgent fix")
+_LINE_SKIP_WORDS = ("✅", "passed", "works", "success", "verdict", "no bug", "no issue", "recommend")
+_BUG_KEYWORDS = ("bug", "broken", "fail", "crash", "error", "missing", "stuck", "empty", "undefined")
+
+
+def _is_bug_line(lower: str, line: str) -> Issue | None:
+    """Check if a line looks like a standalone bug report and return an Issue if so."""
+    if any(skip in lower for skip in _LINE_SKIP_WORDS):
+        return None
+    severity = _detect_severity(line)
+    url = _extract_url(line)
+    if severity and url and any(w in lower for w in _BUG_KEYWORDS):
+        return Issue(page_url=url, description=_clean_description(line), severity=severity)
+    return None
+
+
 def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
     """Parse the LLM's raw output into structured Issue objects."""
-    issues: list[Issue] = []
     if not raw_findings:
-        return issues
+        return []
 
     # Pattern 1: Structured bug reports (compiled regex handles BUG #1:, ### 1., **1., etc.)
     bug_blocks = _BUG_HEADER_RE.split(raw_findings)
+    issues: list[Issue] = []
 
     for block in bug_blocks[1:]:
         first_line = block.strip().split("\n")[0].lower()
-        if any(skip in first_line for skip in ["recommend", "status", "what works", "testing status", "fix needed", "urgent fix"]):
+        if any(skip in first_line for skip in _BLOCK_SKIP_WORDS):
             continue
         issue = _parse_bug_block(block)
         if issue:
@@ -58,24 +74,31 @@ def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
     if issues:
         return issues
 
-    # Pattern 3: Lines with severity keywords and URLs (fallback)
+    # Fallback: scan individual lines for bug-like statements with URLs
     for line in raw_findings.split("\n"):
         line = line.strip()
         if not line or len(line) < 20:
             continue
-        lower = line.lower()
-        if any(skip in lower for skip in ["✅", "passed", "works", "success", "verdict", "no bug", "no issue", "recommend"]):
-            continue
-        severity = _detect_severity(line)
-        url = _extract_url(line)
-        if severity and url and any(w in lower for w in ["bug", "broken", "fail", "crash", "error", "missing", "stuck", "empty", "undefined"]):
-            issues.append(Issue(
-                page_url=url,
-                description=_clean_description(line),
-                severity=severity,
-            ))
+        issue = _is_bug_line(line.lower(), line)
+        if issue:
+            issues.append(issue)
 
     return issues
+
+
+_URL_LABELS = ("url:", "location:", "page:", "**url**")
+_DESC_LABELS = ("description:", "issue:", "**issue**:")
+
+
+def _classify_line(line_lower: str) -> str:
+    """Classify a bug block line as 'url', 'severity', 'description', or ''."""
+    if any(k in line_lower for k in _URL_LABELS):
+        return "url"
+    if "severity:" in line_lower or "(high)" in line_lower or "(critical)" in line_lower or "(medium)" in line_lower:
+        return "severity"
+    if any(k in line_lower for k in _DESC_LABELS):
+        return "description"
+    return ""
 
 
 def _parse_bug_block(block: str) -> Issue | None:
@@ -87,31 +110,30 @@ def _parse_bug_block(block: str) -> Issue | None:
     description = ""
     url = "unknown"
     severity = "medium"
+    has_label = False
 
-    for line in lines[:15]:  # Scan more lines to find URL/severity
-        line_lower = line.lower().strip()
-        if any(k in line_lower for k in ["url:", "location:", "page:", "**url**"]):
+    for line in lines[:15]:
+        kind = _classify_line(line.lower().strip())
+        if kind == "url":
             url = _extract_url(line) or url
-        elif "severity:" in line_lower or "(high)" in line_lower or "(critical)" in line_lower or "(medium)" in line_lower:
+            has_label = True
+        elif kind == "severity":
             severity = _detect_severity(line) or severity
-        elif "description:" in line_lower or "issue:" in line_lower:
+            has_label = True
+        elif kind == "description":
             description = line.split(":", 1)[-1].strip()
-        elif "**issue**:" in line_lower:
-            description = line.split(":", 1)[-1].strip()
+            has_label = True
 
-    # Try to extract URL from anywhere in the block if not found in labeled lines
+    # Blocks without any labeled content (url/severity/description) are likely
+    # not bug reports (e.g. recommendation items).
+    if not has_label and len(lines) < 3:
+        return None
+
     if url == "unknown":
-        for line in lines[:15]:
-            found = _extract_url(line)
-            if found:
-                url = found
-                break
+        url = next((_extract_url(l) for l in lines[:15] if _extract_url(l)), "unknown")
 
-    # Infer severity from title if "(HIGH)" or "(MEDIUM)" in first line
-    if severity == "medium" and lines[0]:
-        detected = _detect_severity(lines[0])
-        if detected:
-            severity = detected
+    if severity == "medium":
+        severity = _detect_severity(lines[0]) or severity
 
     if not description:
         description = _clean_description(lines[0])
@@ -139,26 +161,33 @@ def _detect_severity(text: str) -> str | None:
     return None
 
 
+_RE_LOCALHOST_URL = re.compile(r"(https?://localhost[^\s,)\"']{1,200})")
+_RE_PATH = re.compile(r"(/[a-z][a-z0-9/_-]{1,200})")
+_URL_FALSE_POSITIVES = ("/null", "/undefined", "/object")
+
+
 def _extract_url(text: str) -> str | None:
-    # Match full URLs first, then path-only patterns
-    match = re.search(r"(https?://localhost[^\s,)\"']+)", text)
+    match = _RE_LOCALHOST_URL.search(text)
     if match:
         return match.group(1)
-    # Path pattern: must start with / and a letter, no brackets
-    match = re.search(r"(/[a-z][a-z0-9/_-]+)", text)
+    match = _RE_PATH.search(text)
     if match:
         url = match.group(1)
-        # Skip false positives
-        if any(fp in url for fp in ["/null", "/undefined", "/object"]):
+        if any(fp in url for fp in _URL_FALSE_POSITIVES):
             return None
         return f"http://localhost:3000{url}"
     return None
 
 
+_RE_LEADING_BULLET = re.compile(r"^\s{0,4}[-*•]\s{0,2}")
+_RE_BOLD = re.compile(r"\*\*([^*]{1,200})\*\*")
+_RE_ITALIC = re.compile(r"\*([^*]{1,200})\*")
+
+
 def _clean_description(text: str) -> str:
-    text = re.sub(r"^\s*[-*•]\s*", "", text)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = _RE_LEADING_BULLET.sub("", text)
+    text = _RE_BOLD.sub(r"\1", text)
+    text = _RE_ITALIC.sub(r"\1", text)
     return text.strip()[:300]
 
 

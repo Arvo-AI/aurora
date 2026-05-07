@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # Target app
     base_url: str = "http://localhost:3000"
     test_email: str = "1@a.ca"
-    test_password: str = "browsertest123"
+    test_password: str = ""  # Set via TEST_PASSWORD env var or .env file
 
     # Multiple test users for parallel execution (JSON list)
     # Format: [{"email": "user1@test.com", "password": "pass1"}, ...]

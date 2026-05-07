@@ -81,7 +81,7 @@ IMPORTANT:
 
     base_url = os.environ.get("E2E_BASE_URL", "http://localhost:3000")
     email = os.environ.get("E2E_EMAIL", os.environ.get("TEST_EMAIL", "1@a.ca"))
-    password = os.environ.get("E2E_PASSWORD", os.environ.get("TEST_PASSWORD", "browsertest123"))
+    password = os.environ.get("E2E_PASSWORD", os.environ.get("TEST_PASSWORD", ""))
     task = task.format(base_url=base_url, email=email, password=password)
 
     agent = Agent(

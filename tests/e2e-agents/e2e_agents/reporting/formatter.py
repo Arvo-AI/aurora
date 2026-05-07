@@ -87,37 +87,39 @@ def format_pr_comment(results: list[RunResult], labels: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _format_single_result(result: RunResult) -> list[str]:
+    """Format one agent result for terminal display."""
+    lines: list[str] = [""]
+    retry = " [RETRIED]" if result.retried else ""
+    lines.append(f"[{result.status.upper()}] {result.agent_name} ({result.area}){retry}")
+    lines.append(f"  Steps: {result.steps_used}/{result.max_steps} | Time: {result.duration_seconds:.0f}s")
+
+    if result.issues:
+        lines.append(f"  Issues found: {len(result.issues)}")
+        for issue in result.issues:
+            lines.append(f"    [{issue.severity.upper()}] {issue.description[:120]}")
+            lines.append(f"             → {issue.page_url}")
+
+    if result.errors:
+        for err in result.errors[:3]:
+            lines.append(f"  ERROR: {err[:200]}")
+
+    if result.raw_findings and not result.issues:
+        lines.append("")
+        lines.append(result.raw_findings)
+
+    return lines
+
+
 def format_terminal_output(results: list[RunResult]) -> str:
-    lines = [
-        "=" * 60,
-        "E2E AGENT TEST RESULTS",
-        "=" * 60,
-    ]
+    lines = ["=" * 60, "E2E AGENT TEST RESULTS", "=" * 60]
 
     for result in results:
-        lines.append("")
-        retry = " [RETRIED]" if result.retried else ""
-        lines.append(f"[{result.status.upper()}] {result.agent_name} ({result.area}){retry}")
-        lines.append(f"  Steps: {result.steps_used}/{result.max_steps} | Time: {result.duration_seconds:.0f}s")
-
-        if result.issues:
-            lines.append(f"  Issues found: {len(result.issues)}")
-            for issue in result.issues:
-                lines.append(f"    [{issue.severity.upper()}] {issue.description[:120]}")
-                lines.append(f"             → {issue.page_url}")
-
-        if result.errors:
-            for err in result.errors[:3]:
-                lines.append(f"  ERROR: {err[:200]}")
-
-        if result.raw_findings and not result.issues:
-            lines.append("")
-            lines.append(result.raw_findings)
+        lines.extend(_format_single_result(result))
 
     lines.append("")
     lines.append("=" * 60)
 
-    # Summary
     total_issues = sum(len(r.issues) for r in results)
     if total_issues:
         lines.append(f"TOTAL: {total_issues} issue(s) across {len(results)} agent(s)")
