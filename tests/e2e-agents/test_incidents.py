@@ -11,13 +11,10 @@ from pydantic import BaseModel
 
 from browser_use import Agent, BrowserSession, ChatAnthropic
 
-# Load .env from project root
+from dotenv import load_dotenv
+
 env_path = Path(__file__).parent.parent.parent / ".env"
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        if line.strip() and not line.startswith("#") and "=" in line:
-            key, _, val = line.partition("=")
-            os.environ.setdefault(key.strip(), val.strip())
+load_dotenv(str(env_path), override=False)
 
 
 class Issue(BaseModel):
@@ -56,10 +53,10 @@ Your job: Sign in, navigate to the incidents page, and thoroughly test the incid
 Report ANY issues you find — broken UI, slow loading, missing data, confusing UX, errors.
 
 STEPS:
-1. Go to http://localhost:3000
+1. Go to {base_url}
 2. You will see a login page. Sign in with:
-   - Email: 1@a.ca
-   - Password: browsertest123
+   - Email: {email}
+   - Password: {password}
 3. After login, navigate to the Incidents page (look for it in the sidebar/navigation)
 4. On the incidents list page, check:
    - Do incidents load? How long does it take?
@@ -82,6 +79,11 @@ IMPORTANT:
 - Be honest — if everything works fine, say so. Don't invent problems.
 - You have maximum 40 steps. Be efficient."""
 
+    base_url = os.environ.get("E2E_BASE_URL", "http://localhost:3000")
+    email = os.environ.get("E2E_EMAIL", os.environ.get("TEST_EMAIL", "1@a.ca"))
+    password = os.environ.get("E2E_PASSWORD", os.environ.get("TEST_PASSWORD", "browsertest123"))
+    task = task.format(base_url=base_url, email=email, password=password)
+
     agent = Agent(
         task=task,
         llm=llm,
@@ -91,7 +93,7 @@ IMPORTANT:
     )
 
     print("Starting Browser Use agent for incidents testing...")
-    print(f"Target: http://localhost:3000")
+    print(f"Target: {base_url}")
     print("-" * 60)
 
     try:
@@ -129,7 +131,10 @@ IMPORTANT:
         print(f"\nAgent failed with error: {e}")
         raise
     finally:
-        await browser_session.stop()
+        try:
+            await asyncio.wait_for(browser_session.stop(), timeout=10)
+        except (asyncio.TimeoutError, Exception):
+            pass
 
 
 if __name__ == "__main__":

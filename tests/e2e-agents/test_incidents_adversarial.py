@@ -9,12 +9,10 @@ from pathlib import Path
 
 from browser_use import Agent, BrowserSession, ChatAnthropic
 
+from dotenv import load_dotenv
+
 env_path = Path(__file__).parent.parent.parent / ".env"
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        if line.strip() and not line.startswith("#") and "=" in line:
-            key, _, val = line.partition("=")
-            os.environ.setdefault(key.strip(), val.strip())
+load_dotenv(str(env_path), override=False)
 
 
 async def run_adversarial_test():
@@ -37,7 +35,7 @@ async def run_adversarial_test():
     task = """You are a hostile QA tester. Your job is to FIND PROBLEMS, not confirm things work.
 You get paid per bug found. If you report "everything works fine" you get fired.
 
-Test Aurora at http://localhost:3000 (email: 1@a.ca, password: browsertest123)
+Test Aurora at {base_url} (email: {email}, password: {password})
 
 DO THESE THINGS and report what breaks:
 
@@ -73,6 +71,11 @@ DO THESE THINGS and report what breaks:
 REPORT FORMAT: List every single issue. Include the page URL and a description.
 If you truly find nothing wrong (unlikely), explain exactly what you tested and why
 you're confident there are no issues. Do NOT just say "everything works"."""
+
+    base_url = os.environ.get("E2E_BASE_URL", "http://localhost:3000")
+    email = os.environ.get("E2E_EMAIL", os.environ.get("TEST_EMAIL", "1@a.ca"))
+    password = os.environ.get("E2E_PASSWORD", os.environ.get("TEST_PASSWORD", "browsertest123"))
+    task = task.format(base_url=base_url, email=email, password=password)
 
     agent = Agent(
         task=task,
@@ -113,7 +116,10 @@ you're confident there are no issues. Do NOT just say "everything works"."""
         print(f"\nAgent failed: {e}")
         raise
     finally:
-        await browser_session.stop()
+        try:
+            await asyncio.wait_for(browser_session.stop(), timeout=10)
+        except (asyncio.TimeoutError, Exception):
+            pass
 
 
 if __name__ == "__main__":

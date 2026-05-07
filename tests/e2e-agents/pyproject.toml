@@ -5,8 +5,8 @@ description = "LLM-powered adversarial browser testing for Aurora"
 requires-python = ">=3.11"
 dependencies = [
     "browser-use>=0.12.6,<0.14",
-    "pydantic>=2.0",
-    "pydantic-settings>=2.0",
+    "pydantic>=2.0,<3.0",
+    "pydantic-settings>=2.0,<3.0",
     "python-dotenv>=1.0",
     "click>=8.0",
 ]

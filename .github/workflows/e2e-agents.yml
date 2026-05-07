@@ -23,7 +23,7 @@ jobs:
       - id: check
         run: |
           LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
-          if echo "$LABELS" | grep -q '"area:'; then
+          if echo "$LABELS" | grep -qE '"(area:|test:custom)'; then
             echo "should_run=true" >> $GITHUB_OUTPUT
             echo "labels=$LABELS" >> $GITHUB_OUTPUT
           else

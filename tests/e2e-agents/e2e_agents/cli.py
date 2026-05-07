@@ -35,6 +35,42 @@ def _get_local_diff_context() -> str | None:
         return None
 
 
+def _resolve_definitions(run_all, area):
+    """Resolve which agent definitions to run."""
+    if run_all:
+        return list(get_all_agents().values())
+
+    definitions = []
+    for a in area:
+        agent_def = get_agent(a)
+        if agent_def:
+            definitions.append(agent_def)
+        else:
+            click.echo(f"Warning: no agent found for area '{a}'", err=True)
+    if not definitions:
+        click.echo("No valid agents to run.", err=True)
+        sys.exit(1)
+    return definitions
+
+
+def _apply_overrides(definitions, settings, max_steps, description, diff_context):
+    """Apply max_steps override and inject context into settings."""
+    if max_steps is not None:
+        definitions = [d.model_copy(update={"max_steps": max_steps}) for d in definitions]
+
+    if description:
+        settings.pr_description = description
+        click.echo(f"PR description injected ({len(description)} chars)")
+
+    if diff_context:
+        diff = _get_local_diff_context()
+        if diff:
+            settings.diff_context = diff
+            click.echo(f"Injecting diff context: {len(diff.splitlines())} changed files")
+
+    return definitions
+
+
 @click.group()
 def cli():
     """Aurora E2E Agent Testing Framework"""
@@ -53,6 +89,13 @@ def cli():
 @click.option("--description", default=None, help="Natural language test instructions (simulates PR description)")
 def run(area, run_all, headless, model, max_steps, base_url, skip_health_check, diff_context, parallel, description):
     """Run agent(s) against the target app."""
+    if parallel < 1:
+        click.echo("Error: --parallel must be >= 1.", err=True)
+        sys.exit(1)
+    if max_steps is not None and max_steps < 1:
+        click.echo("Error: --max-steps must be >= 1.", err=True)
+        sys.exit(1)
+
     settings = Settings(headless=headless, max_agents_parallel=parallel)
 
     if model:
@@ -64,38 +107,12 @@ def run(area, run_all, headless, model, max_steps, base_url, skip_health_check, 
         click.echo("Error: ANTHROPIC_API_KEY not set. Set it in .env or export it.", err=True)
         sys.exit(1)
 
-    # Resolve which agents to run
-    if run_all:
-        definitions = list(get_all_agents().values())
-    elif area:
-        definitions = []
-        for a in area:
-            agent_def = get_agent(a)
-            if agent_def:
-                definitions.append(agent_def)
-            else:
-                click.echo(f"Warning: no agent found for area '{a}'", err=True)
-        if not definitions:
-            click.echo("No valid agents to run.", err=True)
-            sys.exit(1)
-    else:
+    if not run_all and not area:
         click.echo("Specify --area or --all. Use `e2e-agents list` to see available agents.", err=True)
         sys.exit(1)
 
-    if max_steps:
-        definitions = [d.model_copy(update={"max_steps": max_steps}) for d in definitions]
-
-    # PR description
-    if description:
-        settings.pr_description = description
-        click.echo(f"PR description injected ({len(description)} chars)")
-
-    # Diff context
-    if diff_context:
-        diff = _get_local_diff_context()
-        if diff:
-            settings.diff_context = diff
-            click.echo(f"Injecting diff context: {len(diff.splitlines())} changed files")
+    definitions = _resolve_definitions(run_all, area)
+    definitions = _apply_overrides(definitions, settings, max_steps, description, diff_context)
 
     # Health check
     if not skip_health_check:
@@ -110,19 +127,15 @@ def run(area, run_all, headless, model, max_steps, base_url, skip_health_check, 
 
     results = asyncio.run(run_agents(definitions, settings))
 
-    # Output
     click.echo(format_terminal_output(results))
 
-    # Save JSON
     output_path = write_json_results(results, settings.results_dir)
     click.echo(f"\nResults saved to: {output_path}")
 
-    # Summary
     total_issues = sum(len(r.issues) for r in results)
     if total_issues > 0:
         click.echo(f"\n🐛 {total_issues} structured issue(s) extracted from findings.")
 
-    # Exit code
     if any(r.status in ("errored", "crashed") for r in results):
         sys.exit(2)
     sys.exit(0)

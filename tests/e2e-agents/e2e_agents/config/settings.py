@@ -1,5 +1,6 @@
-import os
 from pathlib import Path
+
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -50,7 +51,7 @@ class Settings(BaseSettings):
 
     # LLM
     anthropic_api_key: str = ""
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     model_timeout: float = 120.0
 
     # Browser
@@ -74,8 +75,8 @@ class Settings(BaseSettings):
     # PR description — natural language description of what was changed
     pr_description: str | None = None
 
-    # Output (RESULTS_DIR env var overrides default)
-    results_dir: str = os.environ.get("RESULTS_DIR", _default_results_dir())
+    # Output
+    results_dir: str = Field(default_factory=_default_results_dir)
 
     # Labels (JSON list from CI, or comma-separated from CLI)
     labels: str = ""

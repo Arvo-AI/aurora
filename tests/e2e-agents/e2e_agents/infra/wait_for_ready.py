@@ -1,8 +1,9 @@
 """Poll the target app until it responds, with exponential backoff."""
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 
 
 def wait_for_app(url: str, timeout: int = 180) -> bool:
@@ -10,6 +11,10 @@ def wait_for_app(url: str, timeout: int = 180) -> bool:
 
     Returns True if healthy, False if timed out.
     """
+    scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        raise ValueError(f"wait_for_app: only http/https URLs are supported, got '{scheme}'")
+
     start = time.time()
     interval = 2.0
 

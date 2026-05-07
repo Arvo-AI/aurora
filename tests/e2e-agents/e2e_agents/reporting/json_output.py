@@ -24,5 +24,5 @@ def write_json_results(results: list[RunResult], results_dir: str) -> Path:
     }
 
     output_path = output_dir / "run_results.json"
-    output_path.write_text(json.dumps(output, indent=2))
+    output_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     return output_path

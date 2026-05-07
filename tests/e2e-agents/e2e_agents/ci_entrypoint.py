@@ -27,13 +27,12 @@ def parse_labels() -> list[str]:
     try:
         labels = json.loads(raw)
         if isinstance(labels, list):
-            return [str(l) for l in labels]
+            return [str(label) for label in labels]
     except (json.JSONDecodeError, TypeError):
-        # Invalid or non-list JSON payload; fall through to comma-separated parsing.
         pass
 
     # Fall back to comma-separated
-    return [l.strip() for l in raw.split(",") if l.strip()]
+    return [label.strip() for label in raw.split(",") if label.strip()]
 
 
 def parse_pr_number() -> int | None:
@@ -68,10 +67,7 @@ def get_pr_description(pr_number: int | None, repository: str | None) -> str | N
 
 
 def get_diff_context() -> str | None:
-    """Get the list of changed files in the PR for context injection.
-
-    Uses git diff against the base branch to find changed frontend files.
-    """
+    """Get the list of changed files in the PR for context injection."""
     try:
         result = subprocess.run(
             ["git", "diff", "--name-only", "origin/main...HEAD"],
@@ -83,7 +79,6 @@ def get_diff_context() -> str | None:
             return None
 
         files = result.stdout.strip().split("\n")
-        # Filter to frontend-relevant files
         relevant = [
             f for f in files
             if f.startswith("client/") and f.endswith((".tsx", ".ts", ".css"))
@@ -92,7 +87,6 @@ def get_diff_context() -> str | None:
         if not relevant:
             return None
 
-        # Limit to 30 files to keep prompt reasonable
         if len(relevant) > 30:
             relevant = relevant[:30] + [f"... and {len(relevant) - 30} more"]
 
@@ -102,7 +96,8 @@ def get_diff_context() -> str | None:
         return None
 
 
-async def main():
+def _load_settings() -> Settings:
+    """Load settings from environment and validate."""
     pr_number = parse_pr_number()
     settings = Settings(
         ci=True,
@@ -111,49 +106,80 @@ async def main():
         github_token=os.environ.get("GITHUB_TOKEN"),
     )
 
-    # Validate API key early
     if not settings.anthropic_api_key:
         print("Error: ANTHROPIC_API_KEY not set. Cannot run agents.", file=sys.stderr)
         sys.exit(2)
 
+    return settings
+
+
+def _resolve_agents(settings: Settings) -> list:
+    """Parse labels, resolve agents, filter by PR description availability."""
     labels = parse_labels()
     if not labels:
         print("No labels found in environment. Nothing to run.")
-        return
+        return []
 
     print(f"PR #{settings.pr_number} labels: {labels}")
 
-    # Resolve agents
     agents_to_run = resolve_agents_for_labels(labels)
     if not agents_to_run:
         print(f"No matching agents for labels: {labels}")
-        return
+        return []
 
     # Fetch PR description early so we can filter agents that need it
-    pr_desc = get_pr_description(pr_number, settings.repository)
+    pr_desc = get_pr_description(settings.pr_number, settings.repository)
 
-    # Filter out agents that require a PR description if none available
     if not pr_desc:
         skipped = [a.name for a in agents_to_run if a.requires_pr_description]
         agents_to_run = [a for a in agents_to_run if not a.requires_pr_description]
         if skipped:
             print(f"Skipping agents (no PR description): {skipped}")
-        if not agents_to_run:
-            print("No agents to run after filtering.")
-            return
-
-    print(f"Agents to run: {[a.name for a in agents_to_run]}")
-
-    # Inject PR description
-    if pr_desc:
+    else:
         settings.pr_description = pr_desc
         print(f"PR description injected ({len(pr_desc)} chars)")
 
-    # Inject diff context
+    return agents_to_run
+
+
+def _inject_context(settings: Settings) -> None:
+    """Inject diff context into settings."""
     diff = get_diff_context()
     if diff:
         settings.diff_context = diff
         print(f"Diff context: {len(diff.splitlines())} changed files injected into prompts")
+
+
+def _handle_results(results: list, settings: Settings) -> int:
+    """Format output, save artifacts, post PR comment. Returns exit code."""
+    print(format_terminal_output(results))
+
+    output_path = write_json_results(results, settings.results_dir)
+    print(f"Results saved to: {output_path}")
+
+    labels = parse_labels()
+    comment = format_pr_comment(results, labels)
+    if settings.pr_number:
+        if post_pr_comment(comment, settings):
+            print("Posted results to PR.")
+        else:
+            print("Failed to post PR comment.", file=sys.stderr)
+
+    if any(r.status in ("errored", "crashed") for r in results):
+        return 2
+    return 0
+
+
+async def main():
+    settings = _load_settings()
+
+    agents_to_run = _resolve_agents(settings)
+    if not agents_to_run:
+        return
+
+    print(f"Agents to run: {[a.name for a in agents_to_run]}")
+
+    _inject_context(settings)
 
     # Health check
     print(f"Waiting for app at {settings.base_url}...")
@@ -169,7 +195,6 @@ async def main():
 
     print("App is ready. Starting agents...")
 
-    # Run agents (wrapped to catch unexpected crashes)
     try:
         results = await run_agents(agents_to_run, settings)
     except Exception as e:
@@ -182,25 +207,7 @@ async def main():
         post_pr_comment(comment, settings)
         sys.exit(2)
 
-    # Output to terminal
-    print(format_terminal_output(results))
-
-    # Save JSON artifact
-    output_path = write_json_results(results, settings.results_dir)
-    print(f"Results saved to: {output_path}")
-
-    # Post PR comment
-    comment = format_pr_comment(results, labels)
-    if settings.pr_number:
-        if post_pr_comment(comment, settings):
-            print("Posted results to PR.")
-        else:
-            print("Failed to post PR comment.", file=sys.stderr)
-
-    # Exit code: 2 for infra failures, 0 otherwise (advisory mode)
-    if any(r.status in ("errored", "crashed") for r in results):
-        sys.exit(2)
-    sys.exit(0)
+    sys.exit(_handle_results(results, settings))
 
 
 if __name__ == "__main__":

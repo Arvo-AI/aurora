@@ -1,6 +1,10 @@
 from e2e_agents.runner.models import RunResult
 
 
+def _escape_table_cell(text: str) -> str:
+    return text.replace("\n", " ").replace("|", r"\|").replace("`", r"\`")
+
+
 def _status_icon(status: str) -> str:
     return {
         "completed": "✅",
@@ -33,7 +37,7 @@ def format_pr_comment(results: list[RunResult], labels: list[str]) -> str:
     lines = [
         "## 🔍 E2E Agent Test Results",
         "",
-        f"**Labels**: {', '.join(f'`{l}`' for l in labels)}",
+        f"**Labels**: {', '.join(f'`{label}`' for label in labels)}",
         f"**Duration**: {total_duration:.0f}s | **Steps**: {total_steps} | **Issues**: {len(all_issues)}",
         "",
     ]
@@ -46,8 +50,8 @@ def format_pr_comment(results: list[RunResult], labels: list[str]) -> str:
         lines.append("|----------|-------|------|")
         for issue in sorted(all_issues, key=lambda i: ["critical", "high", "medium", "low"].index(i.severity)):
             icon = _severity_icon(issue.severity)
-            desc = issue.description[:100]
-            url = issue.page_url.replace("http://localhost:3000", "")
+            desc = _escape_table_cell(issue.description[:100])
+            url = _escape_table_cell(issue.page_url.replace("http://localhost:3000", ""))
             lines.append(f"| {icon} {issue.severity} | {desc} | `{url}` |")
         lines.append("")
 

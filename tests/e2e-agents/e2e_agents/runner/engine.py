@@ -247,7 +247,7 @@ async def _run_single_attempt(
             agent_name=definition.name,
             area=definition.area,
             status="timed_out",
-            steps_used=steps_completed,  # Actual steps, not max
+            steps_used=max(steps_completed, definition.max_steps),
             max_steps=definition.max_steps,
             duration_seconds=elapsed,
             raw_findings="Agent timed out before completing all tests.",
@@ -307,12 +307,15 @@ async def run_agents(
     total_steps_used = 0
 
     if settings.max_agents_parallel > 1 and len(definitions) > 1:
-        # Parallel execution with separate test users
-        tasks = []
-        for i, definition in enumerate(definitions):
-            agent_settings = _get_isolated_settings(settings, i)
-            tasks.append(run_agent(definition, agent_settings))
+        # Parallel execution with concurrency cap and separate test users
+        semaphore = asyncio.Semaphore(settings.max_agents_parallel)
 
+        async def _bounded_run(i: int, definition: AgentDefinition) -> RunResult:
+            async with semaphore:
+                agent_settings = _get_isolated_settings(settings, i)
+                return await run_agent(definition, agent_settings)
+
+        tasks = [_bounded_run(i, d) for i, d in enumerate(definitions)]
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
         for item in gathered:
             if isinstance(item, Exception):

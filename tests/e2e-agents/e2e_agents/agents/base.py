@@ -19,11 +19,17 @@ class AgentDefinition(BaseModel):
         password: str,
         pr_description: str | None = None,
     ) -> str:
-        prompt = self.prompt_template.format(
-            base_url=base_url,
-            email=email,
-            password=password,
-        )
+        try:
+            prompt = self.prompt_template.format(
+                base_url=base_url,
+                email=email,
+                password=password,
+            )
+        except KeyError as exc:
+            raise ValueError(
+                f"Agent '{self.name}': prompt_template contains unknown placeholder {exc}. "
+                "Use double-braces {{...}} to include literal curly-brace text."
+            ) from exc
         # Replace {pr_description} placeholder (double-braced in template to survive .format())
         if pr_description and "{pr_description}" in self.prompt_template:
             # Template uses literal {pr_description} escaped as {{pr_description}}
