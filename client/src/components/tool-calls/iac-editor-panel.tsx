@@ -9,8 +9,8 @@ import type { JSX } from "react"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } from "@codemirror/view"
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands"
-import { syntaxHighlighting, defaultHighlightStyle, StreamLanguage } from "@codemirror/language"
-import { oneDark } from "@codemirror/theme-one-dark"
+import { syntaxHighlighting, HighlightStyle, StreamLanguage } from "@codemirror/language"
+import { tags } from "@lezer/highlight"
 
 const hclLanguage = StreamLanguage.define({
   token(stream) {
@@ -35,6 +35,27 @@ const hclLanguage = StreamLanguage.define({
   },
   startState() { return {} },
 })
+
+const darkTheme = EditorView.theme({
+  "&": { backgroundColor: "#000000", color: "#e0e0e0" },
+  ".cm-gutters": { backgroundColor: "#000000", color: "#555", borderRight: "none" },
+  ".cm-activeLineGutter": { backgroundColor: "#111" },
+  ".cm-activeLine": { backgroundColor: "#0a0a0a" },
+  ".cm-selectionBackground": { backgroundColor: "#264f78" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "#264f78" },
+  ".cm-cursor": { borderLeftColor: "#fff" },
+}, { dark: true })
+
+const darkHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: "#c586c0" },
+  { tag: tags.string, color: "#ce9178" },
+  { tag: tags.comment, color: "#6a9955" },
+  { tag: tags.number, color: "#b5cea8" },
+  { tag: tags.atom, color: "#569cd6" },
+  { tag: tags.typeName, color: "#4ec9b0" },
+  { tag: tags.variableName, color: "#9cdcfe" },
+  { tag: tags.punctuation, color: "#808080" },
+])
 
 interface IaCEditorPanelProps {
   value: string
@@ -65,7 +86,6 @@ export const IaCEditorPanel = ({
       history(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       hclLanguage,
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       EditorView.lineWrapping,
       EditorState.readOnly.of(readOnly),
       EditorView.updateListener.of((update) => {
@@ -75,11 +95,8 @@ export const IaCEditorPanel = ({
       }),
     ]
     if (themeMode === "dark") {
-      extensions.push(oneDark)
-      extensions.push(EditorView.theme({
-        "&": { backgroundColor: "#000000" },
-        ".cm-gutters": { backgroundColor: "#000000", borderRight: "1px solid #222" },
-      }))
+      extensions.push(darkTheme)
+      extensions.push(syntaxHighlighting(darkHighlight))
     }
     return extensions
   }, [readOnly, themeMode])
