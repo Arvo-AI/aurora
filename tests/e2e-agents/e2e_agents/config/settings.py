@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # Diff context — injected into prompts so agents know what changed
     diff_context: str | None = None
 
+    # PR description — natural language description of what was changed
+    pr_description: str | None = None
+
     # Output (RESULTS_DIR env var overrides default)
     results_dir: str = os.environ.get("RESULTS_DIR", _default_results_dir())
 

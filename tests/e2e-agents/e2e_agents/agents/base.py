@@ -10,10 +10,22 @@ class AgentDefinition(BaseModel):
     use_vision: bool = True
     timeout_seconds: int = 0  # 0 = auto-calculate from max_steps
     priority: int = 1
+    requires_pr_description: bool = False  # If True, only runs when PR description is available
 
-    def render_prompt(self, base_url: str, email: str, password: str) -> str:
-        return self.prompt_template.format(
+    def render_prompt(
+        self,
+        base_url: str,
+        email: str,
+        password: str,
+        pr_description: str | None = None,
+    ) -> str:
+        prompt = self.prompt_template.format(
             base_url=base_url,
             email=email,
             password=password,
         )
+        # Replace {pr_description} placeholder (double-braced in template to survive .format())
+        if pr_description and "{pr_description}" in self.prompt_template:
+            # Template uses literal {pr_description} escaped as {{pr_description}}
+            prompt = prompt.replace("{pr_description}", pr_description)
+        return prompt

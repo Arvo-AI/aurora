@@ -50,7 +50,8 @@ def cli():
 @click.option("--skip-health-check", is_flag=True, help="Skip waiting for app to be ready")
 @click.option("--diff-context/--no-diff-context", default=True, help="Inject git diff into prompts")
 @click.option("--parallel", type=int, default=1, help="Number of agents to run in parallel")
-def run(area, run_all, headless, model, max_steps, base_url, skip_health_check, diff_context, parallel):
+@click.option("--description", default=None, help="Natural language test instructions (simulates PR description)")
+def run(area, run_all, headless, model, max_steps, base_url, skip_health_check, diff_context, parallel, description):
     """Run agent(s) against the target app."""
     settings = Settings(headless=headless, max_agents_parallel=parallel)
 
@@ -83,6 +84,11 @@ def run(area, run_all, headless, model, max_steps, base_url, skip_health_check, 
 
     if max_steps:
         definitions = [d.model_copy(update={"max_steps": max_steps}) for d in definitions]
+
+    # PR description
+    if description:
+        settings.pr_description = description
+        click.echo(f"PR description injected ({len(description)} chars)")
 
     # Diff context
     if diff_context:
