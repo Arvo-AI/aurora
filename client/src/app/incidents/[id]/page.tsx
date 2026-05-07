@@ -11,7 +11,7 @@ import { useAuth } from '@/hooks/useAuthHooks';
 import { canWrite } from '@/lib/roles';
 
 import IncidentCard from '../components/IncidentCard';
-import ThoughtsPanel from '../components/ThoughtsPanel';
+import ThoughtsPanel, { PANEL_WIDTH_DEFAULT } from '../components/ThoughtsPanel';
 
 const STALE_POLL_MS = 5 * 60 * 1000;
 
@@ -24,6 +24,7 @@ export default function IncidentDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showThoughts, setShowThoughts] = useState(false);
   const [thoughts, setThoughts] = useState<StreamingThought[]>([]);
+  const [thoughtsPanelWidth, setThoughtsPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
   const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const userClosedThoughtsRef = useRef<boolean>(false);
   const pollStartRef = useRef<number>(0);
@@ -181,8 +182,9 @@ export default function IncidentDetailPage() {
 
       <div className="flex">
         {/* Main content area */}
-        <div 
-          className={`flex-1 transition-all duration-300 ${showThoughts ? 'mr-[400px]' : ''}`}
+        <div
+          className="flex-1 min-w-0"
+          style={{ marginRight: showThoughts ? thoughtsPanelWidth : 0 }}
           onClick={() => {
             if (showThoughts) {
               setShowThoughts(false);
@@ -219,6 +221,7 @@ export default function IncidentDetailPage() {
           incident={incident}
           isVisible={showThoughts}
           canInteract={canWrite(role)}
+          onWidthChange={setThoughtsPanelWidth}
         />
       </div>
     </div>
