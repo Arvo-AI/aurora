@@ -17,7 +17,7 @@ const PANEL_WIDTH_MAX_RATIO = 0.8;
 function readStoredPanelWidth(): number {
   if (typeof window === 'undefined') return PANEL_WIDTH_DEFAULT;
   const raw = window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY);
-  const parsed = raw ? Number(raw) : NaN;
+  const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= PANEL_WIDTH_MIN ? parsed : PANEL_WIDTH_DEFAULT;
 }
 
