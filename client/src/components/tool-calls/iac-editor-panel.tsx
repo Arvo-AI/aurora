@@ -76,6 +76,10 @@ export const IaCEditorPanel = ({
     ]
     if (themeMode === "dark") {
       extensions.push(oneDark)
+      extensions.push(EditorView.theme({
+        "&": { backgroundColor: "#000000" },
+        ".cm-gutters": { backgroundColor: "#000000", borderRight: "1px solid #222" },
+      }))
     }
     return extensions
   }, [readOnly, themeMode])
@@ -112,7 +116,7 @@ export const IaCEditorPanel = ({
   return (
     <div
       ref={containerRef}
-      className="overflow-auto border border-border rounded-md"
+      className="overflow-auto rounded-md"
       style={{ height: `${height}px` }}
     />
   )
