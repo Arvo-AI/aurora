@@ -675,6 +675,7 @@ def run_background_chat(
             try:
                 from services.actions.executor import update_action_run_status
                 if result.get("guardrail_blocked"):
+                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
                     update_action_run_status(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message='Action blocked by safety guardrails',
@@ -1263,6 +1264,25 @@ async def _execute_background_chat(
 
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _append_block_message(session_id: str, user_id: str, text: str) -> None:
+    """Append a visible bot message to the session so the chat isn't empty."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                row = cursor.fetchone()
+                messages = json.loads(row[0]) if row and row[0] else []
+                messages.append({"sender": "bot", "text": text, "message_number": len(messages) + 1})
+                cursor.execute(
+                    "UPDATE chat_sessions SET messages = %s::jsonb, updated_at = %s WHERE id = %s",
+                    (json.dumps(messages), datetime.now(), session_id),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to append block message: {e}")
 
 
 def _update_session_status(session_id: str, status: str, user_id: str) -> None:
