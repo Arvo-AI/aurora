@@ -1277,6 +1277,15 @@ def initialize_tables():
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
+            # user_github_installations is intentionally NOT RLS-protected.
+            # The webhook handler in tasks/github_webhook_tasks.py enumerates
+            # ALL users who linked a given installation_id (cross-org) when
+            # GitHub fires installation_repositories.removed; that read has
+            # no user_id filter and FORCE RLS would block it. Per-user reads
+            # (auth router, /github/app/installations list, unlink) all
+            # filter by user_id explicitly, so cross-org leakage is bounded
+            # by the WHERE clauses rather than by the policy. The org_id
+            # column is still populated on insert for future RLS migration.
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
 

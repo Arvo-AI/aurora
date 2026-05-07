@@ -43,7 +43,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import validate_user_exists
+from utils.auth.stateless_auth import (
+    get_org_id_for_user,
+    validate_user_exists,
+)
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -281,6 +284,11 @@ def github_app_install_callback():
         )
         return _render_error(_ERROR_GITHUB_API)
 
+    # Best-effort org_id population — defensive, in case
+    # ``user_github_installations`` is later promoted to RLS-protected.
+    # Missing org_id is non-fatal at install time.
+    org_id = get_org_id_for_user(user_id)
+
     # UPSERT installation + INSERT join atomically (single tx).
     try:
         with db_pool.get_admin_connection() as conn:
@@ -315,10 +323,10 @@ def github_app_install_callback():
                 )
                 cur.execute(
                     """INSERT INTO user_github_installations
-                            (user_id, installation_id)
-                       VALUES (%s, %s)
+                            (user_id, org_id, installation_id)
+                       VALUES (%s, %s, %s)
                        ON CONFLICT (user_id, installation_id) DO NOTHING""",
-                    (user_id, installation_id),
+                    (user_id, org_id, installation_id),
                 )
                 conn.commit()
     except Exception:
@@ -373,10 +381,9 @@ def github_app_list_installations(user_id):
                     (user_id,),
                 )
                 rows = cur.fetchall()
-    except Exception as exc:
-        logger.error(
-            "[GITHUB-APP-LIST] DB read failed for user=%s: %s",
-            user_id, exc, exc_info=True,
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-LIST] DB read failed for user=%s", user_id,
         )
         return jsonify({"error": "Failed to list installations"}), 500
 
@@ -421,10 +428,10 @@ def github_app_unlink_installation(user_id, installation_id):
                 )
                 deleted = cur.rowcount
                 conn.commit()
-    except Exception as exc:
-        logger.error(
-            "[GITHUB-APP-UNLINK] DB delete failed user=%s installation_id=%d: %s",
-            user_id, installation_id, exc, exc_info=True,
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-UNLINK] DB delete failed user=%s installation_id=%d",
+            user_id, installation_id,
         )
         return jsonify({"error": "Failed to unlink installation"}), 500
 

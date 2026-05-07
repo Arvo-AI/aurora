@@ -170,6 +170,21 @@ def patched_user_exists(monkeypatch: pytest.MonkeyPatch):
     return _set
 
 
+@pytest.fixture(scope="function", autouse=True)
+def patched_org_id(monkeypatch: pytest.MonkeyPatch):
+    """Stub ``get_org_id_for_user`` so the install callback's defensive
+    org-id lookup doesn't hit the patched cursor and inflate
+    ``execute.call_count`` past what the SQL-shape assertions expect.
+    """
+    from routes.github import github_app as route_module
+
+    monkeypatch.setattr(
+        route_module,
+        "get_org_id_for_user",
+        lambda _user_id: "test-org-id",
+    )
+
+
 def test_callback_verifies_installation_id_with_api(
     flask_app: flask.Flask,
     client: Any,
@@ -401,7 +416,7 @@ def test_callback_persists_user_link(
     assert (
         "ON CONFLICT (user_id, installation_id) DO NOTHING" in join_sql
     )
-    user_id, installation_id = join_params
+    user_id, _org_id, installation_id = join_params
     assert user_id == "user-link-target"
     assert installation_id == payload["id"]
 
