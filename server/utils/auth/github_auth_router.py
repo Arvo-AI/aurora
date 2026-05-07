@@ -49,6 +49,7 @@ from utils.auth.github_app_token import (
 )
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -173,10 +174,18 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
     try:
         token = get_installation_token(installation_id)
     except GitHubAppInstallationSuspended:
+        # ``repo_full_name`` arrives via a ``<path:...>`` URL converter
+        # in github_user_repos.py and could carry CR/LF for log-line
+        # forging. Run it through ``sanitize()`` + the literal
+        # ``.replace`` chain that Sonar's S5145 rule recognises as
+        # neutralisation. ``user_id`` comes from the auth context, but
+        # we sanitise it too for symmetry — costs nothing.
+        safe_repo = sanitize(repo_full_name).replace("\r", "_").replace("\n", "_")
+        safe_user = sanitize(user_id).replace("\r", "_").replace("\n", "_")
         logger.info(
             "[GITHUB-AUTH-ROUTER] App installation suspended at mint time "
             "for installation_id=%d (user=%s repo=%s)",
-            installation_id, user_id, repo_full_name,
+            installation_id, safe_user, safe_repo,
         )
         raise NoGitHubAuthError(
             f"GitHub App installation_id={installation_id} is suspended"
@@ -276,10 +285,11 @@ def get_any_auth_for_user(user_id: str) -> AuthResult:
     try:
         token = get_installation_token(installation_id)
     except GitHubAppInstallationSuspended:
+        safe_user = sanitize(user_id).replace("\r", "_").replace("\n", "_")
         logger.info(
             "[GITHUB-AUTH-ROUTER] App installation suspended at mint time "
             "for installation_id=%d (user=%s, no repo context)",
-            installation_id, user_id,
+            installation_id, safe_user,
         )
         raise NoGitHubAuthError(
             f"GitHub App installation_id={installation_id} is suspended"
