@@ -84,7 +84,7 @@ export function parseCloudExecCommand(
   if (toolInput) {
     try {
       const inputStr = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput)
-      const parsed = JSON.parse(inputStr.replace(/'/g, '"'))
+      const parsed = JSON.parse(inputStr.replaceAll("'", '"'))
       const raw = parsed.command || parsed.kwargs?.command
       if (raw && typeof raw === 'string') {
         const provider = parsed.provider || parsed.kwargs?.provider

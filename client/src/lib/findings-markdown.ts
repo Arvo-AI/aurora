@@ -8,7 +8,7 @@ export function stripFindingsFrontMatter(md: string): string {
   let start = 0;
   while (start < md.length && isLeadingSkippable(md[start])) start++;
 
-  if (md.charCodeAt(start) !== 45 || md.charCodeAt(start + 1) !== 45 || md.charCodeAt(start + 2) !== 45) return md;
+  if (md.codePointAt(start) !== 45 || md.codePointAt(start + 1) !== 45 || md.codePointAt(start + 2) !== 45) return md;
   const openNl = md.indexOf('\n', start + 3);
   if (openNl < 0 || md.slice(start + 3, openNl).trim() !== '') return md;
 
