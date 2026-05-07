@@ -5,9 +5,6 @@ on:
     types: [labeled, synchronize]
     branches: [main, "release/**"]
 
-permissions:
-  contents: read
-
 # Cancel in-progress runs for same PR (cost control)
 concurrency:
   group: e2e-agents-${{ github.event.pull_request.number }}
@@ -16,6 +13,8 @@ concurrency:
 jobs:
   check-labels:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       labels: ${{ steps.check.outputs.labels }}
