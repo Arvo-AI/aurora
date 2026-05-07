@@ -536,13 +536,21 @@ def _fmt_field(value: Any) -> str:
     """Render a payload field for ``key=value`` structured logs.
 
     ``None`` renders as the literal ``<missing>`` so ops can distinguish
-    a present-but-falsy value from an absent field. All other values are
-    coerced via ``str()``; we deliberately do NOT quote-wrap so the log
-    line stays grep-friendly with the rest of the file's key=value style.
+    a present-but-falsy value from an absent field.
+
+    All other values run through :func:`utils.log_sanitizer.sanitize` to
+    strip C0/C1 control chars and Unicode line separators (PR titles and
+    target_urls are user-controlled and would otherwise inject log
+    lines), then have any internal whitespace collapsed to a single
+    space so the ``key=value`` log format isn't broken by spaces inside
+    a single field.
     """
     if value is None:
         return _MISSING_FIELD_LITERAL
-    return str(value)
+    from utils.log_sanitizer import sanitize
+
+    cleaned = sanitize(value).replace("\r", " ").replace("\n", " ")
+    return " ".join(cleaned.split())
 
 
 def _extract_installation_id(payload: dict[str, Any]) -> int | None:

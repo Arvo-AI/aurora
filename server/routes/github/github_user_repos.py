@@ -378,9 +378,22 @@ def get_user_branches(user_id, repo_full_name):
             )
 
             if response.status_code != 200:
-                logger.error(f"GitHub API error: {response.status_code}")
+                logger.error("GitHub API error: %d", response.status_code)
+                # Propagate the upstream class so callers can distinguish
+                # "no branches" from "lookup failed". Keep ``branches: []``
+                # so the response shape is unchanged.
+                upstream_status = (
+                    response.status_code
+                    if response.status_code in (401, 403, 404)
+                    else 502
+                )
                 return create_cors_response(
-                    {"error": "Failed to fetch branches", "branches": []}, 200,
+                    {
+                        "error": "Failed to fetch branches",
+                        "branches": [],
+                        "github_status": response.status_code,
+                    },
+                    upstream_status,
                 )
 
             branches = response.json()

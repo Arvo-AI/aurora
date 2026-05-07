@@ -71,7 +71,7 @@ from utils.auth.github_app_token import (
     GitHubAppInstallationSuspended,
     get_installation_token,
 )
-from utils.auth.stateless_auth import get_credentials_from_db
+from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -170,6 +170,15 @@ def _lookup_repo_installation(
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
+            # ``user_github_installations`` is RLS-protected and the
+            # auth router can be called from Celery tasks where the
+            # connection pool's request-context RLS vars never fired.
+            # Resolving + setting the org_id explicitly keeps the join
+            # readable in every caller context.
+            if not set_rls_context(
+                cursor, conn, user_id, log_prefix="[GITHUB-AUTH-ROUTER]"
+            ):
+                return (None, None)
             cursor.execute(sql, (user_id, repo_full_name))
             row = cursor.fetchone()
 

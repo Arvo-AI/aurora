@@ -29,9 +29,11 @@ def get_connected_repos(**kwargs) -> str:
     try:
         auth = get_any_auth_for_user(user_id)
     except NoGitHubAuthError:
-        return "GitHub not connected for this user. Install the GitHub App or connect via OAuth."
+        return json.dumps({
+            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
+        })
     except Exception as e:
-        logger.error(f"Error resolving GitHub auth for user {user_id}: {e}", exc_info=True)
+        logger.exception("Error resolving GitHub auth for user %s", user_id)
         return json.dumps({"error": f"Failed to resolve GitHub auth: {e}"})
 
     try:
