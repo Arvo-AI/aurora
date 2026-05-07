@@ -5,6 +5,9 @@ on:
     types: [labeled, synchronize]
     branches: [main, "release/**"]
 
+permissions:
+  contents: read
+
 # Cancel in-progress runs for same PR (cost control)
 concurrency:
   group: e2e-agents-${{ github.event.pull_request.number }}
