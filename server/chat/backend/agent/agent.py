@@ -126,12 +126,26 @@ class Agent:
         return False
 
     def _get_github_username_for_user(self, user_id: str) -> str:
-        """Get GitHub username for a specific user from database."""
+        """Get GitHub username for ``user_id`` — primary App installation's account_login."""
         try:
-            from utils.auth.stateless_auth import get_credentials_from_db
-            github_creds = get_credentials_from_db(user_id, 'github')
-            if github_creds and 'username' in github_creds:
-                return github_creds['username']
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT gi.account_login
+                             FROM user_github_installations ugi
+                             JOIN github_installations gi
+                                  ON gi.installation_id = ugi.installation_id
+                            WHERE ugi.user_id = %s
+                              AND gi.suspended_at IS NULL
+                            ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
+                            LIMIT 1""",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+            if row:
+                return row[0]
         except Exception as e:
             logging.warning(f"Failed to get GitHub username for user {user_id}: {e}")
         return "YOUR_GITHUB_USERNAME"  # Fallback

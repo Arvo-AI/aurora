@@ -270,21 +270,32 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_github(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """Mirrors /github/status — validates via GitHub user API."""
-    access_token = creds.get("access_token")
-    if not access_token:
-        return {"connected": False}
+def _check_github(user_id: str, org_id: str) -> Dict[str, Any]:
+    """Mirrors /github/status — App-only.
+
+    "Connected" means the user has at least one non-suspended GitHub App
+    installation linked. Same query as ``routes/github/github_app.py::github_status``.
+    No live GitHub API call here — that would require minting an
+    installation token per status check, which dwarfs the value over a
+    DB lookup that already reflects ``installation`` webhook updates.
+    """
     try:
-        r = requests.get(
-            "https://api.github.com/user",
-            headers={"Authorization": f"token {access_token}"},
-            timeout=HTTP_TIMEOUT,
-        )
-        if r.status_code == 200:
-            return {"connected": True}
-        return {"connected": False}
-    except Exception:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT 1
+                         FROM user_github_installations ugi
+                         JOIN github_installations gi
+                              ON gi.installation_id = ugi.installation_id
+                        WHERE ugi.user_id = %s
+                          AND gi.suspended_at IS NULL
+                        LIMIT 1""",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return {"connected": bool(row)}
+    except Exception as exc:
+        logger.debug("[STATUS] github App check failed: %s", exc)
         return {"connected": False}
 
 
@@ -688,7 +699,9 @@ PROVIDER_CHECKERS = {
     "jira": _check_jira,
     "slack": _check_slack,
     "google_chat": _check_google_chat,
-    "github": _check_github,
+    # github is checked via the (user_id, org_id) special-case branch
+    # in _run_check — uses ``user_github_installations`` instead of
+    # ``user_tokens`` since the App migration removed OAuth-token storage.
     "bitbucket": _check_bitbucket,
     "thousandeyes": _check_thousandeyes,
     "scaleway": _check_scaleway,
@@ -768,6 +781,8 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             return provider, _check_kubectl(user_id, org_id)
         if provider == "grafana":
             return provider, _check_grafana(user_id, org_id)
+        if provider == "github":
+            return provider, _check_github(user_id, org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
@@ -791,6 +806,9 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
     providers.setdefault("onprem", user_id)
     providers.setdefault("kubectl", user_id)
     providers.setdefault("grafana", user_id)
+    # github status comes from user_github_installations, not user_tokens,
+    # so seed it explicitly so the dispatcher always evaluates it.
+    providers.setdefault("github", user_id)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = {

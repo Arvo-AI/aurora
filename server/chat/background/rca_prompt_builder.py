@@ -393,11 +393,10 @@ def _build_provider_investigation_section(providers: List[str], user_id: Optiona
     return ""
 
 def _get_github_connected(user_id: str) -> bool:
-    """Check if user has GitHub connected."""
+    """Check if user has the GitHub App linked (any non-suspended installation)."""
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        creds = get_credentials_from_db(user_id, "github")
-        return bool(creds and creds.get("access_token"))
+        from utils.auth.github_auth_router import _lookup_any_active_installation
+        return _lookup_any_active_installation(user_id) is not None
     except Exception as e:
         logger.warning(f"Error checking GitHub connection for user {user_id}: {e}")
         return False
