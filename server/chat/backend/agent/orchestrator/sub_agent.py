@@ -134,6 +134,22 @@ def _truncate(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
     return s if len(s) <= limit else s[:limit] + "...[truncated]"
 
 
+def _serialize_args(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
+    """JSON-encode tool args so downstream consumers can json.loads without
+    needing a Python-repr fallback. Falls back to str() for non-serializable
+    values (rare; keeps the field non-empty)."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        s = value
+    else:
+        try:
+            s = json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            s = str(value)
+    return s if len(s) <= limit else s[:limit] + "...[truncated]"
+
+
 def _extract_tool_call_history(tool_capture) -> list[dict]:
     """Serialize ToolContextCapture's per-session tool calls as a small list.
 
@@ -160,7 +176,7 @@ def _extract_tool_call_history(tool_capture) -> list[dict]:
                 seen_ids.add(call_id)
             items.append({
                 "tool_name": _truncate(entry.get("tool_name") or "unknown", 128),
-                "args": _truncate(entry.get("input"), _MAX_HISTORY_FIELD_CHARS),
+                "args": _serialize_args(entry.get("input")),
                 "output_excerpt": _truncate(entry.get("output_excerpt") or "", _MAX_HISTORY_FIELD_CHARS),
                 "is_error": bool(entry.get("is_error", False)),
                 "status": "error" if entry.get("is_error", False) else "completed",
@@ -180,7 +196,7 @@ def _extract_tool_call_history(tool_capture) -> list[dict]:
                 started_iso = None
             items.append({
                 "tool_name": _truncate(info.get("tool_name") or "unknown", 128),
-                "args": _truncate(info.get("input"), _MAX_HISTORY_FIELD_CHARS),
+                "args": _serialize_args(info.get("input")),
                 "output_excerpt": "",
                 "is_error": False,
                 "status": "running",

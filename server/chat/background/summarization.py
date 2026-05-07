@@ -588,9 +588,12 @@ def generate_incident_summary_from_chat(
             )
             return {"incident_id": incident_id, "status": "not_found"}
 
-        # Extract citations from the chat session (citations are simply tool calls and their outputs)
+        # Extract citations from the chat session (citations are simply tool calls and their outputs).
+        # Passing incident_id expands dispatch_subagent rollups into per-tool-call citations.
         extractor = CitationExtractor()
-        all_citations = extractor.extract_citations_from_session(session_id, user_id)
+        all_citations = extractor.extract_citations_from_session(
+            session_id, user_id, incident_id=incident_id,
+        )
 
         logger.info(
             f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"

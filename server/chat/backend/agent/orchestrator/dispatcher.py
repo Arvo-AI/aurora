@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_SUBAGENTS_PER_WAVE = 6
 
+DISPATCH_SUBAGENT_TOOL_NAME = "dispatch_subagent"
+
 
 def dispatch_tool_call_id(incident_id: str, agent_id: str, wave: int) -> str:
     """Deterministic synthetic tool_call id shared by dispatch and synthesis.
@@ -116,7 +118,7 @@ def _build_dispatch_aimessage(state: State) -> Optional[AIMessage]:
             continue
         tool_calls.append({
             "id": dispatch_tool_call_id(incident_id, inp.agent_id, wave),
-            "name": "dispatch_subagent",
+            "name": DISPATCH_SUBAGENT_TOOL_NAME,
             "args": {
                 "agent_id": inp.agent_id,
                 "role_name": inp.role_name,

@@ -13,7 +13,10 @@ from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.orchestrator.usage import track_orchestrator_call
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.orchestrator.inputs import SubAgentInput
-from chat.backend.agent.orchestrator.dispatcher import dispatch_tool_call_id
+from chat.backend.agent.orchestrator.dispatcher import (
+    DISPATCH_SUBAGENT_TOOL_NAME,
+    dispatch_tool_call_id,
+)
 from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
@@ -225,7 +228,7 @@ def _build_tool_messages(state: State, incident_id: str, target_wave: int) -> li
         out.append(ToolMessage(
             content=content,
             tool_call_id=tc_id,
-            name="dispatch_subagent",
+            name=DISPATCH_SUBAGENT_TOOL_NAME,
             additional_kwargs={
                 "self_assessed_strength": ref.get("self_assessed_strength"),
             },
