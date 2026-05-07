@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { stripFindingsFrontMatter } from '@/lib/findings-markdown';
+import { formatRoleName } from '@/lib/sub-agent-format';
 import type { ToolCallHistoryEntry } from '@/components/chat/subagent-detail-panel';
 import ToolCallWidget from '@/components/tool-calls/ToolCallWidget';
 import { historyEntryId, historyEntryToToolCall } from '@/components/tool-calls/history';
@@ -215,8 +216,8 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
           <StatusIcon status={finding.status} />
         </span>
         <span className="block min-w-0 flex-1">
-          <span className="mr-1.5 inline-block rounded-sm border border-zinc-700 bg-zinc-800/40 px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase tracking-wide text-zinc-400">
-            {finding.role_name}
+          <span className="mr-1.5 inline-block rounded-sm border border-zinc-700 bg-zinc-800/40 px-1.5 py-0.5 align-middle text-[10px] font-medium tracking-wide text-zinc-300">
+            {formatRoleName(finding.role_name)}
           </span>
           <span
             className="break-words align-middle text-xs text-zinc-300 [overflow-wrap:anywhere]"
@@ -248,7 +249,7 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
         <div className="border-t border-zinc-800 px-3 py-3">
           {/* Header recap */}
           <div className="mb-3">
-            <div className="text-xs font-medium text-zinc-200">{finding.role_name}</div>
+            <div className="text-xs font-medium text-zinc-200">{formatRoleName(finding.role_name)}</div>
             {finding.purpose && (
               <p className="mt-0.5 whitespace-pre-wrap text-[11px] text-zinc-500">
                 {finding.purpose}

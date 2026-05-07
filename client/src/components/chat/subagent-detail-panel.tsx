@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { stripFindingsFrontMatter } from "@/lib/findings-markdown";
+import { formatRoleName } from "@/lib/sub-agent-format";
 import ToolCallWidget from "@/components/tool-calls/ToolCallWidget";
 import { historyEntryId, historyEntryToToolCall } from "@/components/tool-calls/history";
 
@@ -121,7 +122,8 @@ const SubAgentDetailPanel = ({
     };
   }, [incidentId, agentId, reloadKey]);
 
-  const displayRole = finding?.role_name || roleName || agentId;
+  const rawRole = finding?.role_name || roleName;
+  const displayRole = rawRole ? formatRoleName(rawRole) : agentId;
   const displayPurpose = purpose || "";
   const timeWindow = finding?.time_window;
 

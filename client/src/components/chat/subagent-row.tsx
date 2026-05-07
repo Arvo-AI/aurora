@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { ToolCall, parseDispatchToolCall } from "@/app/chat/types";
+import { formatRoleName } from "@/lib/sub-agent-format";
 
 interface SubAgentRowProps {
   toolCall: ToolCall;
@@ -73,8 +74,8 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
   const content = (
     <>
       <StatusIcon toolCall={toolCall} />
-      <span className="rounded-sm border border-input bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-        {parsed.role_name}
+      <span className="rounded-sm border border-input bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-foreground">
+        {formatRoleName(parsed.role_name)}
       </span>
       <span className="flex-1 truncate text-foreground" title={parsed.purpose}>
         {parsed.purpose}
