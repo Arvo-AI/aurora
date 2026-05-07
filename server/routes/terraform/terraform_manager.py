@@ -1360,37 +1360,6 @@ class TerraformManager:
         and picked up via TF_CLI_CONFIG_FILE environment variable."""
         pass
 
-    def _test_network_connectivity(self) -> None:
-        """Test basic network connectivity to HashiCorp registry."""
-        try:
-            import socket
-            import urllib.request
-            
-            # Test DNS resolution for registry.terraform.io
-            try:
-                socket.gethostbyname('registry.terraform.io')
-                logger.info(" DNS resolution successful for registry.terraform.io")
-            except socket.gaierror as e:
-                logger.warning(f" DNS resolution failed for registry.terraform.io: {e}")
-                # Try to resolve 8.8.8.8 to check if DNS is working at all
-                try:
-                    socket.gethostbyname('8.8.8.8')
-                    logger.info("Basic DNS is working, registry.terraform.io might be temporarily unavailable")
-                except:
-                    logger.error("DNS resolution completely broken - network issues detected")
-            
-            # Test HTTP connectivity to registry (with timeout)
-            try:
-                req = urllib.request.Request('https://registry.terraform.io/v1/providers/hashicorp/aws')
-                req.add_header('User-Agent', 'Terraform/1.0')
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    if response.status == 200:
-                        logger.info(" HTTP connectivity successful to Terraform registry")
-            except Exception as e:
-                logger.warning(f" HTTP connectivity test failed: {e}")
-                
-        except Exception as e:
-            logger.warning(f"Network connectivity test failed: {e}")
 
     def _verify_terraform_registry_access(self) -> bool:
         """Verify that we can access the Terraform registry before attempting init."""
