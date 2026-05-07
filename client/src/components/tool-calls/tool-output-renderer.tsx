@@ -100,7 +100,7 @@ export function RenderOutput({
     if (isIacTool(toolName) && isHclContent(output)) {
       const trimmedOutput = output.trim()
       const lineCount = trimmedOutput.split('\n').length
-      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 300)
+      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 500)
 
       return (
         <IaCEditorPanel
@@ -367,7 +367,7 @@ export function RenderOutput({
     if (isIacTool(toolName) && isHclContent(chatOutput)) {
       const trimmedChatOutput = chatOutput.trim()
       const lineCount = trimmedChatOutput.split('\n').length
-      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 300)
+      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 500)
 
       return (
         <IaCEditorPanel

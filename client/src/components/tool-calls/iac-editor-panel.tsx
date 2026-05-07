@@ -112,7 +112,7 @@ export const IaCEditorPanel = ({
   return (
     <div
       ref={containerRef}
-      className="overflow-hidden border border-border rounded-md"
+      className="overflow-auto border border-border rounded-md"
       style={{ height: `${height}px` }}
     />
   )
