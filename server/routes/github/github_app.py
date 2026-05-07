@@ -445,7 +445,7 @@ def github_app_unlink_installation(user_id, installation_id):
     return jsonify({"success": True, "installation_id": installation_id})
 
 
-@github_app_bp.route("/status", methods=["GET", "OPTIONS"])
+@github_app_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def github_status(user_id):
     """Connection status for the GitHub connector.
@@ -484,7 +484,7 @@ def github_status(user_id):
     return jsonify({"connected": True, "username": row[0]})
 
 
-@github_app_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+@github_app_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
     """Sever ALL GitHub App links for this user.
