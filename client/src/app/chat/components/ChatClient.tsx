@@ -120,7 +120,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     router.push('/chat');
   }, [router]);
 
-  const { data: actionsData } = useQuery<{ actions: { id: string; name: string }[] }>(
+  const { data: actionsData } = useQuery<{ id: string; name: string }[] | { actions: { id: string; name: string }[] }>(
     '/api/actions',
     async (key: string, signal: AbortSignal) => {
       const res = await fetch(key, { credentials: 'include', signal });
@@ -129,7 +129,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     },
     { staleTime: 60_000, revalidateOnEvents: ['actionsStateChanged'] },
   );
-  const availableActions = actionsData?.actions ?? [];
+  const availableActions = Array.isArray(actionsData) ? actionsData : (actionsData?.actions ?? []);
 
   const {
     selectedModel,
