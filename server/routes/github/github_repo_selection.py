@@ -11,7 +11,6 @@ import logging
 import json
 from flask import Blueprint, jsonify, request
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_credentials_from_db
 from utils.db.connection_pool import db_pool
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
@@ -83,19 +82,14 @@ def get_repo_selections(user_id):
                 )
                 rows = cur.fetchall()
 
-        oauth_creds = get_credentials_from_db(user_id, "github")
-        oauth_available = bool(oauth_creds and oauth_creds.get("access_token"))
-
         repos = []
         for r in rows:
             installation_id = r[8]
             has_active_installation = r[9]
-            if installation_id is not None and has_active_installation:
-                auth_method = "app"
-            elif oauth_available:
-                auth_method = "oauth"
-            else:
-                auth_method = None
+            auth_method = (
+                "app" if installation_id is not None and has_active_installation
+                else None
+            )
             repos.append({
                 "repo_full_name": r[0],
                 "repo_id": r[1],

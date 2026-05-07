@@ -50,7 +50,6 @@ from utils.auth.github_auth_router import (
     make_auth_header,
 )
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_credentials_from_db
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -193,65 +192,17 @@ def _fetch_installation_repos(token: str, installation_id: int) -> list[dict[str
     return all_repos
 
 
-def _fetch_oauth_repos(token: str) -> list[dict[str, Any]]:
-    """Paginate ``GET /user/repos`` using a legacy OAuth token."""
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-    }
-    all_repos: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        try:
-            resp = requests.get(
-                "https://api.github.com/user/repos",
-                headers=headers,
-                params={"sort": "updated", "per_page": _PER_PAGE, "page": page},
-                timeout=_GITHUB_TIMEOUT,
-            )
-        except requests.RequestException as exc:
-            logger.warning(
-                "[USER-REPOS] OAuth-mode list failed: %s", type(exc).__name__,
-            )
-            break
-        if resp.status_code != 200:
-            logger.error(
-                "[USER-REPOS] OAuth-mode list returned status=%d", resp.status_code,
-            )
-            break
-        try:
-            repos = resp.json()
-        except ValueError:
-            logger.error("[USER-REPOS] OAuth-mode response not JSON")
-            break
-        if not isinstance(repos, list) or not repos:
-            break
-        all_repos.extend(repos)
-        if len(repos) < _PER_PAGE:
-            break
-        page += 1
-        if page > _REPOS_PAGE_LIMIT:
-            logger.warning("[USER-REPOS] OAuth-mode pagination safety limit hit")
-            break
-    return all_repos
-
-
 def _list_repos_for_user(user_id: str) -> list[dict[str, Any]]:
-    """Return merged App+OAuth repos for ``user_id`` with auth tagging.
-
-    Order of operations (matches the auth-router precedence):
+    """Return App-installable repos for ``user_id``.
 
     1. Batched lookup of ``user_github_installations`` (single SELECT).
     2. For each installation, mint an installation token and call
        ``GET /installation/repositories``. Suspended installations are
        skipped silently (logged at INFO) so a partially-broken account
        still gets the rest of its repos.
-    3. If the user has an OAuth credential, call ``GET /user/repos`` and
-       only include OAuth repos with ``permissions.push == True`` (the
-       legacy filter — App-installed repos are pre-filtered by GitHub
-       so they don't need this check).
-    4. Dedupe by ``repo_full_name``: App entries written first, OAuth
-       entries skipped when their ``full_name`` already exists. App wins.
+    3. Dedupe by ``repo_full_name`` — first write wins. Multiple
+       installations exposing the same repo (org-A + org-B both
+       installed on the same fork) is rare but tolerated.
     """
     repos_by_full_name: dict[str, dict[str, Any]] = {}
 
@@ -276,24 +227,10 @@ def _list_repos_for_user(user_id: str) -> list[dict[str, Any]]:
             full_name = repo.get("full_name")
             if not full_name:
                 continue
-            # First write wins per (full_name) at the App layer; multiple
-            # installations of the same App on org-A and org-B legitimately
-            # exposing the same repo is rare but tolerated here.
             if full_name not in repos_by_full_name:
                 repos_by_full_name[full_name] = _simplify_repo(
                     repo, "app", installation_id,
                 )
-
-    github_creds = get_credentials_from_db(user_id, "github")
-    oauth_token = github_creds.get("access_token") if github_creds else None
-    if oauth_token:
-        for repo in _fetch_oauth_repos(oauth_token):
-            full_name = repo.get("full_name")
-            if not full_name or full_name in repos_by_full_name:
-                continue
-            if not repo.get("permissions", {}).get("push", False):
-                continue
-            repos_by_full_name[full_name] = _simplify_repo(repo, "oauth", None)
 
     return list(repos_by_full_name.values())
 
