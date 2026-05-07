@@ -1220,7 +1220,8 @@ async def handle_connection(websocket) -> None:
             mode_input = data.get('mode')    # Extract chat mode (agent / ask)
             attachments = data.get('attachments', []) # Extract file attachments if present
             trigger_rca_requested = data.get('trigger_rca') is True
-            trigger_action_id = data.get('trigger_action')
+            raw_action_id = data.get('trigger_action')
+            trigger_action_id = raw_action_id if isinstance(raw_action_id, str) and raw_action_id else None
 
             mode = _normalize_mode(mode_input)
 

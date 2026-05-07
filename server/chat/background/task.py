@@ -1274,7 +1274,13 @@ def _append_block_message(session_id: str, user_id: str, text: str) -> None:
                 set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
                 cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
                 row = cursor.fetchone()
-                messages = json.loads(row[0]) if row and row[0] else []
+                raw = row[0] if row else None
+                if isinstance(raw, list):
+                    messages = raw
+                elif raw:
+                    messages = json.loads(raw)
+                else:
+                    messages = []
                 messages.append({"sender": "bot", "text": text, "message_number": len(messages) + 1})
                 cursor.execute(
                     "UPDATE chat_sessions SET messages = %s::jsonb, updated_at = %s WHERE id = %s",
