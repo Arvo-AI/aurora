@@ -3,7 +3,6 @@
  * Uses CodeMirror 6 with syntax highlighting. Read-only display.
  */
 
-import * as React from "react"
 import { useRef, useEffect } from "react"
 import type { JSX } from "react"
 import { EditorState } from "@codemirror/state"
@@ -11,15 +10,17 @@ import { EditorView, lineNumbers, highlightSpecialChars } from "@codemirror/view
 import { syntaxHighlighting, HighlightStyle, StreamLanguage } from "@codemirror/language"
 import { tags } from "@lezer/highlight"
 
+const matchBlockComment = (stream: { match: (r: RegExp) => unknown; next: () => unknown }) => {
+  while (!stream.match(/\*\//)) {
+    if (!stream.next()) break
+  }
+  return "comment" as const
+}
+
 const hclLanguage = StreamLanguage.define({
   token(stream) {
     if (stream.match(/\/\/.*/)) return "comment"
-    if (stream.match(/\/\*/)) {
-      while (!stream.match(/\*\//)) {
-        if (!stream.next()) break
-      }
-      return "comment"
-    }
+    if (stream.match(/\/\*/)) return matchBlockComment(stream)
     if (stream.match(/#.*/)) return "comment"
     if (stream.match(/"(?:[^"\\]|\\.)*"/)) return "string"
     if (stream.match(/<<-?\w+/)) return "string"
@@ -27,7 +28,7 @@ const hclLanguage = StreamLanguage.define({
     if (stream.match(/\b(string|number|bool|list|map|set|object|tuple|any)\b/)) return "typeName"
     if (stream.match(/\b(true|false|null)\b/)) return "atom"
     if (stream.match(/\b\d+(\.\d+)?\b/)) return "number"
-    if (stream.match(/[{}\[\]()=]/)) return "punctuation"
+    if (stream.match(/[{}[\]()=]/)) return "punctuation"
     if (stream.match(/[a-zA-Z_][\w-]*/)) return "variableName"
     stream.next()
     return null
@@ -82,8 +83,7 @@ export const IaCEditorPanel = ({
       EditorView.editable.of(false),
     ]
     if (themeMode === "dark") {
-      extensions.push(darkTheme)
-      extensions.push(syntaxHighlighting(darkHighlight))
+      extensions.push(darkTheme, syntaxHighlighting(darkHighlight))
     }
 
     const state = EditorState.create({ doc: value, extensions })

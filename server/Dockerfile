@@ -70,27 +70,32 @@ RUN ARCH=$(uname -m) && \
 RUN mkdir -p /opt/terraform-providers /tmp/_mirror-src
 
 RUN cd /tmp/_mirror-src && \
-    printf 'terraform {\n  required_providers {\n    p = {\n      source = "ovh/ovh"\n      version = ">= 0.36.0"\n    }\n  }\n}\n' > main.tf && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "ovh/ovh"\n      version = ">= 0.36.0"\n    }\n  }\n}\n' \
+      > main.tf && \
     terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
     rm main.tf
 
 RUN cd /tmp/_mirror-src && \
-    printf 'terraform {\n  required_providers {\n    p = {\n      source = "scaleway/scaleway"\n      version = ">= 2.0"\n    }\n  }\n}\n' > main.tf && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "scaleway/scaleway"\n      version = ">= 2.0"\n    }\n  }\n}\n' \
+      > main.tf && \
     terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
     rm main.tf
 
 RUN cd /tmp/_mirror-src && \
-    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/google"\n      version = "~> 4.0"\n    }\n  }\n}\n' > main.tf && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/google"\n      version = "~> 4.0"\n    }\n  }\n}\n' \
+      > main.tf && \
     terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
     rm main.tf
 
 RUN cd /tmp/_mirror-src && \
-    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/azurerm"\n      version = "~> 3.0"\n    }\n  }\n}\n' > main.tf && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/azurerm"\n      version = "~> 3.0"\n    }\n  }\n}\n' \
+      > main.tf && \
     terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
     rm main.tf
 
 RUN cd /tmp/_mirror-src && \
-    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n' > main.tf && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n' \
+      > main.tf && \
     terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
     rm -rf /tmp/_mirror-src
 

@@ -1,9 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, createContext, useContext } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { useUser } from "@/hooks/useAuthHooks";
-import { signOut } from "next-auth/react";
 import { ThemeProvider } from "next-themes";
 import { ProviderPreferenceProvider } from "@/context/ProviderPreferenceContext";
 import { Toaster } from "@/components/ui/toaster";
@@ -57,9 +54,6 @@ interface ClientShellProps {
 }
 
 export default function ClientShell({ children }: ClientShellProps) {
-  const pathname = usePathname();
-  const router = useRouter();
-  const { user, isLoaded } = useUser();
   useConnectionHealth();
 
   // All the state that was in layout.tsx

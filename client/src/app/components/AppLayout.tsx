@@ -4,7 +4,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useUser } from "@/hooks/useAuthHooks";
 import { signOut } from "next-auth/react";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Settings, LogOut } from "lucide-react";

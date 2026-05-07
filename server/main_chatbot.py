@@ -1321,7 +1321,6 @@ async def handle_connection(websocket) -> None:
                     logger.info(f"Executing direct iac_tool call with params: {parameters}")
 
                     try:
-                        # set_user_context already imported at top of file
                         from chat.backend.agent.tools.iac_tool import run_iac_tool
 
                         set_user_context(
