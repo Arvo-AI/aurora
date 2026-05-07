@@ -134,6 +134,46 @@ def _truncate(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
     return s if len(s) <= limit else s[:limit] + "...[truncated]"
 
 
+# Map cloud_exec providers to their CLI prefix. Mirrors the frontend's
+# getProviderCli so the captured command string already includes the prefix
+# (e.g. "aws cloudwatch ...") and CommandLogo can pick the right icon from
+# command.startsWith without needing a separate provider field.
+_PROVIDER_CLI = {
+    "aws": "aws",
+    "gcp": "gcloud", "gcloud": "gcloud",
+    "azure": "az", "az": "az",
+    "ovh": "ovhcloud", "ovhcloud": "ovhcloud",
+    "scaleway": "scw", "scw": "scw",
+}
+_RECOGNIZED_CLI_PREFIXES = (
+    "aws ", "gcloud ", "gsutil ", "bq ", "az ",
+    "ovhcloud ", "scw ",
+    "kubectl ", "helm ", "docker ",
+)
+
+
+def _entry_command(input_value, limit: int = 1024) -> str:
+    """Pull the display-ready command/query out of a tool's input dict before
+    the full args blob is truncated. Without this, large inputs (e.g. cloudwatch
+    get-metric-data with embedded JSON queries) get cut mid-string and downstream
+    consumers can't recover the command for the citation/Thoughts UI."""
+    if not isinstance(input_value, dict):
+        return ""
+    cmd = input_value.get("command")
+    if isinstance(cmd, str) and cmd.strip():
+        provider = input_value.get("provider")
+        if provider:
+            cli = _PROVIDER_CLI.get(str(provider).lower())
+            if cli and not cmd.lstrip().startswith(_RECOGNIZED_CLI_PREFIXES):
+                cmd = f"{cli} {cmd.lstrip()}"
+        return _truncate(cmd, limit)
+    for key in ("query", "path", "promql"):
+        v = input_value.get(key)
+        if v:
+            return _truncate(str(v), limit)
+    return ""
+
+
 def _serialize_args(value, limit: int = _MAX_HISTORY_FIELD_CHARS) -> str:
     """JSON-encode tool args so downstream consumers can json.loads without
     needing a Python-repr fallback. Falls back to str() for non-serializable
@@ -174,9 +214,11 @@ def _extract_tool_call_history(tool_capture) -> list[dict]:
                 continue
             if call_id:
                 seen_ids.add(call_id)
+            input_dict = entry.get("input")
             items.append({
                 "tool_name": _truncate(entry.get("tool_name") or "unknown", 128),
-                "args": _serialize_args(entry.get("input")),
+                "args": _serialize_args(input_dict),
+                "command": _entry_command(input_dict),
                 "output_excerpt": _truncate(entry.get("output_excerpt") or "", _MAX_HISTORY_FIELD_CHARS),
                 "is_error": bool(entry.get("is_error", False)),
                 "status": "error" if entry.get("is_error", False) else "completed",
@@ -194,9 +236,11 @@ def _extract_tool_call_history(tool_capture) -> list[dict]:
                 started_iso = started.isoformat() if started else None
             except Exception:
                 started_iso = None
+            input_dict = info.get("input")
             items.append({
                 "tool_name": _truncate(info.get("tool_name") or "unknown", 128),
-                "args": _serialize_args(info.get("input")),
+                "args": _serialize_args(input_dict),
+                "command": _entry_command(input_dict),
                 "output_excerpt": "",
                 "is_error": False,
                 "status": "running",

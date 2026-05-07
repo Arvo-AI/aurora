@@ -31,6 +31,9 @@ export function historyEntryToToolCall(
   id: string,
   isExpanded: boolean,
 ): ToolCall {
+  // `entry.command` is captured server-side before the args blob is truncated,
+  // so the widget can show the actual command even when args/output are clipped.
+  const entryCommand = (entry as { command?: string }).command;
   return {
     id,
     tool_name: entry.tool_name,
@@ -39,5 +42,6 @@ export function historyEntryToToolCall(
     status: HISTORY_TO_TOOLCALL_STATUS[entry.status] ?? 'completed',
     timestamp: entry.started_at ?? '',
     isExpanded,
+    ...(entryCommand ? { command: entryCommand } : {}),
   };
 }

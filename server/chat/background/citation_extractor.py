@@ -338,11 +338,16 @@ class CitationExtractor:
             inner_tool = entry.get("tool_name") or "unknown"
             if inner_tool in _NON_EVIDENCE_TOOLS:
                 continue
-            args = self._parse_history_args(entry.get("args") or entry.get("input"))
+            # `command` is captured server-side before args truncation; prefer
+            # it. Fall back to parsing args/output for entries without it.
+            command = entry.get("command") or ""
+            if not command:
+                args = self._parse_history_args(entry.get("args") or entry.get("input"))
+                command = self._extract_command(args, output_excerpt, inner_tool)
             started_at = entry.get("started_at")
             rows.append({
                 "tool_name": self._normalize_tool_name(inner_tool),
-                "command": self._extract_command(args, output_excerpt, inner_tool),
+                "command": command,
                 "output": self._extract_output(output_excerpt),
                 "timestamp": self._parse_timestamp(started_at) if started_at else None,
                 "tool_call_id": inner_id,
