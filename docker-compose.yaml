@@ -205,11 +205,7 @@ services:
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
 
-      # GitHub OAuth
-      GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
-      GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
-
-      # GitHub App (alternative to OAuth)
+      # GitHub App (only auth path; OAuth was removed in feat/github-app-only)
       GITHUB_APP_ID: ${GITHUB_APP_ID}
       GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
       GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
