@@ -1,8 +1,26 @@
-const FRONT_MATTER_RE = /^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/;
+function isLeadingSkippable(ch: string): boolean {
+  return ch === '﻿' || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+}
 
 export function stripFindingsFrontMatter(md: string): string {
   if (!md) return md;
-  const s = md.replace(/^[﻿\s]+/, '');
-  const m = s.match(FRONT_MATTER_RE);
-  return m ? s.slice(m[0].length) : md;
+
+  let start = 0;
+  while (start < md.length && isLeadingSkippable(md[start])) start++;
+
+  if (md.charCodeAt(start) !== 45 || md.charCodeAt(start + 1) !== 45 || md.charCodeAt(start + 2) !== 45) return md;
+  const openNl = md.indexOf('\n', start + 3);
+  if (openNl < 0 || md.slice(start + 3, openNl).trim() !== '') return md;
+
+  let i = openNl + 1;
+  while (i < md.length) {
+    const nl = md.indexOf('\n', i);
+    const lineEnd = nl < 0 ? md.length : nl;
+    if (md.slice(i, lineEnd).trim() === '---') {
+      return nl < 0 ? '' : md.slice(nl + 1);
+    }
+    if (nl < 0) break;
+    i = nl + 1;
+  }
+  return md;
 }
