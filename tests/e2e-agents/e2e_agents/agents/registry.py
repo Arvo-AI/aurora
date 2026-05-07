@@ -18,6 +18,7 @@ LABEL_ALIASES = {
     "area:frontend": "general",
     "area:ui": "general",
     "area:rca": "area:incidents",
+    "test:custom": "test:custom",
 }
 
 
