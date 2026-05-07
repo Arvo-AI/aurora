@@ -1,23 +1,25 @@
 # GitHub App Setup
 
-Operator one-time setup for the Aurora GitHub App. After this is done, end
-users see an "Install GitHub App" button on the GitHub connector page; the
-existing OAuth path stays untouched and continues to work.
+Operator one-time setup for the Aurora GitHub App — the only auth path
+to GitHub since the OAuth flow was removed in `feat/github-app-only`.
+After this is done, end users see an "Install GitHub App" button on
+the GitHub connector page.
 
 This guide assumes you have shell access to the host running Aurora and to
-the Vault container.
+the Vault container. For a scripted alternative, see
+`server/scripts/register_github_app.py` which drives GitHub's App Manifest
+flow and writes credentials directly into `.env` + Vault.
 
 ---
 
-## Why GitHub App
+## What the App gives Aurora
 
-The GitHub App path gives Aurora a stable, installation-scoped identity per
-repository. Compared to the legacy OAuth flow it removes per-user rate-limit
-contention, narrows permissions to exactly what Aurora needs (no
-`repo`-scope all-or-nothing), survives the connecting user leaving the org,
-and unlocks real-time webhook delivery for incident-correlation events
-(`pull_request`, `deployment`, `workflow_run`, `check_run`, etc.). For the
-full comparison, see the connector [README](./README.md).
+Stable installation-scoped identity per repository, fine-grained read
+permissions on Contents/Issues/Pull-requests/Actions/Deployments/Checks,
+real-time webhooks for incident-correlation events (`pull_request`,
+`deployment`, `workflow_run`, `check_run`, etc.), and a 5,000-req/hr
+rate-limit budget that scales with installation count rather than user
+count. For the capability matrix see the connector [README](./README.md).
 
 ---
 
@@ -240,10 +242,6 @@ NEXT_PUBLIC_GITHUB_APP_SLUG=<slug-from-step-6>
 The frontend uses this slug to build the install URL
 (`https://github.com/apps/<slug>/installations/new`).
 
-> The legacy OAuth env vars (`GH_OAUTH_CLIENT_ID`,
-> `GH_OAUTH_CLIENT_SECRET`) stay untouched. Both auth paths read their own
-> config independently.
-
 ---
 
 ## Step 9: Restart Aurora
@@ -341,7 +339,6 @@ docker exec aurora-postgres-1 psql -U aurora -d aurora_db \
 
 ## See also
 
-- [README.md](./README.md) — Connector overview and OAuth-vs-App comparison
-- [docs/oss/GITHUB_APP_MIGRATION.md](../../../docs/oss/GITHUB_APP_MIGRATION.md) — Migrating existing OAuth users to the App
+- [README.md](./README.md) — Connector overview
 - GitHub docs: [Creating a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app)
 - GitHub docs: [Authenticating as a GitHub App installation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)

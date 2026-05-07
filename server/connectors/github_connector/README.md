@@ -1,67 +1,43 @@
 # GitHub Connector
 
-Aurora supports **two independent authentication paths** for GitHub. Both
-remain available indefinitely; pick whichever fits your workflow.
+Aurora connects to GitHub via a **GitHub App** installation. The
+prior OAuth flow was removed in `feat/github-app-only`.
 
----
+## What the App gives Aurora
 
-## Two ways to connect: OAuth (existing) vs GitHub App (new, recommended)
-
-| Dimension | OAuth App | GitHub App |
-|---|---|---|
-| **Auth model** | Per-user OAuth token (acts as the user) | Installation token (acts as the App) |
-| **Rate limit** | 5,000 req/hr per user, shared across all OAuth tokens for that user | 5,000 req/hr per installation, isolated from user limits; scales with installed repo count |
-| **Permissions granularity** | Coarse (`repo`, `user`, `read:org`) — all-or-nothing per scope | Fine-grained per-resource (Contents R, Issues R, Pull requests R, Actions R, Deployments R, Commit statuses R, Metadata R, Webhooks R+W, Email addresses R) |
-| **Webhooks** | Not supported | Real-time delivery of `installation`, `installation_repositories`, `pull_request`, `issues`, `deployment`, `deployment_status`, `workflow_run`, `check_run`, `check_suite` |
-| **Who installs** | End-user clicks "Connect" — Aurora gets read access on every repo the user can see | Org admin (or user, on personal account) installs once and selects exactly which repos to grant |
-| **Org UX** | Each org member must reconnect individually | Single install per org; new members inherit access |
-| **Survives user departure** | Breaks when the OAuth-connecting user leaves the org | Survives — install is owned by the account, not by an individual user |
-| **Attribution** | Commits / comments by Aurora appear as the connecting user | Commits / comments appear as `aurora-<slug>[bot]` |
-| **Webhook secret rotation** | N/A | Manual (out of scope for this release) |
-
-**Recommendation**: Use the **GitHub App** path for new installs. The OAuth
-path remains supported for existing users and for environments where the
-operator has not yet configured an Aurora GitHub App.
-
-When a user has connected via **both** paths for the same repo, Aurora
-automatically prefers the GitHub App installation token (better rate limits,
-installation-scoped audit trail).
-
----
-
-## Which guide do I read?
-
-| If you want to... | Read |
+| Capability | Notes |
 |---|---|
-| Set up the new GitHub App path (operator one-time setup) | [SETUP_GITHUB_APP.md](./SETUP_GITHUB_APP.md) |
-| Migrate an existing OAuth-connected user / org to the App | [docs/oss/GITHUB_APP_MIGRATION.md](../../../docs/oss/GITHUB_APP_MIGRATION.md) |
-| Use the legacy OAuth App flow only | Continue below |
-
----
-
-# OAuth App Setup (legacy)
-
-OAuth App authentication for GitHub.
+| **Auth model** | Installation token (acts as the App, not as a user) |
+| **Rate limit** | 5,000 req/hr per installation, isolated from user limits; scales with installed repo count |
+| **Permissions** | Fine-grained read on Contents, Issues, Pull requests, Actions, Deployments, Checks, Metadata |
+| **Webhooks** | Real-time delivery of `installation`, `installation_repositories`, `pull_request`, `issues`, `deployment`, `deployment_status`, `workflow_run`, `check_run`, `check_suite` |
+| **Who installs** | Org admin (or user, on a personal account) installs once and selects exactly which repos to grant |
+| **Org UX** | Single install per org; new members inherit access |
+| **Survives user departure** | Yes — install is owned by the account, not by an individual user |
+| **Attribution** | Aurora appears as `<app-slug>[bot]` in any GitHub UI surface |
 
 ## Setup
 
-### 1. Create OAuth App
+| If you want to... | Read |
+|---|---|
+| Bootstrap a fresh App (one-time, scripted) | Run `python3 server/scripts/register_github_app.py --org <your-org>` |
+| Operator manual walkthrough (web UI, Vault paths, troubleshooting) | [SETUP_GITHUB_APP.md](./SETUP_GITHUB_APP.md) |
 
-1. Go to [GitHub > Settings > Developer settings > OAuth Apps](https://github.com/settings/developers)
-2. Click **New OAuth App**
-   - Application name: `Aurora`
-   - Homepage URL: `http://localhost:3000`
-   - Authorization callback URL: `http://localhost:5000/github/callback`
-3. Copy the **Client ID**
-4. Click **Generate a new client secret** and copy it
+The bootstrap script drives GitHub's App Manifest flow: opens a browser
+tab, captures the post-create redirect, and writes `.env` + Vault for
+you. The manual walkthrough is the fallback when you want to register
+through GitHub's web UI directly.
 
-### 2. Configure `.env`
+## Required `.env` keys
 
 ```bash
-GH_OAUTH_CLIENT_ID=your-github-client-id
-GH_OAUTH_CLIENT_SECRET=your-github-client-secret
+GITHUB_APP_ID=                    # numeric, from App settings page
+GITHUB_APP_CLIENT_ID=             # starts with Iv1. or Iv23.
+NEXT_PUBLIC_GITHUB_APP_SLUG=      # the URL slug, e.g. aurora-by-arvo
+GITHUB_APP_WEBHOOK_URL=           # https://<host>/github/webhook (must be public)
+GITHUB_APP_SETUP_URL=             # https://<host>/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=        # fallback if Vault path not set
 ```
 
-## Troubleshooting
-
-**"No authorization code provided"** — Verify callback URL in GitHub OAuth App matches exactly: `http://localhost:5000/github/callback`
+Plus the App's private key PEM in Vault at
+`aurora/system/github-app/private-key` (field `value`).
