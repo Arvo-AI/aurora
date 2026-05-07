@@ -12,7 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
-import { ToastAction } from "@/components/ui/toast";
 import { GitHubAppService, type GitHubInstallation } from '@/lib/github-app';
 export type { GitHubInstallation, GitHubInstallationsResponse } from '@/lib/github-app';
 
@@ -65,26 +64,6 @@ export class GitHubIntegrationService {
     const response = await fetch('/api/proxy/github/status');
     if (!response.ok) return { connected: false };
     return response.json();
-  }
-
-  static async initiateOAuth(): Promise<string> {
-    const response = await fetch('/api/proxy/github/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      if (errorData?.error_code === 'GITHUB_NOT_CONFIGURED') {
-        const err = new Error(errorData.message || 'GitHub OAuth is not configured');
-        (err as Error & { errorCode?: string; isHandled?: boolean }).errorCode = 'GITHUB_NOT_CONFIGURED';
-        (err as Error & { isHandled?: boolean }).isHandled = true;
-        throw err;
-      }
-      throw new Error('Failed to initiate GitHub OAuth');
-    }
-    const data = await response.json();
-    return data.oauth_url;
   }
 
   static async disconnect(): Promise<void> {
@@ -331,40 +310,6 @@ export default function GitHubProviderIntegration() {
     }
   };
 
-  const handleOAuthLogin = async () => {
-    if (!userId) return;
-    setIsLoading(true);
-    try {
-      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
-      const popup = window.open(oauthUrl, 'github-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
-      const checkClosed = setInterval(() => {
-        if (popup?.closed) {
-          clearInterval(checkClosed);
-          setIsLoading(false);
-          setTimeout(() => githubStatus.refresh(), 1000);
-        }
-      }, 1000);
-    } catch (error: unknown) {
-      const err = error as Error & { errorCode?: string };
-      if (err.errorCode === 'GITHUB_NOT_CONFIGURED') {
-        toast({
-          title: "GitHub OAuth Not Configured",
-          description: "GitHub OAuth environment variables are not configured.",
-          variant: "destructive",
-          action: (
-            <ToastAction altText="View setup guide"
-              onClick={() => window.open("https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md", "_blank")}>
-              <ExternalLink className="h-3 w-3 mr-1" />Setup Guide
-            </ToastAction>
-          ),
-        });
-      } else {
-        toast({ title: "Connection Failed", description: err.message || "Failed to connect to GitHub", variant: "destructive" });
-      }
-      setIsLoading(false);
-    }
-  };
-
   const handleDisconnect = async () => {
     if (!userId) return;
     try {
@@ -505,14 +450,14 @@ export default function GitHubProviderIntegration() {
         </div>
       </div>
 
-      {/* Dual CTA: Install GitHub App (recommended) or Connect via OAuth */}
+      {/* Install GitHub App CTA — only auth path. */}
       {!githubStatus.isAuthenticated && (
         <div className="mt-2 p-4 border border-border rounded-lg bg-muted/30 space-y-3">
           <p className="text-sm text-muted-foreground leading-relaxed">
-            Choose how to connect your GitHub account. <span className="font-medium text-foreground">Install the GitHub App</span> for
-            organizations &mdash; recommended for higher API rate limits, fine-grained
-            repository permissions, and real-time webhook delivery. <span className="font-medium text-foreground">Connect via OAuth</span> uses
-            your personal account access and works without installing an app.
+            <span className="font-medium text-foreground">Install the GitHub App</span> on your
+            organization to give Aurora read access to repos, deployments, and workflow runs.
+            Higher API rate limits, fine-grained repository permissions, and real-time webhook
+            delivery are all included.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -523,16 +468,6 @@ export default function GitHubProviderIntegration() {
             >
               {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
               Install GitHub App
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleOAuthLogin}
-              disabled={isLoading || !userId}
-              size="sm"
-              data-testid="github-oauth-cta"
-            >
-              {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
-              Connect via OAuth
             </Button>
           </div>
         </div>
