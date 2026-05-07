@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useChatExpansion } from "./ClientShell";
 import Navigation from "@/components/navigation";
-import { IaCWorkspace } from "@/components/iac/IaCWorkspace";
 
 // Dynamic imports for heavy components
 const SettingsModal = dynamic(() => import("@/components/SettingsModal").then(mod => ({ default: mod.SettingsModal })), {
@@ -219,14 +218,7 @@ function AppLayout({
     onChatSessionSelect,
     onNewChat,
     currentChatSessionId,
-    workspaceConfig,
-    closeWorkspace,
-    workspacePanelWidth,
-    setWorkspacePanelWidth,
   } = useChatExpansion();
-
-  const workspaceResizeState = useRef<{ startX: number; startWidth: number } | null>(null);
-  const [isWorkspaceResizing, setIsWorkspaceResizing] = useState(false);
 
   // Handlers for sidebar strip buttons
   const handleSidebarToggle = () => {
@@ -247,52 +239,6 @@ function AppLayout({
     setIsChatExpanded(!isChatExpanded);
   };
 
-  const handleWorkspacePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    if (!workspaceConfig) {
-      return;
-    }
-    workspaceResizeState.current = {
-      startX: event.clientX,
-      startWidth: workspacePanelWidth,
-    };
-    setIsWorkspaceResizing(true);
-  }, [workspaceConfig, workspacePanelWidth]);
-
-  useEffect(() => {
-    if (!isWorkspaceResizing) {
-      return;
-    }
-
-    const handlePointerMove = (event: PointerEvent) => {
-      if (!workspaceResizeState.current) return;
-      const { startX, startWidth } = workspaceResizeState.current;
-      const delta = startX - event.clientX;
-      const viewportWidth = window.innerWidth || 1440;
-      const minWidth = 400;
-      const maxWidth = Math.max(minWidth, Math.min(1600, viewportWidth - 280));
-      const nextWidth = Math.min(maxWidth, Math.max(minWidth, startWidth + delta));
-      setWorkspacePanelWidth(nextWidth);
-    };
-
-    const handlePointerUp = () => {
-      setIsWorkspaceResizing(false);
-      workspaceResizeState.current = null;
-    };
-
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp, { once: true });
-
-    return () => {
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [isWorkspaceResizing, setWorkspacePanelWidth]);
-
   // List of public routes that don't require authentication
   const publicRoutes = ["/", "/privacy", "/terms"];
   const isPublicRoute = publicRoutes.includes(pathname);
@@ -307,40 +253,9 @@ function AppLayout({
     <>
       <div className={`flex-1 ${pathname === "/chat" ? "flex overflow-hidden" : "overflow-auto"}`}>
         {pathname === "/chat" ? (
-          <>
-            <div className="flex-1 overflow-hidden">
-              {children}
-            </div>
-            {workspaceConfig?.type === "iac" && (
-              <>
-                <div
-                  className="hidden sm:flex w-3 cursor-col-resize flex-shrink-0 items-center justify-center group"
-                  onPointerDown={handleWorkspacePointerDown}
-                  title="Drag left/right to resize workspace️"
-                >
-                  <div className="flex flex-col gap-1">
-                    <div className="w-1 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
-                    <div className="w-1 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
-                    <div className="w-1 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
-                    <div className="w-1 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
-                    <div className="w-1 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
-                    <div className="w-1 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
-                  </div>
-                </div>
-                <div
-                  className="hidden sm:flex h-full flex-shrink-0 bg-background"
-                  style={{ width: `${workspacePanelWidth}px` }}
-                >
-                  <IaCWorkspace
-                    sessionId={workspaceConfig.sessionId}
-                    onClose={closeWorkspace}
-                    onSave={workspaceConfig.onSave}
-                    onPlan={workspaceConfig.onPlan}
-                  />
-                </div>
-              </>
-            )}
-          </>
+          <div className="flex-1 overflow-hidden">
+            {children}
+          </div>
         ) : (
           <div className="flex-1 overflow-auto">
             {children}

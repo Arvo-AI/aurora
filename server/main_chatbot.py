@@ -1322,6 +1322,7 @@ async def handle_connection(websocket) -> None:
                     try:
                         # set_user_context already imported at top of file
                         from chat.backend.agent.tools.iac_tool import run_iac_tool
+                        import uuid as _uuid
 
                         class MockState:
                             def __init__(self, session_id):
@@ -1351,6 +1352,19 @@ async def handle_connection(websocket) -> None:
                             }))
                             continue
 
+                        tool_call_id = f"direct-{_uuid.uuid4().hex[:12]}"
+
+                        await websocket.send(json.dumps({
+                            "type": "tool_call",
+                            "data": {
+                                "tool_call_id": tool_call_id,
+                                "tool_name": "iac_tool",
+                                "input": json.dumps(parameters),
+                                "status": "running",
+                                "session_id": session_id
+                            }
+                        }))
+
                         result_payload = run_iac_tool(
                             action=action,
                             path=parameters.get('path'),
@@ -1365,8 +1379,9 @@ async def handle_connection(websocket) -> None:
                         await websocket.send(json.dumps({
                             "type": "tool_result",
                             "data": {
+                                "tool_call_id": tool_call_id,
                                 "tool_name": 'iac_tool',
-                                "result": result_payload,
+                                "output": result_payload,
                                 "session_id": session_id
                             }
                         }))

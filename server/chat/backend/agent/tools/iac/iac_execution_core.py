@@ -43,6 +43,7 @@ def run_terraform_command(
             timeout=timeout,
             cwd=working_dir,
             env=isolated_env,
+            trusted=True,
         )
 
         # For terraform plan -detailed-exitcode, exit code 2 means "changes detected" (success)
