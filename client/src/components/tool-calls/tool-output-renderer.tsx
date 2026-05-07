@@ -96,7 +96,7 @@ export function RenderOutput({
       )
     }
 
-    // IAC tools with HCL content - use Monaco Editor
+    // IAC tools with HCL content - use CodeMirror editor
     if (isIacTool(toolName) && isHclContent(output)) {
       const trimmedOutput = output.trim()
       const lineCount = trimmedOutput.split('\n').length
@@ -105,11 +105,8 @@ export function RenderOutput({
       return (
         <IaCEditorPanel
           value={trimmedOutput}
-          onChange={() => {}}
-          readOnly={true}
           height={height}
           themeMode={theme}
-          language="terraform"
         />
       )
     }
@@ -372,11 +369,8 @@ export function RenderOutput({
       return (
         <IaCEditorPanel
           value={trimmedChatOutput}
-          onChange={() => {}}
-          readOnly={true}
           height={height}
           themeMode={theme}
-          language="terraform"
         />
       )
     }

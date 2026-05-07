@@ -1,14 +1,13 @@
 /**
- * Code editor panel for IaC content (Terraform HCL).
- * Uses CodeMirror 6 with syntax highlighting.
+ * Code viewer panel for IaC content (Terraform HCL).
+ * Uses CodeMirror 6 with syntax highlighting. Read-only display.
  */
 
 import * as React from "react"
-import { useRef, useEffect, useCallback } from "react"
+import { useRef, useEffect } from "react"
 import type { JSX } from "react"
 import { EditorState } from "@codemirror/state"
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } from "@codemirror/view"
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands"
+import { EditorView, lineNumbers, highlightSpecialChars } from "@codemirror/view"
 import { syntaxHighlighting, HighlightStyle, StreamLanguage } from "@codemirror/language"
 import { tags } from "@lezer/highlight"
 
@@ -59,65 +58,40 @@ const darkHighlight = HighlightStyle.define([
 
 interface IaCEditorPanelProps {
   value: string
-  onChange: (value: string) => void
-  readOnly?: boolean
   height: number
   themeMode: string
-  language?: string
 }
 
 export const IaCEditorPanel = ({
   value,
-  onChange,
-  readOnly = false,
   height,
   themeMode,
 }: IaCEditorPanelProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
-  const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
 
-  const createExtensions = useCallback(() => {
+  useEffect(() => {
+    if (!containerRef.current) return
+
     const extensions = [
       lineNumbers(),
-      highlightActiveLine(),
       highlightSpecialChars(),
-      history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
       hclLanguage,
       EditorView.lineWrapping,
-      EditorState.readOnly.of(readOnly),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
-          onChangeRef.current(update.state.doc.toString())
-        }
-      }),
+      EditorState.readOnly.of(true),
+      EditorView.editable.of(false),
     ]
     if (themeMode === "dark") {
       extensions.push(darkTheme)
       extensions.push(syntaxHighlighting(darkHighlight))
     }
-    return extensions
-  }, [readOnly, themeMode])
 
-  useEffect(() => {
-    if (!containerRef.current) return
-
-    const state = EditorState.create({
-      doc: value,
-      extensions: createExtensions(),
-    })
-
-    const view = new EditorView({
-      state,
-      parent: containerRef.current,
-    })
-
+    const state = EditorState.create({ doc: value, extensions })
+    const view = new EditorView({ state, parent: containerRef.current })
     viewRef.current = view
     return () => { view.destroy() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [themeMode, readOnly])
+  }, [themeMode])
 
   useEffect(() => {
     const view = viewRef.current

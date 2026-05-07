@@ -11,7 +11,6 @@ import { ChevronDown, ChevronUp, AlertCircle, Settings2 } from "lucide-react"
 import CommandLogo from "./CommandLogo"
 import { useTheme } from "next-themes"
 import { GitHubCommitTool } from "@/components/GitHubCommitTool"
-import { useUser } from '@/hooks/useAuthHooks'
 
 // Import modular utilities
 import {
@@ -31,17 +30,6 @@ import {
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
-interface ToolExecution {
-  tool_name: string
-  status: "pending" | "running" | "completed" | "error" | "awaiting_confirmation" | "cancelled" | "setting_up_environment"
-  input: string
-  output?: any
-  error?: string | null
-  command?: string
-  working_directory?: string
-  duration?: number
-}
-
 interface ToolExecutionWidgetProps {
   tool: ToolCall
   className?: string
@@ -53,7 +41,6 @@ interface ToolExecutionWidgetProps {
 }
 
 const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpdate, sessionId, userId }: ToolExecutionWidgetProps) => {
-  const [isTerminalFocused] = React.useState(false)
   const { theme } = useTheme()
 
   // SINGLE POINT OF NORMALIZATION: Ensure tool.input is always a string for all downstream parsing
@@ -350,7 +337,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
         </div>
 
         {/* Terminal Output */}
-        {showOutput && (isTerminalFocused || tool.status === "running" || tool.status === "setting_up_environment" || tool.status === "awaiting_confirmation" || tool.output || tool.error) && (
+        {showOutput && (tool.status === "running" || tool.status === "setting_up_environment" || tool.status === "awaiting_confirmation" || tool.output || tool.error) && (
           <div className="border-t border-border max-h-96 overflow-y-auto" style={{ backgroundColor: theme === 'dark' ? '#000000' : 'white' }}>
 
             {/* Show "Setting up environment" when terminal pod is being created */}
@@ -415,14 +402,6 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
               </div>
             )}
 
-            {isTerminalFocused && tool.status !== "running" && (
-              <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700">
-                <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
-                  <CommandLogo command={command} toolName={tool.tool_name} provider={provider} />
-                  <div className="w-2 h-4 bg-gray-500 dark:bg-gray-400 animate-pulse ml-1"></div>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
