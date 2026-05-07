@@ -10,17 +10,27 @@ import { EditorView, lineNumbers, highlightSpecialChars } from "@codemirror/view
 import { syntaxHighlighting, HighlightStyle, StreamLanguage } from "@codemirror/language"
 import { tags } from "@lezer/highlight"
 
-const matchBlockComment = (stream: { match: (r: RegExp) => unknown; next: () => unknown }) => {
-  while (!stream.match(/\*\//)) {
-    if (!stream.next()) break
+interface HclState { inBlockComment: boolean }
+
+const consumeBlockComment = (stream: { match: (r: RegExp) => unknown; next: () => unknown; eol: () => boolean }, state: HclState) => {
+  while (!stream.eol()) {
+    if (stream.match(/\*\//)) {
+      state.inBlockComment = false
+      return "comment"
+    }
+    stream.next()
   }
-  return "comment" as const
+  return "comment"
 }
 
-const hclLanguage = StreamLanguage.define({
-  token(stream) {
+const hclLanguage = StreamLanguage.define<HclState>({
+  token(stream, state) {
+    if (state.inBlockComment) return consumeBlockComment(stream, state)
     if (stream.match(/\/\/.*/)) return "comment"
-    if (stream.match(/\/\*/)) return matchBlockComment(stream)
+    if (stream.match(/\/\*/)) {
+      state.inBlockComment = true
+      return consumeBlockComment(stream, state)
+    }
     if (stream.match(/#.*/)) return "comment"
     if (stream.match(/"(?:[^"\\]|\\.)*"/)) return "string"
     if (stream.match(/<<-?\w+/)) return "string"
@@ -33,7 +43,7 @@ const hclLanguage = StreamLanguage.define({
     stream.next()
     return null
   },
-  startState() { return {} },
+  startState() { return { inBlockComment: false } },
 })
 
 const darkTheme = EditorView.theme({
