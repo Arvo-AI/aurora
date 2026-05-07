@@ -289,7 +289,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
     if (!confirm('Delete this action? This cannot be undone.')) return;
     try {
       await fetchR(`/api/actions/${actionId}`, { method: 'DELETE' });
-      window.dispatchEvent(new Event('actionsStateChanged'));
+      globalThis.dispatchEvent(new Event('actionsStateChanged'));
       onBack();
     } catch {
       toast({ title: 'Failed to delete action', variant: 'destructive' });
@@ -473,7 +473,7 @@ function ActionFormView({ onBack, onSaved, action }: {
         return;
       }
       toast({ title: isEdit ? 'Action updated' : 'Action created' });
-      window.dispatchEvent(new Event('actionsStateChanged'));
+      globalThis.dispatchEvent(new Event('actionsStateChanged'));
       onSaved();
     } catch {
       toast({ title: `Failed to ${isEdit ? 'update' : 'create'} action`, variant: 'destructive' });

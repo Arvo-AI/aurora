@@ -10,6 +10,8 @@ from utils.auth.rbac_decorators import require_permission
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
+_ERR_INTERNAL = "Internal server error"
+
 
 def _validate_uuid(value: str) -> bool:
     return bool(_UUID_RE.match(value))
@@ -167,7 +169,7 @@ def list_actions(user_id):
         return jsonify({"actions": rows})
     except Exception:
         logger.exception("Failed to list actions")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @actions_bp.route("", methods=["POST"])
@@ -303,7 +305,7 @@ def update_action(user_id, action_id):
                 conn.commit()
     except Exception:
         logger.exception("Failed to update action")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
     return _get_action_response(action_id)
 
@@ -390,4 +392,4 @@ def list_runs(user_id, action_id):
         return jsonify({"runs": runs})
     except Exception:
         logger.exception("Failed to list runs")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500

@@ -1468,8 +1468,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
         elif name == 'trigger_action':
             pinned_id = _action_id
-            def _pinned_trigger(action_id: str = "", **kw):
-                return final_func(action_id=pinned_id, **kw)
+            def _pinned_trigger(action_id: str = "", _pid=pinned_id, _fn=final_func, **kw):
+                return _fn(action_id=_pid, **kw)
             tool = StructuredTool.from_function(
                 func=_pinned_trigger,
                 name=name,
