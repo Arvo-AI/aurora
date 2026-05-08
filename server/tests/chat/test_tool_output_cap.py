@@ -1,4 +1,11 @@
-"""Tests for chat.backend.agent.utils.tool_output_cap -- three-threshold cap and summarization fallback."""
+"""Tests the cap that prevents oversized tool outputs (kubectl logs, AWS
+describes, Datadog event dumps, etc.) from blowing the LLM context
+window when an agent step returns a huge payload. Pins the
+three-tier behaviour -- pass through under the pass-through threshold,
+summarize between it and the max-summarization-input limit, and
+truncate-then-summarize above that limit -- plus the graceful fallback
+when the summarizer LLM itself fails.
+"""
 
 import logging
 import os

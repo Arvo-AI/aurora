@@ -42,6 +42,8 @@ _COL_FRAGMENTS = {
 def _validate_trigger_config(body):
     """Validate trigger_config field. Returns (sanitized_config, error_msg)."""
     tc = body["trigger_config"]
+    if tc is not None and not isinstance(tc, dict):
+        return None, "trigger_config must be a JSON object or null"
     effective_type = body.get("trigger_type") or None
     if effective_type == "on_schedule" or (not effective_type and "interval_seconds" in (tc or {})):
         interval = (tc or {}).get("interval_seconds")
@@ -84,7 +86,10 @@ def _validate_mode(body):
 
 
 def _validate_enabled(body):
-    return bool(body["enabled"]), None
+    val = body["enabled"]
+    if not isinstance(val, bool):
+        return None, "enabled must be a boolean"
+    return val, None
 
 
 def _validate_trigger_config_json(body):
@@ -362,7 +367,7 @@ def list_runs(user_id, action_id):
     if not _validate_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     try:
-        limit = min(int(request.args.get("limit", 50)), 200)
+        limit = max(min(int(request.args.get("limit", 50)), 200), 1)
         offset = max(int(request.args.get("offset", 0)), 0)
     except (ValueError, TypeError):
         return jsonify({"error": "limit and offset must be integers"}), 400

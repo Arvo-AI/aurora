@@ -1,8 +1,14 @@
-"""Tests for terminal_exec_tool -- shell-routing helpers, SSH jump rewrite, and entrypoint wiring.
+"""Tests two safety helpers in the agent's terminal execution tool that
+runs commands against user infrastructure during incident response: the
+shell-metacharacter detector that decides whether a command needs a
+shell wrapper, and the SSH ``-J`` jump rewrite that converts jump-host
+syntax into ``ProxyCommand`` form. Pins which commands route through a
+shell and which SSH invocations are transformed -- both gates the agent
+crosses before executing anything.
 
-The module pulls in heavy deps (langchain_core, boto3, google.cloud.*), so we
-AST-extract pure helpers / the entrypoint and exec them in a controlled
-namespace rather than importing the full module.
+The production module pulls in heavy deps (langchain_core, boto3,
+google.cloud.*), so the tests AST-extract the pure helpers and exec
+them in a controlled namespace instead of importing the full module.
 """
 
 import ast
