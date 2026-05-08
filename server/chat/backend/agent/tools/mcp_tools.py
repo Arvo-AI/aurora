@@ -1235,7 +1235,7 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Generate consistent tool_call_id for start/completion matching
                 import hashlib
                 import json
-                tool_name = f"mcp_{original_tool_name}"
+                tool_name = f"mcp_{server_type}_{original_tool_name}"
                 # Use JSON serialization with sorted keys for deterministic hashing
                 signature = f"{tool_name}_{json.dumps(kwargs, sort_keys=True, default=str)}"
                 # Use longer hash (16 chars) to reduce collision risk

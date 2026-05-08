@@ -335,6 +335,10 @@ app.register_blueprint(org_bp)
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
 
+# --- Tool Permissions Routes ---
+from routes.tool_permissions import tool_permissions_bp
+app.register_blueprint(tool_permissions_bp)
+
 # --- GitHub Integration Routes ---
 from routes.github.github import github_bp
 from routes.github.github_user_repos import github_user_repos_bp

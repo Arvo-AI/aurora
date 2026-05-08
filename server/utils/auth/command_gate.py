@@ -142,6 +142,21 @@ def gate_command(
         _guardrails_approved_command.reset(approved_token)
 
 
+def _is_org_tool_permitted(tool_name: str) -> bool:
+    """Bypass gate if tool is enabled in org tool permissions (background only)."""
+    try:
+        from utils.cloud.cloud_utils import get_state_context
+        state = get_state_context()
+        if not state or not getattr(state, "is_background", False):
+            return False
+        permitted = getattr(state, "permitted_tools", None)
+        if not permitted:
+            return False
+        return tool_name in permitted
+    except Exception:
+        return False
+
+
 def gate_action(
     *,
     user_id: Optional[str],
@@ -158,6 +173,9 @@ def gate_action(
     Returns the same :class:`GateDecision` shape as :func:`gate_command`
     so callers can treat both gates uniformly.
     """
+    if _is_org_tool_permitted(tool_name):
+        return _ALLOWED
+
     if not user_id:
         # Preserve prior behavior of wait_for_user_confirmation helpers,
         # which required a user and otherwise denied.

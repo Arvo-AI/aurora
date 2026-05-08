@@ -237,7 +237,7 @@ def iac_apply(
 
         if not gate_action(
             user_id=user_id or "",
-            tool_name="iac_tool",
+            tool_name="iac_tool:apply",
             summary=plan_summary_msg,
         ).allowed:
             tool_capture = get_tool_capture()
@@ -533,7 +533,7 @@ def iac_destroy(
 
         if not gate_action(
             user_id=user_id or "",
-            tool_name="iac_tool",
+            tool_name="iac_tool:destroy",
             summary=plan_summary_msg,
         ).allowed:
             tool_capture = get_tool_capture()

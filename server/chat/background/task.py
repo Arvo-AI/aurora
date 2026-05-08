@@ -1167,8 +1167,9 @@ async def _execute_background_chat(
             question=rail_question,
             model=ModelConfig.RCA_MODEL,
             mode=mode,
-            is_background=True,  # Key flag for background behavior
-            rca_context=rca_context,  # RCA context for prompt_builder
+            is_background=True,
+            rca_context=rca_context,
+            permitted_tools=set(trigger_metadata.get("permitted_tools", [])) if trigger_metadata else None,
         )
         logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
         
