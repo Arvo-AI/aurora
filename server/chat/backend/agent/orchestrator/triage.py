@@ -16,6 +16,36 @@ logger = logging.getLogger(__name__)
 
 _ANTI_FANOUT_SEVERITIES = frozenset({"low", "info"})
 _MAX_SUBAGENTS = 6
+_GENERAL_INVESTIGATOR_ROLE = "general_investigator"
+_PER_ROLE_CAPS = {_GENERAL_INVESTIGATOR_ROLE: 3}
+
+
+def _apply_per_role_caps(inputs: list) -> list:
+    """Drop excess inputs once a role's per-wave cap is hit. Preserves order.
+
+    Defends against the LLM filling a wave with `general_investigator` spawns
+    and starving the specialist roles. Order-preserving so the LLM's prioritised
+    spawns survive and overflow at the tail is dropped.
+    """
+    if not inputs:
+        return inputs
+    counts: dict[str, int] = {}
+    out: list = []
+    for inp in inputs:
+        rn = inp.get("role_name") if isinstance(inp, dict) else getattr(inp, "role_name", None)
+        cap = _PER_ROLE_CAPS.get(rn or "")
+        if cap is None:
+            out.append(inp)
+            continue
+        counts[rn] = counts.get(rn, 0) + 1
+        if counts[rn] > cap:
+            logger.warning(
+                "triage: role %r exceeds per-wave cap %d — dropping input #%d",
+                rn, cap, counts[rn],
+            )
+            continue
+        out.append(inp)
+    return out
 
 
 class TriageDecision(BaseModel):
@@ -112,6 +142,13 @@ async def _triage(state: State) -> TriageDecision:
                     rationale="LLM returned no valid sub-agent roles",
                 )
 
+            decision.inputs = _apply_per_role_caps(decision.inputs)
+            if not decision.inputs:
+                return TriageDecision(
+                    mode="single",
+                    rationale="LLM returned no valid sub-agent roles after per-role caps",
+                )
+
         if len(decision.inputs) > _MAX_SUBAGENTS:
             logger.warning(
                 "triage: LLM produced %d inputs > cap %d — truncating",
@@ -142,6 +179,7 @@ def _build_triage_prompt(state: State, available_roles: list) -> str:
         f"- {r.name}: {r.description}" for r in available_roles
     ) or "(none — fan-out not viable)"
 
+    gen_cap = _PER_ROLE_CAPS[_GENERAL_INVESTIGATOR_ROLE]
     return (
         f"You are an RCA orchestrator deciding whether to fan out to parallel sub-agents.\n\n"
         f"Incident ID: {incident_id}\n"
@@ -152,7 +190,21 @@ def _build_triage_prompt(state: State, available_roles: list) -> str:
         f"(multiple simultaneous failure modes, cross-system correlation needed), "
         f"return mode='fanout' with up to {_MAX_SUBAGENTS} SubAgentInput objects.\n"
         f"Each input needs: agent_id (e.g. 'sa_1'), role_name (from the list above), "
-        f"purpose (one bounded sentence), optional time_window.\n"
+        f"purpose (one bounded sentence), optional time_window, optional extra_constraints "
+        f"(dict of focus/boundary keys for the sub-agent).\n\n"
+        f"Role selection guidance:\n"
+        f"- Prefer a specialist role when one clearly fits the sub-question.\n"
+        f"- For sub-questions that don't cleanly map to a specialist (e.g. DNS records, "
+        f"TLS/cert validity, third-party API health, queue depth, data correctness, "
+        f"config drift, IAM/permission audits, build provenance, anything novel), use "
+        f"`general_investigator` rather than skipping the sub-question or forcing it "
+        f"into a specialist.\n"
+        f"- You MAY emit multiple `general_investigator` inputs in the same wave (up to "
+        f"{gen_cap}) when the incident has multiple distinct novel sub-questions. Give each "
+        f"a UNIQUE agent_id and a distinct, tightly-bounded `purpose`. Use `extra_constraints` "
+        f"like {{\"focus\": \"DNS records for foo.example.com\", \"boundary\": \"do not "
+        f"investigate TLS\"}} to keep parallel general investigators in non-overlapping lanes.\n"
+        f"- agent_id values MUST be unique across all inputs in this wave.\n\n"
         f"If the incident is straightforward, return mode='single' with empty inputs.\n"
         f"Always include a brief rationale."
     )

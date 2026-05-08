@@ -17,11 +17,13 @@ from chat.backend.agent.orchestrator.dispatcher import (
     DISPATCH_SUBAGENT_TOOL_NAME,
     dispatch_tool_call_id,
 )
+from chat.backend.agent.orchestrator.triage import _apply_per_role_caps
 from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
 _MAX_SYNTHESIS_WAVES = 2
+_MAX_FOLLOWUPS = 6
 
 
 class SynthesisDecision(BaseModel):
@@ -155,6 +157,16 @@ async def _synthesis(state: State) -> dict:
                 logger.warning(
                     "synthesis_node: dropped %d follow_up_inputs with unknown role names", dropped,
                 )
+
+            decision.follow_up_inputs = _apply_per_role_caps(decision.follow_up_inputs)
+
+            if len(decision.follow_up_inputs) > _MAX_FOLLOWUPS:
+                logger.warning(
+                    "synthesis_node: %d follow_up_inputs exceeds cap %d — truncating",
+                    len(decision.follow_up_inputs), _MAX_FOLLOWUPS,
+                )
+                decision.follow_up_inputs = decision.follow_up_inputs[:_MAX_FOLLOWUPS]
+
             if not decision.follow_up_inputs:
                 decision.needs_more_research = False
 

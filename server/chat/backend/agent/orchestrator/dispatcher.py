@@ -81,6 +81,41 @@ def _filter_known_roles(raw_inputs: list) -> list:
             out.append(raw)
         else:
             logger.warning("dispatcher: dropping input with unknown role_name %r", rn)
+    return _dedupe_agent_ids(out)
+
+
+def _dedupe_agent_ids(raw_inputs: list) -> list:
+    """Rename colliding agent_ids so each sub-agent in a wave has a unique id.
+
+    The triage prompt asks the LLM for unique ids, but `SubAgentInput` does not
+    enforce uniqueness. Two parallel sub-agents sharing an id would collide on
+    the rca_findings (incident_id, agent_id) primary key and the dispatch
+    tool_call id used to close synthesis ToolMessages.
+    """
+    seen: set[str] = set()
+    out: list = []
+    collision_idx = 0
+    for raw in raw_inputs:
+        is_dict = isinstance(raw, dict)
+        agent_id = raw.get("agent_id") if is_dict else getattr(raw, "agent_id", None)
+        if agent_id and agent_id not in seen:
+            seen.add(agent_id)
+            out.append(raw)
+            continue
+        collision_idx += 1
+        new_id = f"sa_dup_{collision_idx}"
+        while new_id in seen:
+            collision_idx += 1
+            new_id = f"sa_dup_{collision_idx}"
+        logger.warning(
+            "dispatcher: agent_id collision on %r — renaming to %r", agent_id, new_id,
+        )
+        if is_dict:
+            renamed = {**raw, "agent_id": new_id}
+        else:
+            renamed = raw.model_copy(update={"agent_id": new_id})
+        seen.add(new_id)
+        out.append(renamed)
     return out
 
 
