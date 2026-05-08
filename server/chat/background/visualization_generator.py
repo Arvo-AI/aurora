@@ -151,17 +151,22 @@ def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> 
                 # `limit` rows and reverse to chronological order for the
                 # visualization extractor.
                 child_calls: List[Dict] = []
-                child_pattern = f"{session_id}::%"
+                # Prefix range scan over the `{parent}::` namespace — index-friendly
+                # and immune to wildcards in session_id (LIKE would mismatch on `%`/`_`).
+                # Upper bound replaces the final `:` with `;` (next ASCII codepoint),
+                # making it the smallest string strictly greater than every `{sid}::*`.
+                child_lo = f"{session_id}::"
+                child_hi = f"{session_id}:;"
                 cursor.execute(
                     """
                     SELECT tool_name, tool_output
                       FROM execution_steps
-                     WHERE session_id LIKE %s
+                     WHERE session_id >= %s AND session_id < %s
                        AND tool_name = ANY(%s)
                      ORDER BY created_at DESC
                      LIMIT %s
                     """,
-                    (child_pattern, list(INFRASTRUCTURE_TOOLS), limit),
+                    (child_lo, child_hi, list(INFRASTRUCTURE_TOOLS), limit),
                 )
                 for tname, toutput in reversed(cursor.fetchall()):
                     child_calls.append({

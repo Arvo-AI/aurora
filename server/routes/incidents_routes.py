@@ -802,14 +802,22 @@ def get_incident(user_id, incident_id: str):
 
                     if all_session_ids:
                         # Match parent sessions + child sub-agent sessions ({parent}::sa_N).
+                        # Children use a prefix range scan per parent (index-friendly,
+                        # immune to wildcards in session_id). Upper bound replaces the
+                        # trailing `:` with `;` — the smallest string strictly greater
+                        # than every `{sid}::*`.
                         placeholders = ",".join(["%s"] * len(all_session_ids))
+                        range_clauses = " OR ".join(
+                            ["(session_id >= %s AND session_id < %s)"] * len(all_session_ids)
+                        )
                         session_where = (
-                            f"(session_id IN ({placeholders}) "
-                            f"OR session_id LIKE ANY(ARRAY[{placeholders}]))"
+                            f"(session_id IN ({placeholders}) OR ({range_clauses}))"
                         )
-                        session_params = tuple(all_session_ids) + tuple(
-                            f"{sid}::%" for sid in all_session_ids
-                        )
+                        range_params: list = []
+                        for sid in all_session_ids:
+                            range_params.append(f"{sid}::")
+                            range_params.append(f"{sid}:;")
+                        session_params = tuple(all_session_ids) + tuple(range_params)
 
                         cursor.execute(
                             f"""

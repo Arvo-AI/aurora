@@ -547,14 +547,22 @@ class Agent:
       
             try:         
                 # Get recursion limit from environment variable (required)
-                max_iterations = int(os.environ["AGENT_RECURSION_LIMIT"])
+                env_limit = int(os.environ["AGENT_RECURSION_LIMIT"])
+                max_iterations = env_limit
                 if max_turns is not None:
                     if max_turns <= 0:
                         raise ValueError("max_turns must be a positive integer")
                     # max_turns is logical ReAct turns (LLM call + tool node = 1 turn).
                     # LangGraph counts each super-step toward recursion_limit, so we
                     # need ~2x + a small buffer for the terminal write_findings call.
-                    max_iterations = min(max_turns * 2 + 2, max_iterations)
+                    requested = max_turns * 2 + 2
+                    max_iterations = min(requested, env_limit)
+                    if requested > env_limit:
+                        logger.info(
+                            "agent: max_turns=%d wants recursion_limit=%d but "
+                            "AGENT_RECURSION_LIMIT=%d caps it — sub-agent will be throttled",
+                            max_turns, requested, env_limit,
+                        )
 
                 # Prepare chat history for the agent - handle LangChain message objects
                 chat_history = []
