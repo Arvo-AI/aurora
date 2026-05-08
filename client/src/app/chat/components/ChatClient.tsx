@@ -32,6 +32,7 @@ import SessionUsagePanel from "@/components/SessionUsagePanel";
 import SubAgentDetailPanel from "@/components/chat/subagent-detail-panel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
+import { useQuery } from "@/lib/query";
 
 interface ChatClientProps {
   initialSessionId?: string;
@@ -78,6 +79,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     purpose?: string;
   } | null>(null);
   const [linkedIncidentId, setLinkedIncidentId] = useState<string | undefined>(undefined);
+
+  const [selectedAction, setSelectedAction] = useState<{ id: string; name: string } | null>(null);
+  const clearSelectedAction = useCallback(() => setSelectedAction(null), []);
 
   
   // Modular streaming message handling
@@ -127,6 +131,17 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     router.push('/chat');
   }, [router]);
 
+  const { data: actionsData } = useQuery<{ id: string; name: string }[] | { actions: { id: string; name: string }[] }>(
+    '/api/actions',
+    async (key: string, signal: AbortSignal) => {
+      const res = await fetch(key, { credentials: 'include', signal });
+      if (!res.ok) return { actions: [] };
+      return res.json();
+    },
+    { staleTime: 60_000, revalidateOnEvents: ['actionsStateChanged'] },
+  );
+  const availableActions = Array.isArray(actionsData) ? actionsData : (actionsData?.actions ?? []);
+
   const {
     selectedModel,
     setSelectedModel,
@@ -150,6 +165,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     justCreatedSessionRef,
     onSessionCreated: refreshChatHistory,
     images,
+    availableActions,
+    selectedAction,
+    clearSelectedAction,
   });
 
   const onSendingStateChange = useCallback((sending: boolean) => {
@@ -550,6 +568,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               onRemoveContext={() => setActiveIncidentContext(undefined)}
               images={images}
               onImagesChange={setImages}
+              actions={availableActions}
+              selectedAction={selectedAction}
+              onActionSelect={setSelectedAction}
             />
             )}
           </div>
@@ -601,6 +622,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             onRemoveContext={() => setActiveIncidentContext(undefined)}
             images={images}
             onImagesChange={setImages}
+            actions={availableActions}
+            selectedAction={selectedAction}
+            onActionSelect={setSelectedAction}
           />
           
           <div className="w-full max-w-3xl mt-6">

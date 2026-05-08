@@ -94,6 +94,7 @@ celery_app.conf.update(
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.github.github_repo_metadata',
+        'services.actions.scheduler',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -124,6 +125,10 @@ celery_app.conf.update(
         'refresh-aws-credentials': {
             'task': 'utils.aws.credential_refresh.refresh_aws_credentials',
             'schedule': 600.0,  # Every 10 minutes
+        },
+        'run-scheduled-actions': {
+            'task': 'services.actions.scheduler.run_scheduled_actions',
+            'schedule': 60.0,  # Check every minute
         },
     },
     beat_schedule_filename='celerybeat-schedule',

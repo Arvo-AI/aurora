@@ -272,7 +272,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'action'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -522,6 +522,16 @@ def run_background_chat(
                             logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
                     except Exception as le:
                         logger.error(f"[BackgroundChat] Failed to record lifecycle event 'rca_started' for incident {incident_id}: {le}")
+
+                    # Dispatch on_incident actions for this incident (fire-and-forget)
+                    source = trigger_metadata.get('source', '') if trigger_metadata else ''
+                    # Prevent infinite loops: actions must not trigger other on_incident actions
+                    if source and source != 'action':
+                        try:
+                            from services.actions.executor import dispatch_on_incident_actions
+                            dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
+                        except Exception:
+                            logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
                     
                     # Send investigation started notifications (if enabled)
                     # Skip notifications if explicitly disabled (e.g., for Slack @mentions)
@@ -661,6 +671,28 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                if result.get("guardrail_blocked"):
+                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
+                    update_action_run_status(
+                        run_id=trigger_metadata['run_id'], status='error',
+                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                    )
+                else:
+                    update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+        # Dispatch on_incident actions configured for after_rca timing
+        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+            try:
+                from services.actions.executor import dispatch_on_incident_actions
+                dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
+
         completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
@@ -670,6 +702,13 @@ def run_background_chat(
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
+                                         error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+            except Exception:
+                logger.debug("Failed to update action run status after timeout")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -681,6 +720,13 @@ def run_background_chat(
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
+                                         error_message=str(e), user_id=user_id)
+            except Exception:
+                logger.debug("Failed to update action run status during error handling")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -704,6 +750,23 @@ def run_background_chat(
                             _propagate_suggestion_status(session_id, "failed")
             except Exception as cleanup_err:
                 logger.error(f"[BackgroundChat] Failed to cleanup session {session_id}: {cleanup_err}")
+
+            if trigger_metadata and trigger_metadata.get('source') == 'action':
+                try:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ActionCleanup]")
+                            cursor.execute(
+                                "UPDATE action_runs SET status = 'error', completed_at = NOW(), "
+                                "error = 'Background chat did not complete successfully' "
+                                "WHERE id = %s AND status = 'running'",
+                                (trigger_metadata['run_id'],)
+                            )
+                            if cursor.rowcount > 0:
+                                conn.commit()
+                                logger.warning("[BackgroundChat] Finally block marked action run as error")
+                except Exception:
+                    logger.debug("Failed to mark action run as error in finally block")
 
 
 # ---------------------------------------------------------------------------
@@ -1070,8 +1133,15 @@ async def _execute_background_chat(
         if rca_context:
             logger.info(f"[BackgroundChat] Built RCA context: source={rca_context.get('source')}, providers={rca_context.get('providers')}")
 
-        # Create the initial message (kept simple - user sees this)
-        human_message = HumanMessage(content=initial_message)
+        # Create the initial message; tag it so the UI layer can skip the
+        # synthesized RCA scaffold (internal instructions, not user input).
+        # Slack/Google Chat messages are user-authored and should NOT be hidden.
+        source = trigger_metadata.get("source", "") if trigger_metadata else ""
+        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat')
+        human_message = HumanMessage(
+            content=initial_message,
+            additional_kwargs={"is_rca_scaffold": is_scaffold},
+        )
 
         # Import centralized model config
         from chat.backend.agent.llm import ModelConfig
@@ -1169,6 +1239,7 @@ async def _execute_background_chat(
             "status": "completed",
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
+            "guardrail_blocked": getattr(state, "guardrail_blocked", False),
         }
         
     except Exception as e:
@@ -1193,6 +1264,31 @@ async def _execute_background_chat(
 
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _append_block_message(session_id: str, user_id: str, text: str) -> None:
+    """Append a visible bot message to the session so the chat isn't empty."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                row = cursor.fetchone()
+                raw = row[0] if row else None
+                if isinstance(raw, list):
+                    messages = raw
+                elif raw:
+                    messages = json.loads(raw)
+                else:
+                    messages = []
+                messages.append({"sender": "bot", "text": text, "message_number": len(messages) + 1})
+                cursor.execute(
+                    "UPDATE chat_sessions SET messages = %s::jsonb, updated_at = %s WHERE id = %s",
+                    (json.dumps(messages), datetime.now(), session_id),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to append block message: {e}")
 
 
 def _update_session_status(session_id: str, status: str, user_id: str) -> None:
@@ -2273,10 +2369,27 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             orphaned_count += 1
                         conn.commit()
 
-            if cleaned_count or dead_task_count or orphaned_count:
-                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d",
-                            cleaned_count, dead_task_count, orphaned_count)
-            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count}
+            # --- 4. Stale action runs (per-org, action_runs is RLS-protected) ---
+            stale_actions_count = 0
+            stale_action_threshold = datetime.now() - timedelta(minutes=35)
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
+                org_ids = [r[0] for r in cursor.fetchall()]
+                for oid in org_ids:
+                    cursor.execute("SET myapp.current_org_id = %s;", (oid,))
+                    cursor.execute("""
+                        UPDATE action_runs SET status = 'error', completed_at = NOW(),
+                               error = 'Stale: background chat did not complete'
+                        WHERE status IN ('running', 'pending') AND started_at < %s
+                    """, (stale_action_threshold,))
+                    stale_actions_count += cursor.rowcount
+                if stale_actions_count > 0:
+                    conn.commit()
+
+            if cleaned_count or dead_task_count or orphaned_count or stale_actions_count:
+                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d stale_actions=%d",
+                            cleaned_count, dead_task_count, orphaned_count, stale_actions_count)
+            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count, "stale_actions": stale_actions_count}
 
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")

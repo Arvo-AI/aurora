@@ -1,8 +1,9 @@
-"""Tests for utils.db.connection_pool -- RLS session variable handling.
-
-Locks down the ``DatabaseConnectionPool.get_connection`` /
-``_set_rls_vars`` contract so a connection is never returned to the pool
-with another tenant's RLS context still attached.
+"""Tests the Flask connection pool that stamps every request's DB session
+with tenant identity (current_user_id, current_org_id) on entry and
+RESETs it on release. Pins the SET-on-entry / RESET-on-exit contract so
+a connection can't be returned to the pool with another tenant's RLS
+context still attached -- the foundation that makes RLS safe across
+shared connections.
 """
 
 import os
@@ -22,6 +23,17 @@ os.environ.setdefault("POSTGRES_PORT", "5432")
 _server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
+
+# The root conftest.py stubs flask/psycopg2 with MagicMock for tests that don't
+# need them. This module needs real Flask (installed in CI) and a mock psycopg2
+# pool, so we evict the stubs and re-import fresh.
+for _mod in list(sys.modules):
+    if _mod == "flask" or _mod.startswith("flask."):
+        del sys.modules[_mod]
+    if _mod == "dotenv":
+        del sys.modules[_mod]
+    if _mod.startswith("utils.db"):
+        del sys.modules[_mod]
 
 from flask import Flask, g  # noqa: E402
 
