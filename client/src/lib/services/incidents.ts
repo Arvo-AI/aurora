@@ -118,6 +118,7 @@ export interface PostmortemData {
   notionPageUrl?: string;
   notionExportedAt?: string;
   notionDatabaseId?: string;
+  generationSessionId?: string;
 }
 
 export interface PostmortemListItem {
@@ -134,6 +135,18 @@ export interface PostmortemListItem {
   notionPageUrl: string | null;
   notionExportedAt: string | null;
   notionDatabaseId: string | null;
+}
+
+export interface PostmortemVersion {
+  id: string;
+  versionNumber: number;
+  source: string;
+  userId: string;
+  createdAt: string;
+}
+
+export interface PostmortemVersionDetail extends PostmortemVersion {
+  content: string;
 }
 
 export interface StreamingThought {
@@ -537,14 +550,21 @@ export const incidentsService = {
 // ============================================================================
 
 export const postmortemService = {
-  async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; error?: string }> {
+  async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; generating?: boolean; error?: string }> {
     try {
-      const data = await apiGet<{ postmortem: PostmortemData | null }>(`/api/incidents/${incidentId}/postmortem`);
-      return { data: data.postmortem || null };
-    } catch (error) {
-      if ((error as ApiError).status === 404) {
+      const res = await fetch(`/api/incidents/${incidentId}/postmortem`, { credentials: 'include' });
+      if (res.status === 202) {
+        return { data: null, generating: true };
+      }
+      if (res.status === 404) {
         return { data: null };
       }
+      if (!res.ok) {
+        return { data: null, error: `Request failed: ${res.status}` };
+      }
+      const json = await res.json();
+      return { data: json.postmortem || null };
+    } catch (error) {
       console.error('Error fetching postmortem:', error);
       return { data: null, error: error instanceof Error ? error.message : 'Network error' };
     }

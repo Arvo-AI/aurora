@@ -1093,15 +1093,15 @@ def update_incident(user_id, incident_id: str):
                 # Trigger postmortem generation only on transition to resolved
                 if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
-                        from chat.background.postmortem_generator import generate_postmortem
-                        generate_postmortem.delay(incident_id, user_id, org_id)
+                        from services.actions.postmortem_action import dispatch_postmortem_action
+                        dispatch_postmortem_action(user_id, incident_id)
                         logger.info(
-                            "[INCIDENTS] Triggered postmortem generation for resolved incident %s",
+                            "[INCIDENTS] Triggered postmortem action for resolved incident %s",
                             sanitize(incident_id),
                         )
                     except Exception as pm_exc:
                         logger.warning(
-                            "[INCIDENTS] Failed to trigger postmortem generation for incident %s: %s",
+                            "[INCIDENTS] Postmortem generation failed for %s: %s",
                             sanitize(incident_id),
                             pm_exc,
                         )

@@ -3,6 +3,7 @@
 import logging
 import time
 from datetime import timezone
+from functools import wraps
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -45,6 +46,69 @@ def _format_timestamp(ts) -> Optional[str]:
     return ts.isoformat()
 
 
+def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, content: str, source: str = "manual") -> None:
+    """Insert a new version row for a postmortem and return the next version number."""
+    cursor.execute(
+        """SELECT COALESCE(MAX(version_number), 0) + 1
+           FROM postmortem_versions WHERE postmortem_id = %s""",
+        (postmortem_id,),
+    )
+    next_version = cursor.fetchone()[0]
+    cursor.execute(
+        """INSERT INTO postmortem_versions
+           (postmortem_id, org_id, user_id, content, version_number, source)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (postmortem_id, org_id, user_id, content, next_version, source),
+    )
+
+
+def with_incident_postmortem(require_postmortem=False):
+    """Decorator that validates incident_id, resolves org_id, opens DB, sets RLS.
+
+    Injects keyword args: org_id, conn, cursor, postmortem_id (if require_postmortem).
+    """
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(user_id, incident_id, *args, **kwargs):
+            if not _validate_uuid(incident_id):
+                return jsonify({"error": "Invalid incident ID"}), 400
+
+            org_id = get_org_id_from_request()
+
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+
+                        postmortem_id = None
+                        if require_postmortem:
+                            cursor.execute(
+                                """SELECT id FROM postmortems
+                                   WHERE incident_id = %s AND org_id = %s""",
+                                (incident_id, org_id),
+                            )
+                            row = cursor.fetchone()
+                            if not row:
+                                return jsonify({"error": "Postmortem not found"}), 404
+                            postmortem_id = str(row[0])
+
+                        return fn(
+                            user_id, incident_id, *args,
+                            org_id=org_id, conn=conn, cursor=cursor,
+                            postmortem_id=postmortem_id, **kwargs,
+                        )
+
+            except Exception as e:
+                logger.error(
+                    "%s %s failed for incident %s: %s",
+                    _LOG_PREFIX, fn.__name__, incident_id, e,
+                )
+                return jsonify({"error": f"Failed to {fn.__name__.replace('_', ' ')}"}), 500
+
+        return wrapper
+    return decorator
+
+
 def _refresh_confluence_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Attempt to refresh OAuth Confluence credentials."""
     refresh_token = creds.get("refresh_token")
@@ -80,67 +144,55 @@ def _refresh_confluence_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem", methods=["GET"])
 @require_permission("postmortems", "read")
-def get_postmortem(user_id, incident_id):
+@with_incident_postmortem(require_postmortem=False)
+def get_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
 
-    if not _validate_uuid(incident_id):
-        return jsonify({"error": "Invalid incident ID"}), 400
+    cursor.execute(
+        """SELECT id, incident_id, user_id, content, generated_at, updated_at,
+                  confluence_page_id, confluence_page_url, confluence_exported_at,
+                  jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at,
+                  notion_page_id, notion_page_url, notion_exported_at, notion_database_id,
+                  generation_session_id
+           FROM postmortems
+           WHERE incident_id = %s AND org_id = %s""",
+        (incident_id, org_id),
+    )
+    row = cursor.fetchone()
 
-    org_id = get_org_id_from_request()
+    if not row:
+        return jsonify({"error": "Postmortem not found"}), 404
 
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                cursor.execute(
-                    """SELECT id, incident_id, user_id, content, generated_at, updated_at,
-                              confluence_page_id, confluence_page_url, confluence_exported_at,
-                              jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at,
-                              notion_page_id, notion_page_url, notion_exported_at, notion_database_id
-                       FROM postmortems
-                       WHERE incident_id = %s AND org_id = %s""",
-                    (incident_id, org_id),
-                )
-                row = cursor.fetchone()
+    # Row exists but content is NULL → generation in progress
+    if row[3] is None:
+        return jsonify({"status": "generating", "generationSessionId": row[17]}), 202
 
-        if not row:
-            return jsonify({"error": "Postmortem not found"}), 404
-
-        postmortem = {
-            "id": str(row[0]),
-            "incidentId": str(row[1]),
-            "userId": row[2],
-            "content": row[3],
-            "generatedAt": _format_timestamp(row[4]),
-            "updatedAt": _format_timestamp(row[5]),
-            "confluencePageId": row[6],
-            "confluencePageUrl": row[7],
-            "confluenceExportedAt": _format_timestamp(row[8]),
-            "jiraIssueId": row[9],
-            "jiraIssueKey": row[10],
-            "jiraIssueUrl": row[11],
-            "jiraExportedAt": _format_timestamp(row[12]),
-            "notionPageId": row[13],
-            "notionPageUrl": row[14],
-            "notionExportedAt": _format_timestamp(row[15]),
-            "notionDatabaseId": row[16],
-        }
-        return jsonify({"postmortem": postmortem})
-
-    except Exception as e:
-        logger.error(
-            "[POSTMORTEM] Failed to fetch postmortem for incident %s: %s",
-            incident_id,
-            e,
-        )
-        return jsonify({"error": "Failed to fetch postmortem"}), 500
+    postmortem = {
+        "id": str(row[0]),
+        "incidentId": str(row[1]),
+        "userId": row[2],
+        "content": row[3],
+        "generatedAt": _format_timestamp(row[4]),
+        "updatedAt": _format_timestamp(row[5]),
+        "confluencePageId": row[6],
+        "confluencePageUrl": row[7],
+        "confluenceExportedAt": _format_timestamp(row[8]),
+        "jiraIssueId": row[9],
+        "jiraIssueKey": row[10],
+        "jiraIssueUrl": row[11],
+        "jiraExportedAt": _format_timestamp(row[12]),
+        "notionPageId": row[13],
+        "notionPageUrl": row[14],
+        "notionExportedAt": _format_timestamp(row[15]),
+        "notionDatabaseId": row[16],
+        "generationSessionId": row[17],
+    }
+    return jsonify({"postmortem": postmortem})
 
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem", methods=["PATCH"])
 @require_permission("postmortems", "write")
-def update_postmortem(user_id, incident_id):
-
-    if not _validate_uuid(incident_id):
-        return jsonify({"error": "Invalid incident ID"}), 400
+@with_incident_postmortem(require_postmortem=True)
+def update_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -156,34 +208,139 @@ def update_postmortem(user_id, incident_id):
             {"error": "Content exceeds maximum length of 100000 characters"}
         ), 400
 
-    org_id = get_org_id_from_request()
+    _create_version(cursor, postmortem_id, org_id, user_id, content, source="manual")
+
+    cursor.execute(
+        """UPDATE postmortems
+           SET content = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (content, postmortem_id),
+    )
+    conn.commit()
+
+    record_audit_event(org_id, user_id, "update_postmortem", "postmortem", incident_id, {}, request)
+    return jsonify({"success": True})
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions", methods=["GET"])
+@require_permission("postmortems", "read")
+@with_incident_postmortem(require_postmortem=False)
+def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
+    """List version history for a postmortem."""
+    cursor.execute(
+        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at
+           FROM postmortem_versions v
+           JOIN postmortems p ON v.postmortem_id = p.id
+           WHERE p.incident_id = %s AND p.org_id = %s
+           ORDER BY v.version_number DESC""",
+        (incident_id, org_id),
+    )
+    rows = cursor.fetchall()
+
+    versions = [
+        {
+            "id": str(row[0]),
+            "versionNumber": row[1],
+            "source": row[2],
+            "userId": row[3],
+            "createdAt": _format_timestamp(row[4]),
+        }
+        for row in rows
+    ]
+    return jsonify({"versions": versions})
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions/<version_id>", methods=["GET"])
+@require_permission("postmortems", "read")
+@with_incident_postmortem(require_postmortem=False)
+def get_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
+    """Get a specific postmortem version content."""
+    if not _validate_uuid(version_id):
+        return jsonify({"error": "Invalid version ID"}), 400
+
+    cursor.execute(
+        """SELECT v.id, v.version_number, v.source, v.user_id, v.content, v.created_at
+           FROM postmortem_versions v
+           JOIN postmortems p ON v.postmortem_id = p.id
+           WHERE v.id = %s AND p.incident_id = %s AND p.org_id = %s""",
+        (version_id, incident_id, org_id),
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        return jsonify({"error": "Version not found"}), 404
+
+    return jsonify({
+        "version": {
+            "id": str(row[0]),
+            "versionNumber": row[1],
+            "source": row[2],
+            "userId": row[3],
+            "content": row[4],
+            "createdAt": _format_timestamp(row[5]),
+        }
+    })
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions/<version_id>/restore", methods=["POST"])
+@require_permission("postmortems", "write")
+@with_incident_postmortem(require_postmortem=True)
+def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
+    """Restore a previous postmortem version as the current content."""
+    if not _validate_uuid(version_id):
+        return jsonify({"error": "Invalid version ID"}), 400
+
+    cursor.execute(
+        """SELECT v.content
+           FROM postmortem_versions v
+           JOIN postmortems p ON v.postmortem_id = p.id
+           WHERE v.id = %s AND p.incident_id = %s AND p.org_id = %s""",
+        (version_id, incident_id, org_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({"error": "Version not found"}), 404
+
+    restored_content = row[0]
+
+    cursor.execute(
+        """UPDATE postmortems
+           SET content = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (restored_content, postmortem_id),
+    )
+    conn.commit()
+
+    record_audit_event(org_id, user_id, "restore_postmortem_version", "postmortem", incident_id,
+                       {"version_id": version_id}, request)
+    return jsonify({"success": True, "content": restored_content})
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/regenerate", methods=["POST"])
+@require_permission("postmortems", "write")
+def regenerate_postmortem(user_id, incident_id):
+    """Trigger postmortem generation (or regeneration) via the built-in action."""
+    if not _validate_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID"}), 400
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                cursor.execute(
-                    """UPDATE postmortems
-                       SET content = %s, updated_at = CURRENT_TIMESTAMP
-                       WHERE incident_id = %s AND org_id = %s""",
-                    (content, incident_id, org_id),
-                )
-                updated = cursor.rowcount
-                conn.commit()
+        from services.actions.postmortem_action import dispatch_postmortem_action
+        run_id = dispatch_postmortem_action(user_id, incident_id)
+        return jsonify({"success": True, "runId": run_id}), 202
 
-        if not updated:
-            return jsonify({"error": "Postmortem not found"}), 404
-
-        record_audit_event(org_id, user_id, "update_postmortem", "postmortem", incident_id, {}, request)
-        return jsonify({"success": True})
-
+    except ValueError as e:
+        if "Rate limited" in str(e):
+            return jsonify({"error": "Rate limited — try again later"}), 429
+        if "already running" in str(e):
+            return jsonify({"error": "Generation already in progress"}), 409
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(
-            "[POSTMORTEM] Failed to update postmortem for incident %s: %s",
+            "[POSTMORTEM] Failed to regenerate postmortem for incident %s: %s",
             incident_id,
             e,
         )
-        return jsonify({"error": "Failed to update postmortem"}), 500
+        return jsonify({"error": "Failed to regenerate postmortem"}), 500
 
 
 @postmortem_bp.route(

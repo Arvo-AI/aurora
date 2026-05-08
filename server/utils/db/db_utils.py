@@ -1130,7 +1130,8 @@ def initialize_tables():
                         notion_page_id TEXT,
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
-                        notion_database_id TEXT
+                        notion_database_id TEXT,
+                        generation_session_id VARCHAR(255)
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
@@ -1873,7 +1874,8 @@ def initialize_tables():
                         notion_page_id TEXT,
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
-                        notion_database_id TEXT
+                        notion_database_id TEXT,
+                        generation_session_id VARCHAR(255)
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
@@ -2003,6 +2005,30 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error backfilling postmortem_exports: {e}")
+                conn.rollback()
+
+            # Create postmortem_versions table for version history
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS postmortem_versions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        postmortem_id UUID NOT NULL REFERENCES postmortems(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT NOT NULL,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        source VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_versions_postmortem
+                        ON postmortem_versions(postmortem_id, version_number DESC);
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_versions_org
+                        ON postmortem_versions(org_id);
+                """)
+                logging.info("Created postmortem_versions table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating postmortem_versions table: {e}")
                 conn.rollback()
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at

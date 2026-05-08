@@ -1305,6 +1305,29 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
+
+    # Postmortem tools (always available)
+    from .postmortem_tool import get_postmortem, save_postmortem
+    tool_functions.append((get_postmortem, "get_postmortem"))
+    tool_functions.append((save_postmortem, "save_postmortem"))
+
+    # Slack tools (if Slack connected)
+    try:
+        from .slack_tool import (
+            list_slack_channels,
+            get_channel_history,
+            get_thread_replies,
+            is_slack_connected,
+        )
+        if user_id and is_slack_connected(user_id):
+            tool_functions.append((list_slack_channels, "list_slack_channels"))
+            tool_functions.append((get_channel_history, "get_channel_history"))
+            tool_functions.append((get_thread_replies, "get_thread_replies"))
+            logging.info(f"Added Slack tools for user {user_id}")
+        else:
+            logging.debug(f"Slack tools not added - user {user_id} not connected")
+    except Exception as e:
+        logging.warning(f"Failed to add Slack tools: {e}")
     
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1478,6 +1501,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     f"Call with action_id=\"{pinned_id}\"."
                 ),
                 args_schema=TriggerActionArgs,
+            )
+        elif name == 'get_postmortem':
+            from .postmortem_tool import GetPostmortemArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Read the current postmortem document for an incident. "
+                    "Returns the markdown content or indicates no postmortem exists yet. "
+                    "Use this before regenerating to get the prior version as context."
+                ),
+                args_schema=GetPostmortemArgs,
+            )
+        elif name == 'save_postmortem':
+            from .postmortem_tool import SavePostmortemArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Save or update a postmortem document for an incident. "
+                    "Creates a new version each time. Content should be complete "
+                    "structured markdown (Summary, Timeline, Root Cause, Impact, etc.)."
+                ),
+                args_schema=SavePostmortemArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
