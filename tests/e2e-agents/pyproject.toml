@@ -4,11 +4,15 @@ version = "0.1.0"
 description = "LLM-powered adversarial browser testing for Aurora"
 requires-python = ">=3.11"
 dependencies = [
-    "browser-use>=0.12.6,<0.14",
+    "browser-use>=0.12.6",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
-    "python-dotenv>=1.0",
     "click>=8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "python-dotenv",
 ]
 
 [project.scripts]

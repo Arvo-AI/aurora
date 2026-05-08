@@ -6,7 +6,6 @@ class Issue(BaseModel):
     page_url: str
     description: str
     severity: Literal["critical", "high", "medium", "low"]
-    screenshot_path: str | None = None
 
 
 class RunResult(BaseModel):
@@ -21,5 +20,3 @@ class RunResult(BaseModel):
     raw_findings: str = ""
     errors: list[str] = []
     model_used: str = ""
-    retried: bool = False
-    screenshots: list[str] = []

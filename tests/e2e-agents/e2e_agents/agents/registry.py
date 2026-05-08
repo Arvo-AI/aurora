@@ -6,7 +6,6 @@ It will be discovered automatically.
 """
 import importlib
 import pkgutil
-import sys
 from pathlib import Path
 
 from .base import AgentDefinition
@@ -34,18 +33,8 @@ def _discover_agents() -> dict[str, AgentDefinition]:
             if hasattr(module, "AGENT_DEF"):
                 agent_def = module.AGENT_DEF
                 agents[agent_def.area] = agent_def
-        except Exception as e:
-            print(
-                f"Warning: Failed to load agent module '{module_info.name}': {e}",
-                file=sys.stderr,
-            )
+        except Exception:
             continue
-
-    if not agents:
-        print(
-            "Warning: No agents discovered. Check that agent modules export AGENT_DEF.",
-            file=sys.stderr,
-        )
 
     return agents
 
