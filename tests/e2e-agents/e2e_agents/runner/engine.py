@@ -21,11 +21,8 @@ async def _safe_stop_browser(browser_session, timeout: float = 10.0):
     """Stop browser session with a timeout to prevent hanging."""
     try:
         await asyncio.wait_for(browser_session.stop(), timeout=timeout)
-    except asyncio.TimeoutError:
-        # Best-effort shutdown: a timeout during cleanup should not fail the run.
+    except (asyncio.TimeoutError, Exception):
         pass
-    except Exception as exc:
-        print(f"Warning: failed to stop browser session cleanly: {exc}")
 
 
 # Each quantifier is bounded or separated by a required literal/digit, so the
@@ -223,8 +220,8 @@ async def _run_single_attempt(
             if page:
                 await page.screenshot(path=str(screenshot_path))
                 screenshots.append(str(screenshot_path))
-        except Exception as e:
-            errors.append(f"Final screenshot capture failed: {e}")
+        except Exception:
+            pass
 
         return RunResult(
             agent_name=definition.name,

@@ -15,7 +15,6 @@ def _find_env_file() -> str | None:
         local = Path(__file__).resolve().parent.parent.parent.parent.parent / ".env"
         candidates.append(local)
     except Exception:
-        # __file__ resolution can fail in some packaging contexts; fall back to cwd-based candidates.
         pass
 
     for candidate in candidates:
@@ -23,7 +22,6 @@ def _find_env_file() -> str | None:
             if candidate.exists():
                 return str(candidate)
         except Exception:
-            # Filesystem probe errors (e.g. permission denied on a candidate) are non-fatal.
             continue
     return None
 

@@ -5,6 +5,7 @@ Spawns an LLM agent that signs in, navigates to incidents, and reports issues.
 import asyncio
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from pydantic import BaseModel

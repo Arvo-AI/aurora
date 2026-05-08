@@ -29,7 +29,6 @@ def parse_labels() -> list[str]:
         if isinstance(labels, list):
             return [str(l) for l in labels]
     except (json.JSONDecodeError, TypeError):
-        # Invalid or non-list JSON payload; fall through to comma-separated parsing.
         pass
 
     # Fall back to comma-separated
