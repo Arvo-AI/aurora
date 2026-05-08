@@ -12,6 +12,7 @@ import { useUser } from "@/hooks/useAuthHooks";
 import { isAdmin } from "@/lib/roles";
 import { Trash2, Plus, Terminal, ChevronRight, ChevronDown, Loader2, Lock, CheckCircle2, XCircle, Shield, ShieldCheck, ShieldX, BookOpen } from "lucide-react";
 import { commandPolicyService, type CommandPolicyRule, type PolicyTemplate } from "@/lib/services/command-policies";
+import { toolPermissionService, type ToolPermission } from "@/lib/services/tool-permissions";
 
 function RuleList({
   rules,
@@ -282,6 +283,10 @@ export function SecuritySettings() {
   const [applyingTemplate, setApplyingTemplate] = useState<string | null>(null);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
 
+  const [toolPerms, setToolPerms] = useState<Record<string, ToolPermission[]>>({});
+  const [toolPermsLoading, setToolPermsLoading] = useState(true);
+  const [expandedConnectors, setExpandedConnectors] = useState<Set<string>>(new Set(["github"]));
+
   const fetchPolicies = useCallback(async () => {
     try {
       const data = await commandPolicyService.getPolicies();
@@ -306,7 +311,22 @@ export function SecuritySettings() {
     }
   }, []);
 
-  useEffect(() => { fetchPolicies(); fetchTemplates(); }, [fetchPolicies, fetchTemplates]);
+  const fetchToolPerms = useCallback(async () => {
+    try {
+      let data = await toolPermissionService.getPermissions();
+      if (!data.seeded) {
+        await toolPermissionService.seedDefaults();
+        data = await toolPermissionService.getPermissions();
+      }
+      setToolPerms(data.tools_by_connector);
+    } catch {
+      // Non-blocking
+    } finally {
+      setToolPermsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchPolicies(); fetchTemplates(); fetchToolPerms(); }, [fetchPolicies, fetchTemplates, fetchToolPerms]);
 
   const handleToggleList = async (list: "allowlist" | "denylist", enabled: boolean) => {
     try {
@@ -385,6 +405,24 @@ export function SecuritySettings() {
       toast({ title: "Template removed" });
     } catch {
       toast({ title: "Failed to remove template", variant: "destructive" });
+    }
+  };
+
+  const handleToggleTool = async (toolKey: string, enabled: boolean) => {
+    setToolPerms((prev) => {
+      const next = { ...prev };
+      for (const connector of Object.keys(next)) {
+        next[connector] = next[connector].map((t) =>
+          t.tool_key === toolKey ? { ...t, enabled } : t
+        );
+      }
+      return next;
+    });
+    try {
+      await toolPermissionService.toggleTool(toolKey, enabled);
+    } catch {
+      toast({ title: "Failed to update tool permission", variant: "destructive" });
+      await fetchToolPerms();
     }
   };
 
@@ -596,6 +634,78 @@ export function SecuritySettings() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Tool Permissions */}
+      <div className="pt-4 border-t">
+        <div className="flex items-center gap-2.5 mb-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10">
+            <Shield className="h-4 w-4 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Action Tool Permissions</h2>
+            <p className="text-xs text-muted-foreground">Tools enabled here can run without confirmation in background actions</p>
+          </div>
+        </div>
+
+        {toolPermsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {Object.entries(toolPerms).map(([connector, tools]) => {
+              const expanded = expandedConnectors.has(connector);
+              const enabledCount = tools.filter((t) => t.enabled).length;
+              return (
+                <div key={connector} className="rounded-lg border bg-card overflow-hidden">
+                  <button
+                    type="button"
+                    className="flex items-center justify-between w-full px-3.5 py-2.5 hover:bg-muted/30 transition-colors"
+                    onClick={() => setExpandedConnectors((prev) => {
+                      const next = new Set(prev);
+                      next.has(connector) ? next.delete(connector) : next.add(connector);
+                      return next;
+                    })}
+                  >
+                    <div className="flex items-center gap-2">
+                      {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                      <span className="text-sm font-medium capitalize">{connector}</span>
+                      <Badge variant="secondary" className="text-[10px] font-normal">
+                        {enabledCount}/{tools.length}
+                      </Badge>
+                    </div>
+                  </button>
+                  {expanded && (
+                    <div className="border-t divide-y divide-border">
+                      {tools.map((tool) => (
+                        <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
+                          <Switch
+                            checked={tool.enabled}
+                            onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
+                            className="shrink-0 scale-90"
+                            disabled={!admin}
+                          />
+                          <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
+                          <Badge
+                            variant={tool.risk === "low" ? "secondary" : "destructive"}
+                            className={`text-[10px] font-normal shrink-0 ${
+                              tool.risk === "medium" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" :
+                              tool.risk === "high" ? "bg-orange-500/10 text-orange-600 border-orange-500/20" :
+                              tool.risk === "critical" ? "" : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {tool.risk}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
