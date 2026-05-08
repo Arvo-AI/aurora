@@ -1359,7 +1359,8 @@ async def handle_connection(websocket) -> None:
                             }
                         }))
 
-                        result_payload = run_iac_tool(
+                        result_payload = await asyncio.to_thread(
+                            run_iac_tool,
                             action=action,
                             path=parameters.get('path'),
                             content=parameters.get('content'),
@@ -1367,7 +1368,7 @@ async def handle_connection(websocket) -> None:
                             vars=parameters.get('vars'),
                             auto_approve=parameters.get('auto_approve'),
                             user_id=user_id,
-                            session_id=session_id
+                            session_id=session_id,
                         )
 
                         await websocket.send(json.dumps({

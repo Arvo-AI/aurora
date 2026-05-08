@@ -104,9 +104,9 @@ def iac_plan(
             try:
                 vars_dict = json.loads(vars) if isinstance(vars, str) else vars
                 for key, value in vars_dict.items():
-                    plan_command += f' -var="{key}={value}"'
+                    plan_command += f" -var={shlex.quote(f'{key}={value}')}"
             except (json.JSONDecodeError, TypeError):
-                plan_command += f' -var="{vars}"'
+                plan_command += f" -var={shlex.quote(str(vars))}"
 
         plan_result = run_terraform_command(
             plan_command, str(terraform_dir), user_id, session_id, timeout=600
