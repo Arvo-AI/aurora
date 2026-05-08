@@ -44,13 +44,11 @@ def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
     if not raw_findings:
         return issues
 
-    # Pattern 1: Structured bug reports (compiled regex handles BUG #1:, ### 1., **1., etc.)
+    # Pattern 1: Structured bug reports
+    # Matches: "BUG #1:", "### 1.", "### Bug:", "**BUG #2:", "Issue #3:", "## 1."
     bug_blocks = _BUG_HEADER_RE.split(raw_findings)
 
     for block in bug_blocks[1:]:
-        first_line = block.strip().split("\n")[0].lower()
-        if any(skip in first_line for skip in ["recommend", "status", "what works", "testing status", "fix needed", "urgent fix"]):
-            continue
         issue = _parse_bug_block(block)
         if issue:
             issues.append(issue)
@@ -58,13 +56,15 @@ def _extract_issues_from_findings(raw_findings: str) -> list[Issue]:
     if issues:
         return issues
 
-    # Pattern 3: Lines with severity keywords and URLs (fallback)
+    # Pattern 2: Lines with severity keywords and URLs
+    # Only use this pattern for lines that look like actual bug reports
     for line in raw_findings.split("\n"):
         line = line.strip()
         if not line or len(line) < 20:
             continue
+        # Skip lines that are clearly not bugs
         lower = line.lower()
-        if any(skip in lower for skip in ["✅", "passed", "works", "success", "verdict", "no bug", "no issue", "recommend"]):
+        if any(skip in lower for skip in ["✅", "passed", "works", "success", "verdict", "no bug", "no issue"]):
             continue
         severity = _detect_severity(line)
         url = _extract_url(line)
@@ -182,7 +182,6 @@ async def _run_single_attempt(
         base_url=settings.base_url,
         email=settings.test_email,
         password=settings.test_password,
-        pr_description=settings.pr_description,
     )
 
     # Inject diff context if available

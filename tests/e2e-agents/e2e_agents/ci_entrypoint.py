@@ -48,25 +48,6 @@ def parse_pr_number() -> int | None:
         return None
 
 
-def get_pr_description(pr_number: int | None, repository: str | None) -> str | None:
-    """Fetch PR description (body) from GitHub."""
-    if not pr_number or not repository:
-        return None
-    try:
-        result = subprocess.run(
-            ["gh", "pr", "view", str(pr_number), "--repo", repository, "--json", "body", "--jq", ".body"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return None
-        body = result.stdout.strip()
-        return body if body else None
-    except Exception:
-        return None
-
-
 def get_diff_context() -> str | None:
     """Get the list of changed files in the PR for context injection.
 
@@ -129,25 +110,7 @@ async def main():
         print(f"No matching agents for labels: {labels}")
         return
 
-    # Fetch PR description early so we can filter agents that need it
-    pr_desc = get_pr_description(pr_number, settings.repository)
-
-    # Filter out agents that require a PR description if none available
-    if not pr_desc:
-        skipped = [a.name for a in agents_to_run if a.requires_pr_description]
-        agents_to_run = [a for a in agents_to_run if not a.requires_pr_description]
-        if skipped:
-            print(f"Skipping agents (no PR description): {skipped}")
-        if not agents_to_run:
-            print("No agents to run after filtering.")
-            return
-
     print(f"Agents to run: {[a.name for a in agents_to_run]}")
-
-    # Inject PR description
-    if pr_desc:
-        settings.pr_description = pr_desc
-        print(f"PR description injected ({len(pr_desc)} chars)")
 
     # Inject diff context
     diff = get_diff_context()
