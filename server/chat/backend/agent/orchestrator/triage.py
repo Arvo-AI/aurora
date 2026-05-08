@@ -5,11 +5,14 @@ import logging
 import time
 from typing import Literal
 
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from chat.backend.agent.orchestrator.usage import track_orchestrator_call
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.orchestrator.inputs import SubAgentInput
+from utils.auth.stateless_auth import set_rls_context
+from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
@@ -115,7 +118,7 @@ async def _triage(state: State) -> TriageDecision:
         llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
         structured = llm.with_structured_output(TriageDecision, include_raw=True)
 
-        incident_summary = _build_triage_prompt(state, available_roles)
+        incident_summary = await _build_triage_prompt(state, available_roles)
         start_time = time.time()
         result = await structured.ainvoke(incident_summary)
 
@@ -170,14 +173,79 @@ async def _triage(state: State) -> TriageDecision:
         return TriageDecision(mode="single", rationale="LLM triage error fallback")
 
 
-def _build_triage_prompt(state: State, available_roles: list) -> str:
+def _fetch_prior_findings_count(incident_id: str, user_id: str) -> int:
+    """Return count of rca_findings rows for this incident. RLS-safe, never raises."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                if set_rls_context(cur, conn, user_id, log_prefix="[Triage]") is None:
+                    logger.warning(
+                        "triage: failed to set RLS context for findings count, incident %s",
+                        hash_for_log(incident_id),
+                    )
+                    return 0
+                cur.execute(
+                    "SELECT COUNT(*) FROM rca_findings WHERE incident_id = %s",
+                    (incident_id,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception:
+        logger.warning(
+            "triage: could not fetch findings count for %s — proceeding with 0",
+            hash_for_log(incident_id),
+        )
+        return 0
+
+
+def _build_conversation_context(state: State) -> tuple[int, str]:
+    """Return (ai_turn_count, recent_transcript) from state.messages. ToolMessages excluded."""
+    messages = getattr(state, "messages", None) or []
+    ai_turns = sum(1 for m in messages if isinstance(m, AIMessage))
+    convo = [m for m in messages if isinstance(m, (HumanMessage, AIMessage))]
+    recent = convo[-4:] if len(convo) >= 4 else convo
+    lines: list[str] = []
+    for m in recent:
+        role = "user" if isinstance(m, HumanMessage) else "assistant"
+        content = getattr(m, "content", "") or ""
+        if isinstance(content, list):
+            content = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        lines.append(f"{role}: {str(content)[:300]}")
+    return ai_turns, "\n".join(lines)
+
+
+async def _build_triage_prompt(state: State, available_roles: list) -> str:
     rca_context = getattr(state, "rca_context", None) or {}
     question = (getattr(state, "question", "") or "")[:1000]
     incident_id = getattr(state, "incident_id", "unknown") or "unknown"
+    user_id = getattr(state, "user_id", None) or ""
 
     role_lines = "\n".join(
         f"- {r.name}: {r.description}" for r in available_roles
     ) or "(none — fan-out not viable)"
+
+    # Situational context lets the LLM distinguish a fresh incident trigger from
+    # a follow-up message on an already-investigated one (e.g. "thank you").
+    # Each follow-up may live in its own session, so chat history alone is not
+    # a reliable signal — query findings for the incident regardless.
+    ai_turn_count, recent_transcript = _build_conversation_context(state)
+    prior_findings_count = 0
+    if incident_id != "unknown" and user_id:
+        prior_findings_count = await asyncio.to_thread(
+            _fetch_prior_findings_count, incident_id, user_id
+        )
+
+    context_block = (
+        f"=== SITUATIONAL CONTEXT ===\n"
+        f"Conversation turn: {ai_turn_count} (0 = initial alert, no prior assistant response)\n"
+        f"Prior RCA findings on file for this incident: {prior_findings_count}\n"
+        f"Recent transcript (last 4 user/assistant turns, tool calls excluded):\n"
+        f"{recent_transcript if recent_transcript else '(none yet)'}\n"
+        f"=== END CONTEXT ===\n\n"
+    )
 
     gen_cap = _PER_ROLE_CAPS[_GENERAL_INVESTIGATOR_ROLE]
     return (
@@ -185,10 +253,15 @@ def _build_triage_prompt(state: State, available_roles: list) -> str:
         f"Incident ID: {incident_id}\n"
         f"Alert/question: {question}\n"
         f"Severity: {rca_context.get('severity', 'unknown')}\n\n"
+        f"{context_block}"
         f"Available investigator roles (use ONLY these role_name values):\n{role_lines}\n\n"
-        f"If this incident is complex enough to benefit from parallel investigation "
-        f"(multiple simultaneous failure modes, cross-system correlation needed), "
-        f"return mode='fanout' with up to {_MAX_SUBAGENTS} SubAgentInput objects.\n"
+        f"Decision rule: choose mode='fanout' ONLY if the latest message genuinely requires "
+        f"NEW parallel investigation that prior findings don't already cover — typically "
+        f"because the incident has multiple simultaneous failure modes or needs cross-system "
+        f"correlation. If prior findings already address the user's question, or the message "
+        f"is conversational (acknowledgements, clarifications about prior findings, simple "
+        f"read-questions), choose mode='single'.\n"
+        f"For mode='fanout', emit up to {_MAX_SUBAGENTS} SubAgentInput objects.\n"
         f"Each input needs: agent_id (e.g. 'sa_1'), role_name (from the list above), "
         f"purpose (one bounded sentence), optional time_window, optional extra_constraints "
         f"(dict of focus/boundary keys for the sub-agent).\n\n"

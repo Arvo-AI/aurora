@@ -1155,12 +1155,19 @@ async def _execute_background_chat(
         # semantics for triggers that forward a raw user question.
         rail_question = rail_text if rail_text else initial_message
 
+        # State.incident_id is read-only context for downstream nodes (triage
+        # uses it to look up prior findings, prompt_builder for RCA scaffolding).
+        # Distinct from the function param `incident_id` which gates RCA-style
+        # side effects — incident-chat follow-ups pass that as None but still
+        # need the incident in state so context-aware nodes can find it.
+        context_incident_id = incident_id or (trigger_metadata or {}).get("incident_id")
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
             user_id=user_id,
             session_id=session_id,
-            incident_id=incident_id,
+            incident_id=context_incident_id,
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],
@@ -1170,7 +1177,7 @@ async def _execute_background_chat(
             is_background=True,  # Key flag for background behavior
             rca_context=rca_context,  # RCA context for prompt_builder
         )
-        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
+        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}, context_incident_id={context_incident_id}")
         
         # Set user context for tools (AFTER state is created so we can pass it)
         set_user_context(
