@@ -36,7 +36,7 @@ x-common-env: &common-env
   STORAGE_CACHE_TTL: ${STORAGE_CACHE_TTL}
 
   # Terraform
-  TF_CLI_CONFIG_FILE: /etc/terraform.rc
+  TF_CLI_CONFIG_FILE: /etc/terraform-airgapped.rc
 
   # Weaviate
   WEAVIATE_HOST: ${WEAVIATE_HOST}

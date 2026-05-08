@@ -115,6 +115,21 @@ disable_checkpoint_signature = true
 plugin_cache_may_break_dependency_lock_file = true
 EOF
 
+# Airgapped variant: mirror only, no network fallback
+RUN cat > /etc/terraform-airgapped.rc <<'EOF'
+provider_installation {
+  filesystem_mirror {
+    path = "/opt/terraform-providers"
+  }
+}
+
+plugin_cache_dir = "/app/terraform_workdir/.plugin-cache"
+
+disable_checkpoint = true
+disable_checkpoint_signature = true
+plugin_cache_may_break_dependency_lock_file = true
+EOF
+
 # Install Google Cloud SDK
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
