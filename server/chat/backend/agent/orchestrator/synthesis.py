@@ -17,6 +17,7 @@ from chat.backend.agent.orchestrator.dispatcher import (
     DISPATCH_SUBAGENT_TOOL_NAME,
     dispatch_tool_call_id,
 )
+from chat.backend.agent.orchestrator.tool_cache import get_cache_hit_count
 from chat.backend.agent.orchestrator.triage import _apply_per_role_caps
 from utils.log_sanitizer import hash_for_log
 
@@ -202,6 +203,10 @@ async def _synthesis(state: State) -> dict:
     new_messages = existing_messages + tool_messages + [final_ai_msg]
 
     if is_terminal:
+        logger.info(
+            "synthesis: incident=%s wave=%d cache_hits=%d",
+            inc_hash, new_wave, get_cache_hit_count(incident_id),
+        )
         return {
             "synthesis_wave": new_wave,
             "subagent_inputs": [],

@@ -303,6 +303,10 @@ def _pre_emit_finding_rows(incident_id: str, inputs: list, user_id: str,
                         hash_for_log(incident_id or ""),
                     )
                     return
+                # WHERE on the upsert: if wave-2 reuses a wave-1 agent_id (the
+                # synthesis prompt only suggests `sa_w{N+1}_*` by example), this
+                # guard keeps the wave-1 succeeded row intact. Same-wave retries
+                # still update (wave matches); cross-wave clobber no-ops.
                 cur.executemany(
                     """
                     INSERT INTO rca_findings
@@ -311,6 +315,8 @@ def _pre_emit_finding_rows(incident_id: str, inputs: list, user_id: str,
                     VALUES (%s, %s, %s, %s, 'running', %s, %s, %s, %s)
                     ON CONFLICT (incident_id, agent_id) DO UPDATE
                         SET status = 'running', started_at = EXCLUDED.started_at, wave = EXCLUDED.wave
+                        WHERE rca_findings.wave = EXCLUDED.wave
+                           OR rca_findings.status = 'running'
                     """,
                     rows,
                 )

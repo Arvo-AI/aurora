@@ -9,6 +9,7 @@ from functools import wraps
 from typing import Any, Callable, Coroutine, Optional
 
 from utils.cache.redis_client import get_redis_client
+from utils.cloud.cloud_utils import _state_var
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,6 @@ def cache_decorator(coro_fn: Callable[..., Coroutine], *, tool_name: str,
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         incident_id: Optional[str] = None
         try:
-            from utils.cloud.cloud_utils import _state_var
             state = _state_var.get()
             if state is not None:
                 incident_id = getattr(state, "incident_id", None)
@@ -82,3 +82,27 @@ def cache_decorator(coro_fn: Callable[..., Coroutine], *, tool_name: str,
                 logger.debug("RCA tool cache set error: %s", exc)
         return result
     return wrapper
+
+
+def wrap_tool_with_cache(tool: Any, *, tool_metadata: dict) -> Any:
+    """Return a copy of ``tool`` whose async coroutine is wrapped with the
+    per-incident Redis cache, when metadata marks the tool as safely cacheable.
+
+    Metadata gate: ``cacheable=True`` AND ``mutates=False``. Anything else is
+    returned unmodified. Original tool is never mutated — sub-agent paths share
+    the singleton list returned by ``get_cloud_tools()``.
+    """
+    if not tool_metadata.get("cacheable") or tool_metadata.get("mutates"):
+        return tool
+    coroutine = getattr(tool, "coroutine", None)
+    if coroutine is None or not asyncio.iscoroutinefunction(coroutine):
+        return tool
+    try:
+        wrapped = cache_decorator(coroutine, tool_name=getattr(tool, "name", "unknown"))
+        return tool.model_copy(update={"coroutine": wrapped})
+    except (AttributeError, TypeError):
+        logger.exception(
+            "RCA tool cache: failed to wrap tool=%s; returning unwrapped",
+            getattr(tool, "name", "?"),
+        )
+        return tool

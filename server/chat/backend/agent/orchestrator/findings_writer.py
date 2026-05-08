@@ -214,6 +214,32 @@ def _update_finding_row(*, agent_id: str, incident_id: str, user_id: str,
         return False
 
 
+def _row_already_succeeded(*, incident_id: str, agent_id: str, user_id: str) -> bool:
+    """Return True if the rca_findings row for this agent is already at status='succeeded'.
+
+    Used as a pre-check before _force_stub_after_retry_exhaustion to avoid
+    clobbering a previously-good body with a stub.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                if not set_rls_context(cur, conn, user_id, log_prefix="[FindingsWriter]"):
+                    return False
+                cur.execute(
+                    "SELECT status FROM rca_findings WHERE incident_id = %s AND agent_id = %s",
+                    (incident_id, agent_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+                return str(row[0]) == "succeeded"
+    except Exception:
+        logger.exception(
+            "write_findings: status pre-check failed for agent %s", agent_id,
+        )
+        return False
+
+
 def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
                                         incident_id: str, user_id: str,
                                         child_session_id: str,
@@ -226,6 +252,18 @@ def _force_stub_after_retry_exhaustion(*, agent_id: str, role_name: str,
     logger.warning(
         "write_findings: agent %s exhausted schema retries — writing stub", agent_id,
     )
+    # Refuse to overwrite a row already at terminal/succeeded status. Without
+    # this check, a successful write followed by two consecutive bad-schema
+    # calls would force-stub and clobber the just-saved findings.md body.
+    if _row_already_succeeded(incident_id=incident_id, agent_id=agent_id, user_id=user_id):
+        logger.warning(
+            "write_findings: agent %s already at status=succeeded — skipping stub overwrite",
+            agent_id,
+        )
+        return (
+            f"findings.md already persisted with status=succeeded; ignoring schema "
+            f"retry exhaustion. Stop calling write_findings."
+        )
     storage_uri = f"rca/{incident_id}/findings/{agent_id}.md"
     stub_body = make_stub(
         agent_id=agent_id, role_name=role_name, incident_id=incident_id,

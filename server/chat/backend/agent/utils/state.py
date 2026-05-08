@@ -42,6 +42,5 @@ class State(BaseModel):
     subagent_inputs: List[Dict[str, Any]] = []
     finding_refs: Annotated[List[Dict[str, Any]], operator.add] = []
     synthesis_wave: int = 0
-    cache_hits: int = 0
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -9,6 +9,8 @@ Sub-agents are read-only. Tools are filtered by:
 import logging
 from typing import Any
 
+from chat.backend.agent.orchestrator.tool_cache import wrap_tool_with_cache
+
 logger = logging.getLogger(__name__)
 
 _SKILL_TOKEN_BUDGET = 4_000  # approximate tokens of tool-spec description budget
@@ -209,7 +211,7 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
     except Exception:
         logger.exception("select_skills: failed to resolve connected providers for user")
 
-    candidates = []
+    candidates: list = []
     dropped_unconnected: list = []
     dropped_cloud_exec = False
     for tool in all_tools:
@@ -232,7 +234,7 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
         if tool_name == "cloud_exec" and not has_cloud_provider:
             dropped_cloud_exec = True
             continue
-        candidates.append(tool)
+        candidates.append((tool, meta))
     if dropped_unconnected:
         logger.info(
             "select_skills: role=%s dropped %d unconnected tools: %s",
@@ -248,7 +250,7 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
     budget_chars = _SKILL_TOKEN_BUDGET * _CHARS_PER_TOKEN
     selected: list = []
     used_chars = 0
-    for tool in candidates:
+    for tool, meta in candidates:
         desc = getattr(tool, "description", "") or ""
         tool_chars = len(desc) + 200
         if used_chars + tool_chars > budget_chars:
@@ -257,7 +259,7 @@ def select_tools_for_role(user_id: str, role: Any, all_tools: list) -> list:
                 len(selected), role.name,
             )
             break
-        selected.append(tool)
+        selected.append(wrap_tool_with_cache(tool, tool_metadata=meta))
         used_chars += tool_chars
 
     logger.info(

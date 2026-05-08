@@ -560,7 +560,7 @@ class Agent:
                     requested = max_turns * 2 + 2
                     max_iterations = min(requested, env_limit)
                     if requested > env_limit:
-                        logger.info(
+                        logging.info(
                             "agent: max_turns=%d wants recursion_limit=%d but "
                             "AGENT_RECURSION_LIMIT=%d caps it — sub-agent will be throttled",
                             max_turns, requested, env_limit,
@@ -863,9 +863,18 @@ class Agent:
                                     if tool_capture is not None and hasattr(tool_capture, 'tool_history'):
                                         try:
                                             data = event.get("data", {}) or {}
-                                            tc_id = (event.get("run_id")
-                                                     or (data.get("input", {}) or {}).get("tool_call_id"))
                                             output = data.get("output")
+                                            # The ToolMessage returned by the tool carries the
+                                            # tool_call_id that matches the AIMessage tool call
+                                            # (and therefore the entry stored at on_chat_model_end).
+                                            # event.run_id is the per-node LangGraph UUID, not the
+                                            # model-generated tool_call_id, so it never matches.
+                                            tc_id = (
+                                                getattr(output, 'tool_call_id', None)
+                                                or (output.get('tool_call_id') if isinstance(output, dict) else None)
+                                                or (data.get("input", {}) or {}).get("tool_call_id")
+                                                or event.get("run_id")
+                                            )
                                             output_str = ""
                                             is_error = False
                                             if output is not None:
