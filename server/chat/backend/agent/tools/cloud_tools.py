@@ -1526,6 +1526,41 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=SavePostmortemArgs,
             )
+        elif name == 'list_slack_channels':
+            from .slack_tool import ListSlackChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List Slack channels accessible to the bot. Returns channel names, "
+                    "topics, purposes, and member counts. Use to discover relevant channels "
+                    "before fetching message history."
+                ),
+                args_schema=ListSlackChannelsArgs,
+            )
+        elif name == 'get_channel_history':
+            from .slack_tool import GetChannelHistoryArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Fetch messages from a Slack channel within a time window. "
+                    "Use oldest/latest (ISO 8601) to scope messages to the incident timeframe. "
+                    "Returns message text, timestamps, user IDs, and thread info."
+                ),
+                args_schema=GetChannelHistoryArgs,
+            )
+        elif name == 'get_thread_replies':
+            from .slack_tool import GetThreadRepliesArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Fetch replies in a Slack thread. Use when a message has reply_count > 0 "
+                    "and the thread looks relevant to the incident investigation."
+                ),
+                args_schema=GetThreadRepliesArgs,
+            )
         else:
             tool = StructuredTool.from_function(final_func)
         tools.append(tool)

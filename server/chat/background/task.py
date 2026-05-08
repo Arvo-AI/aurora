@@ -28,6 +28,7 @@ from utils.notifications.google_chat_notification_service import (
     send_google_chat_investigation_completed_notification,
 )
 from connectors.google_chat_connector.client import get_chat_app_client
+from chat.backend.agent.tools.slack_tool import is_slack_connected
 from utils.db.connection_pool import db_pool
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
@@ -541,7 +542,7 @@ def run_background_chat(
                     email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
                     email_start_notification_enabled = email_general_enabled and email_start_enabled
                     
-                    slack_notification_enabled = _has_slack_connected(user_id)
+                    slack_notification_enabled = is_slack_connected(user_id)
                     google_chat_notification_enabled = _has_google_chat_connected(user_id)
                     
                     if send_notifications and (email_start_notification_enabled or slack_notification_enabled or google_chat_notification_enabled):
@@ -1630,16 +1631,6 @@ def _is_rca_email_notification_enabled(user_id: str) -> bool:
         logger.error(f"[EmailNotification] Error checking notification preference: {e}")
         return False
 
-
-def _has_slack_connected(user_id: str) -> bool:
-    """Check if user has Slack connected."""
-    try:
-        from connectors.slack_connector.client import get_slack_client_for_user
-        client = get_slack_client_for_user(user_id)
-        return client is not None
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error checking Slack connection: {e}")
-        return False
 
 
 def _has_google_chat_connected(user_id: str) -> bool:
