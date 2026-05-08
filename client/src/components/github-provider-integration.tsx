@@ -13,13 +13,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
 import { ToastAction } from "@/components/ui/toast";
-import { getEnv } from '@/lib/env';
 import { GitHubAppService, type GitHubInstallation } from '@/lib/github-app';
 export type { GitHubInstallation, GitHubInstallationsResponse } from '@/lib/github-app';
 
 export type GitHubAuthMethod = 'oauth' | 'app';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export interface GitHubCredentials {
   connected: boolean;
@@ -64,23 +61,17 @@ export interface ConnectedRepo {
 }
 
 export class GitHubIntegrationService {
-  private static getAuthHeaders(userId: string) {
-    return { 'X-User-ID': userId };
-  }
-
-  static async checkStatus(userId: string): Promise<GitHubCredentials> {
-    const response = await fetch(`${BACKEND_URL}/github/status`, {
-      headers: this.getAuthHeaders(userId),
-    });
+  static async checkStatus(): Promise<GitHubCredentials> {
+    const response = await fetch('/api/proxy/github/status');
     if (!response.ok) return { connected: false };
     return response.json();
   }
 
-  static async initiateOAuth(userId: string): Promise<string> {
-    const response = await fetch(`${BACKEND_URL}/github/login`, {
+  static async initiateOAuth(): Promise<string> {
+    const response = await fetch('/api/proxy/github/login', {
       method: 'POST',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
@@ -96,62 +87,52 @@ export class GitHubIntegrationService {
     return data.oauth_url;
   }
 
-  static async disconnect(userId: string): Promise<void> {
-    await fetch(`${BACKEND_URL}/github/disconnect`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(userId),
-    });
+  static async disconnect(): Promise<void> {
+    await fetch('/api/proxy/github/disconnect', { method: 'POST' });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static async fetchRepositories(userId: string): Promise<any> {
-    const response = await fetch(`${BACKEND_URL}/github/user-repos`, {
-      headers: this.getAuthHeaders(userId),
-    });
+  static async fetchRepositories(): Promise<any> {
+    const response = await fetch('/api/proxy/github/user-repos');
     if (!response.ok) throw new Error('Failed to fetch repositories');
     return response.json();
   }
 
-  static async fetchRepoSelections(userId: string): Promise<ConnectedRepo[]> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-selections`, {
-      headers: this.getAuthHeaders(userId),
-    });
+  static async fetchRepoSelections(): Promise<ConnectedRepo[]> {
+    const response = await fetch('/api/proxy/github/repo-selections');
     if (!response.ok) return [];
     const data = await response.json();
     return data.repositories || [];
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static async saveRepoSelections(userId: string, repositories: Repository[]): Promise<any> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-selections`, {
+  static async saveRepoSelections(repositories: Repository[]): Promise<any> {
+    const response = await fetch('/api/proxy/github/repo-selections', {
       method: 'POST',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repositories }),
     });
     if (!response.ok) throw new Error('Failed to save repository selections');
     return response.json();
   }
 
-  static async clearRepoSelections(userId: string): Promise<void> {
-    await fetch(`${BACKEND_URL}/github/repo-selections`, {
-      method: 'DELETE',
-      headers: this.getAuthHeaders(userId),
-    });
+  static async clearRepoSelections(): Promise<void> {
+    await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
   }
 
-  static async updateRepoMetadata(userId: string, repoFullName: string, summary: string): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
+  static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
+    const response = await fetch(`/api/proxy/github/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
       method: 'PUT',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ metadata_summary: summary }),
     });
     if (!response.ok) throw new Error('Failed to update metadata');
   }
 
-  static async generateRepoMetadata(userId: string, repoFullName: string): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-metadata/generate`, {
+  static async generateRepoMetadata(repoFullName: string): Promise<void> {
+    const response = await fetch('/api/proxy/github/repo-metadata/generate', {
       method: 'POST',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repo_full_name: repoFullName }),
     });
     if (!response.ok) throw new Error('Failed to trigger metadata generation');
@@ -193,7 +174,7 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     setIsLoadingRepos(true);
     try {
-      const data = await GitHubIntegrationService.fetchRepositories(userId);
+      const data = await GitHubIntegrationService.fetchRepositories();
       const repos: Repository[] = Array.isArray(data) ? data : data?.repos || [];
       setAllRepos(repos);
     } catch { setAllRepos([]); }
@@ -204,7 +185,7 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     setIsLoadingInstallations(true);
     try {
-      const data = await GitHubAppService.listInstallations(userId);
+      const data = await GitHubAppService.listInstallations();
       setInstallations(data.installations || []);
     } catch { setInstallations([]); }
     finally { setIsLoadingInstallations(false); }
@@ -216,7 +197,7 @@ export default function GitHubProviderIntegration() {
     if (!hasPending || !userId) return;
     pollingRef.current = setInterval(async () => {
       try {
-        const updated = await GitHubIntegrationService.fetchRepoSelections(userId!);
+        const updated = await GitHubIntegrationService.fetchRepoSelections();
         setSavedRepos(updated);
         const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
         if (!stillPending && pollingRef.current) {
@@ -230,7 +211,7 @@ export default function GitHubProviderIntegration() {
   const loadSavedRepos = useCallback(async () => {
     if (!userId) return;
     try {
-      const repos = await GitHubIntegrationService.fetchRepoSelections(userId);
+      const repos = await GitHubIntegrationService.fetchRepoSelections();
       setSavedRepos(repos);
       setCheckedRepos(new Set(repos.map(r => r.repo_full_name)));
       startMetadataPolling(repos);
@@ -267,7 +248,7 @@ export default function GitHubProviderIntegration() {
     setIsSaving(true);
     try {
       const selected = allRepos.filter(r => checkedRepos.has(r.full_name));
-      await GitHubIntegrationService.saveRepoSelections(userId, selected);
+      await GitHubIntegrationService.saveRepoSelections(selected);
       toast({ title: "Repositories saved", description: `${selected.length} repositories connected.` });
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -282,7 +263,7 @@ export default function GitHubProviderIntegration() {
     const summary = editingMetadata[repoFullName];
     if (summary === undefined) return;
     try {
-      await GitHubIntegrationService.updateRepoMetadata(userId, repoFullName, summary);
+      await GitHubIntegrationService.updateRepoMetadata(repoFullName, summary);
       setSavedRepos(prev => prev.map(r =>
         r.repo_full_name === repoFullName ? { ...r, metadata_summary: summary, metadata_status: 'ready' } : r
       ));
@@ -296,7 +277,7 @@ export default function GitHubProviderIntegration() {
   const handleRegenerate = async (repoFullName: string) => {
     if (!userId) return;
     try {
-      await GitHubIntegrationService.generateRepoMetadata(userId, repoFullName);
+      await GitHubIntegrationService.generateRepoMetadata(repoFullName);
       const updated = savedRepos.map(r =>
         r.repo_full_name === repoFullName ? { ...r, metadata_status: 'generating' } : r
       );
@@ -311,7 +292,7 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     setIsLoading(true);
     try {
-      const installUrl = await GitHubAppService.getInstallUrl(userId);
+      const installUrl = await GitHubAppService.getInstallUrl();
       const installUrlState = new URL(installUrl).searchParams.get('state');
 
       if (!installUrlState) {
@@ -354,7 +335,7 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     setIsLoading(true);
     try {
-      const oauthUrl = await GitHubIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
       const popup = window.open(oauthUrl, 'github-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
       const checkClosed = setInterval(() => {
         if (popup?.closed) {
@@ -387,8 +368,8 @@ export default function GitHubProviderIntegration() {
   const handleDisconnect = async () => {
     if (!userId) return;
     try {
-      await GitHubIntegrationService.clearRepoSelections(userId);
-      await GitHubIntegrationService.disconnect(userId);
+      await GitHubIntegrationService.clearRepoSelections();
+      await GitHubIntegrationService.disconnect();
       setSavedRepos([]);
       setCheckedRepos(new Set());
       setAllRepos([]);
@@ -410,7 +391,7 @@ export default function GitHubProviderIntegration() {
   const handleUnlinkInstallation = async (installationId: number) => {
     if (!userId) return;
     try {
-      await GitHubAppService.unlinkInstallation(userId, installationId);
+      await GitHubAppService.unlinkInstallation(installationId);
       toast({ title: "Installation unlinked", description: "GitHub App installation removed from Aurora" });
       await fetchInstallations();
       if (installationFilter === String(installationId)) setInstallationFilter('all');

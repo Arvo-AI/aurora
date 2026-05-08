@@ -1,7 +1,3 @@
-import { getEnv } from '@/lib/env';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
-
 export type GitHubAccountType = 'User' | 'Organization';
 
 interface GitHubInstallUrlResponse {
@@ -23,28 +19,16 @@ export interface GitHubInstallationsResponse {
 }
 
 export class GitHubAppService {
-  private static getAuthHeaders(userId: string) {
-    return { 'X-User-ID': userId };
-  }
-
   private static async request<T>(
     path: string,
-    userId: string,
     options: { method?: string; errorMessage?: string } = {}
   ): Promise<T> {
     const { method, errorMessage = 'Request failed' } = options;
-    const response = await fetch(`${BACKEND_URL}${path}`, {
-      method,
-      headers: this.getAuthHeaders(userId),
-    });
+    const response = await fetch(`/api/proxy/github${path}`, { method });
 
     if (!response.ok) {
       const errorText = await response.text();
 
-      // Surface the backend's structured error message when present, but
-      // never let a malformed JSON body short-circuit the fallback below —
-      // SyntaxError from JSON.parse should fall through, only intentional
-      // errors (parsed errorData.error) should propagate.
       let parsedMessage: string | null = null;
       if (errorText) {
         try {
@@ -63,10 +47,9 @@ export class GitHubAppService {
     return (text ? JSON.parse(text) : undefined) as T;
   }
 
-  static async getInstallUrl(userId: string): Promise<string> {
+  static async getInstallUrl(): Promise<string> {
     const data = await this.request<GitHubInstallUrlResponse>(
-      '/github/app/install',
-      userId,
+      '/app/install',
       { errorMessage: 'Failed to fetch GitHub App install URL' }
     );
 
@@ -77,18 +60,16 @@ export class GitHubAppService {
     return data.install_url;
   }
 
-  static async listInstallations(userId: string): Promise<GitHubInstallationsResponse> {
+  static async listInstallations(): Promise<GitHubInstallationsResponse> {
     return this.request<GitHubInstallationsResponse>(
-      `/github/app/installations?user_id=${encodeURIComponent(userId)}`,
-      userId,
+      '/app/installations',
       { errorMessage: 'Failed to fetch GitHub App installations' }
     );
   }
 
-  static async unlinkInstallation(userId: string, installationId: number): Promise<void> {
+  static async unlinkInstallation(installationId: number): Promise<void> {
     await this.request(
-      `/github/app/installations/${encodeURIComponent(String(installationId))}?user_id=${encodeURIComponent(userId)}`,
-      userId,
+      `/app/installations/${encodeURIComponent(String(installationId))}`,
       { method: 'DELETE', errorMessage: 'Failed to unlink GitHub App installation' }
     );
   }
