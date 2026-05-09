@@ -115,6 +115,7 @@ def _lookup_repo_installation(
             r.installation_id,
             (
                 u.installation_id IS NOT NULL
+                AND u.disconnected_at IS NULL
                 AND i.installation_id IS NOT NULL
                 AND i.suspended_at IS NULL
             ) AS has_active_installation
@@ -269,6 +270,7 @@ def _lookup_any_active_installation(user_id: str) -> int | None:
         JOIN github_installations i
             ON i.installation_id = u.installation_id
         WHERE u.user_id = %s
+          AND u.disconnected_at IS NULL
           AND i.suspended_at IS NULL
         ORDER BY u.is_primary DESC, u.linked_at DESC
         LIMIT 1

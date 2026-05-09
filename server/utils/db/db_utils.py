@@ -357,6 +357,7 @@ def initialize_tables():
                         org_id VARCHAR(255) NULL,
                         installation_id BIGINT NOT NULL REFERENCES github_installations(installation_id) ON DELETE CASCADE,
                         linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        disconnected_at TIMESTAMP NULL,
                         is_primary BOOLEAN NOT NULL DEFAULT FALSE,
                         UNIQUE(user_id, installation_id)
                     );
@@ -1341,6 +1342,25 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding installation_id column to github_connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add disconnected_at to user_github_installations so
+            # Aurora-side disconnect can soft-delete the link instead of
+            # dropping the row. Reconnects (which often don't re-fire GitHub's
+            # install callback when the App is already installed) just clear
+            # this column instead of relying on a fresh installation_id.
+            try:
+                cursor.execute(
+                    "ALTER TABLE user_github_installations ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured disconnected_at column exists on user_github_installations table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding disconnected_at column to user_github_installations: {e}"
                 )
                 conn.rollback()
 

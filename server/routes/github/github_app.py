@@ -332,7 +332,9 @@ def github_app_install_callback():
                     """INSERT INTO user_github_installations
                             (user_id, org_id, installation_id)
                        VALUES (%s, %s, %s)
-                       ON CONFLICT (user_id, installation_id) DO NOTHING""",
+                       ON CONFLICT (user_id, installation_id) DO UPDATE SET
+                            disconnected_at = NULL,
+                            org_id = EXCLUDED.org_id""",
                     (user_id, org_id, installation_id),
                 )
                 conn.commit()
@@ -384,6 +386,7 @@ def github_app_list_installations(user_id):
                          JOIN github_installations gi
                               ON gi.installation_id = ugi.installation_id
                         WHERE ugi.user_id = %s
+                          AND ugi.disconnected_at IS NULL
                         ORDER BY ugi.linked_at""",
                     (user_id,),
                 )
@@ -494,6 +497,7 @@ def github_status(user_id):
                              JOIN github_installations gi
                                   ON gi.installation_id = ugi.installation_id
                             WHERE ugi.user_id = %s
+                              AND ugi.disconnected_at IS NULL
                               AND gi.suspended_at IS NULL
                             ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
                             LIMIT 1""",
@@ -537,27 +541,36 @@ def github_status(user_id):
 @github_app_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
-    """Sever ALL GitHub auth state for this user.
+    """Sever GitHub auth state for this user (Aurora side only).
 
-    Removes every row in ``user_github_installations`` AND any stored
-    OAuth token. Does NOT uninstall the App on GitHub's side — the user
-    must do that from their org settings if they want to fully revoke
-    access.
+    SOFT-deletes ``user_github_installations`` rows by setting
+    ``disconnected_at = NOW()`` so the row survives. This matters
+    because GitHub's install-flow callback typically does NOT re-fire
+    when the App is already installed — without a soft-delete, a user
+    who clicks Aurora's Disconnect and then Install GitHub App again
+    would have nothing to relink to. Reconnect is just clearing
+    ``disconnected_at`` (the install callback's UPSERT does this for us).
+
+    Also removes any stored OAuth token. Does NOT uninstall the App on
+    GitHub's side — the user must do that from their org settings if
+    they want to fully revoke access.
     """
-    deleted_installs = 0
+    soft_deleted_installs = 0
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """DELETE FROM user_github_installations
-                        WHERE user_id = %s""",
+                    """UPDATE user_github_installations
+                          SET disconnected_at = NOW()
+                        WHERE user_id = %s
+                          AND disconnected_at IS NULL""",
                     (user_id,),
                 )
-                deleted_installs = cur.rowcount
+                soft_deleted_installs = cur.rowcount
                 conn.commit()
     except Exception as exc:
         logger.error(
-            "[GITHUB-DISCONNECT] DB delete failed user=%s: %s",
+            "[GITHUB-DISCONNECT] DB soft-delete failed user=%s: %s",
             user_id, exc, exc_info=True,
         )
         return jsonify({"error": "Failed to disconnect"}), 500
@@ -576,13 +589,13 @@ def github_disconnect(user_id):
             )
 
     logger.info(
-        "[GITHUB-DISCONNECT] user=%s removed installs=%d oauth_removed=%s",
-        user_id, deleted_installs, oauth_removed,
+        "[GITHUB-DISCONNECT] user=%s soft_deleted_installs=%d oauth_removed=%s",
+        user_id, soft_deleted_installs, oauth_removed,
     )
     return jsonify(
         {
             "success": True,
-            "removed_installations": deleted_installs,
+            "removed_installations": soft_deleted_installs,
             "oauth_token_removed": oauth_removed,
         }
     )

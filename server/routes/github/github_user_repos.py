@@ -98,6 +98,7 @@ def _list_user_installation_ids(user_id: str) -> list[int]:
                 """SELECT installation_id
                      FROM user_github_installations
                     WHERE user_id = %s
+                      AND disconnected_at IS NULL
                     ORDER BY installation_id""",
                 (user_id,),
             )
