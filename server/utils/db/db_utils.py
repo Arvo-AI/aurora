@@ -1183,6 +1183,9 @@ def initialize_tables():
                         trigger_config JSONB DEFAULT '{}',
                         mode VARCHAR(20) NOT NULL DEFAULT 'agent',
                         enabled BOOLEAN NOT NULL DEFAULT true,
+                        is_system BOOLEAN NOT NULL DEFAULT false,
+                        system_key VARCHAR(100),
+                        default_instructions TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
@@ -1313,6 +1316,18 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # Migration: add system action columns to actions table
+            try:
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false;")
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS system_key VARCHAR(100);")
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS default_instructions TEXT;")
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_system_key ON actions(org_id, system_key) WHERE system_key IS NOT NULL;")
+                conn.commit()
+                logging.info("Ensured system action columns exist on actions table.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for actions system columns: {e}")
 
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
@@ -2018,6 +2033,7 @@ def initialize_tables():
                         content TEXT NOT NULL,
                         version_number INTEGER NOT NULL DEFAULT 1,
                         source VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        generation_session_id UUID,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                     CREATE INDEX IF NOT EXISTS idx_postmortem_versions_postmortem
@@ -2030,6 +2046,14 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error creating postmortem_versions table: {e}")
                 conn.rollback()
+
+            # Migration: add generation_session_id to postmortem_versions
+            try:
+                cursor.execute("ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id UUID;")
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for postmortem_versions.generation_session_id: {e}")
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
             # columns to incidents table.

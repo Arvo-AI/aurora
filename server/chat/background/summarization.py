@@ -686,12 +686,12 @@ def generate_incident_summary_from_chat(
         from chat.background.task import (
             _send_rca_notification,
             _is_rca_email_notification_enabled,
-            _has_slack_connected,
             _has_google_chat_connected,
         )
+        from chat.backend.agent.tools.slack_tool import is_slack_connected
 
         email_enabled = _is_rca_email_notification_enabled(user_id)
-        slack_enabled = _has_slack_connected(user_id)
+        slack_enabled = is_slack_connected(user_id)
         google_chat_enabled = _has_google_chat_connected(user_id)
 
         if email_enabled or slack_enabled or google_chat_enabled:

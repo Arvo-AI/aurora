@@ -13,6 +13,8 @@ import {
   Workflow,
   AlertTriangle,
   Hash,
+  RotateCcw,
+  Shield,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -42,6 +44,8 @@ interface Action {
   run_count: number;
   last_run_at: string | null;
   last_run_status: 'success' | 'error' | 'running' | null;
+  is_system?: boolean;
+  is_modified?: boolean;
 }
 
 interface ActionRun {
@@ -59,6 +63,8 @@ interface ActionRun {
 interface ActionDetail extends Action {
   created_at: string;
   updated_at: string;
+  is_system?: boolean;
+  is_modified?: boolean;
 }
 
 const actionsFetcher = async (key: string, signal: AbortSignal) => {
@@ -202,6 +208,9 @@ function ActionsListView({ actions, onSelect, onCreate }: {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <span className="text-zinc-200 font-medium text-sm">{action.name}</span>
+                        {action.is_system && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">System</span>
+                        )}
                         {!action.enabled && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-800 text-zinc-500">OFF</span>
                         )}
@@ -296,6 +305,17 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
     }
   }, [actionId, onBack, toast]);
 
+  const handleRestoreDefault = useCallback(async () => {
+    if (!confirm('Restore instructions to the built-in default? Your customizations will be lost.')) return;
+    try {
+      await fetchR(`/api/actions/${actionId}/restore-default`, { method: 'POST' });
+      toast({ title: 'Restored to default instructions' });
+      mutate();
+    } catch {
+      toast({ title: 'Failed to restore default', variant: 'destructive' });
+    }
+  }, [actionId, mutate, toast]);
+
   if (!action) {
     return <div className="text-zinc-500 text-sm py-12 text-center">Loading...</div>;
   }
@@ -311,7 +331,14 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
         </button>
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight text-zinc-100">{action.name}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold tracking-tight text-zinc-100">{action.name}</h2>
+              {action.is_system && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center gap-1">
+                  <Shield className="h-2.5 w-2.5" /> System
+                </span>
+              )}
+            </div>
             {action.description && <p className="text-sm text-zinc-500 mt-0.5">{action.description}</p>}
           </div>
           <div className="flex items-center gap-3">
@@ -325,9 +352,16 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
             <button onClick={onEdit} className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all">
               Edit
             </button>
-            <button onClick={handleDelete} className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-red-900/30 text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-900/20 transition-all">
-              Delete
-            </button>
+            {action.is_system && action.is_modified && (
+              <button onClick={handleRestoreDefault} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-indigo-500/30 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-900/20 transition-all">
+                <RotateCcw className="h-3 w-3" /> Restore Default
+              </button>
+            )}
+            {!action.is_system && (
+              <button onClick={handleDelete} className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-red-900/30 text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-900/20 transition-all">
+                Delete
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -415,6 +449,7 @@ function ActionFormView({ onBack, onSaved, action }: {
   readonly action?: ActionDetail;
 }) {
   const isEdit = !!action;
+  const isSystemAction = action?.is_system || false;
   const submitLabel = isEdit ? 'Save Changes' : 'Create Action';
   const submittingLabel = isEdit ? 'Saving...' : 'Creating...';
   const [name, setName] = useState(action?.name || '');
@@ -422,8 +457,8 @@ function ActionFormView({ onBack, onSaved, action }: {
   const [instructions, setInstructions] = useState(action?.instructions || '');
   const [triggerType, setTriggerType] = useState(action?.trigger_type || 'manual');
   const [mode, setMode] = useState(action?.mode || 'agent');
-  const [incidentTiming, setIncidentTiming] = useState<'immediate' | 'after_rca'>(
-    () => (action?.trigger_config?.timing as 'immediate' | 'after_rca') || 'after_rca'
+  const [incidentTiming, setIncidentTiming] = useState<'immediate' | 'after_rca' | 'resolved'>(
+    () => (action?.trigger_config?.timing as 'immediate' | 'after_rca' | 'resolved') || 'after_rca'
   );
   const [intervalValue, setIntervalValue] = useState(() => {
     const s = Number(action?.trigger_config?.interval_seconds || 3600);
@@ -494,11 +529,17 @@ function ActionFormView({ onBack, onSaved, action }: {
 
       <div className="grid grid-cols-[1fr_320px] gap-6">
         <div className="space-y-5">
+          {isSystemAction && (
+            <div className="flex items-start gap-2 text-xs text-indigo-400 bg-indigo-500/5 border border-indigo-500/10 rounded-lg px-3 py-2">
+              <Shield className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+              <span>This is a built-in system action. You can customize the instructions — use &quot;Restore Default&quot; to revert.</span>
+            </div>
+          )}
           <Panel title="Details">
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="action-name" className="text-xs text-zinc-400">Name</Label>
-                <Input id="action-name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mute noisy Datadog alerts via Terraform" />
+                <Input id="action-name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mute noisy Datadog alerts via Terraform" disabled={isSystemAction} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="action-desc" className="text-xs text-zinc-400">Description</Label>
@@ -528,7 +569,7 @@ function ActionFormView({ onBack, onSaved, action }: {
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label className="text-xs text-zinc-400">Trigger</Label>
-                <Select value={triggerType} onValueChange={setTriggerType}>
+                <Select value={triggerType} onValueChange={setTriggerType} disabled={isSystemAction}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="manual">Manual only</SelectItem>
@@ -544,11 +585,12 @@ function ActionFormView({ onBack, onSaved, action }: {
               {triggerType === 'on_incident' && (
                 <div className="space-y-2">
                   <Label className="text-xs text-zinc-400">When to trigger</Label>
-                  <Select value={incidentTiming} onValueChange={(v) => setIncidentTiming(v as 'immediate' | 'after_rca')}>
+                  <Select value={incidentTiming} onValueChange={(v) => setIncidentTiming(v as 'immediate' | 'after_rca' | 'resolved')} disabled={isSystemAction}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="immediate">Immediately on incident creation</SelectItem>
-                      <SelectItem value="after_rca">After RCA investigation completes</SelectItem>
+                      <SelectItem value="immediate">On incident creation</SelectItem>
+                      <SelectItem value="after_rca">After RCA completes</SelectItem>
+                      <SelectItem value="resolved">On incident resolved</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

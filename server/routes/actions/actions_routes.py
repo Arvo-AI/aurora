@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
+from services.actions.system_actions import seed_system_actions
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
@@ -149,9 +150,24 @@ def list_actions(user_id):
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                # Ensure system actions exist for this org
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+                org_row = cur.fetchone()
+                if org_row and org_row[0]:
+                    cur.execute(
+                        "SELECT 1 FROM actions WHERE org_id = %s AND is_system = true LIMIT 1",
+                        (org_row[0],),
+                    )
+                    if not cur.fetchone():
+                        try:
+                            seed_system_actions(org_row[0], user_id)
+                        except Exception:
+                            logger.debug("Failed to lazy-seed system actions")
+
                 cur.execute("""
                     SELECT a.id, a.name, a.description, a.instructions, a.trigger_type,
                            a.trigger_config, a.mode, a.enabled, a.created_at, a.updated_at,
+                           a.is_system, a.system_key, a.default_instructions,
                            COUNT(r.id) AS run_count,
                            MAX(r.started_at) AS last_run_at,
                            (SELECT r2.status FROM action_runs r2
@@ -159,7 +175,7 @@ def list_actions(user_id):
                     FROM actions a
                     LEFT JOIN action_runs r ON r.action_id = a.id
                     GROUP BY a.id
-                    ORDER BY a.created_at DESC
+                    ORDER BY a.is_system DESC, a.created_at DESC
                 """)
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -170,6 +186,13 @@ def list_actions(user_id):
             r["updated_at"] = (r["updated_at"].isoformat() + "Z") if r["updated_at"] else None
             r["last_run_at"] = (r["last_run_at"].isoformat() + "Z") if r["last_run_at"] else None
             r["run_count"] = r["run_count"] or 0
+            r["is_system"] = r.get("is_system", False)
+            r["is_modified"] = (
+                r["is_system"]
+                and r.get("default_instructions")
+                and r.get("instructions") != r.get("default_instructions")
+            )
+            r.pop("default_instructions", None)
 
         return jsonify({"actions": rows})
     except Exception:
@@ -244,7 +267,9 @@ def _get_action_response(action_id):
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT id, org_id, created_by, name, description, instructions,
-                          trigger_type, trigger_config, mode, enabled, created_at, updated_at
+                          trigger_type, trigger_config, mode, enabled,
+                          is_system, system_key, default_instructions,
+                          created_at, updated_at
                    FROM actions WHERE id = %s""",
                 (action_id,),
             )
@@ -267,6 +292,13 @@ def _get_action_response(action_id):
     action["id"] = str(action["id"])
     action["created_at"] = (action["created_at"].isoformat() + "Z") if action["created_at"] else None
     action["updated_at"] = (action["updated_at"].isoformat() + "Z") if action["updated_at"] else None
+    action["is_system"] = action.get("is_system", False)
+    action["is_modified"] = (
+        action["is_system"]
+        and action.get("default_instructions")
+        and action.get("instructions") != action.get("default_instructions")
+    )
+    action.pop("default_instructions", None)
 
     for r in runs:
         r["id"] = str(r["id"])
@@ -323,14 +355,47 @@ def delete_action(user_id, action_id):
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM actions WHERE id = %s RETURNING id", (action_id,))
-                if not cur.fetchone():
+                cur.execute("SELECT is_system FROM actions WHERE id = %s", (action_id,))
+                row = cur.fetchone()
+                if not row:
                     return jsonify({"error": _ERR_NOT_FOUND}), 404
+                if row[0]:
+                    return jsonify({"error": "System actions cannot be deleted. You can disable them instead."}), 403
+                cur.execute("DELETE FROM actions WHERE id = %s", (action_id,))
                 conn.commit()
     except Exception:
         logger.exception("Failed to delete action")
         return jsonify({"error": "Failed to delete action"}), 500
     return "", 204
+
+
+@actions_bp.route("/<action_id>/restore-default", methods=["POST"])
+@require_permission("actions", "write")
+def restore_default(user_id, action_id):
+    """Restore a system action's instructions to the built-in default."""
+    if not _validate_uuid(action_id):
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT is_system, default_instructions FROM actions WHERE id = %s",
+                    (action_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+                if not row[0]:
+                    return jsonify({"error": "Only system actions can be restored to default"}), 400
+                cur.execute(
+                    "UPDATE actions SET instructions = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (row[1], action_id),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Failed to restore default instructions")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    return _get_action_response(action_id)
 
 
 @actions_bp.route("/<action_id>/trigger", methods=["POST"])

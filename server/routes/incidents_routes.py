@@ -1090,20 +1090,20 @@ def update_incident(user_id, incident_id: str):
                     conn.commit()
                     _record_audit_event(org_id or "", user_id, f"incident_{event_type}", "incident", incident_id, {"from": previous_status, "to": data["status"]}, request)
 
-                # Trigger postmortem generation only on transition to resolved
+                # Trigger on_incident actions for the "resolved" event
                 if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
-                        from services.actions.postmortem_action import dispatch_postmortem_action
-                        dispatch_postmortem_action(user_id, incident_id)
+                        from services.actions.executor import dispatch_on_incident_actions
+                        dispatch_on_incident_actions(user_id, incident_id, timing="resolved")
                         logger.info(
-                            "[INCIDENTS] Triggered postmortem action for resolved incident %s",
+                            "[INCIDENTS] Dispatched on-resolved actions for incident %s",
                             sanitize(incident_id),
                         )
-                    except Exception as pm_exc:
+                    except Exception as act_exc:
                         logger.warning(
-                            "[INCIDENTS] Postmortem generation failed for %s: %s",
+                            "[INCIDENTS] on-resolved actions failed for %s: %s",
                             sanitize(incident_id),
-                            pm_exc,
+                            act_exc,
                         )
 
                 logger.info(

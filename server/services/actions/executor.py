@@ -113,22 +113,37 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[Actions:on_incident]")
             cur.execute(
-                "SELECT id, trigger_config FROM actions WHERE trigger_type = 'on_incident' AND enabled = true"
+                "SELECT id, trigger_config, system_key FROM actions WHERE trigger_type = 'on_incident' AND enabled = true"
             )
             rows = cur.fetchall()
 
-    for action_id, trigger_config in rows:
-        action_timing = (trigger_config or {}).get("timing", "immediate")
+    for action_id, trigger_config, system_key in rows:
+        cfg = trigger_config or {}
+        action_timing = cfg.get("timing", "immediate")
+
         if action_timing != timing:
             continue
+
         try:
-            dispatch_action(
-                action_id=str(action_id),
-                user_id=user_id,
-                trigger_context={"source": "on_incident", "incident_id": incident_id},
-            )
+            if system_key == "generate_postmortem":
+                _dispatch_postmortem_via_action(str(action_id), user_id, incident_id)
+            else:
+                dispatch_action(
+                    action_id=str(action_id),
+                    user_id=user_id,
+                    trigger_context={"source": "on_incident", "incident_id": incident_id},
+                )
         except Exception:
             logger.debug("[Actions] Failed to dispatch on_incident action %s", action_id)
+
+
+def _dispatch_postmortem_via_action(action_id: str, user_id: str, incident_id: str) -> None:
+    """Dispatch the postmortem system action with its special pre-reserve logic."""
+    from services.actions.postmortem_action import dispatch_postmortem_action
+    try:
+        dispatch_postmortem_action(user_id, incident_id)
+    except ValueError as e:
+        logger.info("[Actions] Postmortem action skipped for %s: %s", incident_id, e)
 
 
 def build_action_prompt(

@@ -13,6 +13,25 @@ from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
+
+def _get_action_instructions(user_id: str) -> tuple:
+    """Load instructions and action_id from the DB system action. Returns (instructions, action_id, org_id)."""
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT a.instructions, a.id, a.org_id FROM actions a
+                       JOIN users u ON u.org_id = a.org_id
+                       WHERE u.id = %s AND a.system_key = 'generate_postmortem'""",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    return row[0], str(row[1]), row[2]
+    except Exception as e:
+        logger.warning("[PostmortemAction] Failed to load action from DB, using default: %s", e)
+    return DEFAULT_POSTMORTEM_INSTRUCTIONS, None, None
+
 DEFAULT_POSTMORTEM_INSTRUCTIONS = """**Step 1: Read existing postmortem (if regenerating)**
 Call get_postmortem to check if there is a prior version. If one exists, use it as a baseline
 so the new version does not diverge too far from what the team has already reviewed.
@@ -71,7 +90,7 @@ def dispatch_postmortem_action(
             if cur.fetchone():
                 raise ValueError("Postmortem generation already running for this incident")
 
-    instructions = DEFAULT_POSTMORTEM_INSTRUCTIONS
+    instructions, action_id, org_id = _get_action_instructions(user_id)
     if custom_instructions:
         instructions = f"{instructions}\n\n## Additional Instructions (user-customized)\n{custom_instructions}"
 
@@ -98,6 +117,22 @@ def dispatch_postmortem_action(
         "incident_id": incident_id,
     }
 
+    # Record an action_run for tracking
+    run_id = None
+    if action_id:
+        from services.actions.executor import _create_run, _update_run
+        run_id = _create_run(
+            action_id=action_id,
+            org_id=org_id,
+            user_id=user_id,
+            incident_id=incident_id,
+            trigger_context=trigger_meta,
+            status="running",
+        )
+        trigger_meta["source"] = "action"
+        trigger_meta["run_id"] = run_id
+        trigger_meta["action_id"] = action_id
+
     session_id = create_background_chat_session(
         user_id=user_id,
         title=f"Generate Postmortem: {incident_context.get('title', 'Incident')[:50]}",
@@ -106,6 +141,9 @@ def dispatch_postmortem_action(
 
     # Pre-create the postmortem row so the GET endpoint can detect "generating" state
     _reserve_postmortem_row(user_id, incident_id, session_id)
+
+    if run_id:
+        _update_run(run_id, user_id, chat_session_id=session_id)
 
     run_background_chat.delay(
         user_id=user_id,
@@ -208,6 +246,8 @@ def _build_action_prompt(instructions: str, incident: dict) -> str:
 def _reserve_postmortem_row(user_id: str, incident_id: str, session_id: str) -> None:
     """Pre-create a postmortem row with NULL content to signal 'generating' state.
 
+    If a postmortem already exists (regeneration), snapshots the current content
+    as a version before nulling it, so the GET endpoint returns 202.
     The save_postmortem tool will later fill in the content via ON CONFLICT UPDATE.
     """
     try:
@@ -221,11 +261,13 @@ def _reserve_postmortem_row(user_id: str, incident_id: str, session_id: str) -> 
                     return
 
                 set_rls_context(cur, conn, user_id, log_prefix="[PostmortemAction:reserve]")
+
                 cur.execute(
                     """INSERT INTO postmortems (incident_id, user_id, org_id, content, generation_session_id)
                        VALUES (%s, %s, %s, NULL, %s)
                        ON CONFLICT (incident_id)
-                       DO UPDATE SET generation_session_id = EXCLUDED.generation_session_id,
+                       DO UPDATE SET content = NULL,
+                                     generation_session_id = EXCLUDED.generation_session_id,
                                      updated_at = CURRENT_TIMESTAMP""",
                     (incident_id, user_id, org_id, session_id),
                 )

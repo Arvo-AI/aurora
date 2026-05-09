@@ -228,7 +228,7 @@ def update_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_
 def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
     """List version history for a postmortem."""
     cursor.execute(
-        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at
+        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at, v.generation_session_id
            FROM postmortem_versions v
            JOIN postmortems p ON v.postmortem_id = p.id
            WHERE p.incident_id = %s AND p.org_id = %s
@@ -244,6 +244,7 @@ def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, post
             "source": row[2],
             "userId": row[3],
             "createdAt": _format_timestamp(row[4]),
+            "generationSessionId": str(row[5]) if row[5] else None,
         }
         for row in rows
     ]

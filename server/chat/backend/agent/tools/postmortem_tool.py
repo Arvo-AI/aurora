@@ -129,9 +129,9 @@ def save_postmortem(
                 next_version = cursor.fetchone()[0]
                 cursor.execute(
                     """INSERT INTO postmortem_versions
-                       (postmortem_id, org_id, user_id, content, version_number, source)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (postmortem_id, org_id, user_id, content, next_version, "agent"),
+                       (postmortem_id, org_id, user_id, content, version_number, source, generation_session_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (postmortem_id, org_id, user_id, content, next_version, "agent", session_id),
                 )
 
                 conn.commit()

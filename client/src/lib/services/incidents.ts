@@ -143,6 +143,7 @@ export interface PostmortemVersion {
   source: string;
   userId: string;
   createdAt: string;
+  generationSessionId: string | null;
 }
 
 export interface PostmortemVersionDetail extends PostmortemVersion {

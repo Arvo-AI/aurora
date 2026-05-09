@@ -35,6 +35,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [regenerateSubmitting, setRegenerateSubmitting] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [versions, setVersions] = useState<PostmortemVersion[]>([]);
@@ -91,7 +92,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       prevContentRef.current = postmortem?.content ?? null;
       return;
     }
-    if (postmortem && prevContentRef.current !== null && postmortem.content !== prevContentRef.current) {
+    if (postmortem && postmortem.content !== prevContentRef.current) {
       setRegenerating(false);
       prevContentRef.current = postmortem.content;
     }
@@ -117,7 +118,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   };
 
   const handleRegenerate = async () => {
-    setRegenerating(true);
+    setRegenerateSubmitting(true);
     setRegenerateError(null);
     setPostmortemNotFound(false);
     try {
@@ -125,13 +126,15 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       const data = await res.json();
       if (!res.ok) {
         setRegenerateError(data.error || 'Failed to regenerate');
-        setRegenerating(false);
         setPostmortemNotFound(true);
+        return;
       }
+      setRegenerating(true);
     } catch {
       setRegenerateError('Failed to regenerate');
-      setRegenerating(false);
       setPostmortemNotFound(true);
+    } finally {
+      setRegenerateSubmitting(false);
     }
   };
 
@@ -219,12 +222,12 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
             <>
               <button
                 onClick={handleRegenerate}
-                disabled={regenerating}
+                disabled={regenerating || regenerateSubmitting}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
                 title="Regenerate postmortem with latest data"
               >
-                <RotateCcw className={`w-3 h-3 ${regenerating ? 'animate-spin' : ''}`} />
-                {regenerating ? 'Generating...' : 'Regenerate'}
+                <RotateCcw className={`w-3 h-3 ${regenerating || regenerateSubmitting ? 'animate-spin' : ''}`} />
+                {regenerating || regenerateSubmitting ? 'Generating...' : 'Regenerate'}
               </button>
               <button
                 onClick={handleLoadVersions}
@@ -349,6 +352,14 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
         </div>
       )}
 
+      {/* Regenerating banner */}
+      {regenerating && postmortem && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+          <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+          <p className="text-xs text-amber-400">Regenerating postmortem — this may take a minute...</p>
+        </div>
+      )}
+
       {/* Version history panel */}
       {showVersionHistory && (
         <div className="mb-4 p-4 rounded-lg bg-zinc-900 border border-zinc-800">
@@ -387,9 +398,9 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {v.source === 'agent' && postmortem?.generationSessionId && v.versionNumber === Math.max(...versions.filter(ver => ver.source === 'agent').map(ver => ver.versionNumber)) && (
+                    {v.generationSessionId && (
                       <a
-                        href={`/chat?sessionId=${postmortem.generationSessionId}`}
+                        href={`/chat?sessionId=${v.generationSessionId}`}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-zinc-400 hover:text-zinc-200 bg-zinc-700/40 hover:bg-zinc-700/70 border border-zinc-700 transition-colors"
                       >
                         <MessageSquare className="w-3 h-3" />
@@ -463,7 +474,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       {postmortem === null && regenerating ? (
         <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
           <RefreshCw className="w-5 h-5 animate-spin" />
-          <p className="text-xs">Generating postmortem...</p>
+          <p className="text-xs">{prevContentRef.current ? 'Regenerating postmortem...' : 'Generating postmortem...'}</p>
         </div>
       ) : postmortem === null && postmortemNotFound ? (
         <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
@@ -471,11 +482,11 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
           <p className="text-xs">No postmortem generated yet.</p>
           <button
             onClick={handleRegenerate}
-            disabled={regenerating}
+            disabled={regenerating || regenerateSubmitting}
             className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
           >
-            <RotateCcw className="w-3 h-3" />
-            Generate Postmortem
+            <RotateCcw className={`w-3 h-3 ${regenerateSubmitting ? 'animate-spin' : ''}`} />
+            {regenerateSubmitting ? 'Starting...' : 'Generate Postmortem'}
           </button>
         </div>
       ) : postmortem === null ? (
