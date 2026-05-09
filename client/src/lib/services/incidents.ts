@@ -599,15 +599,15 @@ export const postmortemService = {
     }
   },
 
-  async getVersions(incidentId: string): Promise<{ versions: PostmortemVersion[] }> {
+  async getVersions(incidentId: string): Promise<{ versions: PostmortemVersion[]; currentVersionId: string | null }> {
     try {
       const res = await fetch(`/api/incidents/${incidentId}/postmortem/versions`, {
         credentials: 'include',
       });
       const data = await res.json();
-      return { versions: data.versions ?? [] };
+      return { versions: data.versions ?? [], currentVersionId: data.currentVersionId ?? null };
     } catch {
-      return { versions: [] };
+      return { versions: [], currentVersionId: null };
     }
   },
 

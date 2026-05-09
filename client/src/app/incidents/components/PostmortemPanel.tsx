@@ -39,6 +39,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [versions, setVersions] = useState<PostmortemVersion[]>([]);
+  const [currentVersionId, setCurrentVersionId] = useState<string | null>(null);
   const [loadingVersions, setLoadingVersions] = useState(false);
 
   const loadPostmortem = useCallback(async () => {
@@ -144,8 +145,9 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
     }
     setLoadingVersions(true);
     try {
-      const { versions: versionList } = await postmortemService.getVersions(incidentId);
+      const { versions: versionList, currentVersionId: cvId } = await postmortemService.getVersions(incidentId);
       setVersions(versionList);
+      setCurrentVersionId(cvId);
     } catch {
       setVersions([]);
     }
@@ -165,9 +167,11 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
         setPostmortem(prev => prev ? { ...prev, content: data.content } : null);
         setEditContent(data.content);
         setShowVersionHistory(false);
+        setCurrentVersionId(versionId);
         try {
-          const { versions: refreshed } = await postmortemService.getVersions(incidentId);
+          const { versions: refreshed, currentVersionId: cvId } = await postmortemService.getVersions(incidentId);
           setVersions(refreshed);
+          setCurrentVersionId(cvId);
         } catch {
           // version list refresh is non-critical
         }
@@ -408,7 +412,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                         Log
                       </a>
                     )}
-                    {v.versionNumber === Math.max(...versions.map(ver => ver.versionNumber)) ? (
+                    {v.id === currentVersionId ? (
                       <span className="inline-flex items-center px-2 py-1 rounded-md text-[11px] text-green-400 bg-green-500/10 border border-green-500/20">
                         Current
                       </span>

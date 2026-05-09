@@ -1131,7 +1131,8 @@ def initialize_tables():
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
                         notion_database_id TEXT,
-                        generation_session_id VARCHAR(255)
+                        generation_session_id VARCHAR(255),
+                        current_version_id UUID
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
@@ -1891,7 +1892,8 @@ def initialize_tables():
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
                         notion_database_id TEXT,
-                        generation_session_id VARCHAR(255)
+                        generation_session_id VARCHAR(255),
+                        current_version_id UUID
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
@@ -2048,21 +2050,17 @@ def initialize_tables():
                 logging.warning(f"Error creating postmortem_versions table: {e}")
                 conn.rollback()
 
-            # Migration: add generation_session_id to postmortems (for existing deployments)
+            # Migrations: postmortem columns for existing deployments
             try:
-                cursor.execute("ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);")
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS current_version_id UUID;
+                    ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                """)
                 conn.commit()
             except Exception as e:
                 conn.rollback()
-                logging.warning(f"Migration for postmortems.generation_session_id: {e}")
-
-            # Migration: add generation_session_id to postmortem_versions
-            try:
-                cursor.execute("ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);")
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                logging.warning(f"Migration for postmortem_versions.generation_session_id: {e}")
+                logging.warning(f"Migration for postmortem columns: {e}")
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
             # columns to incidents table.

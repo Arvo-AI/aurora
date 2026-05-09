@@ -47,7 +47,7 @@ def _format_timestamp(ts) -> Optional[str]:
 
 
 def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, content: str, source: str = "manual") -> int:
-    """Insert a new version row for a postmortem atomically and return the version number."""
+    """Insert a new version row for a postmortem atomically, update the pointer, and return the version number."""
     cursor.execute(
         """INSERT INTO postmortem_versions
            (postmortem_id, org_id, user_id, content, version_number, source)
@@ -55,10 +55,16 @@ def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, conte
                    (SELECT COALESCE(MAX(version_number), 0) + 1
                     FROM postmortem_versions WHERE postmortem_id = %s),
                    %s)
-           RETURNING version_number""",
+           RETURNING id, version_number""",
         (postmortem_id, org_id, user_id, content, postmortem_id, source),
     )
-    return cursor.fetchone()[0]
+    row = cursor.fetchone()
+    version_id, version_number = row[0], row[1]
+    cursor.execute(
+        "UPDATE postmortems SET current_version_id = %s WHERE id = %s",
+        (str(version_id), postmortem_id),
+    )
+    return version_number
 
 
 def with_incident_postmortem(require_postmortem=False):
@@ -227,7 +233,8 @@ def update_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_
 def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
     """List version history for a postmortem."""
     cursor.execute(
-        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at, v.generation_session_id
+        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at, v.generation_session_id,
+                  p.current_version_id
            FROM postmortem_versions v
            JOIN postmortems p ON v.postmortem_id = p.id
            WHERE p.incident_id = %s AND p.org_id = %s
@@ -235,6 +242,8 @@ def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, post
         (incident_id, org_id),
     )
     rows = cursor.fetchall()
+
+    current_version_id = str(rows[0][6]) if rows and rows[0][6] else None
 
     versions = [
         {
@@ -247,7 +256,7 @@ def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, post
         }
         for row in rows
     ]
-    return jsonify({"versions": versions})
+    return jsonify({"versions": versions, "currentVersionId": current_version_id})
 
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions/<version_id>", methods=["GET"])
@@ -303,23 +312,12 @@ def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn
 
     restored_content = row[0]
 
-    # Snapshot current content before overwriting
-    cursor.execute(
-        "SELECT content FROM postmortems WHERE id = %s",
-        (postmortem_id,),
-    )
-    current = cursor.fetchone()
-    if current and current[0]:
-        _create_version(cursor, postmortem_id, org_id, user_id, current[0], source="pre_restore")
-
-    # Insert a version for the restored content so the UI shows it as current
-    _create_version(cursor, postmortem_id, org_id, user_id, restored_content, source="restore")
-
+    # Point to the restored version and update content
     cursor.execute(
         """UPDATE postmortems
-           SET content = %s, updated_at = CURRENT_TIMESTAMP
+           SET content = %s, current_version_id = %s, updated_at = CURRENT_TIMESTAMP
            WHERE id = %s""",
-        (restored_content, postmortem_id),
+        (restored_content, version_id, postmortem_id),
     )
     conn.commit()
 

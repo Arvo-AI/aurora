@@ -132,10 +132,17 @@ def save_postmortem(
                                (SELECT COALESCE(MAX(version_number), 0) + 1
                                 FROM postmortem_versions WHERE postmortem_id = %s),
                                %s, %s)
-                       RETURNING version_number""",
+                       RETURNING id, version_number""",
                     (postmortem_id, org_id, user_id, content, postmortem_id, "agent", session_id),
                 )
-                next_version = cursor.fetchone()[0]
+                version_row = cursor.fetchone()
+                version_id, next_version = str(version_row[0]), version_row[1]
+
+                # Update the current version pointer
+                cursor.execute(
+                    "UPDATE postmortems SET current_version_id = %s WHERE id = %s",
+                    (version_id, postmortem_id),
+                )
 
                 conn.commit()
 
