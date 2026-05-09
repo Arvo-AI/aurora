@@ -467,6 +467,25 @@ export function SecuritySettings() {
     });
   };
 
+  const handleToggleTier = async (tools: ToolPermission[], enabled: boolean) => {
+    const keys = tools.map((t) => t.tool_key);
+    setToolPerms((prev) => {
+      const next = { ...prev };
+      for (const connector of Object.keys(next)) {
+        next[connector] = next[connector].map((t) =>
+          keys.includes(t.tool_key) ? { ...t, enabled } : t
+        );
+      }
+      return next;
+    });
+    try {
+      await Promise.all(keys.map((k) => toolPermissionService.toggleTool(k, enabled)));
+    } catch {
+      toast({ title: "Failed to update tier permissions", variant: "destructive" });
+      await fetchToolPerms();
+    }
+  };
+
   const renderConnectorGroup = (connector: string, tools: ToolPermission[]) => {
     const expanded = expandedConnectors.has(connector);
     const enabledCount = tools.filter((t) => t.enabled).length;
@@ -496,26 +515,39 @@ export function SecuritySettings() {
         </button>
         {expanded && (
           <div className="border-t">
-            {grouped.map(({ risk, items }) => (
-              <div key={risk}>
-                <div className="px-3.5 py-1.5 bg-muted/40 border-b">
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{risk} risk</span>
-                </div>
-                <div className="divide-y divide-border">
-                  {items.map((tool) => (
-                    <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
+            {grouped.map(({ risk, items }) => {
+              const tierEnabled = items.every((t) => t.enabled);
+              const tierPartial = !tierEnabled && items.some((t) => t.enabled);
+              return (
+                <div key={risk}>
+                  <div className="flex items-center justify-between px-3.5 py-1.5 bg-muted/40 border-b">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{risk} risk</span>
+                    <div className="flex items-center gap-1.5">
+                      {tierPartial && <span className="text-[10px] text-muted-foreground">{items.filter((t) => t.enabled).length}/{items.length}</span>}
                       <Switch
-                        checked={tool.enabled}
-                        onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
-                        className="shrink-0 scale-90"
-                        disabled={!admin || togglingTools.has(tool.tool_key)}
+                        checked={tierEnabled}
+                        onCheckedChange={(v) => handleToggleTier(items, v)}
+                        className="shrink-0 scale-75"
+                        disabled={!admin}
                       />
-                      <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
                     </div>
-                  ))}
+                  </div>
+                  <div className="divide-y divide-border">
+                    {items.map((tool) => (
+                      <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
+                        <Switch
+                          checked={tool.enabled}
+                          onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
+                          className="shrink-0 scale-90"
+                          disabled={!admin || togglingTools.has(tool.tool_key)}
+                        />
+                        <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
