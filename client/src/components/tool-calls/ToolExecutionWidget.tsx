@@ -27,7 +27,6 @@ import {
   parseNewRelicCommand,
   parseCloudflareCommand,
   parseSlackCommand,
-  parsePostmortemCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
@@ -180,10 +179,6 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // Slack tools parsing
   else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
     command = parseSlackCommand(tool.tool_name, normalizedInput)
-  }
-  // Postmortem tools parsing
-  else if (tool.tool_name === "get_postmortem" || tool.tool_name === "save_postmortem") {
-    command = parsePostmortemCommand(tool.tool_name, normalizedInput)
   }
 
   // If command is still JSON blob, use default
