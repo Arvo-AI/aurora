@@ -47,37 +47,6 @@ ATTACKER_VALUE  = "attacker-supplied-identity"
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def app():
-    """Minimal Flask app with the incidents blueprint, rebuilt fresh per test."""
-    for _mod in list(sys.modules):
-        if _mod.startswith("routes.") or _mod.startswith("utils.auth.rbac"):
-            del sys.modules[_mod]
-
-    for heavy in (
-        "celery_config", "celery", "weaviate", "openai", "anthropic",
-        "chat.background.task", "chat.background.summarization",
-        "routes.audit_routes",
-    ):
-        if heavy not in sys.modules:
-            sys.modules[heavy] = MagicMock()
-
-    sys.modules["routes.audit_routes"].record_audit_event = MagicMock()
-
-    from flask import Flask as _Flask
-    from routes.incidents_routes import incidents_bp
-
-    application = _Flask(__name__)
-    application.register_blueprint(incidents_bp)
-    application.config["TESTING"] = True
-    return application
-
-
-@pytest.fixture
-def client(app):
-    return app.test_client()
-
-
 # ---------------------------------------------------------------------------
 # Tests: RBAC decorator rejects spoofed identity headers
 # ---------------------------------------------------------------------------

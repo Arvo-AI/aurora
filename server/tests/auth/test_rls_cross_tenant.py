@@ -71,50 +71,6 @@ def _make_conn(cursor):
     return conn
 
 
-@pytest.fixture
-def app():
-    """Minimal Flask app with the incidents blueprint registered.
-
-    Force-evicts and re-imports the route module and its Flask-dependent
-    transitive dependencies on every fixture instantiation, so the
-    Werkzeug LocalProxy objects inside them are bound to the Flask instance
-    created in *this* test run rather than one from a prior test file.
-    """
-    # Evict routes and the RBAC decorator so their module-level
-    # ``request``/``jsonify`` proxies are rebound to the new Flask app created
-    # in this fixture.  We deliberately avoid evicting ``flask.*``,
-    # ``werkzeug.*``, and ``utils.db.*`` here: those are shared with
-    # test_connection_pool.py which imports them at module level and expects
-    # its own bindings to remain stable throughout the test session.
-    for _mod in list(sys.modules):
-        if _mod.startswith("routes.") or _mod.startswith("utils.auth.rbac"):
-            del sys.modules[_mod]
-
-    # Stub heavy transitive dependencies before importing the blueprint.
-    for heavy in (
-        "celery_config", "celery", "weaviate", "openai", "anthropic",
-        "chat.background.task", "chat.background.summarization",
-        "routes.audit_routes",
-    ):
-        if heavy not in sys.modules:
-            sys.modules[heavy] = MagicMock()
-
-    sys.modules["routes.audit_routes"].record_audit_event = MagicMock()
-
-    from flask import Flask as _Flask  # fresh after eviction
-    from routes.incidents_routes import incidents_bp  # fresh after eviction
-
-    application = _Flask(__name__)
-    application.register_blueprint(incidents_bp)
-    application.config["TESTING"] = True
-    return application
-
-
-@pytest.fixture
-def client(app):
-    return app.test_client()
-
-
 # ---------------------------------------------------------------------------
 # Helper: build the standard auth headers for org-A's authenticated user
 # ---------------------------------------------------------------------------
