@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
+import { ToastAction } from '@/components/ui/toast';
 import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Search, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
 import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
@@ -339,6 +340,8 @@ export default function GitHubProviderIntegration() {
 
   const handleDisconnect = async () => {
     if (!userId) return;
+    const hadAppInstall = installations.length > 0;
+    const primaryInstall = installations[0];
     try {
       await GitHubIntegrationService.clearRepoSelections();
       await GitHubIntegrationService.disconnect();
@@ -347,9 +350,26 @@ export default function GitHubProviderIntegration() {
       setAllRepos([]);
       setHasLoadedRepos(false);
       setExpanded(false);
+      setInstallations([]);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      toast({ title: "Disconnected", description: "GitHub account disconnected" });
+      if (hadAppInstall && primaryInstall) {
+        const manageUrl = installationManageUrl(primaryInstall);
+        toast({
+          title: "Disconnected from Aurora",
+          description: "The GitHub App is still installed on your GitHub side. Open GitHub to fully uninstall it if you no longer want Aurora to receive webhooks.",
+          action: (
+            <ToastAction
+              altText="Uninstall on GitHub"
+              onClick={() => window.open(manageUrl, '_blank', 'noopener,noreferrer')}
+            >
+              Uninstall on GitHub
+            </ToastAction>
+          ),
+        });
+      } else {
+        toast({ title: "Disconnected", description: "GitHub account disconnected" });
+      }
     } catch (error: unknown) {
       const err = error as Error;
       toast({
@@ -711,6 +731,32 @@ export default function GitHubProviderIntegration() {
                     className="h-8 text-xs pl-7"
                   />
                 </div>
+              )}
+
+              {visibleRepos.length > 0 && (
+                <label className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                  <Checkbox
+                    data-testid="github-select-all"
+                    checked={visibleRepos.length > 0 && visibleRepos.every(r => checkedRepos.has(r.full_name))}
+                    onCheckedChange={(checked) => {
+                      setCheckedRepos(prev => {
+                        const next = new Set(prev);
+                        if (checked) {
+                          visibleRepos.forEach(r => next.add(r.full_name));
+                        } else {
+                          visibleRepos.forEach(r => next.delete(r.full_name));
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                  <span>
+                    Select all
+                    {searchFilter || installationFilter !== 'all' ? ' (filtered)' : ''}
+                    {' · '}
+                    {visibleRepos.length} repos
+                  </span>
+                </label>
               )}
 
               <div className="max-h-60 overflow-y-auto space-y-1">

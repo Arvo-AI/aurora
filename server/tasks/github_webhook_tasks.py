@@ -259,11 +259,25 @@ def _handle_installation_event(
     if action == "deleted":
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # Drop the parent row first. ``user_github_installations``
+                # has ``ON DELETE CASCADE`` so the user-link rows go with
+                # it. ``github_connected_repos.installation_id`` is a plain
+                # column with no FK, so we null it explicitly below to
+                # avoid leaving dangling references that would surface as
+                # "App-bound repo with no install" in the picker.
                 cur.execute(
                     "DELETE FROM github_installations WHERE installation_id = %s",
                     (installation_id,),
                 )
                 rows_deleted = cur.rowcount
+                cur.execute(
+                    """UPDATE github_connected_repos
+                          SET installation_id = NULL,
+                              updated_at = NOW()
+                        WHERE installation_id = %s""",
+                    (installation_id,),
+                )
+                connected_repos_unbound = cur.rowcount
                 cur.execute(
                     """UPDATE webhook_deliveries
                        SET status = 'processed', processed_at = NOW()
@@ -275,11 +289,12 @@ def _handle_installation_event(
         logger.info(
             "gh_webhook_handler=installation action=deleted installation_id=%s "
             "account_login=%s delivery_id=%s status=processed "
-            "rows_deleted=%s duration_ms=%d",
+            "rows_deleted=%s connected_repos_unbound=%s duration_ms=%d",
             installation_id,
             account_login,
             delivery_id,
             rows_deleted,
+            connected_repos_unbound,
             duration_ms,
         )
         return
