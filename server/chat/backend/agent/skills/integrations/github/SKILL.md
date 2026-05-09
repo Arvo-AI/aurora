@@ -4,9 +4,9 @@ id: github
 description: "GitHub code repository integration for investigating code changes, deployments, commits, PRs, and suggesting fixes during RCA"
 category: code_repository
 connection_check:
-  method: get_credentials_from_db
-  provider_key: github
-  required_field: username
+  method: is_connected_function
+  module: utils.auth.github_auth_router
+  function: is_github_connected
 tools:
   - get_connected_repos
   - github_rca

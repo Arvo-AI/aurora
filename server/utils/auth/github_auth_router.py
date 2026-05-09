@@ -341,3 +341,41 @@ def get_any_auth_for_user(user_id: str) -> AuthResult:
     raise NoGitHubAuthError(
         f"No GitHub credential available for user={user_id}"
     )
+
+
+def is_github_connected(user_id: str) -> bool:
+    """True if the user has *any* working GitHub credential.
+
+    Used by the skill registry's connection check (and any other code
+    that just needs a yes/no). Returns True when EITHER:
+      * a non-disconnected, non-suspended App installation is linked, OR
+      * an OAuth token is stored (only when OAuth is enabled).
+
+    Never raises — connection checks shouldn't bring down agent
+    initialization.
+    """
+    try:
+        if _lookup_any_active_installation(user_id) is not None:
+            return True
+    except Exception:
+        logger.warning(
+            "[GITHUB-AUTH-ROUTER] is_github_connected: install lookup failed "
+            "for user=%s",
+            sanitize(user_id).replace("\r", "_").replace("\n", "_"),
+            exc_info=True,
+        )
+
+    if is_oauth_enabled():
+        try:
+            creds = get_credentials_from_db(user_id, "github")
+            if creds and (creds.get("access_token") or creds.get("username")):
+                return True
+        except Exception:
+            logger.warning(
+                "[GITHUB-AUTH-ROUTER] is_github_connected: oauth lookup failed "
+                "for user=%s",
+                sanitize(user_id).replace("\r", "_").replace("\n", "_"),
+                exc_info=True,
+            )
+
+    return False
