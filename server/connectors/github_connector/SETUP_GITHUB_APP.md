@@ -345,6 +345,12 @@ ingress. There is no shared "Aurora SaaS" GitHub App in this case — each
 customer creates their own App in their own GitHub org and points it at
 their own Aurora hostname.
 
+> **For a focused, on-prem-specific App-creation walkthrough** (Vault
+> paths, per-customer naming, env layout, end-to-end verification) see
+> [SETUP_ONPREM.md](./SETUP_ONPREM.md). This section covers the ingress
+> and secret-hygiene background; the dedicated guide covers the actual
+> click-through.
+
 ### Requirements
 
 | Requirement | Why |
