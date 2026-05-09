@@ -1,14 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
+import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Search, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
 import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
@@ -53,8 +52,6 @@ export interface ConnectedRepo {
   repo_id: number;
   default_branch: string;
   is_private: boolean;
-  metadata_summary: string | null;
-  metadata_status: string;
   repo_data: Repository | null;
   created_at: string | null;
 }
@@ -142,23 +139,6 @@ export class GitHubIntegrationService {
     await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
   }
 
-  static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
-    const response = await fetch(`/api/proxy/github/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metadata_summary: summary }),
-    });
-    if (!response.ok) throw new Error('Failed to update metadata');
-  }
-
-  static async generateRepoMetadata(repoFullName: string): Promise<void> {
-    const response = await fetch('/api/proxy/github/repo-metadata/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_full_name: repoFullName }),
-    });
-    if (!response.ok) throw new Error('Failed to trigger metadata generation');
-  }
 }
 
 export default function GitHubProviderIntegration() {
@@ -176,10 +156,8 @@ export default function GitHubProviderIntegration() {
   const [expanded, setExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Saved repos with metadata
+  // Saved repos
   const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
-  const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
@@ -228,32 +206,14 @@ export default function GitHubProviderIntegration() {
     finally { setIsLoadingInstallations(false); }
   }, [userId]);
 
-  const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    const hasPending = repos.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
-    if (!hasPending || !userId) return;
-    pollingRef.current = setInterval(async () => {
-      try {
-        const updated = await GitHubIntegrationService.fetchRepoSelections();
-        setSavedRepos(updated);
-        const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
-        if (!stillPending && pollingRef.current) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-        }
-      } catch {}
-    }, 3000);
-  }, [userId]);
-
   const loadSavedRepos = useCallback(async () => {
     if (!userId) return;
     try {
       const repos = await GitHubIntegrationService.fetchRepoSelections();
       setSavedRepos(repos);
       setCheckedRepos(new Set(repos.map(r => r.repo_full_name)));
-      startMetadataPolling(repos);
     } catch { setSavedRepos([]); }
-  }, [userId, startMetadataPolling]);
+  }, [userId]);
 
   // Load saved repos when authenticated (fast DB query only)
   useEffect(() => {
@@ -278,8 +238,6 @@ export default function GitHubProviderIntegration() {
     }
   }, [expanded, githubStatus.isAuthenticated, userId, hasLoadedRepos, isLoadingRepos, fetchAllRepos]);
 
-  useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
-
   const handleSaveSelections = async () => {
     if (!userId) return;
     setIsSaving(true);
@@ -293,36 +251,6 @@ export default function GitHubProviderIntegration() {
     } catch {
       toast({ title: "Error", description: "Failed to save repositories", variant: "destructive" });
     } finally { setIsSaving(false); }
-  };
-
-  const handleMetadataSave = async (repoFullName: string) => {
-    if (!userId) return;
-    const summary = editingMetadata[repoFullName];
-    if (summary === undefined) return;
-    try {
-      await GitHubIntegrationService.updateRepoMetadata(repoFullName, summary);
-      setSavedRepos(prev => prev.map(r =>
-        r.repo_full_name === repoFullName ? { ...r, metadata_summary: summary, metadata_status: 'ready' } : r
-      ));
-      setEditingMetadata(prev => { const n = { ...prev }; delete n[repoFullName]; return n; });
-      toast({ title: "Description updated" });
-    } catch {
-      toast({ title: "Error", description: "Failed to update description", variant: "destructive" });
-    }
-  };
-
-  const handleRegenerate = async (repoFullName: string) => {
-    if (!userId) return;
-    try {
-      await GitHubIntegrationService.generateRepoMetadata(repoFullName);
-      const updated = savedRepos.map(r =>
-        r.repo_full_name === repoFullName ? { ...r, metadata_status: 'generating' } : r
-      );
-      setSavedRepos(updated);
-      startMetadataPolling(updated);
-    } catch {
-      toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
-    }
   };
 
   const handleAppInstall = async () => {
@@ -689,66 +617,16 @@ export default function GitHubProviderIntegration() {
             </div>
           )}
 
-          {/* Saved repos with metadata */}
+          {/* Connected repos */}
           {savedRepos.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm font-medium text-muted-foreground">Connected Repositories</p>
               {savedRepos.map(repo => (
-                <div key={repo.repo_full_name} className="p-2 rounded-md border border-border space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{repo.repo_full_name}</span>
-                      {repo.is_private && <Badge variant="secondary" className="text-xs">Private</Badge>}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {repo.metadata_status === 'ready' && (
-                        <>
-                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
-                            if (editingMetadata[repo.repo_full_name] !== undefined) {
-                              setEditingMetadata(prev => { const n = { ...prev }; delete n[repo.repo_full_name]; return n; });
-                            } else {
-                              setEditingMetadata(prev => ({ ...prev, [repo.repo_full_name]: repo.metadata_summary || '' }));
-                            }
-                          }} title="Edit description">
-                            {editingMetadata[repo.repo_full_name] !== undefined ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleRegenerate(repo.repo_full_name)} title="Regenerate">
-                            <RotateCw className="h-3 w-3" />
-                          </Button>
-                        </>
-                      )}
-                      {repo.metadata_status === 'error' && (
-                        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => handleRegenerate(repo.repo_full_name)}>Retry</Button>
-                      )}
-                    </div>
+                <div key={repo.repo_full_name} className="p-2 rounded-md border border-border">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{repo.repo_full_name}</span>
+                    {repo.is_private && <Badge variant="secondary" className="text-xs">Private</Badge>}
                   </div>
-
-                  {/* Metadata display/edit */}
-                  {(repo.metadata_status === 'pending' || repo.metadata_status === 'generating') && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />Generating description...
-                    </div>
-                  )}
-                  {repo.metadata_status === 'error' && (
-                    <p className="text-xs text-red-500">Failed to generate description</p>
-                  )}
-                  {repo.metadata_status === 'ready' && editingMetadata[repo.repo_full_name] !== undefined && (
-                    <div className="space-y-1">
-                      <Textarea
-                        value={editingMetadata[repo.repo_full_name]}
-                        onChange={(e) => setEditingMetadata(prev => ({ ...prev, [repo.repo_full_name]: e.target.value }))}
-                        className="text-xs min-h-[60px]"
-                        rows={2}
-                      />
-                      <div className="flex gap-1 justify-end">
-                        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setEditingMetadata(prev => { const n = { ...prev }; delete n[repo.repo_full_name]; return n; })}>Cancel</Button>
-                        <Button size="sm" className="h-6 px-2 text-xs" onClick={() => handleMetadataSave(repo.repo_full_name)}>Save</Button>
-                      </div>
-                    </div>
-                  )}
-                  {repo.metadata_status === 'ready' && editingMetadata[repo.repo_full_name] === undefined && repo.metadata_summary && (
-                    <p className="text-xs text-muted-foreground">{repo.metadata_summary?.replace(/\*\*/g, '')}</p>
-                  )}
                 </div>
               ))}
             </div>

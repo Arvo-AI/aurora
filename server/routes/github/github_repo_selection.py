@@ -29,47 +29,27 @@ def _get_user_org_id(user_id: str) -> str | None:
         return None
 
 
-def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE github_connected_repos SET metadata_status = %s, updated_at = NOW() WHERE user_id = %s AND repo_full_name = %s",
-                    (status, user_id, repo_full_name),
-                )
-                conn.commit()
-    except Exception as e:
-        logger.warning(f"Failed to revert metadata_status for {repo_full_name}: {e}")
-
-
 @github_repo_selection_bp.route("/repo-selections", methods=["GET"])
 @require_permission("connectors", "read")
 def get_repo_selections(user_id):
-    """Return all connected repos with metadata + ``auth_method`` per row.
+    """Return all connected repos with ``auth_method`` per row.
 
     The ``auth_method`` field mirrors the routing decision that
     :func:`utils.auth.github_auth_router.get_auth_for_user_repo` would
-    make for each repo, computed without invoking the router (and without
-    any per-repo DB query):
+    make for each repo, computed without invoking the router:
 
     - ``"app"`` if the repo row has a non-NULL ``installation_id`` AND
       the joined ``github_installations`` row exists with
       ``suspended_at IS NULL``.
-    - ``"oauth"`` if App auth is unavailable for the repo AND the user
-      has an OAuth credential.
-    - ``None`` if neither path is available (e.g. the App was uninstalled
-      and OAuth was never connected).
-
-    No N+1: one SELECT (with LEFT JOIN) for all repos + one OAuth
-    availability check for the whole user.
+    - ``None`` otherwise.
     """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT r.repo_full_name, r.repo_id, r.default_branch,
-                              r.is_private, r.metadata_summary, r.metadata_status,
-                              r.repo_data, r.created_at, r.installation_id,
+                              r.is_private, r.repo_data, r.created_at,
+                              r.installation_id,
                               (i.installation_id IS NOT NULL
                                   AND i.suspended_at IS NULL)
                                   AS has_active_installation
@@ -84,8 +64,8 @@ def get_repo_selections(user_id):
 
         repos = []
         for r in rows:
-            installation_id = r[8]
-            has_active_installation = r[9]
+            installation_id = r[6]
+            has_active_installation = r[7]
             auth_method = (
                 "app" if installation_id is not None and has_active_installation
                 else None
@@ -95,10 +75,8 @@ def get_repo_selections(user_id):
                 "repo_id": r[1],
                 "default_branch": r[2],
                 "is_private": r[3],
-                "metadata_summary": r[4],
-                "metadata_status": r[5],
-                "repo_data": r[6],
-                "created_at": r[7].isoformat() if r[7] else None,
+                "repo_data": r[4],
+                "created_at": r[5].isoformat() if r[5] else None,
                 "installation_id": installation_id,
                 "auth_method": auth_method,
             })
@@ -111,7 +89,7 @@ def get_repo_selections(user_id):
 @github_repo_selection_bp.route("/repo-selections", methods=["POST"])
 @require_permission("connectors", "write")
 def save_repo_selections(user_id):
-    """Sync the set of connected repos. Upserts new, removes deselected, triggers metadata gen."""
+    """Sync the set of connected repos. Upserts new, removes deselected."""
     try:
         data = request.get_json()
         repositories = data.get("repositories") if data else None
@@ -140,8 +118,8 @@ def save_repo_selections(user_id):
                     cur.execute(
                         """INSERT INTO github_connected_repos
                                (user_id, org_id, repo_full_name, repo_id, default_branch,
-                                is_private, repo_data, metadata_status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
+                                is_private, repo_data)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)
                            ON CONFLICT (user_id, repo_full_name) DO UPDATE SET
                                repo_data = EXCLUDED.repo_data,
                                default_branch = EXCLUDED.default_branch,
@@ -172,17 +150,8 @@ def save_repo_selections(user_id):
 
                 conn.commit()
 
-        # Fire metadata generation for newly added repos
-        for repo_name in newly_added:
-            try:
-                from routes.github.github_repo_metadata import generate_repo_metadata
-                generate_repo_metadata.delay(user_id, repo_name)
-            except Exception as e:
-                logger.warning(f"Failed to enqueue metadata gen for {repo_name}: {e}")
-                _update_metadata_status(user_id, repo_name, "error")
-
         return jsonify({
-            "message": f"Saved {len(incoming)} repos, removed {len(removed)}, generating metadata for {len(newly_added)}",
+            "message": f"Saved {len(incoming)} repos, removed {len(removed)}",
             "added": newly_added,
             "removed": list(removed),
         })
@@ -204,64 +173,3 @@ def clear_repo_selections(user_id):
     except Exception as e:
         logger.error(f"Error clearing repo selections: {e}", exc_info=True)
         return jsonify({"error": "Failed to clear repository selections"}), 500
-
-
-@github_repo_selection_bp.route("/repo-selections/<path:repo_full_name>/metadata", methods=["PUT"])
-@require_permission("connectors", "write")
-def update_repo_metadata(user_id, repo_full_name):
-    """Update the metadata summary for a specific repo (human edit)."""
-    try:
-        data = request.get_json()
-        summary = data.get("metadata_summary") if data else None
-        if summary is None:
-            return jsonify({"error": "metadata_summary is required"}), 400
-
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """UPDATE github_connected_repos
-                       SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
-                       WHERE user_id = %s AND repo_full_name = %s""",
-                    (summary, user_id, repo_full_name),
-                )
-                if cur.rowcount == 0:
-                    return jsonify({"error": "Repository not found"}), 404
-                conn.commit()
-        return jsonify({"message": "Metadata updated"})
-    except Exception as e:
-        logger.error(f"Error updating repo metadata: {e}", exc_info=True)
-        return jsonify({"error": "Failed to update metadata"}), 500
-
-
-@github_repo_selection_bp.route("/repo-metadata/generate", methods=["POST"])
-@require_permission("connectors", "write")
-def trigger_metadata_generation(user_id):
-    """Trigger LLM metadata generation for a specific repo."""
-    try:
-        data = request.get_json()
-        repo_full_name = data.get("repo_full_name") if data else None
-        if not repo_full_name:
-            return jsonify({"error": "repo_full_name is required"}), 400
-
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """UPDATE github_connected_repos SET metadata_status = 'generating', updated_at = NOW()
-                       WHERE user_id = %s AND repo_full_name = %s""",
-                    (user_id, repo_full_name),
-                )
-                if cur.rowcount == 0:
-                    return jsonify({"error": "Repository not found"}), 404
-                conn.commit()
-
-        from routes.github.github_repo_metadata import generate_repo_metadata
-        try:
-            generate_repo_metadata.delay(user_id, repo_full_name)
-        except Exception as e:
-            logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
-            _update_metadata_status(user_id, repo_full_name, "pending")
-            return jsonify({"error": "Failed to start metadata generation"}), 500
-        return jsonify({"message": "Metadata generation started"})
-    except Exception as e:
-        logger.error(f"Error triggering metadata generation: {e}", exc_info=True)
-        return jsonify({"error": "Failed to trigger metadata generation"}), 500

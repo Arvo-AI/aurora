@@ -93,7 +93,6 @@ celery_app.conf.update(
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
-        'routes.github.github_repo_metadata',
         'tasks.github_webhook_tasks',
     ],
     # Periodic task schedule
@@ -208,12 +207,6 @@ try:
     logging.info("New Relic tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
-
-try:
-    import routes.github.github_repo_metadata  # noqa: F401
-    logging.info("GitHub repo metadata task imported successfully")
-except ImportError as e:
-    logging.warning(f"Failed to import GitHub repo metadata task: {e}")
 
 try:
     from tasks import github_webhook_tasks  # noqa: F401
