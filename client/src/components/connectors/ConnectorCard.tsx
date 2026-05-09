@@ -79,7 +79,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
   const {
     isConnecting: isConnectingOAuthHandler,
-    handleGitHubOAuth,
     handleSlackOAuth,
   } = useConnectorOAuth(connector, userId);
 
@@ -141,13 +140,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
   const handleConnect = async () => {
     if (connector.id === "github") {
-      const isGitHubAuthed = hasOverride ? isConnected : githubStatus.isAuthenticated;
-      if (!isGitHubAuthed) {
-        pendingGitHubDialog = true;
-        await handleGitHubOAuth(checkGitHubStatus);
-      } else {
-        setShowGitHubDialog(true);
-      }
+      setShowGitHubDialog(true);
       return;
     }
 
