@@ -226,6 +226,23 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
             )
             # Fall through to OAuth fallback below.
 
+    # Fallback: the repo row may have a NULL installation_id (legacy
+    # OAuth-era pick) even though the user has an active App install
+    # for the same account. Try any active install for the user before
+    # giving up — App tokens are scoped to repos the App can already
+    # see, so this can't broaden access beyond what GitHub allows.
+    fallback_install_id = _lookup_any_active_installation(user_id)
+    if fallback_install_id is not None:
+        try:
+            token = get_installation_token(fallback_install_id)
+            return AuthResult(
+                method="app",
+                token=token,
+                installation_id=fallback_install_id,
+            )
+        except GitHubAppInstallationSuspended:
+            pass  # try OAuth
+
     oauth_result = _try_oauth_fallback(user_id)
     if oauth_result is not None:
         return oauth_result
