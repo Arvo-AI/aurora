@@ -1,4 +1,4 @@
-import { apiGet, apiPut, apiPost } from "./api-client";
+import { apiGet, apiPut, apiPost } from "@/lib/services/api-client";
 
 export interface ToolPermission {
   tool_key: string;

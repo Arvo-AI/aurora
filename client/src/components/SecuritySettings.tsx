@@ -543,6 +543,7 @@ export function SecuritySettings() {
                           onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
                           className="shrink-0 scale-90"
                           disabled={!admin || togglingTools.has(tool.tool_key)}
+                          aria-label={tool.label}
                         />
                         <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
                       </div>

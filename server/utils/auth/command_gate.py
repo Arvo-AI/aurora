@@ -150,10 +150,10 @@ def _is_org_tool_permitted(tool_name: str) -> bool:
         if not state:
             return False
         permitted = getattr(state, "permitted_tools", None)
-        if permitted is None:
-            return False
         _maybe_refresh_permitted_tools(state)
         permitted = state.permitted_tools
+        if permitted is None:
+            return False
         if not permitted:
             return False
         if tool_name in permitted:
@@ -191,7 +191,9 @@ def _maybe_refresh_permitted_tools(state) -> None:
         user_id = getattr(state, "user_id", None)
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[Gate:refresh_perms]")
+                org_id_resolved = set_rls_context(cur, conn, user_id, log_prefix="[Gate:refresh_perms]")
+                if not org_id_resolved:
+                    return
                 cur.execute(
                     "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
                     (org_id,),

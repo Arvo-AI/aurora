@@ -56,7 +56,7 @@ def list_permissions(user_id: str):
 
     return jsonify({
         "tools_by_connector": tools_by_connector,
-        "seeded": len(db_state) > 0,
+        "seeded": len(db_state) >= len(TOOL_REGISTRY),
     })
 
 
