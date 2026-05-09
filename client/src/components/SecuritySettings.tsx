@@ -489,9 +489,12 @@ export function SecuritySettings() {
   const renderConnectorGroup = (connector: string, tools: ToolPermission[]) => {
     const expanded = expandedConnectors.has(connector);
     const enabledCount = tools.filter((t) => t.enabled).length;
-    const riskOrder = ["low", "medium", "high", "critical"];
-    const grouped = riskOrder
-      .map((risk) => ({ risk, items: tools.filter((t) => t.risk === risk) }))
+    const tierOrder: string[] = [];
+    for (const t of tools) {
+      if (!tierOrder.includes(t.tier)) tierOrder.push(t.tier);
+    }
+    const grouped = tierOrder
+      .map((tier) => ({ tier, items: tools.filter((t) => t.tier === tier) }))
       .filter(({ items }) => items.length > 0);
     return (
       <div key={connector} className="rounded-lg border bg-card overflow-hidden">
@@ -515,13 +518,13 @@ export function SecuritySettings() {
         </button>
         {expanded && (
           <div className="border-t">
-            {grouped.map(({ risk, items }) => {
+            {grouped.map(({ tier, items }) => {
               const tierEnabled = items.every((t) => t.enabled);
               const tierPartial = !tierEnabled && items.some((t) => t.enabled);
               return (
-                <div key={risk}>
+                <div key={tier}>
                   <div className="flex items-center justify-between px-3.5 py-1.5 bg-muted/40 border-b">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{risk} risk</span>
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{tier}</span>
                     <div className="flex items-center gap-1.5">
                       {tierPartial && <span className="text-[10px] text-muted-foreground">{items.filter((t) => t.enabled).length}/{items.length}</span>}
                       <Switch
