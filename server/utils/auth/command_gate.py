@@ -143,11 +143,11 @@ def gate_command(
 
 
 def _is_org_tool_permitted(tool_name: str) -> bool:
-    """Bypass gate if tool is enabled in org tool permissions (background only)."""
+    """Bypass gate if tool is enabled in org tool permissions."""
     try:
         from utils.cloud.cloud_utils import get_state_context
         state = get_state_context()
-        if not state or not getattr(state, "is_background", False):
+        if not state:
             return False
         permitted = getattr(state, "permitted_tools", None)
         if not permitted:
