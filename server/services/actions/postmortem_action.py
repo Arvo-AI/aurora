@@ -73,7 +73,7 @@ def dispatch_postmortem_action(
         custom_instructions: Optional user-customized instructions (layered on top of defaults)
 
     Returns:
-        run_id of the dispatched action
+        session_id of the dispatched background chat (used by frontend to poll progress)
 
     Raises:
         ValueError: If rate limited or generation already in progress
