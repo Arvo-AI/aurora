@@ -255,12 +255,89 @@ class TestGetConnectionCleanup:
 
 
 class TestRLSContextAdversarial:
-    """Pool-release behaviour when set_rls_context is skipped or raises.
+    """Adversarial inputs to set_rls_context and pool-release behaviour for
+    tasks that forget to call it.
 
-    Invariant: an absent or failed RLS call must never leave a prior
-    tenant's identity attached to a returned connection — the pool's
-    RESET must fire on every exit path.
+    Invariant: no malformed user_id, cross-org user_id, or absent RLS call
+    must leave a previous tenant's identity attached to a returned connection.
+    Every path must either refuse to configure RLS (returning None, emitting no
+    SET) or guarantee that the pool's RESET fires on release.
     """
+
+    # ------------------------------------------------------------------
+    # Invalid / hostile user_id values passed to set_rls_context
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("bad_user_id", [
+        None,
+        "",
+        "../etc/passwd",
+        "org-b-victim-uuid",          # UUID belonging to a different org
+        "\x00null-byte",
+        "a" * 512,                    # pathologically long identifier
+    ])
+    def test_unresolvable_user_id_does_not_set_rls_vars(
+        self, bad_user_id, monkeypatch
+    ):
+        """Any user_id for which org resolution returns None must result in
+        zero SET executions and no commit — never a half-stamped connection.
+        """
+        import sys
+        import os as _os
+        _server_dir = _os.path.join(_os.path.dirname(__file__), _os.pardir, _os.pardir)
+        if _os.path.abspath(_server_dir) not in sys.path:
+            sys.path.insert(0, _os.path.abspath(_server_dir))
+
+        from utils.auth import stateless_auth as sa_module
+        from utils.auth.stateless_auth import set_rls_context
+
+        # Simulate org lookup returning nothing for every hostile input.
+        monkeypatch.setattr(sa_module, "_user_org_cache", {})
+        monkeypatch.setattr(
+            sa_module, "get_org_id_for_user", MagicMock(return_value=None)
+        )
+
+        cursor, conn = MagicMock(name="cursor"), MagicMock(name="conn")
+        result = set_rls_context(cursor, conn, bad_user_id)
+
+        assert result is None, (
+            f"set_rls_context must return None for unresolvable user_id={bad_user_id!r}"
+        )
+        cursor.execute.assert_not_called()
+        conn.commit.assert_not_called()
+
+    def test_cross_org_user_id_resolved_to_foreign_org_does_not_set_requester_org(
+        self, monkeypatch
+    ):
+        """A user_id that resolves to org-B must configure RLS for org-B —
+        never silently leave org-A's vars from a prior borrow on the same
+        connection.  The fixture confirms SET is called with the *resolved*
+        org, not any caller-supplied one.
+        """
+        import sys
+        import os as _os
+        _server_dir = _os.path.join(_os.path.dirname(__file__), _os.pardir, _os.pardir)
+        if _os.path.abspath(_server_dir) not in sys.path:
+            sys.path.insert(0, _os.path.abspath(_server_dir))
+
+        from utils.auth import stateless_auth as sa_module
+        from utils.auth.stateless_auth import set_rls_context
+
+        monkeypatch.setattr(sa_module, "_user_org_cache", {})
+        monkeypatch.setattr(
+            sa_module, "get_org_id_for_user", MagicMock(return_value="org-B")
+        )
+
+        cursor, conn = MagicMock(name="cursor"), MagicMock(name="conn")
+        result = set_rls_context(cursor, conn, "user-in-org-B")
+
+        assert result == "org-B"
+        set_sql = [c.args[0] for c in cursor.execute.call_args_list]
+        set_params = [c.args[1] for c in cursor.execute.call_args_list if len(c.args) > 1]
+        assert "SET myapp.current_org_id = %s;" in set_sql
+        assert ("org-B",) in set_params
+        # Must NOT contain anything that looks like org-A
+        assert ("org-A",) not in set_params
 
     # ------------------------------------------------------------------
     # Pool RESET fires even when set_rls_context was never called
