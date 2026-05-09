@@ -34,17 +34,31 @@ for _mod in list(sys.modules):
 
 
 # ---------------------------------------------------------------------------
+# Shared helper: minimal throwaway Flask app for request-context tests
+# ---------------------------------------------------------------------------
+
+
+def _make_test_app():
+    """Return a fresh Flask app suitable for test_request_context use.
+
+    TESTING=True enables exception propagation for cleaner assertions.
+    Aurora has no Flask-side CSRF middleware, so this does not disable any
+    CSRF protection — the trust boundary is the Next.js proxy layer.
+    """
+    sys.modules.pop("utils.auth.stateless_auth", None)
+    from flask import Flask as _Flask  # fresh import after eviction
+    tmp_app = _Flask(__name__)
+    tmp_app.config["TESTING"] = True  # NOSONAR
+    return tmp_app
+
+
+# ---------------------------------------------------------------------------
 # Fixed identities used across tests
 # ---------------------------------------------------------------------------
 
 VICTIM_USER_ID  = "victim-0000-0000-0000-000000000001"
 VICTIM_ORG_ID   = "victim-org-0000-0000-000000000001"
 ATTACKER_VALUE  = "attacker-supplied-identity"
-
-
-# ---------------------------------------------------------------------------
-# Minimal Flask app fixture (mirrors the pattern in test_rls_cross_tenant.py)
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -139,11 +153,7 @@ class TestGetUserIdFromRequestHeaderBehaviour:
         Flask's ``request`` proxy inside the module is bound to the fresh
         app created here, not to a stale app from a previous test file.
         """
-        sys.modules.pop("utils.auth.stateless_auth", None)
-
-        from flask import Flask as _Flask
-        tmp_app = _Flask(__name__)
-        tmp_app.config["TESTING"] = True
+        tmp_app = _make_test_app()
         with tmp_app.test_request_context("/", headers=headers):
             import utils.auth.stateless_auth as sa_module_fresh
             return sa_module_fresh.get_user_id_from_request()
@@ -155,11 +165,7 @@ class TestGetUserIdFromRequestHeaderBehaviour:
 
     def test_returns_none_for_empty_header_value(self):
         """Empty X-User-ID header → None (equivalent to absent)."""
-        sys.modules.pop("utils.auth.stateless_auth", None)
-
-        from flask import Flask as _Flask
-        tmp_app = _Flask(__name__)
-        tmp_app.config["TESTING"] = True
+        tmp_app = _make_test_app()
         with tmp_app.test_request_context("/", headers={"X-User-ID": ""}):
             import utils.auth.stateless_auth as sa_module_fresh
             result = sa_module_fresh.get_user_id_from_request()
@@ -197,16 +203,12 @@ class TestGetOrgIdFromRequestHeaderBehaviour:
     """
 
     def _fresh_app_and_module(self):
-        """Return a minimal Flask app and a freshly imported stateless_auth module.
+        """Return a minimal Flask app for test_request_context use.
 
         Evicts the stale module so the ``request`` proxy inside it is rebound
         to the new Flask app's context, not a dead one from a prior test file.
         """
-        sys.modules.pop("utils.auth.stateless_auth", None)
-        from flask import Flask as _Flask
-        tmp_app = _Flask(__name__)
-        tmp_app.config["TESTING"] = True
-        return tmp_app
+        return _make_test_app()
 
     def test_returns_org_from_header_when_present(self):
         """X-Org-ID header is trusted and returned directly."""

@@ -39,10 +39,10 @@ def app():
 
     application = _Flask(__name__)
     application.register_blueprint(incidents_bp)
-    # TESTING=True enables propagation of exceptions for cleaner assertions.
+    # TESTING=True enables exception propagation for cleaner assertions.
     # Aurora has no Flask-side CSRF middleware, so this does not disable any
-    # CSRF protection — the trust boundary is the Next.js proxy layer.  # NOSONAR
-    application.config["TESTING"] = True
+    # CSRF protection — the trust boundary is the Next.js proxy layer.
+    application.config["TESTING"] = True  # NOSONAR
     return application
 
 
