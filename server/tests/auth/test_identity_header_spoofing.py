@@ -32,8 +32,6 @@ for _mod in list(sys.modules):
     if _mod == "flask" or _mod.startswith("flask."):
         del sys.modules[_mod]
 
-from flask import Flask  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Fixed identities used across tests
@@ -100,7 +98,7 @@ class TestSpoofedIdentityHeaderRejectedAtRoute:
             monkeypatch.setattr(mod, "get_user_id_from_request", MagicMock(return_value=None))
             monkeypatch.setattr(mod, "get_org_id_from_request", MagicMock(return_value=None))
 
-        import routes.incidents_routes as route_module
+        from routes import incidents_routes as route_module
         pool_spy = MagicMock(name="db_pool")
         monkeypatch.setattr(route_module, "db_pool", pool_spy)
         return pool_spy
@@ -304,7 +302,7 @@ class TestRBACDecoratorIdentitySource:
         monkeypatch.setattr(rbac_module, "get_user_id_from_request", resolver_spy)
         monkeypatch.setattr(sa_module, "get_user_id_from_request", resolver_spy)
 
-        import routes.incidents_routes as route_module
+        from routes import incidents_routes as route_module
         monkeypatch.setattr(route_module, "db_pool", MagicMock(name="db_pool"))
 
         resp = client.get(

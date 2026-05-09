@@ -18,6 +18,7 @@ _server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
 
+import utils.internal.api_handler
 from utils.internal.api_handler import _handle_kubectl_execute  # noqa: E402
 
 
@@ -171,10 +172,8 @@ class TestConstantTimeComparison:
         """The implementation must delegate to ``hmac.compare_digest``
         so the runtime does not leak the secret length or prefix via timing.
         """
-        import utils.internal.api_handler as handler_module
-
         compare_spy = MagicMock(wraps=hmac.compare_digest)
-        monkeypatch.setattr(handler_module.hmac, "compare_digest", compare_spy)
+        monkeypatch.setattr(utils.internal.api_handler.hmac, "compare_digest", compare_spy)
 
         writer = _writer_spy()
         asyncio.run(

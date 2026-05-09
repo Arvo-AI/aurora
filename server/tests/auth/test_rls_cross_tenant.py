@@ -8,7 +8,7 @@ identity headers, or omits authentication entirely.  All tests are hermetic
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -33,8 +33,6 @@ if os.path.abspath(_server_dir) not in sys.path:
 for _mod in list(sys.modules):
     if _mod == "flask" or _mod.startswith("flask."):
         del sys.modules[_mod]
-
-from flask import Flask  # noqa: E402  (used by type hints only; fixture re-imports)
 
 # ---------------------------------------------------------------------------
 # UUIDs used as test fixtures
@@ -172,7 +170,7 @@ def _patch_auth_and_pool(monkeypatch, *, cursor):
     # The route module does `from utils.db.connection_pool import db_pool`,
     # so we must patch the name *in the route module's namespace*, not just
     # in the pool module, to intercept the reference the route actually uses.
-    import routes.incidents_routes as route_module
+    from routes import incidents_routes as route_module
     monkeypatch.setattr(route_module, "db_pool", fake_pool)
 
     # set_rls_context and get_org_id_from_request are both imported by name
@@ -287,9 +285,9 @@ class TestCrossTenantIncidentAccess:
         cursor = _make_cursor_returning(None)
         # _patch_auth_and_pool already stubs set_rls_context in the route module;
         # we grab it after patching so we can inspect calls on the same spy.
-        fake_pool = _patch_auth_and_pool(monkeypatch, cursor=cursor)
+        _patch_auth_and_pool(monkeypatch, cursor=cursor)
 
-        import routes.incidents_routes as route_module
+        from routes import incidents_routes as route_module
         rls_spy = MagicMock(return_value=ORG_A_ID)
         monkeypatch.setattr(route_module, "set_rls_context", rls_spy)
 
@@ -338,7 +336,7 @@ class TestUnauthenticatedAndNoOrgRequests:
         )
 
         # Pool must never be touched — patch via the route's local binding.
-        import routes.incidents_routes as route_module
+        from routes import incidents_routes as route_module
         pool_spy = MagicMock(name="db_pool")
         monkeypatch.setattr(route_module, "db_pool", pool_spy)
 
@@ -368,7 +366,7 @@ class TestUnauthenticatedAndNoOrgRequests:
             MagicMock(return_value=None),
         )
 
-        import routes.incidents_routes as route_module
+        from routes import incidents_routes as route_module
         pool_spy = MagicMock(name="db_pool")
         monkeypatch.setattr(route_module, "db_pool", pool_spy)
 
@@ -403,7 +401,7 @@ class TestUnauthenticatedAndNoOrgRequests:
             MagicMock(return_value=None),
         )
 
-        import routes.incidents_routes as route_module
+        from routes import incidents_routes as route_module
         pool_spy = MagicMock(name="db_pool")
         monkeypatch.setattr(route_module, "db_pool", pool_spy)
 
