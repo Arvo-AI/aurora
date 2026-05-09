@@ -1,14 +1,45 @@
-"""Shared fixtures for server/tests/auth/.
+"""Shared fixtures and bootstrap for server/tests/auth/.
 
 The ``app`` fixture rebuilds the incidents blueprint from scratch on every test
 so Werkzeug LocalProxy objects (``request``, ``jsonify``, …) are always bound
 to the Flask instance created in the current test run.
+
+Module-level bootstrap (env vars, sys.path insertion, Flask module eviction) is
+run here once so individual test files do not need to repeat it.
 """
 
+import os
 import sys
 from unittest.mock import MagicMock
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Environment defaults — must be set before any server module is imported.
+# ---------------------------------------------------------------------------
+
+os.environ.setdefault("POSTGRES_DB", "aurora_test")
+os.environ.setdefault("POSTGRES_USER", "test_user")
+os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
+os.environ.setdefault("POSTGRES_HOST", "localhost")
+os.environ.setdefault("POSTGRES_PORT", "5432")
+
+# ---------------------------------------------------------------------------
+# sys.path — make ``server/`` importable without an install step.
+# ---------------------------------------------------------------------------
+
+_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
+if os.path.abspath(_server_dir) not in sys.path:
+    sys.path.insert(0, os.path.abspath(_server_dir))
+
+# ---------------------------------------------------------------------------
+# Flask module eviction — ensures Werkzeug LocalProxy objects are rebound to
+# whatever Flask app the current test creates, not one from a prior test file.
+# ---------------------------------------------------------------------------
+
+for _mod in list(sys.modules):
+    if _mod == "flask" or _mod.startswith("flask."):
+        del sys.modules[_mod]
 
 
 @pytest.fixture
@@ -39,9 +70,8 @@ def app():
 
     application = _Flask(__name__)
     application.register_blueprint(incidents_bp)
-    # TESTING=True enables exception propagation for cleaner assertions.
-    # Aurora has no Flask-side CSRF middleware, so this does not disable any
-    # CSRF protection — the trust boundary is the Next.js proxy layer.
+    # Propagate exceptions instead of swallowing them so assertions are clear.
+    # Aurora's auth boundary is the Next.js proxy layer, not Flask middleware.
     application.config["TESTING"] = True  # NOSONAR
     return application
 

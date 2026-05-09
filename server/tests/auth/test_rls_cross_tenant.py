@@ -6,33 +6,10 @@ identity headers, or omits authentication entirely.  All tests are hermetic
 (no network, no real database).
 """
 
-import os
 import sys
 from unittest.mock import MagicMock
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path bootstrap — identical pattern to the other server/tests/ files
-# ---------------------------------------------------------------------------
-
-os.environ.setdefault("POSTGRES_DB", "aurora_test")
-os.environ.setdefault("POSTGRES_USER", "test_user")
-os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
-os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
-
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
-
-# Evict any previously-stacked stubs accumulated by earlier test files so that
-# Flask and Werkzeug LocalProxy objects are initialised fresh when the ``app``
-# fixture recreates the blueprint.  The fixture itself does a second, targeted
-# eviction immediately before re-importing the route and Flask modules.
-for _mod in list(sys.modules):
-    if _mod == "flask" or _mod.startswith("flask."):
-        del sys.modules[_mod]
 
 # ---------------------------------------------------------------------------
 # UUIDs used as test fixtures
