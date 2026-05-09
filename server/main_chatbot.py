@@ -1544,8 +1544,8 @@ async def handle_connection(websocket) -> None:
                             (org_id,),
                         )
                         _permitted_tools = {row[0] for row in cur.fetchall()}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[Chatbot] Failed to fetch tool permissions: %s", e)
 
             state = State(
                 user_id=user_id,
