@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
-from utils.auth.rbac_decorators import require_permission, require_auth_only
+from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.tool_registry import TOOL_REGISTRY, get_default_enabled_tools, get_tools_by_connector
 from utils.db.connection_pool import db_pool
@@ -22,7 +22,7 @@ tool_permissions_bp = Blueprint("tool_permissions", __name__, url_prefix="/api/o
 
 
 @tool_permissions_bp.route("/tool-permissions", methods=["GET"])
-@require_auth_only
+@require_permission("admin", "access")
 def list_permissions(user_id: str):
     """Return registry grouped by connector with current org toggle states."""
     org_id = get_org_id_from_request()
@@ -61,7 +61,9 @@ def toggle_permission(user_id: str, tool_key: str):
         return jsonify({"error": _ERR_NO_ORG}), 400
 
     body = request.get_json(silent=True) or {}
-    enabled = bool(body.get("enabled", False))
+    if "enabled" not in body or not isinstance(body["enabled"], bool):
+        return jsonify({"error": "`enabled` must be a boolean"}), 400
+    enabled = body["enabled"]
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
