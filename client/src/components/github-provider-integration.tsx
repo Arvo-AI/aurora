@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
-import { GitHubAppService, type GitHubInstallation } from '@/lib/github-app';
+import { GitHubAppService, type GitHubInstallation, type GitHubDiscoveredInstallation } from '@/lib/github-app';
 export type { GitHubInstallation, GitHubInstallationsResponse } from '@/lib/github-app';
 
 export type GitHubAuthMethod = 'oauth' | 'app';
@@ -165,6 +165,13 @@ export default function GitHubProviderIntegration() {
   const [isLoadingInstallations, setIsLoadingInstallations] = useState(false);
   const [installationFilter, setInstallationFilter] = useState<string>('all');
 
+  // App installations that exist on GitHub but aren't linked to this Aurora
+  // user. Surfaced after Install GitHub App when GitHub didn't fire the
+  // install callback (because the App was already installed) so the user
+  // can explicitly claim them.
+  const [discoveredInstallations, setDiscoveredInstallations] = useState<GitHubDiscoveredInstallation[]>([]);
+  const [isClaimingInstallation, setIsClaimingInstallation] = useState(false);
+
   // Server-fed deployment config: which auth paths are enabled.
   const [authConfig, setAuthConfig] = useState<GitHubAuthConfig>({
     mode: 'app',
@@ -280,9 +287,26 @@ export default function GitHubProviderIntegration() {
         if (popup.closed) {
           clearInterval(checkClosed);
           setIsLoading(false);
-          setTimeout(() => {
+          setTimeout(async () => {
             githubStatus.refresh();
             window.dispatchEvent(new CustomEvent('providerStateChanged'));
+            // Pull the user's linked installations one more time. If
+            // GitHub didn't fire the install callback (because the App
+            // was already installed and the user just visited the
+            // configure page), Aurora has nothing linked yet — discover
+            // the existing GitHub-side installs and offer them as a
+            // claim picker.
+            try {
+              const linked = await GitHubAppService.listInstallations();
+              if (!linked.installations || linked.installations.length === 0) {
+                const discovered = await GitHubAppService.discoverInstallations();
+                setDiscoveredInstallations(discovered.installations || []);
+              } else {
+                setDiscoveredInstallations([]);
+              }
+            } catch {
+              // discovery is best-effort; silent on failure
+            }
           }, 1000);
         }
       }, 1000);
@@ -294,6 +318,27 @@ export default function GitHubProviderIntegration() {
         variant: "destructive",
       });
       setIsLoading(false);
+    }
+  };
+
+  const handleClaimInstallation = async (installationId: number) => {
+    setIsClaimingInstallation(true);
+    try {
+      await GitHubAppService.claimInstallation(installationId);
+      setDiscoveredInstallations(prev => prev.filter(d => d.installation_id !== installationId));
+      await fetchInstallations();
+      githubStatus.refresh();
+      window.dispatchEvent(new CustomEvent('providerStateChanged'));
+      toast({ title: "Linked", description: "GitHub App installation linked to Aurora" });
+    } catch (error: unknown) {
+      const err = error as Error;
+      toast({
+        title: "Link failed",
+        description: err.message || "Failed to link installation",
+        variant: "destructive",
+      });
+    } finally {
+      setIsClaimingInstallation(false);
     }
   };
 
@@ -496,6 +541,52 @@ export default function GitHubProviderIntegration() {
           )}
         </div>
       </div>
+
+      {/* Existing-install picker — surfaced when the user clicked Install
+          GitHub App but GitHub didn't redirect with a fresh installation_id
+          (because the App was already installed on their org). Lets them
+          explicitly claim the existing installation. */}
+      {!githubStatus.isAuthenticated && discoveredInstallations.length > 0 && (
+        <div
+          className="mt-2 p-4 border border-amber-500/40 rounded-lg bg-amber-500/10 space-y-3"
+          data-testid="discovered-installations"
+        >
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-foreground">
+              Existing installation{discoveredInstallations.length > 1 ? 's' : ''} found on GitHub
+            </p>
+            <p className="text-xs text-muted-foreground">
+              The Aurora GitHub App is already installed
+              {discoveredInstallations.length > 1 ? ' on multiple accounts' : ''}.
+              Claim the one that belongs to you to finish connecting.
+            </p>
+          </div>
+          <div className="space-y-2">
+            {discoveredInstallations.map(d => (
+              <div
+                key={d.installation_id}
+                className="flex items-center justify-between gap-3 p-2 rounded-md border border-border bg-background"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{d.account_login || `Installation ${d.installation_id}`}</p>
+                  {d.account_type && (
+                    <p className="text-xs text-muted-foreground">{d.account_type}</p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => handleClaimInstallation(d.installation_id)}
+                  disabled={isClaimingInstallation}
+                  data-testid={`claim-installation-${d.installation_id}`}
+                >
+                  {isClaimingInstallation ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                  Link to Aurora
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Connect CTAs — rendered based on the deployment's auth mode.
           App-only deployments see one button; OAuth-only see one button;

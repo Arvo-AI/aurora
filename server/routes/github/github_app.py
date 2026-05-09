@@ -417,6 +417,229 @@ def github_app_list_installations(user_id):
     return jsonify({"installations": installations})
 
 
+@github_app_bp.route("/app/discover-installations", methods=["GET", "OPTIONS"])
+@require_permission("connectors", "read")
+def github_app_discover_installations(user_id):
+    """List App installations that exist on GitHub but aren't linked here.
+
+    Use case: the user installed the App on their GitHub side previously,
+    then disconnected on Aurora (which hard-deleted the link before
+    feat/github-app-only#fix(soft-delete)). The Install GitHub App popup
+    no longer redirects with a state token because the App is already
+    installed, so the install/callback path can't relink them.
+
+    This endpoint mints the App JWT, calls ``/app/installations`` to get
+    every install GitHub knows about for this App, and filters out the
+    ones the user already has a non-disconnected row for. Frontend
+    renders the result as a "Found existing installation(s) — claim
+    yours" picker. Claim is a separate POST so the user explicitly
+    asserts ownership (no implicit auto-link).
+    """
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return jsonify({"error": "GitHub App not configured"}), 503
+
+    try:
+        app_jwt = mint_app_jwt()
+    except GitHubAppJWTError:
+        logger.exception("[GITHUB-APP-DISCOVER] JWT mint failed")
+        return jsonify({"error": "GitHub App not configured"}), 503
+
+    try:
+        resp = requests.get(
+            "https://api.github.com/app/installations",
+            headers={
+                "Authorization": f"Bearer {app_jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=GITHUB_TIMEOUT,
+        )
+    except requests.RequestException:
+        logger.exception("[GITHUB-APP-DISCOVER] GitHub API request failed")
+        return jsonify({"error": "Failed to reach GitHub"}), 502
+
+    if resp.status_code != 200:
+        logger.error(
+            "[GITHUB-APP-DISCOVER] GitHub returned status=%d", resp.status_code
+        )
+        return jsonify({"error": "Failed to list App installations"}), 502
+
+    try:
+        installs = resp.json()
+    except ValueError:
+        logger.error("[GITHUB-APP-DISCOVER] response not JSON")
+        return jsonify({"error": "Failed to parse GitHub response"}), 502
+
+    if not isinstance(installs, list):
+        installs = []
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT installation_id
+                         FROM user_github_installations
+                        WHERE user_id = %s
+                          AND disconnected_at IS NULL""",
+                    (user_id,),
+                )
+                already_linked = {r[0] for r in cur.fetchall()}
+    except Exception:
+        logger.exception("[GITHUB-APP-DISCOVER] DB read failed")
+        return jsonify({"error": "Failed to check existing links"}), 500
+
+    out = []
+    for inst in installs:
+        if not isinstance(inst, dict):
+            continue
+        inst_id = inst.get("id")
+        if not isinstance(inst_id, int) or inst_id in already_linked:
+            continue
+        account = inst.get("account") or {}
+        out.append(
+            {
+                "installation_id": inst_id,
+                "account_login": account.get("login") if isinstance(account, dict) else None,
+                "account_type": account.get("type") if isinstance(account, dict) else None,
+                "repository_selection": inst.get("repository_selection"),
+                "suspended_at": inst.get("suspended_at"),
+            }
+        )
+    return jsonify({"installations": out})
+
+
+@github_app_bp.route(
+    "/app/installations/<int:installation_id>/claim", methods=["POST", "OPTIONS"]
+)
+@require_permission("connectors", "write")
+def github_app_claim_installation(user_id, installation_id):
+    """Link an existing App installation to the current Aurora user.
+
+    Counterpart to ``/app/discover-installations`` — the user picks one
+    from the discovery list and explicitly asserts ownership. We verify
+    the installation exists via ``/app/installations/{id}`` before
+    INSERTing so a guess at a random installation_id can't succeed.
+
+    Single-tenant deployments are safe by construction (one Aurora user
+    == one operator). Multi-tenant deployments accept that the user
+    asserts ownership; the audit log line below makes the claim
+    traceable.
+    """
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return jsonify({"error": "GitHub App not configured"}), 503
+
+    try:
+        app_jwt = mint_app_jwt()
+    except GitHubAppJWTError:
+        logger.exception("[GITHUB-APP-CLAIM] JWT mint failed")
+        return jsonify({"error": "GitHub App not configured"}), 503
+
+    try:
+        resp = requests.get(
+            f"https://api.github.com/app/installations/{installation_id}",
+            headers={
+                "Authorization": f"Bearer {app_jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=GITHUB_TIMEOUT,
+        )
+    except requests.RequestException:
+        logger.exception(
+            "[GITHUB-APP-CLAIM] GitHub API request failed user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Failed to verify installation with GitHub"}), 502
+
+    if resp.status_code == 404:
+        return jsonify({"error": "Installation not found"}), 404
+
+    if resp.status_code != 200:
+        logger.error(
+            "[GITHUB-APP-CLAIM] GitHub returned status=%d for installation_id=%d",
+            resp.status_code, installation_id,
+        )
+        return jsonify({"error": "Failed to verify installation"}), 502
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return jsonify({"error": "Failed to parse GitHub response"}), 502
+
+    account = data.get("account") if isinstance(data, dict) else None
+    account_login = (account or {}).get("login")
+    account_id = (account or {}).get("id")
+    account_type = (account or {}).get("type")
+    target_type = data.get("target_type") or account_type
+    permissions = data.get("permissions") or {}
+    events = data.get("events") or []
+    repository_selection = data.get("repository_selection") or "selected"
+    suspended_at = data.get("suspended_at")
+
+    if not isinstance(account_login, str) or not isinstance(account_type, str):
+        logger.error("[GITHUB-APP-CLAIM] GitHub response missing fields")
+        return jsonify({"error": "Invalid response from GitHub"}), 502
+
+    if account_type not in ("User", "Organization"):
+        return jsonify({"error": "Unexpected account_type"}), 502
+
+    org_id = get_org_id_for_user(user_id)
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO github_installations (
+                            installation_id, account_login, account_id, account_type,
+                            target_type, permissions, events, repository_selection,
+                            suspended_at, updated_at)
+                       VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, NOW())
+                       ON CONFLICT (installation_id) DO UPDATE SET
+                            account_login = EXCLUDED.account_login,
+                            account_id = EXCLUDED.account_id,
+                            account_type = EXCLUDED.account_type,
+                            target_type = EXCLUDED.target_type,
+                            permissions = EXCLUDED.permissions,
+                            events = EXCLUDED.events,
+                            repository_selection = EXCLUDED.repository_selection,
+                            suspended_at = EXCLUDED.suspended_at,
+                            updated_at = NOW()""",
+                    (
+                        installation_id,
+                        account_login,
+                        account_id,
+                        account_type,
+                        target_type,
+                        json.dumps(permissions),
+                        json.dumps(events),
+                        repository_selection,
+                        suspended_at,
+                    ),
+                )
+                cur.execute(
+                    """INSERT INTO user_github_installations
+                            (user_id, org_id, installation_id)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id, installation_id) DO UPDATE SET
+                            disconnected_at = NULL,
+                            org_id = EXCLUDED.org_id""",
+                    (user_id, org_id, installation_id),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-CLAIM] DB write failed user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Failed to link installation"}), 500
+
+    logger.info(
+        "[GITHUB-APP-CLAIM] user=%s claimed installation_id=%d account=%s",
+        user_id, installation_id, account_login,
+    )
+    return jsonify({"success": True, "installation_id": installation_id})
+
+
 @github_app_bp.route(
     "/app/installations/<int:installation_id>", methods=["DELETE", "OPTIONS"]
 )

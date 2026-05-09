@@ -18,6 +18,18 @@ export interface GitHubInstallationsResponse {
   installations: GitHubInstallation[];
 }
 
+export interface GitHubDiscoveredInstallation {
+  installation_id: number;
+  account_login: string | null;
+  account_type: GitHubAccountType | null;
+  repository_selection: 'all' | 'selected' | null;
+  suspended_at: string | null;
+}
+
+export interface GitHubDiscoveredInstallationsResponse {
+  installations: GitHubDiscoveredInstallation[];
+}
+
 export class GitHubAppService {
   private static async request<T>(
     path: string,
@@ -71,6 +83,20 @@ export class GitHubAppService {
     await this.request(
       `/app/installations/${encodeURIComponent(String(installationId))}`,
       { method: 'DELETE', errorMessage: 'Failed to unlink GitHub App installation' }
+    );
+  }
+
+  static async discoverInstallations(): Promise<GitHubDiscoveredInstallationsResponse> {
+    return this.request<GitHubDiscoveredInstallationsResponse>(
+      '/app/discover-installations',
+      { errorMessage: 'Failed to discover GitHub App installations' }
+    );
+  }
+
+  static async claimInstallation(installationId: number): Promise<void> {
+    await this.request(
+      `/app/installations/${encodeURIComponent(String(installationId))}/claim`,
+      { method: 'POST', errorMessage: 'Failed to link GitHub App installation' }
     );
   }
 }
