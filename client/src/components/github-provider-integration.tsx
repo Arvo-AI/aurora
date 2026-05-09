@@ -209,10 +209,25 @@ export default function GitHubProviderIntegration() {
     setIsLoadingInstallations(true);
     try {
       const data = await GitHubAppService.listInstallations();
-      setInstallations(data.installations || []);
+      const linked = data.installations || [];
+      setInstallations(linked);
+      // If the user has no linked installs but the App exists on GitHub
+      // for some account (left over from a previous install or another
+      // session), surface those for explicit claim. Cleared once any
+      // install is linked.
+      if (linked.length === 0 && authConfig.app_enabled) {
+        try {
+          const discovered = await GitHubAppService.discoverInstallations();
+          setDiscoveredInstallations(discovered.installations || []);
+        } catch {
+          setDiscoveredInstallations([]);
+        }
+      } else {
+        setDiscoveredInstallations([]);
+      }
     } catch { setInstallations([]); }
     finally { setIsLoadingInstallations(false); }
-  }, [userId]);
+  }, [userId, authConfig.app_enabled]);
 
   const loadSavedRepos = useCallback(async () => {
     if (!userId) return;
