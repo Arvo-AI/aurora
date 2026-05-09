@@ -297,6 +297,7 @@ export function SecuritySettings() {
 
   const [toolPerms, setToolPerms] = useState<Record<string, ToolPermission[]>>({});
   const [toolPermsLoading, setToolPermsLoading] = useState(true);
+  const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const [expandedConnectors, setExpandedConnectors] = useState<Set<string>>(new Set(["github"]));
   const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set());
 
@@ -339,7 +340,7 @@ export function SecuritySettings() {
     }
   }, []);
 
-  useEffect(() => { fetchPolicies(); fetchTemplates(); fetchToolPerms(); }, [fetchPolicies, fetchTemplates, fetchToolPerms]);
+  useEffect(() => { fetchPolicies(); fetchTemplates(); if (admin) fetchToolPerms(); }, [fetchPolicies, fetchTemplates, fetchToolPerms, admin]);
 
   useEffect(() => {
     fetchConnectedAccounts().then(() => {
@@ -433,6 +434,8 @@ export function SecuritySettings() {
   };
 
   const handleToggleTool = async (toolKey: string, enabled: boolean) => {
+    if (togglingTools.has(toolKey)) return;
+    setTogglingTools((prev) => new Set(prev).add(toolKey));
     setToolPerms((prev) => {
       const next = { ...prev };
       for (const connector of Object.keys(next)) {
@@ -447,6 +450,12 @@ export function SecuritySettings() {
     } catch {
       toast({ title: "Failed to update tool permission", variant: "destructive" });
       await fetchToolPerms();
+    } finally {
+      setTogglingTools((prev) => {
+        const next = new Set(prev);
+        next.delete(toolKey);
+        return next;
+      });
     }
   };
 
@@ -726,7 +735,7 @@ export function SecuritySettings() {
                             checked={tool.enabled}
                             onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
                             className="shrink-0 scale-90"
-                            disabled={!admin}
+                            disabled={!admin || togglingTools.has(tool.tool_key)}
                           />
                           <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
                         </div>

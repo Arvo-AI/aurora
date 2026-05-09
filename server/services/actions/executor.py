@@ -12,19 +12,6 @@ from utils.auth.stateless_auth import set_rls_context
 logger = logging.getLogger(__name__)
 
 
-def _fetch_org_permitted_tools(org_id: str, user_id: str) -> list:
-    """Fetch enabled tool_keys from org_tool_permissions for this org."""
-    with db_pool.get_connection() as conn:
-        with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Actions:permissions]")
-            cur.execute(
-                "SELECT tool_key FROM org_tool_permissions "
-                "WHERE org_id = %s AND enabled = true",
-                (org_id,),
-            )
-            return [row[0] for row in cur.fetchall()]
-
-
 def dispatch_action(
     action_id: str,
     user_id: str,
@@ -87,7 +74,6 @@ def dispatch_action(
         "source": "action",
         "action_id": action_id,
         "run_id": run_id,
-        "permitted_tools": _fetch_org_permitted_tools(org_id, user_id),
     }
 
     try:

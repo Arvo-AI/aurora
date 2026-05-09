@@ -104,7 +104,8 @@ def iac_plan(
             try:
                 vars_dict = json.loads(vars) if isinstance(vars, str) else vars
                 for key, value in vars_dict.items():
-                    plan_command += f" -var={shlex.quote(f'{key}={value}')}"
+                    serialized = json.dumps(value) if not isinstance(value, str) else value
+                    plan_command += f" -var={shlex.quote(f'{key}={serialized}')}"
             except (json.JSONDecodeError, TypeError):
                 plan_command += f" -var={shlex.quote(str(vars))}"
 

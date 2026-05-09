@@ -37,10 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_permitted_tools(user_id: str, trigger_metadata: Optional[Dict[str, Any]]) -> Optional[set]:
-    """Resolve permitted tools for background chats. Uses trigger_metadata if
-    provided (action executor pre-fetches), otherwise fetches from DB."""
-    if trigger_metadata and "permitted_tools" in trigger_metadata:
-        return set(trigger_metadata["permitted_tools"])
+    """Resolve permitted tools for background chats. Always fetches fresh from DB."""
     try:
         org_id = get_org_id_for_user(user_id)
         if not org_id:

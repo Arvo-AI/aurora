@@ -210,11 +210,11 @@ def spinnaker_rca(
     if action == "trigger_pipeline":
         # Block in background/ask mode — unless org has explicitly permitted this tool
         try:
+            from utils.auth.command_gate import _is_org_tool_permitted
             from chat.backend.agent.tools.cloud_tools import get_state_context
             state = get_state_context()
             if state and getattr(state, "is_background", False):
-                permitted = getattr(state, "permitted_tools", None)
-                if not permitted or "spinnaker_rca" not in permitted:
+                if not _is_org_tool_permitted("spinnaker_rca"):
                     return json.dumps({"error": "trigger_pipeline is not available in background mode. Only read-only actions can run automatically."})
         except Exception as e:
             logger.debug("[SPINNAKER_RCA] Could not check background state: %s", e)
