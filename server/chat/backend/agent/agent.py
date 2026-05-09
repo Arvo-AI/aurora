@@ -512,7 +512,9 @@ class Agent:
             # ContextSafetyMiddleware is a lightweight safety net that also injects
             # correlated RCA context updates into background sessions.
             middlewares = [ContextTrimMiddleware(model_name=model_name)]
-            if getattr(state, "trigger_rca_requested", False):
+            if getattr(state, "trigger_action_id", None):
+                middlewares.insert(0, _ForceToolChoice("trigger_action"))
+            elif getattr(state, "trigger_rca_requested", False):
                 middlewares.insert(0, _ForceToolChoice("trigger_rca"))
 
             agent_graph = create_agent(

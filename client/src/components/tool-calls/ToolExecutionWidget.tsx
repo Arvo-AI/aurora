@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import type { JSX } from "react"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
@@ -11,12 +10,9 @@ import { ChevronDown, ChevronUp, AlertCircle, Settings2 } from "lucide-react"
 import CommandLogo from "./CommandLogo"
 import { useTheme } from "next-themes"
 import { GitHubCommitTool } from "@/components/GitHubCommitTool"
-import { useUser } from '@/hooks/useAuthHooks'
-import { useChatExpansion } from "@/app/components/ClientShell"
 
 // Import modular utilities
 import {
-  extractIacPath,
   extractIacAction,
   parseCloudExecCommand,
   parseGitHubToolCommand,
@@ -33,17 +29,6 @@ import {
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
 
-interface ToolExecution {
-  tool_name: string
-  status: "pending" | "running" | "completed" | "error" | "awaiting_confirmation" | "cancelled" | "setting_up_environment"
-  input: string
-  output?: any
-  error?: string | null
-  command?: string
-  working_directory?: string
-  duration?: number
-}
-
 interface ToolExecutionWidgetProps {
   tool: ToolCall
   className?: string
@@ -55,12 +40,7 @@ interface ToolExecutionWidgetProps {
 }
 
 const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpdate, sessionId, userId }: ToolExecutionWidgetProps) => {
-  const [isTerminalFocused] = React.useState(false)
   const { theme } = useTheme()
-  const [editedContent, setEditedContent] = React.useState<string | null>(null)
-  const [hasSavedEdit, setHasSavedEdit] = React.useState(false)
-  const [lastSavedContent, setLastSavedContent] = React.useState<string | null>(null)
-  const { openWorkspace, closeWorkspace, workspaceConfig } = useChatExpansion()
 
   // SINGLE POINT OF NORMALIZATION: Ensure tool.input is always a string for all downstream parsing
   const normalizedInput = React.useMemo(() => 
@@ -79,20 +59,12 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     return undefined
   }, [tool.tool_name, normalizedInput])
 
-  const allowEditing = iacAction === 'write'
-  const iacPath = React.useMemo(() => extractIacPath(normalizedInput), [normalizedInput])
-
   // Use persistent state from tool.isExpanded, default to false if not set
   const showOutput = tool.isExpanded ?? false
-  const workspaceActive = React.useMemo(() => {
-    if (!sessionId) return false
-    return workspaceConfig?.type === 'iac' && workspaceConfig.sessionId === sessionId
-  }, [workspaceConfig, sessionId])
 
   // Auto-expand dropdown when tool starts running or awaiting confirmation
   React.useEffect(() => {
     if ((tool.status === "running" || tool.status === "awaiting_confirmation" || tool.status === "setting_up_environment") && !tool.isExpanded) {
-      // Only expand if not already expanded to avoid redundant state updates
       onToolUpdate?.({ isExpanded: true })
     }
   }, [tool.status, tool.isExpanded, onToolUpdate])
@@ -101,92 +73,6 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   const toggleShowOutput = () => {
     onToolUpdate?.({ isExpanded: !showOutput })
   }
-
-  React.useEffect(() => {
-    setEditedContent(null)
-    setHasSavedEdit(false)
-    setLastSavedContent(null)
-  }, [tool.tool_name, tool.output])
-
-  const handleEditorChange = React.useCallback((value: string) => {
-    if (!allowEditing) {
-      return
-    }
-    setEditedContent(value)
-    setHasSavedEdit(false)
-  }, [allowEditing])
-
-  const sendDirectToolCall = React.useCallback(
-    (toolName: string, parameters: Record<string, unknown>) => {
-      if (!sendRaw || !userId || !sessionId) {
-        console.warn(`Cannot invoke ${toolName} without websocket context`)
-        return false
-      }
-
-      const payload = {
-        user_id: userId,
-        session_id: sessionId,
-        direct_tool_call: {
-          tool_name: toolName,
-          parameters
-        }
-      }
-
-      return sendRaw(JSON.stringify(payload))
-    },
-    [sendRaw, sessionId, userId]
-  )
-
-  const handleSave = React.useCallback(
-    (content: string) => {
-      const success = sendDirectToolCall('iac_tool', { action: 'write', path: iacPath, content })
-      if (success) {
-        setLastSavedContent(content)
-        setHasSavedEdit(true)
-        onToolUpdate?.({ status: 'running' })
-      }
-      return success
-    },
-    [iacPath, onToolUpdate, sendDirectToolCall]
-  )
-
-  const handlePlan = React.useCallback(() => {
-    const success = sendDirectToolCall('iac_tool', { action: 'plan' })
-    if (success) {
-      onToolUpdate?.({ status: 'running' })
-    }
-    return success
-  }, [onToolUpdate, sendDirectToolCall])
-
-  const handleWorkspaceToggle = React.useCallback(() => {
-    if (!sessionId || !userId) {
-      return
-    }
-
-    if (workspaceActive) {
-      closeWorkspace()
-      return
-    }
-
-    openWorkspace({
-      type: 'iac',
-      sessionId,
-      onSave: async (path: string, content: string) => {
-        const success = sendDirectToolCall('iac_tool', { action: 'write', path, content })
-        if (success) {
-          onToolUpdate?.({ status: 'running' })
-        }
-        return !!success
-      },
-      onPlan: async () => {
-        const success = sendDirectToolCall('iac_tool', { action: 'plan' })
-        if (success) {
-          onToolUpdate?.({ status: 'running' })
-        }
-        return !!success
-      },
-    })
-  }, [closeWorkspace, openWorkspace, workspaceActive, onToolUpdate, sendDirectToolCall, sessionId, userId])
 
   // Parse command for display using modular parsers
   const defaultCliCommand = tool.tool_name ? tool.tool_name.replace(/_/g, " ") : "command"
@@ -435,16 +321,6 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
             className="flex items-center gap-2 flex-shrink-0 ml-2"
             onClick={(e) => e.stopPropagation()}
           >
-            {allowEditing && userId && sessionId && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 px-2 text-xs font-medium text-foreground hover:bg-muted/50"
-                onClick={handleWorkspaceToggle}
-              >
-                {workspaceActive ? "Close workspace" : "Open workspace"}
-              </Button>
-            )}
             <button
               onClick={toggleShowOutput}
               aria-label={showOutput ? "Collapse output" : "Expand output"}
@@ -460,7 +336,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
         </div>
 
         {/* Terminal Output */}
-        {showOutput && (isTerminalFocused || tool.status === "running" || tool.status === "setting_up_environment" || tool.status === "awaiting_confirmation" || tool.output || tool.error) && (
+        {showOutput && (tool.status === "running" || tool.status === "setting_up_environment" || tool.status === "awaiting_confirmation" || tool.output || tool.error) && (
           <div className="border-t border-border max-h-96 overflow-y-auto" style={{ backgroundColor: theme === 'dark' ? '#000000' : 'white' }}>
 
             {/* Show "Setting up environment" when terminal pod is being created */}
@@ -514,16 +390,6 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
                   output={tool.output}
                   toolName={tool.tool_name}
                   theme={theme || 'dark'}
-                  allowEditing={allowEditing}
-                  editedContent={editedContent}
-                  lastSavedContent={lastSavedContent}
-                  handleEditorChange={handleEditorChange}
-                  handleSave={handleSave}
-                  handlePlan={handlePlan}
-                  hasSavedEdit={hasSavedEdit}
-                  sendRaw={sendRaw}
-                  userId={userId}
-                  sessionId={sessionId}
                 />
               </div>
             )}
@@ -535,14 +401,6 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
               </div>
             )}
 
-            {isTerminalFocused && tool.status !== "running" && (
-              <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700">
-                <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
-                  <CommandLogo command={command} toolName={tool.tool_name} provider={provider} />
-                  <div className="w-2 h-4 bg-gray-500 dark:bg-gray-400 animate-pulse ml-1"></div>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
