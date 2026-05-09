@@ -298,7 +298,7 @@ export function SecuritySettings() {
   const [toolPerms, setToolPerms] = useState<Record<string, ToolPermission[]>>({});
   const [toolPermsLoading, setToolPermsLoading] = useState(true);
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
-  const [expandedConnectors, setExpandedConnectors] = useState<Set<string>>(new Set(["github"]));
+  const [expandedConnectors, setExpandedConnectors] = useState<Set<string>>(new Set());
   const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set());
 
   const fetchPolicies = useCallback(async () => {
