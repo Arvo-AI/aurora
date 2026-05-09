@@ -313,6 +313,37 @@ class TestEnforcerAllows:
 
 
 # ---------------------------------------------------------------------------
+# Enforcer errors: exception in enforce_with_reload must fail closed (500)
+# ---------------------------------------------------------------------------
+
+
+class TestEnforcerErrors:
+    """enforce_with_reload raising must fail closed (500), never fail open."""
+
+    def test_enforcer_exception_returns_500(self, flask_app, patch_auth):
+        """An unexpected Casbin error is NOT a pass — it must be 500, not 200."""
+        patch_auth.enforce_with_reload.side_effect = RuntimeError("casbin exploded")
+        view, observed = _build_view()
+
+        with flask_app.test_request_context("/api/x"):
+            response, status = view()
+
+        assert status == 500
+        assert response.get_json() == {"error": "Internal server error"}
+        assert "called" not in observed
+
+    def test_enforcer_exception_does_not_leak_200(self, flask_app, patch_auth):
+        """Double-check the fail-open case: status must not be 200."""
+        patch_auth.enforce_with_reload.side_effect = Exception("enforcer down")
+        view, _ = _build_view()
+
+        with flask_app.test_request_context("/api/x"):
+            _, status = view()
+
+        assert status != 200
+
+
+# ---------------------------------------------------------------------------
 # Wrapped fn errors: HTTPException propagates, everything else -> 500
 # ---------------------------------------------------------------------------
 
