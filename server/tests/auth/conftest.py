@@ -1,36 +1,17 @@
-"""Shared fixtures and bootstrap for server/tests/auth/.
+"""Shared fixtures for server/tests/auth/.
 
 The ``app`` fixture rebuilds the incidents blueprint from scratch on every test
 so Werkzeug LocalProxy objects (``request``, ``jsonify``, …) are always bound
 to the Flask instance created in the current test run.
 
-Module-level bootstrap (env vars, sys.path insertion, Flask module eviction) is
-run here once so individual test files do not need to repeat it.
+Env vars, sys.path insertion, and heavy-package stubs are handled by the
+parent ``server/tests/conftest.py`` which pytest loads automatically.
 """
 
-import os
 import sys
 from unittest.mock import MagicMock
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Environment defaults — must be set before any server module is imported.
-# ---------------------------------------------------------------------------
-
-os.environ.setdefault("POSTGRES_DB", "aurora_test")
-os.environ.setdefault("POSTGRES_USER", "test_user")
-os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")
-os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
-
-# ---------------------------------------------------------------------------
-# sys.path — make ``server/`` importable without an install step.
-# ---------------------------------------------------------------------------
-
-_server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
-if os.path.abspath(_server_dir) not in sys.path:
-    sys.path.insert(0, os.path.abspath(_server_dir))
 
 # ---------------------------------------------------------------------------
 # Flask module eviction — ensures Werkzeug LocalProxy objects are rebound to
