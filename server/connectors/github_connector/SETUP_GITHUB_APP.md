@@ -337,6 +337,113 @@ docker exec aurora-postgres-1 psql -U aurora -d aurora_db \
 
 ---
 
+## On-Premises Deployment
+
+When Aurora runs on customer infrastructure (private cloud, on-prem
+datacenter, customer-managed VPC) the operator owns both the App and the
+ingress. There is no shared "Aurora SaaS" GitHub App in this case — each
+customer creates their own App in their own GitHub org and points it at
+their own Aurora hostname.
+
+### Requirements
+
+| Requirement | Why |
+|---|---|
+| Public hostname Aurora can be reached at | GitHub.com posts webhooks from public IPs; tunnel-only setups break under load |
+| Valid TLS cert (Let's Encrypt, internal CA chained to a public root, or paid CA) | GitHub refuses webhook delivery to invalid certs |
+| Outbound HTTPS to `api.github.com` | Aurora calls GitHub for installation token mint, repo metadata, etc. |
+| GitHub App created in **the customer's** GitHub org | App secrets live with the customer, not Arvo |
+
+### Reverse-proxy sketch (nginx)
+
+Terminate TLS at the edge, forward `/github/webhook`, `/github/app/*`,
+and the rest of Aurora to `aurora-server:5080`.
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name aurora.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
+
+    # GitHub webhooks can deliver bursts; raise body size to absorb large
+    # workflow_run payloads without truncation.
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://aurora-server:5080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+A traefik-style label config achieves the same; the only requirements
+are TLS termination and Host-header preservation.
+
+### Env vars to point at the customer's hostname
+
+In the customer's `.env` (kept on their host, never committed):
+
+```bash
+GITHUB_APP_SETUP_URL=https://aurora.example.com/github/app/install/callback
+GITHUB_APP_WEBHOOK_URL=https://aurora.example.com/github/webhook
+NEXT_PUBLIC_BACKEND_URL=https://aurora.example.com
+```
+
+These three must match the URLs configured inside the customer's GitHub
+App settings (Step 1). Mismatch causes silent webhook drops or "GitHub
+App install URL is missing the required state parameter" toasts on the
+client.
+
+### Secret hygiene for prod
+
+| Secret | Where in dev | Where in prod |
+|---|---|---|
+| `GITHUB_APP_WEBHOOK_SECRET` | `.env` | Vault: `aurora/system/github-app/webhook-secret` (field `value`); env var becomes a fallback only |
+| `GITHUB_APP_PRIVATE_KEY` (PEM) | Vault: `aurora/system/github-app/private-key` | Same — Vault is canonical in both envs; never bake into images |
+| `INTERNAL_API_SECRET` | Empty in dev | Required, rotated; the server refuses to start without it when `AURORA_ENV != dev` |
+
+Set `AURORA_ENV=production` so the runtime startup check enforces the
+above. Empty `INTERNAL_API_SECRET` is permitted only in dev.
+
+### Per-environment Apps
+
+Create separate `aurora-<customer>-prod`, `aurora-<customer>-staging`,
+`aurora-<customer>-dev` Apps. Aurora reads `GITHUB_APP_*` env vars per
+deployment, so each env gets its own App keys. This stops a stray
+callback URL change in dev from breaking prod webhook delivery.
+
+### When public ingress is not possible
+
+Some customers cannot expose any port to the internet. Today the only
+supported workaround is a self-hosted webhook relay (smee.io-style
+tunnel that the customer operates), which is **not** part of the
+upstream Aurora deployment. If you need this, the OAuth-mode flag
+(`GITHUB_AUTH_MODE=oauth`, see below) gives you a path that does **not**
+need GitHub.com-to-Aurora reachability — it relies on user-level OAuth
+tokens and polling instead of webhook push.
+
+### GitHub Enterprise Server (GHES)
+
+GHES customers run their own GitHub instance inside their network, so
+both the App and Aurora can stay internal — no public hostname needed.
+This is the cleanest on-prem story when the customer already runs GHES.
+
+**Status:** not yet supported. Aurora's GitHub-API call sites still
+hardcode `https://api.github.com`. To enable GHES, every hardcoded
+`api.github.com` and `github.com` path needs to be routed through a
+configurable base URL (`GITHUB_API_URL`, `GITHUB_BASE_URL`). See
+[GHES_AUDIT.md](./GHES_AUDIT.md) for the file-by-file punch list. Until
+that work lands, GHES customers must use [Path A above](#requirements)
+with a public Aurora hostname that talks to the public GHES URL.
+
+---
+
 ## See also
 
 - [README.md](./README.md) — Connector overview

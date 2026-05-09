@@ -42,8 +42,15 @@ from flask import Blueprint, jsonify, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
+from utils.auth.github_auth_mode import (
+    get_auth_mode,
+    is_app_enabled,
+    is_oauth_enabled,
+    oauth_credentials_configured,
+)
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import (
+    get_credentials_from_db,
     get_org_id_for_user,
     validate_user_exists,
 )
@@ -445,54 +452,99 @@ def github_app_unlink_installation(user_id, installation_id):
     return jsonify({"success": True, "installation_id": installation_id})
 
 
+@github_app_bp.route("/auth-config", methods=["GET"])
+@require_permission("connectors", "read")
+def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorator
+    """Return the deployment's GitHub auth configuration.
+
+    The frontend calls this once on dialog mount to decide which CTAs to
+    render (Install GitHub App, Connect via OAuth, or both). Returning
+    the mode server-side is mandatory because ``NEXT_PUBLIC_*`` vars
+    cannot be trusted for security-relevant rendering and Aurora's
+    client/backend boundary forbids client-derived identity.
+    """
+    return jsonify(
+        {
+            "mode": get_auth_mode(),
+            "app_enabled": is_app_enabled(),
+            "oauth_enabled": is_oauth_enabled(),
+            "oauth_configured": oauth_credentials_configured(),
+        }
+    )
+
+
 @github_app_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def github_status(user_id):
     """Connection status for the GitHub connector.
 
-    Replaces the legacy OAuth-flavoured ``/github/status`` (deleted with
-    the OAuth flow). "Connected" now means the user has at least one
-    non-suspended GitHub App installation linked to them. Surfaces the
-    primary installation's ``account_login`` as ``username`` so the
-    frontend keeps showing a recognisable identifier without a separate
-    GitHub API call.
+    Hybrid-aware: a user is "connected" if they have either a non-suspended
+    GitHub App installation linked OR (when OAuth is enabled) a stored
+    user OAuth token. App identity wins when both are present, since the
+    installation token has scoped permissions and survives user departure.
     """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT gi.account_login
-                         FROM user_github_installations ugi
-                         JOIN github_installations gi
-                              ON gi.installation_id = ugi.installation_id
-                        WHERE ugi.user_id = %s
-                          AND gi.suspended_at IS NULL
-                        ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
-                        LIMIT 1""",
-                    (user_id,),
-                )
-                row = cur.fetchone()
-    except Exception as exc:
-        logger.error(
-            "[GITHUB-STATUS] DB read failed user=%s: %s",
-            user_id, exc, exc_info=True,
-        )
-        return jsonify({"connected": False, "error": "Failed to check status"}), 500
+    app_username: str | None = None
+    if is_app_enabled():
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT gi.account_login
+                             FROM user_github_installations ugi
+                             JOIN github_installations gi
+                                  ON gi.installation_id = ugi.installation_id
+                            WHERE ugi.user_id = %s
+                              AND gi.suspended_at IS NULL
+                            ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
+                            LIMIT 1""",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        app_username = row[0]
+        except Exception as exc:
+            logger.error(
+                "[GITHUB-STATUS] DB read failed user=%s: %s",
+                user_id, exc, exc_info=True,
+            )
+            return jsonify({"connected": False, "error": "Failed to check status"}), 500
 
-    if not row:
-        return jsonify({"connected": False})
-    return jsonify({"connected": True, "username": row[0]})
+    if app_username:
+        return jsonify({"connected": True, "username": app_username, "auth_method": "app"})
+
+    if is_oauth_enabled():
+        try:
+            creds = get_credentials_from_db(user_id, "github")
+        except Exception as exc:
+            logger.error(
+                "[GITHUB-STATUS] OAuth credential read failed user=%s: %s",
+                user_id, exc, exc_info=True,
+            )
+            return jsonify({"connected": False, "error": "Failed to check status"}), 500
+
+        if creds and creds.get("access_token"):
+            return jsonify(
+                {
+                    "connected": True,
+                    "username": creds.get("username"),
+                    "auth_method": "oauth",
+                }
+            )
+
+    return jsonify({"connected": False})
 
 
 @github_app_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
-    """Sever ALL GitHub App links for this user.
+    """Sever ALL GitHub auth state for this user.
 
-    Removes every row in ``user_github_installations`` for ``user_id``.
-    Does NOT uninstall the App on GitHub's side — the user must do that
-    from their org settings if they want to fully revoke access.
+    Removes every row in ``user_github_installations`` AND any stored
+    OAuth token. Does NOT uninstall the App on GitHub's side — the user
+    must do that from their org settings if they want to fully revoke
+    access.
     """
+    deleted_installs = 0
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -501,7 +553,7 @@ def github_disconnect(user_id):
                         WHERE user_id = %s""",
                     (user_id,),
                 )
-                deleted = cur.rowcount
+                deleted_installs = cur.rowcount
                 conn.commit()
     except Exception as exc:
         logger.error(
@@ -510,5 +562,27 @@ def github_disconnect(user_id):
         )
         return jsonify({"error": "Failed to disconnect"}), 500
 
-    logger.info("[GITHUB-DISCONNECT] removed %d installation link(s) for user=%s", deleted, user_id)
-    return jsonify({"success": True, "removed": deleted})
+    oauth_removed = False
+    if is_oauth_enabled():
+        try:
+            from utils.secrets.secret_ref_utils import delete_user_secret
+
+            success, _ = delete_user_secret(user_id, "github")
+            oauth_removed = bool(success)
+        except Exception as exc:
+            logger.warning(
+                "[GITHUB-DISCONNECT] OAuth credential delete failed user=%s: %s",
+                user_id, exc,
+            )
+
+    logger.info(
+        "[GITHUB-DISCONNECT] user=%s removed installs=%d oauth_removed=%s",
+        user_id, deleted_installs, oauth_removed,
+    )
+    return jsonify(
+        {
+            "success": True,
+            "removed_installations": deleted_installs,
+            "oauth_token_removed": oauth_removed,
+        }
+    )

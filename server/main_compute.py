@@ -188,6 +188,10 @@ _OPEN_PREFIXES = (
     # GitHub App install callback — verified via signed state token, not session.
     "/github/app/install/callback",
     "/github/webhook",
+    # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
+    # listed here unconditionally so the gate applies even if OAuth flips on
+    # at runtime.
+    "/github/callback",
     "/bitbucket/callback",
     "/slack/callback",
     "/slack/events",
@@ -332,10 +336,12 @@ from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
 from routes.github.github_webhook import github_webhook_bp
 from routes.github.github_app import github_app_bp
+from routes.github.github_oauth import github_oauth_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
+app.register_blueprint(github_oauth_bp, url_prefix="/github")
 
 # --- kubectl Agent Token Routes ---
 from routes.kubectl_token_routes import kubectl_token_bp

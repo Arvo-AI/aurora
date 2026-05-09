@@ -59,11 +59,54 @@ export interface ConnectedRepo {
   created_at: string | null;
 }
 
+export interface GitHubAuthConfig {
+  mode: 'app' | 'oauth' | 'hybrid';
+  app_enabled: boolean;
+  oauth_enabled: boolean;
+  oauth_configured: boolean;
+}
+
 export class GitHubIntegrationService {
   static async checkStatus(): Promise<GitHubCredentials> {
     const response = await fetch('/api/proxy/github/status');
     if (!response.ok) return { connected: false };
     return response.json();
+  }
+
+  static async getAuthConfig(): Promise<GitHubAuthConfig> {
+    const response = await fetch('/api/proxy/github/auth-config');
+    if (!response.ok) {
+      // Default to App-only on error so a misconfigured proxy never
+      // surfaces an OAuth CTA the deployment hasn't enabled.
+      return { mode: 'app', app_enabled: true, oauth_enabled: false, oauth_configured: false };
+    }
+    return response.json();
+  }
+
+  static async initiateOAuth(): Promise<string> {
+    const response = await fetch('/api/proxy/github/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      let parsed: { error_code?: string; message?: string } | null = null;
+      try {
+        parsed = JSON.parse(errorText);
+      } catch {
+        // fall through
+      }
+      if (parsed?.error_code === 'GITHUB_NOT_CONFIGURED' || parsed?.error_code === 'GITHUB_OAUTH_DISABLED') {
+        const err = new Error(parsed.message || 'GitHub OAuth is not configured');
+        (err as Error & { errorCode?: string; isHandled?: boolean }).errorCode = parsed.error_code;
+        (err as Error & { isHandled?: boolean }).isHandled = true;
+        throw err;
+      }
+      throw new Error('Failed to initiate GitHub OAuth');
+    }
+    const data = await response.json();
+    return data.oauth_url;
   }
 
   static async disconnect(): Promise<void> {
@@ -143,11 +186,26 @@ export default function GitHubProviderIntegration() {
   const [isLoadingInstallations, setIsLoadingInstallations] = useState(false);
   const [installationFilter, setInstallationFilter] = useState<string>('all');
 
+  // Server-fed deployment config: which auth paths are enabled.
+  const [authConfig, setAuthConfig] = useState<GitHubAuthConfig>({
+    mode: 'app',
+    app_enabled: true,
+    oauth_enabled: false,
+    oauth_configured: false,
+  });
+
   useEffect(() => {
     fetch('/api/getUserId').then(r => r.ok ? r.json() : null).then(d => {
       if (d?.userId) setUserId(d.userId);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    GitHubIntegrationService.getAuthConfig()
+      .then(setAuthConfig)
+      .catch(() => { /* keep app-only default */ });
+  }, [userId]);
 
   const fetchAllRepos = useCallback(async () => {
     if (!userId) return;
@@ -310,6 +368,47 @@ export default function GitHubProviderIntegration() {
     }
   };
 
+  const handleOAuthLogin = async () => {
+    if (!userId) return;
+    setIsLoading(true);
+    try {
+      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
+      const popup = window.open(oauthUrl, 'github-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
+      if (!popup) {
+        toast({
+          title: "Popup Blocked",
+          description: "Allow popups for Aurora to continue the GitHub OAuth flow.",
+          variant: "destructive",
+        });
+        setIsLoading(false);
+        return;
+      }
+      const checkClosed = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkClosed);
+          setIsLoading(false);
+          setTimeout(() => {
+            githubStatus.refresh();
+            window.dispatchEvent(new CustomEvent('providerStateChanged'));
+          }, 1000);
+        }
+      }, 1000);
+    } catch (error: unknown) {
+      const err = error as Error & { errorCode?: string };
+      const title = err.errorCode === 'GITHUB_NOT_CONFIGURED'
+        ? 'GitHub OAuth Not Configured'
+        : err.errorCode === 'GITHUB_OAUTH_DISABLED'
+          ? 'GitHub OAuth Disabled'
+          : 'Connection Failed';
+      toast({
+        title,
+        description: err.message || 'Failed to connect to GitHub via OAuth',
+        variant: 'destructive',
+      });
+      setIsLoading(false);
+    }
+  };
+
   const handleDisconnect = async () => {
     if (!userId) return;
     try {
@@ -450,25 +549,59 @@ export default function GitHubProviderIntegration() {
         </div>
       </div>
 
-      {/* Install GitHub App CTA — only auth path. */}
+      {/* Connect CTAs — rendered based on the deployment's auth mode.
+          App-only deployments see one button; OAuth-only see one button;
+          hybrid deployments see both with App as the recommended path. */}
       {!githubStatus.isAuthenticated && (
         <div className="mt-2 p-4 border border-border rounded-lg bg-muted/30 space-y-3">
           <p className="text-sm text-muted-foreground leading-relaxed">
-            <span className="font-medium text-foreground">Install the GitHub App</span> on your
-            organization to give Aurora read access to repos, deployments, and workflow runs.
-            Higher API rate limits, fine-grained repository permissions, and real-time webhook
-            delivery are all included.
+            {authConfig.app_enabled && authConfig.oauth_enabled ? (
+              <>
+                Choose how to connect.{' '}
+                <span className="font-medium text-foreground">Install the GitHub App</span> for
+                higher rate limits, fine-grained permissions, and real-time webhooks (recommended).{' '}
+                <span className="font-medium text-foreground">Connect via OAuth</span> uses your
+                personal access token — simpler, no admin needed.
+              </>
+            ) : authConfig.oauth_enabled ? (
+              <>
+                <span className="font-medium text-foreground">Connect via OAuth</span> uses your
+                personal GitHub access token. The administrator of this Aurora deployment has
+                disabled the GitHub App path.
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-foreground">Install the GitHub App</span> on your
+                organization to give Aurora read access to repos, deployments, and workflow runs.
+                Higher API rate limits, fine-grained repository permissions, and real-time webhook
+                delivery are all included.
+              </>
+            )}
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={handleAppInstall}
-              disabled={isLoading || !userId}
-              size="sm"
-              data-testid="github-install-app-cta"
-            >
-              {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
-              Install GitHub App
-            </Button>
+            {authConfig.app_enabled && (
+              <Button
+                onClick={handleAppInstall}
+                disabled={isLoading || !userId}
+                size="sm"
+                data-testid="github-install-app-cta"
+              >
+                {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                Install GitHub App
+              </Button>
+            )}
+            {authConfig.oauth_enabled && (
+              <Button
+                onClick={handleOAuthLogin}
+                disabled={isLoading || !userId}
+                size="sm"
+                variant={authConfig.app_enabled ? 'outline' : 'default'}
+                data-testid="github-oauth-cta"
+              >
+                {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                Connect via OAuth
+              </Button>
+            )}
           </div>
         </div>
       )}

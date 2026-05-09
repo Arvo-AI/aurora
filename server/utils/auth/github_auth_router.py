@@ -1,4 +1,4 @@
-"""GitHub authentication router: GitHub App installation tokens only.
+"""GitHub authentication router: App installation tokens with OAuth fallback.
 
 The auth router is the single entry point for any Aurora subsystem that
 needs to call the GitHub REST/GraphQL API on behalf of a user.
@@ -13,7 +13,13 @@ For each call to :func:`get_auth_for_user_repo`:
    user still links a non-suspended installation for that repo.
 2. If yes: mint an installation token and return
    ``AuthResult(method="app", ...)``.
-3. If no (no row, no link, suspended): raise :class:`NoGitHubAuthError`.
+3. If no AND ``GITHUB_AUTH_MODE`` allows OAuth: look up the user's
+   stored OAuth token and return ``AuthResult(method="oauth", ...)``.
+4. If still no auth available: raise :class:`NoGitHubAuthError`.
+
+App auth always wins when both are configured, since the installation
+token has narrower scope, isolated rate limits, and survives the OAuth
+user's GitHub-account departure.
 
 Header construction
 -------------------
@@ -47,7 +53,8 @@ from utils.auth.github_app_token import (
     GitHubAppInstallationSuspended,
     get_installation_token,
 )
-from utils.auth.stateless_auth import set_rls_context
+from utils.auth.github_auth_mode import is_oauth_enabled
+from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -73,18 +80,18 @@ class AuthResult:
     """Resolved GitHub auth for a (user, repo) pair.
 
     Attributes:
-        method: Always ``"app"`` — only auth path supported. Kept as a
-            field for callers that emit it as a metric/log dimension.
-        token: The installation token to place in the Authorization
-            header. Treat as a secret: never log, never include in
-            exception messages.
-        installation_id: Numeric GitHub installation id. Useful for
+        method: ``"app"`` for installation tokens, ``"oauth"`` for stored
+            user OAuth tokens. Callers emit this as a metric/log dimension.
+        token: The credential to place in the Authorization header. Treat
+            as a secret: never log, never include in exception messages.
+        installation_id: Numeric GitHub installation id when ``method``
+            is ``"app"``; ``None`` for OAuth tokens. Useful for
             downstream metrics and webhook correlation.
     """
 
-    method: Literal["app"]
+    method: Literal["app", "oauth"]
     token: str
-    installation_id: int
+    installation_id: int | None
 
 
 def _lookup_repo_installation(
@@ -141,19 +148,48 @@ def _lookup_repo_installation(
     return (installation_id, bool(has_active))
 
 
+def _try_oauth_fallback(user_id: str) -> AuthResult | None:
+    """Return an OAuth ``AuthResult`` if the user has a stored token, else None.
+
+    Returns ``None`` when OAuth is disabled in this deployment OR the
+    user has no stored OAuth credential. Never raises — credential
+    lookup failures degrade to "no auth available", letting the caller
+    surface a single ``NoGitHubAuthError``.
+    """
+    if not is_oauth_enabled():
+        return None
+    try:
+        creds = get_credentials_from_db(user_id, "github")
+    except Exception:
+        logger.warning(
+            "[GITHUB-AUTH-ROUTER] OAuth credential lookup failed for user=%s",
+            sanitize(user_id).replace("\r", "_").replace("\n", "_"),
+            exc_info=True,
+        )
+        return None
+    token = (creds or {}).get("access_token")
+    if not token:
+        return None
+    return AuthResult(method="oauth", token=token, installation_id=None)
+
+
 def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
-    """Resolve GitHub App auth for a ``(user, repo)`` pair.
+    """Resolve GitHub auth for a ``(user, repo)`` pair.
+
+    Tries App installation first. When no installation is linked for the
+    repo and ``GITHUB_AUTH_MODE`` allows OAuth, falls back to the user's
+    stored OAuth token.
 
     Args:
         user_id: Aurora user id.
         repo_full_name: GitHub ``owner/repo`` slug.
 
     Returns:
-        :class:`AuthResult` with the installation token.
+        :class:`AuthResult` with the resolved credential.
 
     Raises:
-        NoGitHubAuthError: No active App installation linked for this
-            repo (no row, link revoked, or installation suspended).
+        NoGitHubAuthError: No App installation AND no OAuth token (or
+            OAuth disabled).
         utils.auth.github_app_token.GitHubAppTokenError: Minting the
             installation token failed for a non-suspension reason
             (network error, installation deleted on GitHub mid-call).
@@ -165,36 +201,37 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
         user_id, repo_full_name
     )
 
-    if installation_id is None or not has_active:
-        raise NoGitHubAuthError(
-            f"No GitHub App installation available for user={user_id} "
-            f"repo={repo_full_name}"
-        )
+    if installation_id is not None and has_active:
+        try:
+            token = get_installation_token(installation_id)
+            return AuthResult(
+                method="app",
+                token=token,
+                installation_id=installation_id,
+            )
+        except GitHubAppInstallationSuspended:
+            # ``repo_full_name`` arrives via a ``<path:...>`` URL converter
+            # in github_user_repos.py and could carry CR/LF for log-line
+            # forging. Run it through ``sanitize()`` + the literal
+            # ``.replace`` chain that Sonar's S5145 rule recognises as
+            # neutralisation. ``user_id`` comes from the auth context, but
+            # we sanitise it too for symmetry — costs nothing.
+            safe_repo = sanitize(repo_full_name).replace("\r", "_").replace("\n", "_")
+            safe_user = sanitize(user_id).replace("\r", "_").replace("\n", "_")
+            logger.info(
+                "[GITHUB-AUTH-ROUTER] App installation suspended at mint time "
+                "for installation_id=%d (user=%s repo=%s); attempting OAuth fallback",
+                installation_id, safe_user, safe_repo,
+            )
+            # Fall through to OAuth fallback below.
 
-    try:
-        token = get_installation_token(installation_id)
-    except GitHubAppInstallationSuspended:
-        # ``repo_full_name`` arrives via a ``<path:...>`` URL converter
-        # in github_user_repos.py and could carry CR/LF for log-line
-        # forging. Run it through ``sanitize()`` + the literal
-        # ``.replace`` chain that Sonar's S5145 rule recognises as
-        # neutralisation. ``user_id`` comes from the auth context, but
-        # we sanitise it too for symmetry — costs nothing.
-        safe_repo = sanitize(repo_full_name).replace("\r", "_").replace("\n", "_")
-        safe_user = sanitize(user_id).replace("\r", "_").replace("\n", "_")
-        logger.info(
-            "[GITHUB-AUTH-ROUTER] App installation suspended at mint time "
-            "for installation_id=%d (user=%s repo=%s)",
-            installation_id, safe_user, safe_repo,
-        )
-        raise NoGitHubAuthError(
-            f"GitHub App installation_id={installation_id} is suspended"
-        )
+    oauth_result = _try_oauth_fallback(user_id)
+    if oauth_result is not None:
+        return oauth_result
 
-    return AuthResult(
-        method="app",
-        token=token,
-        installation_id=installation_id,
+    raise NoGitHubAuthError(
+        f"No GitHub credential available for user={user_id} "
+        f"repo={repo_full_name}"
     )
 
 
@@ -277,26 +314,28 @@ def get_any_auth_for_user(user_id: str) -> AuthResult:
     """
 
     installation_id = _lookup_any_active_installation(user_id)
-    if installation_id is None:
-        raise NoGitHubAuthError(
-            f"No GitHub App installation available for user={user_id}"
-        )
+    if installation_id is not None:
+        try:
+            token = get_installation_token(installation_id)
+            return AuthResult(
+                method="app",
+                token=token,
+                installation_id=installation_id,
+            )
+        except GitHubAppInstallationSuspended:
+            safe_user = sanitize(user_id).replace("\r", "_").replace("\n", "_")
+            logger.info(
+                "[GITHUB-AUTH-ROUTER] App installation suspended at mint time "
+                "for installation_id=%d (user=%s, no repo context); "
+                "attempting OAuth fallback",
+                installation_id, safe_user,
+            )
+            # Fall through to OAuth fallback below.
 
-    try:
-        token = get_installation_token(installation_id)
-    except GitHubAppInstallationSuspended:
-        safe_user = sanitize(user_id).replace("\r", "_").replace("\n", "_")
-        logger.info(
-            "[GITHUB-AUTH-ROUTER] App installation suspended at mint time "
-            "for installation_id=%d (user=%s, no repo context)",
-            installation_id, safe_user,
-        )
-        raise NoGitHubAuthError(
-            f"GitHub App installation_id={installation_id} is suspended"
-        )
+    oauth_result = _try_oauth_fallback(user_id)
+    if oauth_result is not None:
+        return oauth_result
 
-    return AuthResult(
-        method="app",
-        token=token,
-        installation_id=installation_id,
+    raise NoGitHubAuthError(
+        f"No GitHub credential available for user={user_id}"
     )
