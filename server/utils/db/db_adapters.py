@@ -72,7 +72,7 @@ def connect_to_db_as_admin():
     except psycopg2.pool.PoolError:
         raise Exception("connection pool exhausted")
     except Exception as e:
-        logger.error(f"Error getting admin connection: {e}")
+        logger.error("Error getting admin connection: %s", type(e).__name__)
         raise Exception("connection pool exhausted")
 
 def connect_to_db_as_user():
