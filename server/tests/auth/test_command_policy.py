@@ -17,7 +17,9 @@ from utils.auth import command_policy
 from utils.auth.command_policy import (
     CommandVerdict,
     ListStates,
+    PolicyChange,
     PolicyRule,
+    apply_yes_always,
     derive_pattern_from_command,
     evaluate_command,
     evaluate_compound_command,
@@ -79,7 +81,12 @@ def policy(monkeypatch):
 
 
 class TestNoOrgContext:
-    """Without an ``org_id`` there is no policy to enforce."""
+    """Without an ``org_id`` there is no policy to enforce.
+
+    Callers are responsible for resolving org context before reaching this 
+    function. Any unauthenticated path that arrives here without an org_id 
+    is a logic bug in the caller.
+    """
 
     @pytest.mark.parametrize("missing", [None, ""])
     def test_falsy_org_id_short_circuits_to_allowed(self, missing, monkeypatch):
@@ -334,6 +341,48 @@ class TestFailOpenOnDbError:
         assert states.allowlist_enabled is False
         assert states.denylist_enabled is False
 
+    def test_recovered_db_is_requeried_after_ttl_expiry(self, monkeypatch):
+        """Stale fail-open cache entry must not outlive its TTL."""
+        import time
+        import utils.db.connection_pool as cp_module
+        import utils.auth.stateless_auth as sa_module
+
+        broken_pool = MagicMock(name="broken_pool")
+        broken_pool.get_admin_connection.side_effect = RuntimeError("db down")
+        monkeypatch.setattr(cp_module, "db_pool", broken_pool)
+        monkeypatch.setattr(
+            sa_module, "get_user_preference", MagicMock(return_value="off"),
+        )
+
+        now_ts = time.monotonic()
+        monkeypatch.setattr(command_policy.time, "monotonic", lambda: now_ts)
+
+        _, _, states = command_policy._get_cached("org-7")
+        assert states.denylist_enabled is False
+
+        monkeypatch.setattr(
+            command_policy.time, "monotonic", lambda: now_ts + command_policy._CACHE_TTL + 1,
+        )
+
+        deny_cursor = MagicMock()
+        deny_cursor.fetchall.return_value = [
+            (10, "deny", r"\brm\s+-rf\s+/", "Recursive root deletion", 100),
+        ]
+        deny_conn = MagicMock()
+        deny_conn.cursor.return_value.__enter__.return_value = deny_cursor
+        recovered_pool = MagicMock(name="recovered_pool")
+        recovered_pool.get_admin_connection.return_value.__enter__.return_value = deny_conn
+        monkeypatch.setattr(cp_module, "db_pool", recovered_pool)
+        monkeypatch.setattr(
+            sa_module, "get_user_preference", MagicMock(side_effect=lambda *a, **kw: "on"),
+        )
+
+        _, deny2, states2 = command_policy._get_cached("org-7")
+
+        assert states2.denylist_enabled is True
+        assert len(deny2) == 1
+        assert deny2[0].id == 10
+
 
 # ---------------------------------------------------------------------------
 # Cache invalidation
@@ -354,6 +403,123 @@ class TestCacheInvalidation:
 
     def test_invalidate_cache_unknown_org_is_noop(self):
         invalidate_cache("never-cached")
+
+
+# ---------------------------------------------------------------------------
+# apply_yes_always -- the privilege-escalation write path
+# ---------------------------------------------------------------------------
+
+
+def _make_db_pool_mock():
+    """Stub pool/conn/cursor wired as context-manager chain."""
+    cursor = MagicMock(name="cursor")
+    cursor.__enter__ = MagicMock(return_value=cursor)
+    cursor.__exit__ = MagicMock(return_value=False)
+
+    conn = MagicMock(name="conn")
+    conn.cursor = MagicMock(return_value=cursor)
+    conn.__enter__ = MagicMock(return_value=conn)
+    conn.__exit__ = MagicMock(return_value=False)
+
+    pool = MagicMock(name="db_pool")
+    pool.get_admin_connection = MagicMock(return_value=conn)
+
+    return pool, cursor, conn
+
+
+class TestApplyYesAlways:
+    """``apply_yes_always`` writes policy mutations to the DB; pins the
+    org-scoping and mode guards that prevent privilege escalation."""
+
+    def test_empty_changes_is_noop_no_db_call(self, monkeypatch):
+        import utils.db.connection_pool as cp_module
+
+        pool, _, _ = _make_db_pool_mock()
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+
+        command_policy.apply_yes_always("org-7", [], user_id="u-1")
+
+        pool.get_admin_connection.assert_not_called()
+
+    def test_disable_deny_rule_update_includes_org_id_and_mode_guard(
+        self, monkeypatch,
+    ):
+        """UPDATE WHERE must include both ``org_id`` and ``mode = 'deny'``."""
+        import utils.db.connection_pool as cp_module
+
+        pool, cursor, _ = _make_db_pool_mock()
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+        command_policy._cache["org-7"] = ([], [], ListStates(False, False), 0.0)
+
+        changes = [PolicyChange(action="disable_deny_rule", rule_id=42)]
+        command_policy.apply_yes_always("org-7", changes, user_id="u-1")
+
+        update_calls = [
+            call for call in cursor.execute.call_args_list
+            if "UPDATE" in str(call)
+        ]
+        assert update_calls, "Expected at least one UPDATE execute call"
+        update_sql, update_params = update_calls[0].args
+        assert "org_id" in update_sql
+        assert "mode = 'deny'" in update_sql
+        assert "org-7" in update_params
+        assert 42 in update_params
+
+    def test_add_allow_rule_always_inserts_allow_mode(self, monkeypatch):
+        """INSERT hardcodes ``mode = 'allow'`` — caller can't inject a deny mode."""
+        import utils.db.connection_pool as cp_module
+
+        pool, cursor, _ = _make_db_pool_mock()
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+        command_policy._cache["org-7"] = ([], [], ListStates(False, False), 0.0)
+
+        changes = [PolicyChange(action="add_allow_rule", pattern=r"^kubectl\b", description="test")]
+        command_policy.apply_yes_always("org-7", changes, user_id="u-1")
+
+        insert_calls = [
+            call for call in cursor.execute.call_args_list
+            if "INSERT" in str(call)
+        ]
+        assert insert_calls, "Expected at least one INSERT execute call"
+        insert_sql, insert_params = insert_calls[0].args
+        assert "'allow'" in insert_sql
+        assert "org-7" in insert_params
+
+    def test_cache_invalidated_after_mutation(self, monkeypatch):
+        import utils.db.connection_pool as cp_module
+
+        pool, _, _ = _make_db_pool_mock()
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+        command_policy._cache["org-7"] = ([], [], ListStates(False, False), 0.0)
+
+        changes = [PolicyChange(action="disable_deny_rule", rule_id=1)]
+        command_policy.apply_yes_always("org-7", changes, user_id="u-1")
+
+        assert "org-7" not in command_policy._cache
+
+    def test_disable_change_with_none_rule_id_issues_no_update(self, monkeypatch):
+        import utils.db.connection_pool as cp_module
+
+        pool, cursor, _ = _make_db_pool_mock()
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+
+        changes = [PolicyChange(action="disable_deny_rule", rule_id=None)]
+        command_policy.apply_yes_always("org-7", changes, user_id="u-1")
+
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE" in str(c)]
+        assert not update_calls
+
+    def test_add_change_with_none_pattern_issues_no_insert(self, monkeypatch):
+        import utils.db.connection_pool as cp_module
+
+        pool, cursor, _ = _make_db_pool_mock()
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+
+        changes = [PolicyChange(action="add_allow_rule", pattern=None)]
+        command_policy.apply_yes_always("org-7", changes, user_id="u-1")
+
+        insert_calls = [c for c in cursor.execute.call_args_list if "INSERT" in str(c)]
+        assert not insert_calls
 
 
 # ---------------------------------------------------------------------------
