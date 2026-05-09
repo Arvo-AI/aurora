@@ -37,9 +37,9 @@ if os.path.abspath(_server_dir) not in sys.path:
 # whatever Flask app the current test creates, not one from a prior test file.
 # ---------------------------------------------------------------------------
 
-for _mod in list(sys.modules):
-    if _mod == "flask" or _mod.startswith("flask."):
-        del sys.modules[_mod]
+_flask_mods = [m for m in sys.modules if m == "flask" or m.startswith("flask.")]
+for _mod in _flask_mods:
+    del sys.modules[_mod]
 
 
 @pytest.fixture
@@ -51,9 +51,12 @@ def app():
     Werkzeug LocalProxy objects inside them are bound to the Flask instance
     created in *this* test run rather than one from a prior test file.
     """
-    for _mod in list(sys.modules):
-        if _mod.startswith("routes.") or _mod.startswith("utils.auth.rbac"):
-            del sys.modules[_mod]
+    mods_to_evict = [
+        m for m in sys.modules
+        if m.startswith(("routes.", "utils.auth.rbac"))
+    ]
+    for _mod in mods_to_evict:
+        del sys.modules[_mod]
 
     for heavy in (
         "celery_config", "celery", "weaviate", "openai", "anthropic",

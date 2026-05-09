@@ -377,20 +377,18 @@ class TestRLSContextAdversarial:
         cursor.execute.side_effect = [Exception("db gone"), None, None]
         factory.return_value.getconn.return_value = connection
 
-        with flask_app.test_request_context(
-            "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"},
+        with (
+            flask_app.test_request_context(
+                "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"}
+            ),
+            pool.get_connection() as conn,
         ):
-            with pool.get_connection() as conn:
-                assert conn is connection
+            assert conn is connection
 
         assert _RESET_SQL in _executed_sql(cursor)
         factory.return_value.putconn.assert_called_once_with(connection)
 
-    # ------------------------------------------------------------------
-    # Direct RLS-table query with no context returns zero rows
-    # ------------------------------------------------------------------
-
-    def test_rls_protected_query_without_context_returns_no_rows(self, monkeypatch):
+    def test_rls_protected_query_without_context_returns_no_rows(self):
         """When code queries an RLS-protected table on a connection that had
         no myapp.current_org_id SET, the mock cursor returns no rows.  This
         pins the expectation that the query path is gated — if it isn't, the
