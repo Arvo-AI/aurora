@@ -98,13 +98,13 @@ def save_postmortem(
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[PostmortemTool:save]")
 
-                # Get org_id for the user
-                cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                user_row = cursor.fetchone()
-                org_id = user_row[0] if user_row else None
+                # Resolve org_id from the incident (under RLS) to prevent cross-tenant writes
+                cursor.execute("SELECT org_id FROM incidents WHERE id = %s", (incident_id,))
+                incident_row = cursor.fetchone()
+                org_id = incident_row[0] if incident_row else None
 
                 if not org_id:
-                    return json.dumps({"error": "User has no organization."})
+                    return json.dumps({"error": "Incident not found or not accessible."})
 
                 # Upsert the postmortem
                 cursor.execute(

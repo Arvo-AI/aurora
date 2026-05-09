@@ -46,8 +46,15 @@ def _format_timestamp(ts) -> Optional[str]:
     return ts.isoformat()
 
 
-def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, content: str, source: str = "manual") -> int:
-    """Insert a new version row for a postmortem atomically, update the pointer, and return the version number."""
+def _create_version(
+    cursor, postmortem_id: str, org_id: str, user_id: str, content: str,
+    source: str = "manual", *, set_current: bool = True,
+) -> int:
+    """Insert a new version row for a postmortem atomically and return the version number.
+
+    When set_current=True (default), also advances the current_version_id pointer.
+    Snapshot versions (e.g. pre_edit) should pass set_current=False.
+    """
     cursor.execute(
         """INSERT INTO postmortem_versions
            (postmortem_id, org_id, user_id, content, version_number, source)
@@ -60,10 +67,11 @@ def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, conte
     )
     row = cursor.fetchone()
     version_id, version_number = row[0], row[1]
-    cursor.execute(
-        "UPDATE postmortems SET current_version_id = %s WHERE id = %s",
-        (str(version_id), postmortem_id),
-    )
+    if set_current:
+        cursor.execute(
+            "UPDATE postmortems SET current_version_id = %s WHERE id = %s",
+            (str(version_id), postmortem_id),
+        )
     return version_number
 
 
@@ -217,7 +225,7 @@ def update_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_
     cursor.execute("SELECT content FROM postmortems WHERE id = %s", (postmortem_id,))
     prev_row = cursor.fetchone()
     if prev_row and prev_row[0]:
-        _create_version(cursor, postmortem_id, org_id, user_id, prev_row[0], source="pre_edit")
+        _create_version(cursor, postmortem_id, org_id, user_id, prev_row[0], source="pre_edit", set_current=False)
 
     cursor.execute(
         """UPDATE postmortems
