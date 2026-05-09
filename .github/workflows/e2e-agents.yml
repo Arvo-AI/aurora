@@ -1,0 +1,96 @@
+name: E2E Agent Tests
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+    branches: [main, "release/**"]
+
+# Cancel in-progress runs for same PR (cost control)
+concurrency:
+  group: e2e-agents-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      labels: ${{ steps.check.outputs.labels }}
+    steps:
+      - id: check
+        run: |
+          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
+          if echo "$LABELS" | grep -qE '"(area:|test:custom)'; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "labels=$LABELS" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+  run-agents:
+    needs: check-labels
+    if: needs.check-labels.outputs.should_run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: write
+    environment: development
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git diff context
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: tests/e2e-agents/pyproject.toml
+
+      - name: Install agent framework
+        run: pip install ./tests/e2e-agents/
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium --with-deps
+
+      - name: Prepare environment
+        env:
+          ENV_CONTENT: ${{ secrets.ENV_CONTENT }}
+        run: |
+          if [ -z "$ENV_CONTENT" ]; then
+            echo "Warning: ENV_CONTENT not set, relying on env vars"
+          else
+            echo "$ENV_CONTENT" > .env
+          fi
+
+      - name: Build and start production stack
+        run: |
+          docker compose -f docker-compose.prod-local.yml up --build -d frontend aurora-server postgres redis
+          python -m e2e_agents.infra.wait_for_ready --url http://localhost:3000 --timeout 180
+
+      - name: Run E2E agents
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          LABELS: ${{ needs.check-labels.outputs.labels }}
+          CI: "true"
+          RESULTS_DIR: ${{ github.workspace }}/tests/e2e-agents/results
+        run: python -m e2e_agents.ci_entrypoint
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-agent-results
+          path: tests/e2e-agents/results/
+
+      - name: Teardown stack
+        if: always()
+        run: docker compose -f docker-compose.prod-local.yml down
