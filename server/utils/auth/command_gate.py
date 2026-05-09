@@ -152,7 +152,12 @@ def _is_org_tool_permitted(tool_name: str) -> bool:
         permitted = getattr(state, "permitted_tools", None)
         if not permitted:
             return False
-        return tool_name in permitted
+        if tool_name in permitted:
+            return True
+        for p in permitted:
+            if p.endswith("_*") and tool_name.startswith(p[:-1]):
+                return True
+        return False
     except Exception:
         return False
 

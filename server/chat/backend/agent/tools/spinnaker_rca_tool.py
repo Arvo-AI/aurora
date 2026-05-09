@@ -208,12 +208,14 @@ def spinnaker_rca(
 
     # Mutating action: trigger_pipeline requires human-in-the-loop confirmation
     if action == "trigger_pipeline":
-        # Block in background/ask mode — no user to confirm
+        # Block in background/ask mode — unless org has explicitly permitted this tool
         try:
             from chat.backend.agent.tools.cloud_tools import get_state_context
             state = get_state_context()
             if state and getattr(state, "is_background", False):
-                return json.dumps({"error": "trigger_pipeline is not available in background mode. Only read-only actions can run automatically."})
+                permitted = getattr(state, "permitted_tools", None)
+                if not permitted or "spinnaker_rca" not in permitted:
+                    return json.dumps({"error": "trigger_pipeline is not available in background mode. Only read-only actions can run automatically."})
         except Exception as e:
             logger.debug("[SPINNAKER_RCA] Could not check background state: %s", e)
 
