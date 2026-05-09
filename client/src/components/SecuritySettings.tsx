@@ -13,6 +13,18 @@ import { isAdmin } from "@/lib/roles";
 import { Trash2, Plus, Terminal, ChevronRight, ChevronDown, Loader2, Lock, CheckCircle2, XCircle, Shield, ShieldCheck, ShieldX, BookOpen } from "lucide-react";
 import { commandPolicyService, type CommandPolicyRule, type PolicyTemplate } from "@/lib/services/command-policies";
 import { toolPermissionService, type ToolPermission } from "@/lib/services/tool-permissions";
+import { getConnectedAccounts, fetchConnectedAccounts, subscribe as subscribeAccounts } from "@/lib/connected-accounts-cache";
+import Image from "next/image";
+
+const CONNECTOR_ICONS: Record<string, string> = {
+  github: "/github-mark.svg",
+  bitbucket: "/bitbucket.svg",
+  terraform: "/terraform-icon-svgrepo-com.svg",
+  notion: "/notion.svg",
+  spinnaker: "/spinnaker.svg",
+};
+
+const ALWAYS_SHOW_CONNECTORS = new Set(["terraform"]);
 
 function RuleList({
   rules,
@@ -286,6 +298,7 @@ export function SecuritySettings() {
   const [toolPerms, setToolPerms] = useState<Record<string, ToolPermission[]>>({});
   const [toolPermsLoading, setToolPermsLoading] = useState(true);
   const [expandedConnectors, setExpandedConnectors] = useState<Set<string>>(new Set(["github"]));
+  const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set());
 
   const fetchPolicies = useCallback(async () => {
     try {
@@ -327,6 +340,17 @@ export function SecuritySettings() {
   }, []);
 
   useEffect(() => { fetchPolicies(); fetchTemplates(); fetchToolPerms(); }, [fetchPolicies, fetchTemplates, fetchToolPerms]);
+
+  useEffect(() => {
+    fetchConnectedAccounts().then(() => {
+      const { providerIds } = getConnectedAccounts();
+      setConnectedProviders(new Set(providerIds));
+    });
+    return subscribeAccounts(() => {
+      const { providerIds } = getConnectedAccounts();
+      setConnectedProviders(new Set(providerIds));
+    });
+  }, []);
 
   const handleToggleList = async (list: "allowlist" | "denylist", enabled: boolean) => {
     try {
@@ -658,7 +682,9 @@ export function SecuritySettings() {
           </div>
         ) : (
           <div className="space-y-2">
-            {Object.entries(toolPerms).map(([connector, tools]) => {
+            {Object.entries(toolPerms)
+              .filter(([connector]) => ALWAYS_SHOW_CONNECTORS.has(connector) || connectedProviders.has(connector))
+              .map(([connector, tools]) => {
               const expanded = expandedConnectors.has(connector);
               const enabledCount = tools.filter((t) => t.enabled).length;
               return (
@@ -674,6 +700,11 @@ export function SecuritySettings() {
                   >
                     <div className="flex items-center gap-2">
                       {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                      {CONNECTOR_ICONS[connector] && (
+                        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white dark:bg-white/10 shrink-0">
+                          <Image src={CONNECTOR_ICONS[connector]} alt={connector} width={16} height={16} className={connector === "github" ? "dark:invert" : ""} />
+                        </div>
+                      )}
                       <span className="text-sm font-medium capitalize">{connector}</span>
                       <Badge variant="secondary" className="text-[10px] font-normal">
                         {enabledCount}/{tools.length}
@@ -691,16 +722,6 @@ export function SecuritySettings() {
                             disabled={!admin}
                           />
                           <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
-                          <Badge
-                            variant={tool.risk === "low" ? "secondary" : "destructive"}
-                            className={`text-[10px] font-normal shrink-0 ${
-                              tool.risk === "medium" ? "bg-amber-500/10 text-amber-600 border-amber-500/20" :
-                              tool.risk === "high" ? "bg-orange-500/10 text-orange-600 border-orange-500/20" :
-                              tool.risk === "critical" ? "" : "bg-muted text-muted-foreground"
-                            }`}
-                          >
-                            {tool.risk}
-                          </Badge>
                         </div>
                       ))}
                     </div>

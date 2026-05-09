@@ -4,8 +4,6 @@ export interface ToolPermission {
   tool_key: string;
   connector: string;
   label: string;
-  risk: "low" | "medium" | "high" | "critical";
-  default?: boolean;
   enabled: boolean;
 }
 
