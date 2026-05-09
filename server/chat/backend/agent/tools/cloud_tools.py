@@ -1307,9 +1307,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((trigger_action, "trigger_action"))
 
     # Postmortem tools (always available)
-    from .postmortem_tool import get_postmortem, save_postmortem
-    tool_functions.append((get_postmortem, "get_postmortem"))
-    tool_functions.append((save_postmortem, "save_postmortem"))
+    try:
+        from .postmortem_tool import get_postmortem, save_postmortem
+        tool_functions.append((get_postmortem, "get_postmortem"))
+        tool_functions.append((save_postmortem, "save_postmortem"))
+    except ImportError:
+        logger.debug("Postmortem tools not available")
 
     # Slack tools (if Slack connected)
     try:

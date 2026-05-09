@@ -4,6 +4,9 @@ Slack Tools for Agent
 Agent-callable tools for reading Slack channel messages and threads.
 Used by the "Generate Postmortem" action to gather human context
 from team conversations during incidents.
+
+NOTE: A shared run_slack_tool() callback pattern was considered but rejected —
+with only 3 tools, the indirection decreases readability for little benefit.
 """
 
 import json
@@ -120,7 +123,7 @@ def list_slack_channels(user_id: str | None = None, **kwargs) -> str:
         })
 
     except Exception as e:
-        logger.exception("[SlackTool] Failed to list channels")
+        logger.info("[SlackTool] Failed to list channels: %s", type(e).__name__)
         return json.dumps({"error": f"Failed to list Slack channels: {e}"})
 
 
@@ -174,7 +177,7 @@ def get_channel_history(
             return json.dumps({"error": f"Bot is not a member of channel {channel_id}. The bot must be invited to the channel first."})
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
-        logger.exception("[SlackTool] Failed to get channel history for %s", channel_id)
+        logger.info("[SlackTool] Failed to get channel history for %s", channel_id)
         return json.dumps({"error": f"Failed to fetch channel history: {e}"})
 
 
@@ -221,5 +224,5 @@ def get_thread_replies(
     except ValueError as e:
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
-        logger.exception("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
+        logger.info("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
         return json.dumps({"error": f"Failed to fetch thread replies: {e}"})

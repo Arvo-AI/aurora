@@ -46,20 +46,19 @@ def _format_timestamp(ts) -> Optional[str]:
     return ts.isoformat()
 
 
-def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, content: str, source: str = "manual") -> None:
-    """Insert a new version row for a postmortem and return the next version number."""
-    cursor.execute(
-        """SELECT COALESCE(MAX(version_number), 0) + 1
-           FROM postmortem_versions WHERE postmortem_id = %s""",
-        (postmortem_id,),
-    )
-    next_version = cursor.fetchone()[0]
+def _create_version(cursor, postmortem_id: str, org_id: str, user_id: str, content: str, source: str = "manual") -> int:
+    """Insert a new version row for a postmortem atomically and return the version number."""
     cursor.execute(
         """INSERT INTO postmortem_versions
            (postmortem_id, org_id, user_id, content, version_number, source)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        (postmortem_id, org_id, user_id, content, next_version, source),
+           VALUES (%s, %s, %s, %s,
+                   (SELECT COALESCE(MAX(version_number), 0) + 1
+                    FROM postmortem_versions WHERE postmortem_id = %s),
+                   %s)
+           RETURNING version_number""",
+        (postmortem_id, org_id, user_id, content, postmortem_id, source),
     )
+    return cursor.fetchone()[0]
 
 
 def with_incident_postmortem(require_postmortem=False):
@@ -303,6 +302,15 @@ def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn
         return jsonify({"error": "Version not found"}), 404
 
     restored_content = row[0]
+
+    # Snapshot current content before overwriting
+    cursor.execute(
+        "SELECT content FROM postmortems WHERE id = %s",
+        (postmortem_id,),
+    )
+    current = cursor.fetchone()
+    if current and current[0]:
+        _create_version(cursor, postmortem_id, org_id, user_id, current[0], source="pre_restore")
 
     cursor.execute(
         """UPDATE postmortems

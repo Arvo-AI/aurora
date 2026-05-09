@@ -388,8 +388,8 @@ def restore_default(user_id, action_id):
                 if not row[0]:
                     return jsonify({"error": "Only system actions can be restored to default"}), 400
                 cur.execute(
-                    "UPDATE actions SET instructions = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-                    (row[1], action_id),
+                    "UPDATE actions SET instructions = %s, updated_at = %s WHERE id = %s",
+                    (row[1], datetime.now(timezone.utc), action_id),
                 )
                 conn.commit()
     except Exception:

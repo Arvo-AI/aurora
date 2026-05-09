@@ -566,7 +566,6 @@ export const postmortemService = {
       const json = await res.json();
       return { data: json.postmortem || null };
     } catch (error) {
-      console.error('Error fetching postmortem:', error);
       return { data: null, error: error instanceof Error ? error.message : 'Network error' };
     }
   },
@@ -581,6 +580,34 @@ export const postmortemService = {
     } catch (error) {
       console.error('Error updating postmortem:', error);
       return { success: false };
+    }
+  },
+
+  async regeneratePostmortem(incidentId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`/api/incidents/${incidentId}/postmortem/regenerate`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { success: false, error: data.error || 'Failed to regenerate' };
+      }
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Failed to regenerate' };
+    }
+  },
+
+  async getVersions(incidentId: string): Promise<{ versions: PostmortemVersion[] }> {
+    try {
+      const res = await fetch(`/api/incidents/${incidentId}/postmortem/versions`, {
+        credentials: 'include',
+      });
+      const data = await res.json();
+      return { versions: data.versions ?? [] };
+    } catch {
+      return { versions: [] };
     }
   },
 

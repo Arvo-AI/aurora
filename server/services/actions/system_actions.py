@@ -9,6 +9,8 @@ import json
 import logging
 from typing import Optional
 
+from services.actions.postmortem_action import DEFAULT_POSTMORTEM_INSTRUCTIONS
+
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,6 @@ SYSTEM_ACTIONS = [
 def _get_default_instructions(system_key: str) -> str:
     """Resolve the default instructions for a given system action."""
     if system_key == "generate_postmortem":
-        from services.actions.postmortem_action import DEFAULT_POSTMORTEM_INSTRUCTIONS
         return DEFAULT_POSTMORTEM_INSTRUCTIONS
     raise ValueError(f"Unknown system action: {system_key}")
 

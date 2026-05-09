@@ -118,21 +118,24 @@ def save_postmortem(
                        RETURNING id""",
                     (incident_id, user_id, org_id, content, session_id),
                 )
-                postmortem_id = str(cursor.fetchone()[0])
+                postmortem_row = cursor.fetchone()
+                if not postmortem_row:
+                    conn.rollback()
+                    return json.dumps({"error": "Failed to save postmortem — access denied or conflict."})
+                postmortem_id = str(postmortem_row[0])
 
-                # Create a version row
-                cursor.execute(
-                    """SELECT COALESCE(MAX(version_number), 0) + 1
-                       FROM postmortem_versions WHERE postmortem_id = %s""",
-                    (postmortem_id,),
-                )
-                next_version = cursor.fetchone()[0]
+                # Create a version row (atomic with a subquery to prevent race conditions)
                 cursor.execute(
                     """INSERT INTO postmortem_versions
                        (postmortem_id, org_id, user_id, content, version_number, source, generation_session_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    (postmortem_id, org_id, user_id, content, next_version, "agent", session_id),
+                       VALUES (%s, %s, %s, %s,
+                               (SELECT COALESCE(MAX(version_number), 0) + 1
+                                FROM postmortem_versions WHERE postmortem_id = %s),
+                               %s, %s)
+                       RETURNING version_number""",
+                    (postmortem_id, org_id, user_id, content, postmortem_id, "agent", session_id),
                 )
+                next_version = cursor.fetchone()[0]
 
                 conn.commit()
 

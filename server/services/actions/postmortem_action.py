@@ -163,7 +163,7 @@ def dispatch_postmortem_action(
 def _load_incident_for_prompt(incident_id: str, user_id: str) -> Optional[dict]:
     """Load incident data for the postmortem prompt."""
     try:
-        with db_pool.get_admin_connection() as conn:
+        with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[PostmortemAction]")
                 cur.execute(

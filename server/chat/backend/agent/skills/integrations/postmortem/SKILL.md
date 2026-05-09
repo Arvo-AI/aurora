@@ -23,10 +23,10 @@ Core tools for reading and writing postmortem documents. Always available. Used 
 ## Tools
 
 ### `get_postmortem(incident_id)`
-Read the current postmortem for an incident. Returns markdown content, generated_at, and updated_at timestamps. Returns `status: "not_found"` if no postmortem exists yet.
+Read the current postmortem for an incident. Returns markdown content, generated_at, and updated_at timestamps. Returns `status: "not_found"` if no postmortem exists yet. Only the latest version is returned; historical versions are browsable in the UI but not via this tool.
 
 ### `save_postmortem(incident_id, content)`
-Write or update a postmortem. Each call creates a new version (append-only history). Content must be complete markdown — partial updates are not supported. Max 100,000 characters.
+Write or update a postmortem. Each save automatically snapshots the previous content as a version for history tracking. Content must be complete markdown — partial updates are not supported. Max 100,000 characters.
 
 ## Workflow
 

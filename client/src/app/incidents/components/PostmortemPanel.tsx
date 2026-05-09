@@ -122,10 +122,9 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
     setRegenerateError(null);
     setPostmortemNotFound(false);
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/postmortem/regenerate`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        setRegenerateError(data.error || 'Failed to regenerate');
+      const result = await postmortemService.regeneratePostmortem(incidentId);
+      if (!result.success) {
+        setRegenerateError(result.error || 'Failed to regenerate');
         setPostmortemNotFound(true);
         return;
       }
@@ -145,9 +144,8 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
     }
     setLoadingVersions(true);
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/postmortem/versions`);
-      const data = await res.json();
-      setVersions(data.versions ?? []);
+      const { versions: versionList } = await postmortemService.getVersions(incidentId);
+      setVersions(versionList);
     } catch {
       setVersions([]);
     }
@@ -167,9 +165,12 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
         setPostmortem(prev => prev ? { ...prev, content: data.content } : null);
         setEditContent(data.content);
         setShowVersionHistory(false);
-        const versionsRes = await fetch(`/api/incidents/${incidentId}/postmortem/versions`);
-        const versionsData = await versionsRes.json();
-        setVersions(versionsData.versions ?? []);
+        try {
+          const { versions: refreshed } = await postmortemService.getVersions(incidentId);
+          setVersions(refreshed);
+        } catch {
+          // version list refresh is non-critical
+        }
       }
     } catch {
       setRegenerateError('Failed to restore version');
@@ -407,7 +408,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                         Log
                       </a>
                     )}
-                    {v.versionNumber === versions[0]?.versionNumber ? (
+                    {v.versionNumber === Math.max(...versions.map(ver => ver.versionNumber)) ? (
                       <span className="inline-flex items-center px-2 py-1 rounded-md text-[11px] text-green-400 bg-green-500/10 border border-green-500/20">
                         Current
                       </span>

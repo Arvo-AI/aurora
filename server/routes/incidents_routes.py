@@ -1094,16 +1094,18 @@ def update_incident(user_id, incident_id: str):
                 if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
                         from services.actions.executor import dispatch_on_incident_actions
+                        from services.actions.system_actions import seed_system_actions
+                        if org_id:
+                            seed_system_actions(org_id, user_id)
                         dispatch_on_incident_actions(user_id, incident_id, timing="resolved")
                         logger.info(
                             "[INCIDENTS] Dispatched on-resolved actions for incident %s",
                             sanitize(incident_id),
                         )
-                    except Exception as act_exc:
+                    except Exception:
                         logger.warning(
-                            "[INCIDENTS] on-resolved actions failed for %s: %s",
+                            "[INCIDENTS] on-resolved actions failed for %s",
                             sanitize(incident_id),
-                            act_exc,
                         )
 
                 logger.info(

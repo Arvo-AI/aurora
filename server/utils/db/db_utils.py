@@ -2034,7 +2034,7 @@ def initialize_tables():
                         content TEXT NOT NULL,
                         version_number INTEGER NOT NULL DEFAULT 1,
                         source VARCHAR(50) NOT NULL DEFAULT 'manual',
-                        generation_session_id UUID,
+                        generation_session_id VARCHAR(255),
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                     CREATE INDEX IF NOT EXISTS idx_postmortem_versions_postmortem
@@ -2048,9 +2048,17 @@ def initialize_tables():
                 logging.warning(f"Error creating postmortem_versions table: {e}")
                 conn.rollback()
 
+            # Migration: add generation_session_id to postmortems (for existing deployments)
+            try:
+                cursor.execute("ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);")
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for postmortems.generation_session_id: {e}")
+
             # Migration: add generation_session_id to postmortem_versions
             try:
-                cursor.execute("ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id UUID;")
+                cursor.execute("ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);")
                 conn.commit()
             except Exception as e:
                 conn.rollback()
