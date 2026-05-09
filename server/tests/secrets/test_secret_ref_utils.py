@@ -216,3 +216,105 @@ class TestProviderParserRejectsMalformed:
 
         assert manager.get_user_token_data("u-1", bad_provider) is None
         db_explodes_if_called.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_org returning None: _org_clause must be used (no NULL param bug)
+# ---------------------------------------------------------------------------
+
+
+class TestHasUserCredentialsNullOrgPath:
+    """When _resolve_org returns None the SQL must not pass None as a %s param
+    for org_id — ``org_id = NULL`` is always false in PostgreSQL.  The fix is
+    to route through ``_org_clause`` which returns an empty fragment for None.
+    """
+
+    def test_db_still_queried_when_org_is_none(self, monkeypatch):
+        """_resolve_org=None must not short-circuit; row found by user_id alone."""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = (1,)
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
+        monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+
+        manager = SecretRefManager()
+        result = manager.has_user_credentials("u-1", "gcp")
+
+        assert result is True
+        cursor.execute.assert_called()
+
+    def test_none_org_does_not_appear_as_sql_param(self, monkeypatch):
+        """None must never be passed to psycopg2 as an org_id equality param."""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = None
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
+        monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+
+        manager = SecretRefManager()
+        manager.has_user_credentials("u-1", "gcp")
+
+        for call in cursor.execute.call_args_list:
+            params = call.args[1] if len(call.args) > 1 else ()
+            assert None not in params, (
+                f"None passed as SQL param (would silently do nothing): {params}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Provider canonicalization reaches the SQL query
+# ---------------------------------------------------------------------------
+
+
+class TestProviderCanonicalizedInSQL:
+    """get_user_token_data and has_user_credentials must pass provider_base
+    (lowercase, first segment) to the SQL query — not the raw caller string.
+    If the DB stores 'gcp' and we query for 'GCP', zero rows come back.
+    """
+
+    def _make_db(self, monkeypatch, fetchone_val):
+        cursor = MagicMock()
+        cursor.fetchone.return_value = fetchone_val
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
+        monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value="org-7"))
+        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value="org-7"))
+        return cursor
+
+    @pytest.mark.parametrize("raw_provider", ["GCP", "Gcp", "gCp", "GcP"])
+    def test_has_user_credentials_passes_lowercase_to_sql(
+        self, monkeypatch, raw_provider,
+    ):
+        cursor = self._make_db(monkeypatch, (1,))
+        manager = SecretRefManager()
+        manager.has_user_credentials("u-1", raw_provider)
+
+        executed_sql, params = cursor.execute.call_args.args
+        assert "gcp" in params, (
+            f"Expected canonicalized 'gcp' in SQL params, got {params}"
+        )
+        assert raw_provider not in params, (
+            f"Raw mixed-case provider {raw_provider!r} must not reach the DB"
+        )
+
+    @pytest.mark.parametrize("raw_provider", ["GCP", "AWS", "Azure"])
+    def test_get_user_token_data_passes_lowercase_to_sql(
+        self, monkeypatch, raw_provider,
+    ):
+        cursor = self._make_db(monkeypatch, None)
+        manager = SecretRefManager()
+        manager.get_user_token_data("u-1", raw_provider)
+
+        for call in cursor.execute.call_args_list:
+            params = call.args[1] if len(call.args) > 1 else ()
+            assert raw_provider not in params, (
+                f"Raw provider {raw_provider!r} found in SQL params {params}; "
+                f"only lowercase provider_base should reach the query"
+            )
