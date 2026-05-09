@@ -126,7 +126,7 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
 
         try:
             if system_key == "generate_postmortem":
-                _dispatch_postmortem_via_action(str(action_id), user_id, incident_id)
+                _dispatch_postmortem_via_action(user_id, incident_id)
             else:
                 dispatch_action(
                     action_id=str(action_id),
@@ -137,13 +137,13 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
             logger.debug("[Actions] Failed to dispatch on_incident action %s", action_id)
 
 
-def _dispatch_postmortem_via_action(action_id: str, user_id: str, incident_id: str) -> None:
+def _dispatch_postmortem_via_action(user_id: str, incident_id: str) -> None:
     """Dispatch the postmortem system action with its special pre-reserve logic."""
     from services.actions.postmortem_action import dispatch_postmortem_action
     try:
         dispatch_postmortem_action(user_id, incident_id)
-    except ValueError as e:
-        logger.info("[Actions] Postmortem action skipped for %s: %s", incident_id, e)
+    except ValueError:
+        logger.info("[Actions] Postmortem action skipped for incident")
 
 
 def build_action_prompt(

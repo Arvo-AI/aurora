@@ -156,11 +156,7 @@ def dispatch_postmortem_action(
         incident_id=None,
     )
 
-    logger.info(
-        "[PostmortemAction] Dispatched postmortem generation for incident %s (session=%s)",
-        incident_id,
-        session_id,
-    )
+    logger.info("[PostmortemAction] Dispatched postmortem generation (session created)")
     return session_id
 
 
@@ -194,7 +190,7 @@ def _load_incident_for_prompt(incident_id: str, user_id: str) -> Optional[dict]:
                     "environment": row[8] or "unknown",
                 }
     except Exception:
-        logger.exception("[PostmortemAction] Failed to load incident %s", incident_id)
+        logger.exception("[PostmortemAction] Failed to load incident for postmortem")
         return None
 
 
@@ -273,4 +269,4 @@ def _reserve_postmortem_row(user_id: str, incident_id: str, session_id: str) -> 
                 )
                 conn.commit()
     except Exception:
-        logger.exception("[PostmortemAction] Failed to reserve postmortem row for %s", incident_id)
+        logger.exception("[PostmortemAction] Failed to reserve postmortem row")

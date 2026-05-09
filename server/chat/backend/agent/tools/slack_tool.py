@@ -17,6 +17,9 @@ from connectors.slack_connector.client import get_slack_client_for_user
 
 logger = logging.getLogger(__name__)
 
+_ERR_NO_USER = "No user context available."
+_ERR_NOT_CONNECTED = "Slack not connected for this user."
+
 
 class ListSlackChannelsArgs(BaseModel):
     """Arguments for listing Slack channels."""
@@ -91,11 +94,11 @@ def _format_message(msg: dict) -> dict:
 def list_slack_channels(user_id: str | None = None, **kwargs) -> str:
     """List Slack channels accessible to the bot, including name, topic, and purpose."""
     if not user_id:
-        return json.dumps({"error": "No user context available."})
+        return json.dumps({"error": _ERR_NO_USER})
 
     client = get_slack_client_for_user(user_id)
     if not client:
-        return json.dumps({"error": "Slack not connected for this user."})
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
 
     try:
         channels = client.list_channels()
@@ -131,14 +134,14 @@ def get_channel_history(
 ) -> str:
     """Fetch messages from a Slack channel within an optional time window."""
     if not user_id:
-        return json.dumps({"error": "No user context available."})
+        return json.dumps({"error": _ERR_NO_USER})
 
     if not channel_id:
         return json.dumps({"error": "channel_id is required."})
 
     client = get_slack_client_for_user(user_id)
     if not client:
-        return json.dumps({"error": "Slack not connected for this user."})
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
 
     limit = max(1, min(limit, 200))
 
@@ -184,14 +187,14 @@ def get_thread_replies(
 ) -> str:
     """Fetch replies in a Slack thread."""
     if not user_id:
-        return json.dumps({"error": "No user context available."})
+        return json.dumps({"error": _ERR_NO_USER})
 
     if not channel_id or not thread_ts:
         return json.dumps({"error": "channel_id and thread_ts are required."})
 
     client = get_slack_client_for_user(user_id)
     if not client:
-        return json.dumps({"error": "Slack not connected for this user."})
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
 
     limit = max(1, min(limit, 200))
 

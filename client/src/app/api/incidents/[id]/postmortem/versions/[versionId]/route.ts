@@ -3,7 +3,7 @@ import { forwardRequest } from '@/lib/backend-proxy';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string; versionId: string } }
+  { params }: { params: Promise<{ id: string; versionId: string }> }
 ) {
   const { id, versionId } = await params;
   return forwardRequest(
