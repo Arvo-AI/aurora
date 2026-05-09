@@ -301,6 +301,10 @@ services:
     volumes:
       - ./server:/app
     environment:
+      <<: *common-env
+
+      # Frontend/Backend URLs
+      FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
 
