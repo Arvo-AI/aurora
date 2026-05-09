@@ -315,15 +315,52 @@ These are Aurora's own AWS credentials for STS AssumeRole calls, not end-user cr
 
 ### GitHub
 
-| Variable | Description |
-|----------|-------------|
-| `GH_OAUTH_CLIENT_ID` | GitHub OAuth App Client ID |
-| `GH_OAUTH_CLIENT_SECRET` | GitHub OAuth App Client Secret |
+GitHub App is the default auth path. OAuth is a flag-gated fallback for
+on-prem deployments that cannot expose a public webhook URL.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_AUTH_MODE` | `app` | One of `app` \| `oauth` \| `hybrid`. Controls which CTA the connector dialog renders and which auth paths the backend accepts. |
+| `GITHUB_APP_ID` | | Numeric App ID from the App settings page. |
+| `GITHUB_APP_CLIENT_ID` | | App's Client ID (starts with `Iv23l...`). |
+| `NEXT_PUBLIC_GITHUB_APP_SLUG` | | The App's URL slug (e.g. `aurora-acme`). Used by the frontend to build install management URLs. |
+| `GITHUB_APP_WEBHOOK_URL` | | Public URL Aurora exposes for webhooks. Must match what's configured on the App. Example: `https://aurora.example.com/github/webhook`. |
+| `GITHUB_APP_SETUP_URL` | | Post-install redirect URL. Example: `https://aurora.example.com/github/app/install/callback`. |
+| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — Vault path `aurora/system/github-app/webhook-secret` takes precedence. |
+| `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
+| `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
+
+App-mode (recommended):
 
 ```bash
-GH_OAUTH_CLIENT_ID=your-client-id
-GH_OAUTH_CLIENT_SECRET=your-client-secret
+GITHUB_AUTH_MODE=app
+GITHUB_APP_ID=12345
+GITHUB_APP_CLIENT_ID=Iv23liExampleClientId
+NEXT_PUBLIC_GITHUB_APP_SLUG=aurora-acme
+GITHUB_APP_WEBHOOK_URL=https://aurora.example.com/github/webhook
+GITHUB_APP_SETUP_URL=https://aurora.example.com/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=
+# (private key PEM lives in Vault at aurora/system/github-app/private-key)
 ```
+
+Hybrid (App + OAuth, e.g. for a migration window):
+
+```bash
+GITHUB_AUTH_MODE=hybrid
+# all GITHUB_APP_* vars from the App-mode block above, plus:
+GH_OAUTH_CLIENT_ID=your-oauth-client-id
+GH_OAUTH_CLIENT_SECRET=your-oauth-client-secret
+```
+
+OAuth-only (on-prem fallback when public webhook ingress is unavailable):
+
+```bash
+GITHUB_AUTH_MODE=oauth
+GH_OAUTH_CLIENT_ID=your-oauth-client-id
+GH_OAUTH_CLIENT_SECRET=your-oauth-client-secret
+```
+
+See the [GitHub connector setup walkthroughs](../integrations/connectors.md#github) for the full operator click-through.
 
 ### Slack
 
