@@ -494,3 +494,37 @@ export function parseCloudflareCommand(toolName: string, toolInput: string): str
 
   return `Cloudflare: ${toolName.replace(/cloudflare_?/g, "").replace(/_/g, " ") || "query"}`
 }
+
+export function parseSlackCommand(toolName: string, toolInput: string): string {
+  let args: Record<string, any> = {}
+  try {
+    args = JSON.parse(toolInput.replace(/'/g, '"'))
+    if (args.kwargs) args = { ...args, ...args.kwargs }
+  } catch {
+    // fall through
+  }
+
+  if (toolName === "list_slack_channels") {
+    return "Slack: List channels"
+  }
+
+  if (toolName === "get_channel_history") {
+    const parts: string[] = []
+    if (args.channel_id) parts.push(`#${args.channel_id}`)
+    if (args.oldest) parts.push(`from ${args.oldest}`)
+    if (args.latest) parts.push(`to ${args.latest}`)
+    if (args.limit && args.limit !== 100) parts.push(`limit ${args.limit}`)
+    const detail = parts.length ? ` (${parts.join(", ")})` : ""
+    return `Slack: Get channel history${detail}`
+  }
+
+  if (toolName === "get_thread_replies") {
+    const parts: string[] = []
+    if (args.channel_id) parts.push(`#${args.channel_id}`)
+    if (args.thread_ts) parts.push(`thread ${args.thread_ts}`)
+    const detail = parts.length ? ` (${parts.join(", ")})` : ""
+    return `Slack: Get thread replies${detail}`
+  }
+
+  return `Slack: ${toolName.replace(/slack_?/g, "").replace(/_/g, " ")}`
+}
