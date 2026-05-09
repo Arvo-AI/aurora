@@ -24,6 +24,8 @@ from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
+_INTERNAL_SERVER_ERROR = "Internal server error"
+
 
 def _audit_auth_failure(user_id, org_id, action, detail) -> None:
     """Best-effort audit log for auth/RBAC failures."""
@@ -71,8 +73,8 @@ def require_permission(resource: str, action: str):
             try:
                 allowed = enforce_with_reload(user_id, org_id, resource, action)
             except Exception as exc:
-                logger.error("Enforcer error in %s: %s", fn.__name__, exc, exc_info=True)
-                return jsonify({"error": "Internal server error"}), 500
+                logger.info("Enforcer error in %s (%s)", fn.__name__, type(exc).__name__)
+                return jsonify({"error": _INTERNAL_SERVER_ERROR}), 500
 
             if not allowed:
                 logger.warning(
@@ -90,7 +92,7 @@ def require_permission(resource: str, action: str):
                 raise
             except Exception as exc:
                 logger.error("Unhandled error in %s: %s", fn.__name__, exc, exc_info=True)
-                return jsonify({"error": "Internal server error"}), 500
+                return jsonify({"error": _INTERNAL_SERVER_ERROR}), 500
         return wrapper
     return decorator
 
@@ -123,5 +125,5 @@ def require_auth_only(fn):
             raise
         except Exception as exc:
             logger.error("Unhandled error in %s: %s", fn.__name__, exc, exc_info=True)
-            return jsonify({"error": "Internal server error"}), 500
+            return jsonify({"error": _INTERNAL_SERVER_ERROR}), 500
     return wrapper

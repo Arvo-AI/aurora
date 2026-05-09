@@ -98,7 +98,7 @@ class TestSupportedSecretProvidersShape:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def manager_with_mocked_db(monkeypatch):
     """Mock the DB layer so an *accepted* provider exercises a real lookup."""
     cursor = MagicMock()
@@ -161,7 +161,7 @@ class TestProviderLookupCaseInsensitive:
 class TestProviderParserRejectsMalformed:
     """Bogus provider names must short-circuit before any DB or Vault call."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def db_explodes_if_called(self, monkeypatch):
         """DB and RLS hooks raise if rejection regresses."""
         connect = MagicMock(
@@ -296,7 +296,7 @@ class TestProviderCanonicalizedInSQL:
         manager = SecretRefManager()
         manager.has_user_credentials("u-1", raw_provider)
 
-        executed_sql, params = cursor.execute.call_args.args
+        _, params = cursor.execute.call_args.args
         assert "gcp" in params, (
             f"Expected canonicalized 'gcp' in SQL params, got {params}"
         )

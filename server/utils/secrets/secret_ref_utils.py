@@ -206,7 +206,7 @@ class SecretRefManager:
                      AND is_active = TRUE
                      {clause}
                    LIMIT 1""",
-                (user_id, provider_base) + params,
+                (user_id, provider_base, *params),
             )
             return cursor.fetchone() is not None
         except Exception as e:
@@ -243,7 +243,7 @@ class SecretRefManager:
                      {clause}
                    ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
                    LIMIT 1""",
-                (user_id, provider_base) + clause_params + (user_id,),
+                (user_id, provider_base, *clause_params, user_id),
             )
 
             result = cursor.fetchone()
