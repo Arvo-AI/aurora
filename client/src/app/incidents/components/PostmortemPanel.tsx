@@ -46,6 +46,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
     const result = await postmortemService.getPostmortem(incidentId);
     if (result.error) {
       console.error('Failed to load postmortem:', result.error);
+      return;
     }
     setPostmortem(result.data);
     if (result.data) {
@@ -157,15 +158,14 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
 
   const handleRestoreVersion = async (versionId: string) => {
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/postmortem/versions/${versionId}/restore`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        setRegenerateError(data.error || 'Failed to restore version');
+      const result = await postmortemService.restoreVersion(incidentId, versionId);
+      if (!result.success) {
+        setRegenerateError(result.error || 'Failed to restore version');
         return;
       }
-      if (data.content) {
-        setPostmortem(prev => prev ? { ...prev, content: data.content } : null);
-        setEditContent(data.content);
+      if (result.content) {
+        setPostmortem(prev => prev ? { ...prev, content: result.content! } : null);
+        setEditContent(result.content);
         setShowVersionHistory(false);
         setCurrentVersionId(versionId);
         try {

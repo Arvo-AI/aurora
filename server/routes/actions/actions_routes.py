@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
-from services.actions.system_actions import seed_system_actions
+from services.actions.system_actions import seed_system_actions, SYSTEM_ACTIONS
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
@@ -154,11 +154,13 @@ def list_actions(user_id):
                 cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 org_row = cur.fetchone()
                 if org_row and org_row[0]:
+                    expected_keys = [a["system_key"] for a in SYSTEM_ACTIONS]
                     cur.execute(
-                        "SELECT 1 FROM actions WHERE org_id = %s AND is_system = true LIMIT 1",
-                        (org_row[0],),
+                        "SELECT system_key FROM actions WHERE org_id = %s AND is_system = true AND system_key = ANY(%s)",
+                        (org_row[0], expected_keys),
                     )
-                    if not cur.fetchone():
+                    existing_keys = {row[0] for row in cur.fetchall()}
+                    if len(existing_keys) < len(expected_keys):
                         try:
                             seed_system_actions(org_row[0], user_id)
                         except Exception:

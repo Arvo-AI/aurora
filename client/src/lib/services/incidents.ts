@@ -553,20 +553,17 @@ export const incidentsService = {
 export const postmortemService = {
   async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; generating?: boolean; error?: string }> {
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/postmortem`, { credentials: 'include' });
-      if (res.status === 202) {
+      const data = await apiGet<{ postmortem: PostmortemData }>(`/api/incidents/${incidentId}/postmortem`);
+      return { data: data.postmortem || null };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      if (apiErr.status === 202) {
         return { data: null, generating: true };
       }
-      if (res.status === 404) {
+      if (apiErr.status === 404) {
         return { data: null };
       }
-      if (!res.ok) {
-        return { data: null, error: `Request failed: ${res.status}` };
-      }
-      const json = await res.json();
-      return { data: json.postmortem || null };
-    } catch (error) {
-      return { data: null, error: error instanceof Error ? error.message : 'Network error' };
+      return { data: null, error: apiErr.message || 'Network error' };
     }
   },
 
@@ -585,29 +582,35 @@ export const postmortemService = {
 
   async regeneratePostmortem(incidentId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/postmortem/regenerate`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        return { success: false, error: data.error || 'Failed to regenerate' };
-      }
+      await apiPost(`/api/incidents/${incidentId}/postmortem/regenerate`);
       return { success: true };
-    } catch {
-      return { success: false, error: 'Failed to regenerate' };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { success: false, error: apiErr.message || 'Failed to regenerate' };
     }
   },
 
-  async getVersions(incidentId: string): Promise<{ versions: PostmortemVersion[]; currentVersionId: string | null }> {
+  async getVersions(incidentId: string): Promise<{ versions: PostmortemVersion[]; currentVersionId: string | null; error?: string }> {
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/postmortem/versions`, {
-        credentials: 'include',
-      });
-      const data = await res.json();
+      const data = await apiGet<{ versions: PostmortemVersion[]; currentVersionId: string | null }>(
+        `/api/incidents/${incidentId}/postmortem/versions`
+      );
       return { versions: data.versions ?? [], currentVersionId: data.currentVersionId ?? null };
-    } catch {
-      return { versions: [], currentVersionId: null };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { versions: [], currentVersionId: null, error: apiErr.message || 'Failed to load versions' };
+    }
+  },
+
+  async restoreVersion(incidentId: string, versionId: string): Promise<{ success: boolean; content?: string; error?: string }> {
+    try {
+      const data = await apiPost<{ success: boolean; content: string }>(
+        `/api/incidents/${incidentId}/postmortem/versions/${versionId}/restore`,
+      );
+      return { success: true, content: data.content };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { success: false, error: apiErr.message || 'Failed to restore version' };
     }
   },
 
@@ -638,41 +641,28 @@ export const postmortemService = {
     },
   ): Promise<{ success: boolean; pageUrl?: string; pageId?: string; actionItemCount?: number; error?: string; code?: string }> {
     try {
-      const response = await fetch(`/api/incidents/${incidentId}/postmortem/export/notion`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await apiPost<{ success?: boolean; pageUrl?: string; pageId?: string; actionItemCount?: number }>(
+        `/api/incidents/${incidentId}/postmortem/export/notion`,
+        {
           databaseId: params.databaseId,
           titleProperty: params.titleProperty,
           propertyMapping: params.propertyMapping,
           actionItemsDatabaseId: params.actionItemsDatabaseId,
-        }),
-      });
-      const text = await response.text();
-      let data: Record<string, unknown> = {};
-      try {
-        data = text ? JSON.parse(text) : {};
-      } catch {
-        data = {};
-      }
-      if (!response.ok) {
-        return {
-          success: false,
-          error: (data.error as string) || `Export failed (${response.status})`,
-          code: data.code as string | undefined,
-        };
-      }
+        },
+      );
       return {
         success: Boolean(data.success ?? true),
-        pageUrl: data.pageUrl as string | undefined,
-        pageId: data.pageId as string | undefined,
-        actionItemCount: data.actionItemCount as number | undefined,
+        pageUrl: data.pageUrl,
+        pageId: data.pageId,
+        actionItemCount: data.actionItemCount,
       };
     } catch (error) {
-      console.error('Error exporting to Notion:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      return { success: false, error: message };
+      const apiErr = error as ApiError;
+      return {
+        success: false,
+        error: apiErr.message || 'Export failed',
+        code: apiErr.code,
+      };
     }
   },
 

@@ -213,7 +213,11 @@ def update_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_
             {"error": "Content exceeds maximum length of 100000 characters"}
         ), 400
 
-    _create_version(cursor, postmortem_id, org_id, user_id, content, source="manual")
+    # Snapshot the pre-edit content into version history
+    cursor.execute("SELECT content FROM postmortems WHERE id = %s", (postmortem_id,))
+    prev_row = cursor.fetchone()
+    if prev_row and prev_row[0]:
+        _create_version(cursor, postmortem_id, org_id, user_id, prev_row[0], source="pre_edit")
 
     cursor.execute(
         """UPDATE postmortems
