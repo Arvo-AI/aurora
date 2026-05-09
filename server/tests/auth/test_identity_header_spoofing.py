@@ -9,8 +9,6 @@ responsibility, not the functions themselves.
 import sys
 from unittest.mock import MagicMock
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Shared helper: minimal throwaway Flask app for request-context tests
@@ -18,16 +16,10 @@ import pytest
 
 
 def _make_test_app():
-    """Return a fresh Flask app suitable for test_request_context use.
-
-    Propagates exceptions for cleaner assertions. Aurora's auth boundary
-    is the Next.js proxy layer, not Flask middleware.
-    """
+    """Return a fresh Flask app suitable for test_request_context use."""
     sys.modules.pop("utils.auth.stateless_auth", None)
     from flask import Flask as _Flask  # fresh import after eviction
-    tmp_app = _Flask(__name__)
-    tmp_app.config["TESTING"] = True  # NOSONAR
-    return tmp_app
+    return _Flask(__name__)
 
 
 # ---------------------------------------------------------------------------

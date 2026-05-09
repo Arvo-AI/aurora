@@ -9,8 +9,6 @@ identity headers, or omits authentication entirely.  All tests are hermetic
 import sys
 from unittest.mock import MagicMock
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # UUIDs used as test fixtures
 # ---------------------------------------------------------------------------

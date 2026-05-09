@@ -70,9 +70,6 @@ def app():
 
     application = _Flask(__name__)
     application.register_blueprint(incidents_bp)
-    # Propagate exceptions instead of swallowing them so assertions are clear.
-    # Aurora's auth boundary is the Next.js proxy layer, not Flask middleware.
-    application.config["TESTING"] = True  # NOSONAR
     return application
 
 
