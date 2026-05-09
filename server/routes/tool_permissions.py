@@ -20,12 +20,12 @@ _ERR_NO_ORG = "No org context"
 
 
 def _invalidate_permissions_cache(org_id: str) -> None:
-    """Set Redis dirty flag so running chats refresh permissions on next tool call."""
+    """Increment Redis version so running chats refresh permissions on next tool call."""
     try:
         from utils.cache.redis_client import get_redis_client
         rc = get_redis_client()
         if rc:
-            rc.set(f"tool_perms_dirty:{org_id}", "1", ex=3600)
+            rc.incr(f"tool_perms_version:{org_id}")
     except Exception as e:
         logger.debug("Could not set permissions dirty flag: %s", e)
 

@@ -170,7 +170,7 @@ def _is_org_tool_permitted(tool_name: str) -> bool:
 
 
 def _maybe_refresh_permitted_tools(state) -> None:
-    """Refresh State.permitted_tools from DB if Redis dirty flag is set."""
+    """Refresh State.permitted_tools from DB if Redis version has changed."""
     try:
         from utils.cache.redis_client import get_redis_client
         rc = get_redis_client()
@@ -179,8 +179,12 @@ def _maybe_refresh_permitted_tools(state) -> None:
         org_id = getattr(state, "org_id", None)
         if not org_id:
             return
-        dirty_key = f"tool_perms_dirty:{org_id}"
-        if not rc.get(dirty_key):
+        version_key = f"tool_perms_version:{org_id}"
+        current_version = rc.get(version_key)
+        if not current_version:
+            return
+        cached_version = getattr(state, "_perms_version", None)
+        if cached_version == current_version:
             return
         from utils.db.connection_pool import db_pool
         from utils.auth.stateless_auth import set_rls_context
@@ -193,9 +197,10 @@ def _maybe_refresh_permitted_tools(state) -> None:
                     (org_id,),
                 )
                 state.permitted_tools = {row[0] for row in cur.fetchall()}
-        rc.delete(dirty_key)
+        state._perms_version = current_version
     except Exception as e:
         logger.debug("Could not refresh tool permissions: %s", e)
+        state.permitted_tools = None
 
 
 def gate_action(

@@ -727,7 +727,7 @@ export function SecuritySettings() {
           </div>
           <div>
             <h2 className="text-sm font-semibold">Action Tool Permissions</h2>
-            <p className="text-xs text-muted-foreground">Tools enabled here can run without confirmation in background actions</p>
+            <p className="text-xs text-muted-foreground">Tools enabled here can run without confirmation in chats and background actions</p>
           </div>
         </div>
 
