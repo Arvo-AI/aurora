@@ -50,7 +50,8 @@ def _resolve_permitted_tools(user_id: str) -> Optional[set]:
                     (org_id,),
                 )
                 return {row[0] for row in cur.fetchall()}
-    except Exception:
+    except Exception as e:
+        logger.warning("[BackgroundChat] Failed to fetch tool permissions: %s", e)
         return None
 
 

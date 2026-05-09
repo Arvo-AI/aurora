@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 
 _ERR_NO_ORG = "No org context"
 
+
+def _invalidate_permissions_cache(org_id: str) -> None:
+    """Set Redis dirty flag so running chats refresh permissions on next tool call."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if rc:
+            rc.set(f"tool_perms_dirty:{org_id}", "1", ex=3600)
+    except Exception:
+        pass
+
 tool_permissions_bp = Blueprint("tool_permissions", __name__, url_prefix="/api/org")
 
 
@@ -79,6 +90,7 @@ def toggle_permission(user_id: str, tool_key: str):
             )
             conn.commit()
 
+    _invalidate_permissions_cache(org_id)
     return jsonify({"tool_key": tool_key, "enabled": enabled})
 
 
@@ -106,4 +118,5 @@ def seed_defaults(user_id: str):
                 )
             conn.commit()
 
+    _invalidate_permissions_cache(org_id)
     return jsonify({"seeded": len(TOOL_REGISTRY)})

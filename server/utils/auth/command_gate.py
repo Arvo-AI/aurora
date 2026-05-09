@@ -150,6 +150,10 @@ def _is_org_tool_permitted(tool_name: str) -> bool:
         if not state:
             return False
         permitted = getattr(state, "permitted_tools", None)
+        if permitted is None:
+            return False
+        _maybe_refresh_permitted_tools(state)
+        permitted = state.permitted_tools
         if not permitted:
             return False
         if tool_name in permitted:
@@ -157,9 +161,41 @@ def _is_org_tool_permitted(tool_name: str) -> bool:
         for p in permitted:
             if p.endswith("_*") and tool_name.startswith(p[:-1]):
                 return True
+            if p.endswith(":*") and tool_name.startswith(p[:-1]):
+                return True
         return False
+    except Exception as e:
+        logger.warning("Failed to check tool permissions for %s: %s", tool_name, e)
+        return False
+
+
+def _maybe_refresh_permitted_tools(state) -> None:
+    """Refresh State.permitted_tools from DB if Redis dirty flag is set."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if not rc:
+            return
+        org_id = getattr(state, "org_id", None)
+        if not org_id:
+            return
+        dirty_key = f"tool_perms_dirty:{org_id}"
+        if not rc.get(dirty_key):
+            return
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        user_id = getattr(state, "user_id", None)
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Gate:refresh_perms]")
+                cur.execute(
+                    "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                    (org_id,),
+                )
+                state.permitted_tools = {row[0] for row in cur.fetchall()}
+        rc.delete(dirty_key)
     except Exception:
-        return False
+        pass
 
 
 def gate_action(
