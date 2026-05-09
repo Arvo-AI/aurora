@@ -223,7 +223,7 @@ def connect(user_id):
     try:
         token_data = exchange_code_for_token(code)
     except Exception as exc:
-        logger.error("[ATLASSIAN] OAuth token exchange failed for user %s: %s", user_id, exc)
+        logger.error("[ATLASSIAN] OAuth token exchange failed for user %s: %s", user_id, type(exc).__name__)
         return jsonify({"error": "Atlassian OAuth token exchange failed"}), 502
 
     access_token = token_data.get("access_token")

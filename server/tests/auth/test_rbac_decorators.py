@@ -362,6 +362,22 @@ class TestWrappedFunctionErrors:
         assert status == 500
         assert response.get_json() == {"error": "Internal server error"}
 
+    def test_exception_message_does_not_appear_in_500_body(self, flask_app, patch_auth):
+        """The 500 body must be the canned string, never ``repr(exc)``.
+
+        Downstream libraries (psycopg2, requests) can embed passwords or tokens
+        in exception text; that must not reach the HTTP response.
+        """
+        @require_permission("incidents", "read")
+        def leaky(user_id):
+            raise RuntimeError("password=db_password_DO_NOT_LEAK_XYZ wrong host")
+
+        with flask_app.test_request_context("/api/x"):
+            response, status = leaky()
+
+        assert status == 500
+        assert "db_password_DO_NOT_LEAK_XYZ" not in response.get_data(as_text=True)
+
     def test_httpexception_is_reraised(self, flask_app, patch_auth):
         """Flask error handlers rely on HTTPException reaching them unwrapped."""
 

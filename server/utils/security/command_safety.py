@@ -176,8 +176,8 @@ def check_command_safety(
         logger.exception("[CommandSafety] LLM timed out after %ds", _TIMEOUT_SECONDS)
         return _fail_verdict("timeout")
     except Exception as e:
-        logger.exception("[CommandSafety] LLM call failed")
-        return _fail_verdict(str(e))
+        logger.exception("[CommandSafety] LLM call failed: %s", type(e).__name__)
+        return _fail_verdict(type(e).__name__)
 
 
 # ---------------------------------------------------------------------------
