@@ -36,11 +36,11 @@ _HEX_ALPHABET = set("0123456789abcdef")
 # ---------------------------------------------------------------------------
 
 
-def _patch_config(monkeypatch, *, enabled: bool):
+def _patch_config(monkeypatch, *, enabled: bool) -> None:
     monkeypatch.setattr(command_safety, "config", MagicMock(enabled=enabled))
 
 
-def _patch_user_message(monkeypatch, msg):
+def _patch_user_message(monkeypatch, msg) -> None:
     monkeypatch.setattr(
         command_safety,
         "_get_latest_user_message",
@@ -48,7 +48,7 @@ def _patch_user_message(monkeypatch, msg):
     )
 
 
-def _forbid_llm(monkeypatch):
+def _forbid_llm(monkeypatch) -> MagicMock:
     spy = MagicMock(side_effect=AssertionError("LLM must not run"))
     monkeypatch.setattr(command_safety, "_call_llm", spy)
     return spy
@@ -280,7 +280,7 @@ class TestFingerprintRobustness:
 # ---------------------------------------------------------------------------
 
 
-def _silence_audit(monkeypatch):
+def _silence_audit(monkeypatch) -> None:
     import utils.security.audit_events as audit_mod
 
     monkeypatch.setattr(audit_mod, "emit_block_event", MagicMock())

@@ -19,7 +19,6 @@ from utils.auth.command_policy import (
     ListStates,
     PolicyChange,
     PolicyRule,
-    apply_yes_always,
     derive_pattern_from_command,
     evaluate_command,
     evaluate_compound_command,
@@ -59,7 +58,7 @@ def reset_cache():
     command_policy._cache.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def policy(monkeypatch):
     """Replace ``_get_cached`` with a deterministic, mutable stub."""
     state = {
@@ -68,7 +67,7 @@ def policy(monkeypatch):
         "states": ListStates(allowlist_enabled=False, denylist_enabled=False),
     }
 
-    def fake_get_cached(_org_id):
+    def fake_get_cached(_org_id) -> tuple[list, list, ListStates]:
         return state["allow"], state["deny"], state["states"]
 
     monkeypatch.setattr(command_policy, "_get_cached", fake_get_cached)
