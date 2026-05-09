@@ -155,3 +155,55 @@ class TestOrgLookupWiring:
         set_rls_context(cursor, conn, "u-1")
 
         org_lookup.assert_called_once_with("u-1")
+
+
+# ---------------------------------------------------------------------------
+# Hostile user_id inputs
+# ---------------------------------------------------------------------------
+
+
+class TestSetRlsContextHostileInputs:
+    """Malformed or adversarial user_id values must never produce a
+    half-stamped connection — if org resolution returns None the function
+    must emit no SET and no commit, regardless of what the user_id looks like.
+    """
+
+    @pytest.mark.parametrize("bad_user_id", [
+        None,
+        "",
+        "../etc/passwd",
+        "org-b-victim-uuid",
+        "\x00null-byte",
+        "a" * 512,
+    ])
+    def test_unresolvable_user_id_does_not_set_rls_vars(
+        self, bad_user_id, patch_org_lookup
+    ):
+        """Any user_id for which org resolution returns None → no SET, no commit."""
+        patch_org_lookup(None)
+        cursor, conn = _make_cursor_and_conn()
+
+        result = set_rls_context(cursor, conn, bad_user_id)
+
+        assert result is None
+        cursor.execute.assert_not_called()
+        conn.commit.assert_not_called()
+
+    def test_foreign_org_user_id_sets_resolved_org_not_caller_org(
+        self, patch_org_lookup
+    ):
+        """A user_id resolving to org-B must stamp the connection with org-B —
+        never leave a prior tenant's org_id from an earlier pool borrow.
+        """
+        patch_org_lookup("org-B")
+        cursor, conn = _make_cursor_and_conn()
+
+        result = set_rls_context(cursor, conn, "user-in-org-B")
+
+        assert result == "org-B"
+        executed = list(_executed(cursor))
+        sql_stmts = [sql for sql, _ in executed]
+        params = [p for _, p in executed if p is not None]
+        assert "SET myapp.current_org_id = %s;" in sql_stmts
+        assert ("org-B",) in params
+        assert ("org-A",) not in params
