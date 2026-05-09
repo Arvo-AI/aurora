@@ -22,8 +22,7 @@ prior OAuth flow was removed in `feat/github-app-only`.
 |---|---|
 | Bootstrap a fresh App (one-time, scripted) | Run `python3 server/scripts/register_github_app.py --org <your-org>` |
 | Operator manual walkthrough (web UI, Vault paths, troubleshooting) | [SETUP_GITHUB_APP.md](./SETUP_GITHUB_APP.md) |
-| Stand up Aurora on customer infra (on-prem, private cloud) | [SETUP_ONPREM.md](./SETUP_ONPREM.md) |
-| Audit GHES support gap (currently GitHub.com only) | [GHES_AUDIT.md](./GHES_AUDIT.md) |
+| On-prem deployment, OAuth fallback, GHES status | [Aurora docs site → Connectors → GitHub](../../../website/docs/integrations/connectors.md#github) |
 
 The bootstrap script drives GitHub's App Manifest flow: opens a browser
 tab, captures the post-create redirect, and writes `.env` + Vault for
