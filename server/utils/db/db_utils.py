@@ -1277,6 +1277,7 @@ def initialize_tables():
             rls_tables.append("org_command_policies")
             rls_tables.append("actions")
             rls_tables.append("action_runs")
+            rls_tables.append("postmortem_versions")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

@@ -334,7 +334,7 @@ def regenerate_postmortem(user_id, incident_id):
             return jsonify({"error": "Rate limited — try again later"}), 429
         if "already running" in str(e):
             return jsonify({"error": "Generation already in progress"}), 409
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": "Unable to generate postmortem"}), 400
     except Exception as e:
         logger.error(
             "[POSTMORTEM] Failed to regenerate postmortem for incident %s: %s",
