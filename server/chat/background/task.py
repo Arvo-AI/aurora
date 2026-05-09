@@ -702,6 +702,7 @@ def run_background_chat(
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+            _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -720,6 +721,7 @@ def run_background_chat(
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+            _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1424,6 +1426,38 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
                     logger.error(f"[BackgroundChat] Failed to record lifecycle event '{event_type}' for incident {incident_id}: {le}")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
+
+
+def _mark_inflight_findings_failed(incident_id: str, user_id: str, reason: str) -> int:
+    """Mark every still-running rca_findings row for this incident as terminal.
+
+    Called from the parent task's except handlers so the sub-agent UI rows stop
+    spinning when the orchestrator itself fails — without this, children stay
+    status='running' forever even after incidents.aurora_status flips to 'error'.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:FindingsCleanup]"):
+                    return 0
+                cursor.execute(
+                    """UPDATE rca_findings
+                       SET status = 'timeout',
+                           completed_at = NOW(),
+                           error_message = COALESCE(error_message, %s)
+                       WHERE incident_id = %s AND status = 'running'""",
+                    (reason, incident_id),
+                )
+                rowcount = cursor.rowcount
+            conn.commit()
+            if rowcount:
+                logger.info(
+                    f"[BackgroundChat] Marked {rowcount} in-flight rca_findings as timeout for incident {incident_id}"
+                )
+            return rowcount
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to mark in-flight findings for incident {incident_id}: {e}")
+        return 0
 
 
 def _update_incident_status_and_aurora(
@@ -2282,12 +2316,15 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     """
     stale_threshold = datetime.now() - timedelta(minutes=20)
     dead_task_threshold = datetime.now() - timedelta(minutes=3)
+    # Per-role timeout caps at 600s; 35 min is safely past any legitimate run.
+    findings_threshold = datetime.now() - timedelta(minutes=35)
 
     try:
         with db_pool.get_admin_connection() as conn:
             cleaned_count = 0
             dead_task_count = 0
             orphaned_count = 0
+            stale_findings_count = 0
 
             with conn.cursor() as cursor:
                 for uid in _affected_users(cursor):
@@ -2376,7 +2413,33 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             orphaned_count += 1
                         conn.commit()
 
-            # --- 4. Stale action runs (per-org, action_runs is RLS-protected) ---
+                    # --- 4. Stale rca_findings: cascade from any incident already
+                    # marked aurora_status='error' (immediate, catches sections 1-3
+                    # that just flipped the parent), plus a time-based safety net
+                    # for the rare case where the parent itself never got marked. ---
+                    cursor.execute(
+                        """UPDATE rca_findings rf
+                           SET status = 'timeout',
+                               completed_at = NOW(),
+                               error_message = COALESCE(
+                                   rf.error_message,
+                                   CASE WHEN i.aurora_status = 'error'
+                                        THEN 'parent incident failed'
+                                        ELSE 'orphaned: no progress within 35 minutes'
+                                   END
+                               )
+                           FROM incidents i
+                           WHERE i.id = rf.incident_id
+                             AND rf.status = 'running'
+                             AND rf.user_id = %s
+                             AND (i.aurora_status = 'error' OR rf.started_at < %s)""",
+                        (uid, findings_threshold),
+                    )
+                    if cursor.rowcount:
+                        stale_findings_count += cursor.rowcount
+                        conn.commit()
+
+            # --- 5. Stale action runs (per-org, action_runs is RLS-protected) ---
             stale_actions_count = 0
             stale_action_threshold = datetime.now() - timedelta(minutes=35)
             with conn.cursor() as cursor:
@@ -2393,10 +2456,10 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                 if stale_actions_count > 0:
                     conn.commit()
 
-            if cleaned_count or dead_task_count or orphaned_count or stale_actions_count:
-                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d stale_actions=%d",
-                            cleaned_count, dead_task_count, orphaned_count, stale_actions_count)
-            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count, "stale_actions": stale_actions_count}
+            if cleaned_count or dead_task_count or orphaned_count or stale_actions_count or stale_findings_count:
+                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d stale_actions=%d stale_findings=%d",
+                            cleaned_count, dead_task_count, orphaned_count, stale_actions_count, stale_findings_count)
+            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count, "stale_actions": stale_actions_count, "stale_findings": stale_findings_count}
 
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
