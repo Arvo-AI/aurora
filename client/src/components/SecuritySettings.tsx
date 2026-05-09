@@ -459,6 +459,56 @@ export function SecuritySettings() {
     }
   };
 
+  const toggleConnectorExpanded = (connector: string) => {
+    setExpandedConnectors((prev) => {
+      const next = new Set(prev);
+      next.has(connector) ? next.delete(connector) : next.add(connector);
+      return next;
+    });
+  };
+
+  const renderConnectorGroup = (connector: string, tools: ToolPermission[]) => {
+    const expanded = expandedConnectors.has(connector);
+    const enabledCount = tools.filter((t) => t.enabled).length;
+    return (
+      <div key={connector} className="rounded-lg border bg-card overflow-hidden">
+        <button
+          type="button"
+          className="flex items-center justify-between w-full px-3.5 py-2.5 hover:bg-muted/30 transition-colors"
+          onClick={() => toggleConnectorExpanded(connector)}
+        >
+          <div className="flex items-center gap-2">
+            {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+            {CONNECTOR_ICONS[connector] && (
+              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white dark:bg-white/10 shrink-0">
+                <Image src={CONNECTOR_ICONS[connector]} alt={connector} width={16} height={16} className={connector === "github" ? "dark:invert" : ""} />
+              </div>
+            )}
+            <span className="text-sm font-medium capitalize">{connector}</span>
+            <Badge variant="secondary" className="text-[10px] font-normal">
+              {enabledCount}/{tools.length}
+            </Badge>
+          </div>
+        </button>
+        {expanded && (
+          <div className="border-t divide-y divide-border">
+            {tools.map((tool) => (
+              <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
+                <Switch
+                  checked={tool.enabled}
+                  onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
+                  className="shrink-0 scale-90"
+                  disabled={!admin || togglingTools.has(tool.tool_key)}
+                />
+                <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -700,51 +750,7 @@ export function SecuritySettings() {
           <div className="space-y-2">
             {Object.entries(toolPerms)
               .filter(([connector]) => ALWAYS_SHOW_CONNECTORS.has(connector) || connectedProviders.has(connector))
-              .map(([connector, tools]) => {
-              const expanded = expandedConnectors.has(connector);
-              const enabledCount = tools.filter((t) => t.enabled).length;
-              return (
-                <div key={connector} className="rounded-lg border bg-card overflow-hidden">
-                  <button
-                    type="button"
-                    className="flex items-center justify-between w-full px-3.5 py-2.5 hover:bg-muted/30 transition-colors"
-                    onClick={() => setExpandedConnectors((prev) => {
-                      const next = new Set(prev);
-                      next.has(connector) ? next.delete(connector) : next.add(connector);
-                      return next;
-                    })}
-                  >
-                    <div className="flex items-center gap-2">
-                      {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
-                      {CONNECTOR_ICONS[connector] && (
-                        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white dark:bg-white/10 shrink-0">
-                          <Image src={CONNECTOR_ICONS[connector]} alt={connector} width={16} height={16} className={connector === "github" ? "dark:invert" : ""} />
-                        </div>
-                      )}
-                      <span className="text-sm font-medium capitalize">{connector}</span>
-                      <Badge variant="secondary" className="text-[10px] font-normal">
-                        {enabledCount}/{tools.length}
-                      </Badge>
-                    </div>
-                  </button>
-                  {expanded && (
-                    <div className="border-t divide-y divide-border">
-                      {tools.map((tool) => (
-                        <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
-                          <Switch
-                            checked={tool.enabled}
-                            onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
-                            className="shrink-0 scale-90"
-                            disabled={!admin || togglingTools.has(tool.tool_key)}
-                          />
-                          <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+              .map(([connector, tools]) => renderConnectorGroup(connector, tools))}
           </div>
           );
         })()}

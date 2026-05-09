@@ -36,7 +36,7 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 logger = logging.getLogger(__name__)
 
 
-def _resolve_permitted_tools(user_id: str, trigger_metadata: Optional[Dict[str, Any]]) -> Optional[set]:
+def _resolve_permitted_tools(user_id: str) -> Optional[set]:
     """Resolve permitted tools for background chats. Always fetches fresh from DB."""
     try:
         org_id = get_org_id_for_user(user_id)
@@ -1187,7 +1187,7 @@ async def _execute_background_chat(
             mode=mode,
             is_background=True,
             rca_context=rca_context,
-            permitted_tools=_resolve_permitted_tools(user_id, trigger_metadata),
+            permitted_tools=_resolve_permitted_tools(user_id),
         )
         logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
         
