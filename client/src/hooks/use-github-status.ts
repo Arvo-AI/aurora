@@ -48,36 +48,46 @@ export function useGitHubStatus(userId: string | null) {
     isConnected: false,
     hasReposConnected: null,
   });
+  // Coalesce overlapping refresh calls without dropping them. While a
+  // check is in-flight, additional refresh() calls flip pendingRef so
+  // the current check re-runs once it finishes — the user's "needs a
+  // page refresh" symptom was caused by silently dropping these.
   const inFlightRef = useRef(false);
+  const pendingRef = useRef(false);
 
   const checkStatus = useCallback(async () => {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current) {
+      pendingRef.current = true;
+      return;
+    }
     inFlightRef.current = true;
 
-    try {
-      const [credentials, repos] = await Promise.all([
-        GitHubIntegrationService.checkStatus(),
-        GitHubIntegrationService.fetchRepoSelections().catch(() => []),
-      ]);
+    do {
+      pendingRef.current = false;
+      try {
+        const [credentials, repos] = await Promise.all([
+          GitHubIntegrationService.checkStatus(),
+          GitHubIntegrationService.fetchRepoSelections().catch(() => []),
+        ]);
 
-      const isAuthenticated = credentials.connected || false;
-      if (!isAuthenticated) {
-        setStatus({ isAuthenticated: false, isConnected: false, hasReposConnected: false });
-        return;
+        const isAuthenticated = credentials.connected || false;
+        if (!isAuthenticated) {
+          setStatus({ isAuthenticated: false, isConnected: false, hasReposConnected: false });
+        } else {
+          const hasReposConnected = repos.length > 0;
+          setStatus({
+            isAuthenticated: true,
+            isConnected: hasReposConnected,
+            hasReposConnected,
+            username: credentials.username,
+          });
+        }
+      } catch {
+        setStatus({ isAuthenticated: false, isConnected: false, hasReposConnected: null });
       }
+    } while (pendingRef.current);
 
-      const hasReposConnected = repos.length > 0;
-      setStatus({
-        isAuthenticated: true,
-        isConnected: hasReposConnected,
-        hasReposConnected,
-        username: credentials.username,
-      });
-    } catch {
-      setStatus({ isAuthenticated: false, isConnected: false, hasReposConnected: null });
-    } finally {
-      inFlightRef.current = false;
-    }
+    inFlightRef.current = false;
   }, []);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
