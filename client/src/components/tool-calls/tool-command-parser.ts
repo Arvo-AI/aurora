@@ -15,33 +15,6 @@ const getProviderCli = (provider: string): string => {
 // Helper: Check if command already has recognized CLI prefix
 const RECOGNIZED_CLI_REGEX = /^(gcloud|kubectl|gsutil|bq|aws|az)\b/i
 
-export function extractIacPath(toolInput?: string): string | undefined {
-  if (!toolInput) return undefined
-  try {
-    const parsed = JSON.parse(toolInput)
-    if (parsed?.kwargs?.path && typeof parsed.kwargs.path === 'string') {
-      return parsed.kwargs.path
-    }
-    if (parsed?.path && typeof parsed.path === 'string') {
-      return parsed.path
-    }
-  } catch (error) {
-    // Ignore JSON parse errors and try regex fallback
-  }
-
-  const regexMatch = toolInput.match(/"path"\s*:\s*"([^"\\]+)"/)
-  if (regexMatch?.[1]) {
-    return regexMatch[1]
-  }
-
-  const singleQuoteMatch = toolInput.match(/'path'\s*:\s*'([^'\\]+)'/)
-  if (singleQuoteMatch?.[1]) {
-    return singleQuoteMatch[1]
-  }
-
-  return undefined
-}
-
 export function extractIacAction(toolInput?: string, fallback?: string): string | undefined {
   if (!toolInput) return fallback
   try {

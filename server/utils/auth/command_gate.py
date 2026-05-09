@@ -142,6 +142,69 @@ def gate_command(
         _guardrails_approved_command.reset(approved_token)
 
 
+def _is_org_tool_permitted(tool_name: str) -> bool:
+    """Bypass gate if tool is enabled in org tool permissions."""
+    try:
+        from utils.cloud.cloud_utils import get_state_context
+        state = get_state_context()
+        if not state:
+            return False
+        permitted = getattr(state, "permitted_tools", None)
+        _maybe_refresh_permitted_tools(state)
+        permitted = state.permitted_tools
+        if permitted is None:
+            return False
+        if not permitted:
+            return False
+        if tool_name in permitted:
+            return True
+        for p in permitted:
+            if p.endswith("_*") and tool_name.startswith(p[:-1]):
+                return True
+            if p.endswith(":*") and tool_name.startswith(p[:-1]):
+                return True
+        return False
+    except Exception as e:
+        logger.warning("Failed to check tool permissions for %s: %s", tool_name, e)
+        return False
+
+
+def _maybe_refresh_permitted_tools(state) -> None:
+    """Refresh State.permitted_tools from DB if Redis version has changed."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+        rc = get_redis_client()
+        if not rc:
+            return
+        org_id = getattr(state, "org_id", None)
+        if not org_id:
+            return
+        version_key = f"tool_perms_version:{org_id}"
+        current_version = rc.get(version_key)
+        if not current_version:
+            return
+        cached_version = getattr(state, "_perms_version", None)
+        if cached_version == current_version:
+            return
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        user_id = getattr(state, "user_id", None)
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                org_id_resolved = set_rls_context(cur, conn, user_id, log_prefix="[Gate:refresh_perms]")
+                if not org_id_resolved:
+                    return
+                cur.execute(
+                    "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                    (org_id,),
+                )
+                state.permitted_tools = {row[0] for row in cur.fetchall()}
+        state._perms_version = current_version
+    except Exception as e:
+        logger.debug("Could not refresh tool permissions: %s", e)
+        state.permitted_tools = None
+
+
 def gate_action(
     *,
     user_id: Optional[str],
@@ -158,6 +221,9 @@ def gate_action(
     Returns the same :class:`GateDecision` shape as :func:`gate_command`
     so callers can treat both gates uniformly.
     """
+    if _is_org_tool_permitted(tool_name):
+        return _ALLOWED
+
     if not user_id:
         # Preserve prior behavior of wait_for_user_confirmation helpers,
         # which required a user and otherwise denied.

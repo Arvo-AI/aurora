@@ -1047,6 +1047,19 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
                         ON org_command_policies(org_id);
                 """,
+                "org_tool_permissions": """
+                    CREATE TABLE IF NOT EXISTS org_tool_permissions (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        tool_key VARCHAR(100) NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT false,
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, tool_key)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_otp_org
+                        ON org_tool_permissions(org_id);
+                """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1302,6 +1315,7 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("org_tool_permissions")
             rls_tables.append("rca_findings")
             rls_tables.append("actions")
             rls_tables.append("action_runs")

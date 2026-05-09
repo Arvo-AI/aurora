@@ -1,9 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, createContext, useContext, useCallback } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { useUser } from "@/hooks/useAuthHooks";
-import { signOut } from "next-auth/react";
+import React, { useState, useEffect, createContext, useContext } from "react";
 import { ThemeProvider } from "next-themes";
 import { ProviderPreferenceProvider } from "@/context/ProviderPreferenceContext";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,13 +8,6 @@ import AppLayout from "@/app/components/AppLayout";
 import GlobalProjectSelectionMonitor from "@/components/cloud-provider/GlobalProjectSelectionMonitor";
 import { WebViewWarning } from "@/components/WebViewWarning";
 import { useConnectionHealth } from "@/hooks/useConnectionHealth";
-
-type WorkspaceConfig = {
-  type: "iac"
-  sessionId: string
-  onSave?: (path: string, content: string) => Promise<boolean>
-  onPlan?: () => Promise<boolean>
-}
 
 // Chat context definition (moved from layout.tsx)
 export const ChatContext = createContext<{
@@ -37,11 +27,6 @@ export const ChatContext = createContext<{
   setCurrentChatSessionId: (sessionId: string | null) => void;
   refreshChatHistory: () => void;
   setRefreshChatHistory: (refreshFn: () => void) => void;
-  workspaceConfig: WorkspaceConfig | null;
-  openWorkspace: (config: WorkspaceConfig) => void;
-  closeWorkspace: () => void;
-  workspacePanelWidth: number;
-  setWorkspacePanelWidth: (width: number) => void;
 }>({
   isChatExpanded: true,
   setIsChatExpanded: () => {},
@@ -59,11 +44,6 @@ export const ChatContext = createContext<{
   setCurrentChatSessionId: () => {},
   refreshChatHistory: () => {},
   setRefreshChatHistory: () => {},
-  workspaceConfig: null,
-  openWorkspace: () => {},
-  closeWorkspace: () => {},
-  workspacePanelWidth: 800, 
-  setWorkspacePanelWidth: () => {},
 });
 
 // Custom hook to use chat context
@@ -74,9 +54,6 @@ interface ClientShellProps {
 }
 
 export default function ClientShell({ children }: ClientShellProps) {
-  const pathname = usePathname();
-  const router = useRouter();
-  const { user, isLoaded } = useUser();
   useConnectionHealth();
 
   // All the state that was in layout.tsx
@@ -93,8 +70,6 @@ export default function ClientShell({ children }: ClientShellProps) {
   const [currentChatSessionId, setCurrentChatSessionId] = useState<string | null>(null);
   const [refreshChatHistory, setRefreshChatHistory] = useState<(() => void)>(() => () => {});
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [workspaceConfig, setWorkspaceConfig] = useState<WorkspaceConfig | null>(null);
-  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(800); 
 
   // Clear localStorage if version has changed (moved from layout.tsx)
   useEffect(() => {
@@ -138,15 +113,6 @@ export default function ClientShell({ children }: ClientShellProps) {
     setCurrentChatSessionId,
     refreshChatHistory,
     setRefreshChatHistory,
-    workspaceConfig,
-    openWorkspace: useCallback((config: WorkspaceConfig) => {
-      setWorkspaceConfig(config);
-    }, []),
-    closeWorkspace: useCallback(() => {
-      setWorkspaceConfig(null);
-    }, []),
-    workspacePanelWidth,
-    setWorkspacePanelWidth,
   };
 
   return (

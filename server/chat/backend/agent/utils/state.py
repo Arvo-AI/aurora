@@ -36,6 +36,7 @@ class State(BaseModel):
         None  # Pending RCA context updates for UI injection
     )
     guardrail_blocked: bool = False  # Set by workflow when input rail blocks the message
+    permitted_tools: Optional[set] = None
 
     # --- Multi-agent orchestrator fields (defaults preserve single-agent behavior) ---
     triage_decision: Optional[Dict[str, Any]] = None

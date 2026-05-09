@@ -48,7 +48,7 @@ _DESTRUCTIVE_MCP_TOOLS = {
     "merge_pull_request", "update_pull_request_branch", "fork_repository",
     "add_issue_comment", "add_comment_to_pending_review", "add_project_item",
     "delete_file", "delete_pending_review", "cancel_workflow_run",
-    "rerun_workflow", "rerun_workflow_failed_jobs", "assign_copilot_to_issue",
+    "rerun_workflow_run", "rerun_failed_jobs", "assign_copilot_to_issue",
     "request_copilot_review", "update_issue", "update_project_item_field_value",
     "close_pull_request_review", "manage_pull_request_review",
 }
@@ -1235,7 +1235,7 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Generate consistent tool_call_id for start/completion matching
                 import hashlib
                 import json
-                tool_name = f"mcp_{original_tool_name}"
+                tool_name = f"mcp_{server_type}_{original_tool_name}"
                 # Use JSON serialization with sorted keys for deterministic hashing
                 signature = f"{tool_name}_{json.dumps(kwargs, sort_keys=True, default=str)}"
                 # Use longer hash (16 chars) to reduce collision risk

@@ -116,6 +116,7 @@ export default auth((req) => {
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     `connect-src ${connectSrc}`,
+    "worker-src 'self' blob:",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "object-src 'none'",

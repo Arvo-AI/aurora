@@ -45,13 +45,14 @@ jobs:
         run: |
           tests=(
             tests/architectural/test_connector_rbac.py
+            tests/auth/test_command_policy.py
             tests/auth/test_enforcer.py
             tests/auth/test_oauth2_state_cache.py
+            tests/auth/test_rbac_decorators.py
             tests/auth/test_stateless_auth.py
             tests/chat/test_tool_output_cap.py
             tests/db/test_connection_pool.py
-            tests/security/test_input_rail.py
-            tests/security/test_terminal_exec_tool.py
+            tests/secrets/test_secret_ref_utils.py
             tests/utils/test_log_sanitizer.py
             tests/utils/test_payload_timestamp.py
             tests/utils/test_webhook_signature.py
