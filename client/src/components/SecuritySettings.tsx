@@ -470,6 +470,10 @@ export function SecuritySettings() {
   const renderConnectorGroup = (connector: string, tools: ToolPermission[]) => {
     const expanded = expandedConnectors.has(connector);
     const enabledCount = tools.filter((t) => t.enabled).length;
+    const riskOrder = ["low", "medium", "high", "critical"];
+    const grouped = riskOrder
+      .map((risk) => ({ risk, items: tools.filter((t) => t.risk === risk) }))
+      .filter(({ items }) => items.length > 0);
     return (
       <div key={connector} className="rounded-lg border bg-card overflow-hidden">
         <button
@@ -491,16 +495,25 @@ export function SecuritySettings() {
           </div>
         </button>
         {expanded && (
-          <div className="border-t divide-y divide-border">
-            {tools.map((tool) => (
-              <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
-                <Switch
-                  checked={tool.enabled}
-                  onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
-                  className="shrink-0 scale-90"
-                  disabled={!admin || togglingTools.has(tool.tool_key)}
-                />
-                <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
+          <div className="border-t">
+            {grouped.map(({ risk, items }) => (
+              <div key={risk}>
+                <div className="px-3.5 py-1.5 bg-muted/40 border-b">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{risk} risk</span>
+                </div>
+                <div className="divide-y divide-border">
+                  {items.map((tool) => (
+                    <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
+                      <Switch
+                        checked={tool.enabled}
+                        onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
+                        className="shrink-0 scale-90"
+                        disabled={!admin || togglingTools.has(tool.tool_key)}
+                      />
+                      <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
