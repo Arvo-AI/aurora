@@ -6,7 +6,6 @@ identity headers, or omits authentication entirely.  All tests are hermetic
 (no network, no real database).
 """
 
-import sys
 from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------

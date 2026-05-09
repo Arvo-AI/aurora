@@ -68,7 +68,7 @@ def app():
     from flask import Flask as _Flask  # fresh after eviction
     from routes.incidents_routes import incidents_bp  # fresh after eviction
 
-    application = _Flask(__name__)
+    application = _Flask(__name__)  # NOSONAR
     application.register_blueprint(incidents_bp)
     return application
 
