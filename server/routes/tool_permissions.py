@@ -26,8 +26,8 @@ def _invalidate_permissions_cache(org_id: str) -> None:
         rc = get_redis_client()
         if rc:
             rc.set(f"tool_perms_dirty:{org_id}", "1", ex=3600)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not set permissions dirty flag: %s", e)
 
 tool_permissions_bp = Blueprint("tool_permissions", __name__, url_prefix="/api/org")
 

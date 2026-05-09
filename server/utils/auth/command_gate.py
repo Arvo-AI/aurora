@@ -194,8 +194,8 @@ def _maybe_refresh_permitted_tools(state) -> None:
                 )
                 state.permitted_tools = {row[0] for row in cur.fetchall()}
         rc.delete(dirty_key)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not refresh tool permissions: %s", e)
 
 
 def gate_action(
