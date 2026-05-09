@@ -191,6 +191,7 @@ class SecretRefManager:
             return False
 
         org_id = _resolve_org(user_id)
+        clause, params = _org_clause(org_id)
         conn = None
         cursor = None
         try:
@@ -198,13 +199,14 @@ class SecretRefManager:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:hasCreds]")
             cursor.execute(
-                """SELECT 1 FROM user_tokens
-                   WHERE (user_id = %s OR org_id = %s)
+                f"""SELECT 1 FROM user_tokens
+                   WHERE user_id = %s
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
+                     {clause}
                    LIMIT 1""",
-                (user_id, org_id, provider)
+                (user_id, provider_base, *params),
             )
             return cursor.fetchone() is not None
         except Exception as e:
@@ -226,20 +228,22 @@ class SecretRefManager:
         conn = None
         cursor = None
 
+        clause, clause_params = _org_clause(org_id)
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:getToken]")
             cursor.execute(
-                """SELECT secret_ref, client_id, client_secret
+                f"""SELECT secret_ref, client_id, client_secret
                    FROM user_tokens
-                   WHERE (user_id = %s OR org_id = %s)
+                   WHERE user_id = %s
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
+                     {clause}
                    ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
                    LIMIT 1""",
-                (user_id, org_id, provider, user_id)
+                (user_id, provider_base, *clause_params, user_id),
             )
 
             result = cursor.fetchone()

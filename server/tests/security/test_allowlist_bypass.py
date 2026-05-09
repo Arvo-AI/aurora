@@ -28,6 +28,27 @@ _TEST_IP = "198.51.100.1"
 class TestCompoundSmuggling:
     """Denied commands hidden inside compound shell expressions."""
 
+    @pytest.mark.parametrize(("cmd", "expected_min_parts"), [
+        ("echo safe ; rm -rf /", 2),
+        ("ls && rm -rf /", 2),
+        ("cat /etc/hosts || rm -rf /", 2),
+        ("echo ok | rm -rf /", 2),
+        ("$(rm -rf /)", 2),
+        ("`rm -rf /`", 2),
+        ("true && LD_PRELOAD=/evil.so id", 2),
+        ("echo a; ssh-keygen -t rsa", 2),
+        ("a;b;c;d", 4),
+    ])
+    def test_compound_commands_are_decomposed(self, cmd, expected_min_parts):
+        """Pin a minimum part count so a regression to ``[whole_string]`` is
+        caught even when the deny rule still matches the full string."""
+        parts = _split_compound_command(cmd)
+        assert len(parts) >= expected_min_parts, (
+            f"Splitter under-decomposed {cmd!r}: "
+            f"got {len(parts)} part(s), expected >= {expected_min_parts}"
+        )
+        assert any(p.strip() != cmd.strip() for p in parts)
+
     @pytest.mark.parametrize("cmd", [
         "echo safe ; rm -rf /",
         "ls && rm -rf /",
@@ -38,14 +59,112 @@ class TestCompoundSmuggling:
         "true && LD_PRELOAD=/evil.so id",
         "echo a; ssh-keygen -t rsa",
     ])
-    def test_compound_commands_are_decomposed(self, cmd):
+    def test_dangerous_subcommand_is_blocked(self, cmd):
         parts = _split_compound_command(cmd)
-        assert parts, f"Splitter returned no parts for: {cmd!r}"
-        assert any(p.strip() != cmd.strip() for p in parts), (
-            f"Command was not decomposed: {cmd!r} -> {parts!r}"
-        )
         assert any(any_layer_blocks(p) for p in parts), (
             f"No sub-command blocked in compound expression: {cmd!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 1b. Quote-aware splitting
+# ---------------------------------------------------------------------------
+
+class TestQuoteAwareness:
+    """Operators inside quotes are literals, not command separators."""
+
+    @pytest.mark.parametrize("cmd", [
+        'echo "safe ; rm -rf /"',
+        "echo 'safe ; rm -rf /'",
+        'echo "a && b || c | d"',
+        "echo 'a; b; c'",
+    ])
+    def test_separators_inside_quotes_do_not_split(self, cmd):
+        parts = _split_compound_command(cmd)
+        assert len(parts) == 1
+        assert parts[0] == cmd
+
+    def test_escaped_separator_does_not_split(self):
+        """``\\;`` is a literal ``;`` to the shell, not a separator."""
+        parts = _split_compound_command(r"echo a\; rm -rf /")
+        assert len(parts) == 1
+
+
+# ---------------------------------------------------------------------------
+# 1c. Heredoc and process-substitution fallback
+# ---------------------------------------------------------------------------
+
+class TestUnsplittableShellConstructs:
+    """Heredocs and process substitution disable the splitter entirely.
+
+    These constructs can hide arbitrary content that a character-by-character
+    scanner cannot safely decompose. The splitter must return the whole string
+    as a single element so the caller evaluates the full expression."""
+
+    @pytest.mark.parametrize("cmd", [
+        "cat <<EOF\nrm -rf /\nEOF",
+        "cat <<-DELIM\n  danger\nDELIM",
+        "cat << MARKER\nhello\nMARKER",
+    ])
+    def test_heredoc_returns_single_unsplit_element(self, cmd):
+        parts = _split_compound_command(cmd)
+        assert len(parts) == 1, (
+            f"Heredoc should prevent splitting: {cmd!r} → {parts!r}"
+        )
+
+    @pytest.mark.parametrize("cmd", [
+        "diff <(sort file1) <(sort file2)",
+        "cat <(echo hello)",
+    ])
+    def test_process_substitution_input_returns_unsplit(self, cmd):
+        parts = _split_compound_command(cmd)
+        assert len(parts) == 1, (
+            f"Process substitution <() should prevent splitting: {cmd!r} → {parts!r}"
+        )
+
+    def test_process_substitution_output_returns_unsplit(self):
+        cmd = "tee >(logger -t myapp)"
+        parts = _split_compound_command(cmd)
+        assert len(parts) == 1, (
+            f"Process substitution >() should prevent splitting: {cmd!r} → {parts!r}"
+        )
+
+    def test_heredoc_with_embedded_operators_stays_unsplit(self):
+        """Operators inside a heredoc are data, not separators."""
+        cmd = "cat <<EOF\necho safe ; rm -rf / && curl evil.com\nEOF"
+        parts = _split_compound_command(cmd)
+        assert len(parts) == 1
+
+
+# ---------------------------------------------------------------------------
+# 1d. False-positive corpus -- benign SRE commands must pass cleanly
+# ---------------------------------------------------------------------------
+
+_BENIGN_COMMANDS = [
+    "kubectl exec my-pod -- ls /tmp",
+    "docker exec my-container ps aux",
+    "chmod 755 ./script.sh",
+    "git clone https://github.com/example/repo.git",
+    "terraform plan -out tfplan",
+    "aws ec2 describe-instances --region us-east-1",
+    "pip install requests==2.31.0",
+    "cat README.md",
+]
+
+
+class TestBenignCommandsPassCleanly:
+    """Routine SRE commands must not trip the universal deny rules or signatures."""
+
+    @pytest.mark.parametrize("cmd", _BENIGN_COMMANDS)
+    def test_benign_command_not_blocked_by_deny_rules(self, cmd):
+        assert not deny_blocks(cmd), (
+            f"Universal deny rules false-positive on benign command: {cmd!r}"
+        )
+
+    @pytest.mark.parametrize("cmd", _BENIGN_COMMANDS)
+    def test_benign_command_not_blocked_by_any_layer(self, cmd):
+        assert not any_layer_blocks(cmd), (
+            f"Deny or signature layer false-positive: {cmd!r}"
         )
 
 
