@@ -145,16 +145,22 @@ def dispatch_postmortem_action(
     if run_id:
         _update_run(run_id, user_id, chat_session_id=session_id)
 
-    run_background_chat.delay(
-        user_id=user_id,
-        session_id=session_id,
-        initial_message=prompt,
-        trigger_metadata=trigger_meta,
-        mode="agent",
-        rail_text=instructions,
-        send_notifications=False,
-        incident_id=None,
-    )
+    try:
+        run_background_chat.delay(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=prompt,
+            trigger_metadata=trigger_meta,
+            mode="agent",
+            rail_text=instructions,
+            send_notifications=False,
+            incident_id=None,
+        )
+    except Exception as enqueue_err:
+        logger.exception("[PostmortemAction] Failed to enqueue background chat")
+        if run_id:
+            _update_run(run_id, user_id, status="error", error=str(enqueue_err))
+        raise
 
     logger.info("[PostmortemAction] Dispatched postmortem generation (session created)")
     return session_id
@@ -242,8 +248,9 @@ def _build_action_prompt(instructions: str, incident: dict) -> str:
 def _reserve_postmortem_row(user_id: str, incident_id: str, session_id: str) -> None:
     """Pre-create a postmortem row with NULL content to signal 'generating' state.
 
-    If a postmortem already exists (regeneration), snapshots the current content
-    as a version before nulling it, so the GET endpoint returns 202.
+    If a postmortem already exists (regeneration), sets content to NULL so the
+    GET endpoint returns 202. Previous content is already preserved in
+    postmortem_versions from the original save.
     The save_postmortem tool will later fill in the content via ON CONFLICT UPDATE.
     """
     try:

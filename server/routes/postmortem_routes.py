@@ -312,6 +312,9 @@ def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn
     if current and current[0]:
         _create_version(cursor, postmortem_id, org_id, user_id, current[0], source="pre_restore")
 
+    # Insert a version for the restored content so the UI shows it as current
+    _create_version(cursor, postmortem_id, org_id, user_id, restored_content, source="restore")
+
     cursor.execute(
         """UPDATE postmortems
            SET content = %s, updated_at = CURRENT_TIMESTAMP
