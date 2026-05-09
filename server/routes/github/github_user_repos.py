@@ -44,12 +44,14 @@ from utils.auth.github_app_token import (
     GitHubAppTokenError,
     get_installation_token,
 )
+from utils.auth.github_auth_mode import is_oauth_enabled
 from utils.auth.github_auth_router import (
     NoGitHubAuthError,
     get_auth_for_user_repo,
     make_auth_header,
 )
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_credentials_from_db
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -232,7 +234,87 @@ def _list_repos_for_user(user_id: str) -> list[dict[str, Any]]:
                     repo, "app", installation_id,
                 )
 
+    # OAuth fallback / additional source. App entries already loaded above
+    # win on collision per the module docstring (finer permissions, isolated
+    # rate limits). Only runs when OAuth is enabled in the deployment AND
+    # the user has a stored token.
+    if is_oauth_enabled():
+        try:
+            creds = get_credentials_from_db(user_id, "github")
+        except Exception:
+            logger.warning(
+                "[USER-REPOS] OAuth credential lookup failed user=%s",
+                user_id, exc_info=True,
+            )
+            creds = None
+        oauth_token = (creds or {}).get("access_token")
+        if oauth_token:
+            for repo in _fetch_oauth_repos(oauth_token):
+                full_name = repo.get("full_name")
+                if not full_name:
+                    continue
+                if full_name not in repos_by_full_name:
+                    repos_by_full_name[full_name] = _simplify_repo(
+                        repo, "oauth", None,
+                    )
+
     return list(repos_by_full_name.values())
+
+
+def _fetch_oauth_repos(token: str) -> list[dict[str, Any]]:
+    """Paginate ``GET /user/repos`` for a stored OAuth token.
+
+    Note that ``/user/repos`` returns a bare array of repo objects (NOT
+    the ``{total_count, repositories}`` envelope used by the App-mode
+    ``/installation/repositories`` endpoint).
+
+    Failures are logged and partial results returned so a transient
+    network glitch does not erase the entire repo list.
+    """
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    all_repos: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        try:
+            resp = requests.get(
+                "https://api.github.com/user/repos",
+                headers=headers,
+                params={
+                    "per_page": _PER_PAGE,
+                    "page": page,
+                    "affiliation": "owner,collaborator,organization_member",
+                    "sort": "updated",
+                },
+                timeout=_GITHUB_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "[USER-REPOS] OAuth-mode list failed: %s", type(exc).__name__,
+            )
+            break
+        if resp.status_code != 200:
+            logger.error(
+                "[USER-REPOS] OAuth-mode list returned status=%d",
+                resp.status_code,
+            )
+            break
+        try:
+            payload = resp.json()
+        except ValueError:
+            logger.error("[USER-REPOS] OAuth-mode response not JSON")
+            break
+        repos = payload if isinstance(payload, list) else []
+        if not repos:
+            break
+        all_repos.extend(repos)
+        if len(repos) < _PER_PAGE or page >= _REPOS_PAGE_LIMIT:
+            break
+        page += 1
+    return all_repos
 
 
 @github_user_repos_bp.route("/user-repos", methods=["GET", "OPTIONS"])
