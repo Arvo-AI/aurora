@@ -3,29 +3,17 @@
 /**
  * Output rendering utilities for different tool types.
  * Handles syntax highlighting, formatting, and special displays.
- * Extensible for future Pulumi support.
  */
 
 import * as React from "react"
 import Convert from 'ansi-to-html'
 import DOMPurify from 'dompurify'
-import { Button } from "@/components/ui/button"
 import { IaCEditorPanel } from "./iac-editor-panel"
 
 interface RenderOutputProps {
   output: any
   toolName: string
   theme: string
-  allowEditing: boolean
-  editedContent: string | null
-  lastSavedContent: string | null
-  handleEditorChange: (value: string) => void
-  handleSave: (content: string) => void
-  handlePlan: () => void
-  hasSavedEdit: boolean
-  sendRaw?: (data: string) => boolean
-  userId?: string
-  sessionId?: string
 }
 
 // Helper to detect tool type for appropriate rendering
@@ -57,16 +45,6 @@ export function RenderOutput({
   output,
   toolName,
   theme,
-  allowEditing,
-  editedContent,
-  lastSavedContent,
-  handleEditorChange,
-  handleSave,
-  handlePlan,
-  hasSavedEdit,
-  sendRaw,
-  userId,
-  sessionId
 }: RenderOutputProps): JSX.Element | null {
   // Initialize ANSI to HTML converter
   const ansiConverter = React.useMemo(() => new Convert({
@@ -118,67 +96,18 @@ export function RenderOutput({
       )
     }
 
-    // IAC tools with HCL content - use Monaco Editor
+    // IAC tools with HCL content - use CodeMirror editor
     if (isIacTool(toolName) && isHclContent(output)) {
       const trimmedOutput = output.trim()
       const lineCount = trimmedOutput.split('\n').length
-      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 300)
-
-      const baselineContent = lastSavedContent ?? trimmedOutput
-      const currentValue = allowEditing ? (editedContent ?? trimmedOutput) : trimmedOutput
-      const isDirty = allowEditing && currentValue !== baselineContent
-
-      const viewer = (
-        <IaCEditorPanel
-          value={currentValue}
-          onChange={handleEditorChange}
-          readOnly={!allowEditing}
-          height={height}
-          themeMode={theme}
-          language="terraform"
-        />
-      )
-
-      if (!allowEditing) {
-        return viewer
-      }
+      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 500)
 
       return (
-        <div className="space-y-0.2">
-          {viewer}
-          <div className="flex justify-end gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6 px-2 text-xs font-medium"
-              disabled={
-                !isDirty ||
-                !currentValue.trim() ||
-                !sendRaw ||
-                !userId ||
-                !sessionId
-              }
-              onClick={() => handleSave(currentValue)}
-            >
-              Save to Terraform
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-xs font-medium"
-              disabled={
-                !hasSavedEdit ||
-                isDirty ||
-                !sendRaw ||
-                !userId ||
-                !sessionId
-              }
-              onClick={handlePlan}
-            >
-              Re-run Plan
-            </Button>
-          </div>
-        </div>
+        <IaCEditorPanel
+          value={trimmedOutput}
+          height={height}
+          themeMode={theme}
+        />
       )
     }
 
@@ -435,63 +364,14 @@ export function RenderOutput({
     if (isIacTool(toolName) && isHclContent(chatOutput)) {
       const trimmedChatOutput = chatOutput.trim()
       const lineCount = trimmedChatOutput.split('\n').length
-      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 300)
-
-      const baselineContent = lastSavedContent ?? trimmedChatOutput
-      const currentValue = allowEditing ? (editedContent ?? trimmedChatOutput) : trimmedChatOutput
-      const isDirty = allowEditing && currentValue !== baselineContent
-
-      const viewer = (
-        <IaCEditorPanel
-          value={currentValue}
-          onChange={allowEditing ? handleEditorChange : () => {}}
-          readOnly={!allowEditing}
-          height={height}
-          themeMode={theme}
-          language="terraform"
-        />
-      )
-
-      if (!allowEditing) {
-        return viewer
-      }
+      const height = Math.min(Math.max(lineCount * 18 + 20, 100), 500)
 
       return (
-        <div className="space-y-0.2">
-          {viewer}
-          <div className="flex justify-end gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              className="h-6 px-2 text-xs font-medium"
-              disabled={
-                !isDirty ||
-                !currentValue.trim() ||
-                !sendRaw ||
-                !userId ||
-                !sessionId
-              }
-              onClick={() => handleSave(currentValue)}
-            >
-              Save to Terraform
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-xs font-medium"
-              disabled={
-                !hasSavedEdit ||
-                isDirty ||
-                !sendRaw ||
-                !userId ||
-                !sessionId
-              }
-              onClick={handlePlan}
-            >
-              Re-run Plan
-            </Button>
-          </div>
-        </div>
+        <IaCEditorPanel
+          value={trimmedChatOutput}
+          height={height}
+          themeMode={theme}
+        />
       )
     }
 

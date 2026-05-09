@@ -52,8 +52,8 @@ const nextConfig: NextConfig = {
               priority: 15,
             },
             editor: {
-              test: /[\\/]node_modules[\\/](@monaco-editor|monaco-editor)[\\/]/,
-              name: 'monaco-editor',
+              test: /[\\/]node_modules[\\/](@codemirror|@lezer)[\\/]/,
+              name: 'codemirror',
               chunks: 'all',
               priority: 25,
             },
@@ -72,7 +72,7 @@ const nextConfig: NextConfig = {
       // Note: Don't alias lodash globally as it breaks recharts dependencies
     }
 
-    // Handle Monaco Editor and JSZip
+    // Handle JSZip and other modules that need node polyfills disabled
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
