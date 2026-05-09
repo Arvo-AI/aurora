@@ -16,6 +16,8 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
+_ERR_NO_ORG = "No org context"
+
 tool_permissions_bp = Blueprint("tool_permissions", __name__, url_prefix="/api/org")
 
 
@@ -25,7 +27,7 @@ def list_permissions(user_id: str):
     """Return registry grouped by connector with current org toggle states."""
     org_id = get_org_id_from_request()
     if not org_id:
-        return jsonify({"error": "No org context"}), 400
+        return jsonify({"error": _ERR_NO_ORG}), 400
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
@@ -56,7 +58,7 @@ def toggle_permission(user_id: str, tool_key: str):
 
     org_id = get_org_id_from_request()
     if not org_id:
-        return jsonify({"error": "No org context"}), 400
+        return jsonify({"error": _ERR_NO_ORG}), 400
 
     body = request.get_json(silent=True) or {}
     enabled = bool(body.get("enabled", False))
@@ -84,7 +86,7 @@ def seed_defaults(user_id: str):
     """Seed default tool permissions for this org (idempotent)."""
     org_id = get_org_id_from_request()
     if not org_id:
-        return jsonify({"error": "No org context"}), 400
+        return jsonify({"error": _ERR_NO_ORG}), 400
 
     defaults = get_default_enabled_tools()
     now = datetime.now(timezone.utc)

@@ -672,15 +672,22 @@ export function SecuritySettings() {
           </div>
         </div>
 
-        {toolPermsLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          </div>
-        ) : Object.keys(toolPerms).length === 0 ? (
-          <div className="rounded-lg border bg-card p-4 text-center">
-            <p className="text-xs text-muted-foreground">Could not load tool permissions. Ensure the backend is running.</p>
-          </div>
-        ) : (
+        {(() => {
+          if (toolPermsLoading) {
+            return (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            );
+          }
+          if (Object.keys(toolPerms).length === 0) {
+            return (
+              <div className="rounded-lg border bg-card p-4 text-center">
+                <p className="text-xs text-muted-foreground">Could not load tool permissions. Ensure the backend is running.</p>
+              </div>
+            );
+          }
+          return (
           <div className="space-y-2">
             {Object.entries(toolPerms)
               .filter(([connector]) => ALWAYS_SHOW_CONNECTORS.has(connector) || connectedProviders.has(connector))
@@ -730,7 +737,8 @@ export function SecuritySettings() {
               );
             })}
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
