@@ -117,8 +117,8 @@ class RealMCPServerManager:
             #     "description": "Azure MCP Server"
             # },
             "github": {
-                "command": ["docker", "run", "-i", "--rm"],
-                "description": "GitHub Official MCP Server (Docker)"
+                "command": ["github-mcp-server", "stdio"],
+                "description": "GitHub Official MCP Server"
             },
             "context7": {
                 "command": ["npx", "-y", "@upstash/context7-mcp"],
@@ -222,10 +222,8 @@ class RealMCPServerManager:
                 python_cmd = shutil.which("python") or "/usr/local/bin/python"
                 cmd = [python_cmd, "-m", "awslabs.aws_api_mcp_server.server"]
             elif server_type == "github":
-                # Official GitHub MCP Server via Docker
-                # Command is built dynamically below to include the token
-                docker_cmd = shutil.which("docker") or "/usr/bin/docker"
-                # Get GitHub token from credentials
+                # Official GitHub MCP Server - native binary baked into the image
+                github_binary = shutil.which("github-mcp-server") or "/usr/local/bin/github-mcp-server"
                 github_token = ""
                 if user_credentials and "github" in user_credentials:
                     github_token = str(user_credentials["github"].get("access_token", ""))
@@ -234,16 +232,8 @@ class RealMCPServerManager:
                     logging.error(" GitHub token is required for GitHub MCP server")
                     return None
                 
-                # Build Docker command with token passed via -e flag
-                # Using GITHUB_TOOLSETS=all to enable all 60+ tools
-                cmd = [
-                    docker_cmd, "run", "-i", "--rm",
-                    "-e", f"GITHUB_PERSONAL_ACCESS_TOKEN={github_token}",
-                    "-e", "GITHUB_TOOLSETS=all",
-                    "ghcr.io/github/github-mcp-server"
-                ]
-                
-                logging.info(f" GitHub MCP server command prepared (Docker with all toolsets)")
+                cmd = [github_binary, "stdio"]
+                logging.info(f" GitHub MCP server command prepared (native binary, all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
@@ -302,11 +292,11 @@ output = json
                     env["AWS_SHARED_CREDENTIALS_FILE"] = credentials_file
                     env["AWS_CONFIG_FILE"] = config_file
                     
-                # GitHub credentials are passed via Docker -e flag in the command itself
-                # (handled above when building the docker command)
+                # GitHub credentials passed as env vars to the native binary
                 elif server_type == "github":
-                    # Token already passed in Docker command args, nothing to add to env
-                    pass
+                    if "github" in user_credentials:
+                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = str(user_credentials["github"].get("access_token", ""))
+                        env["GITHUB_TOOLSETS"] = "all"
 
             
             # Offload the blocking Popen spawn to a worker thread so we don't
@@ -326,8 +316,7 @@ output = json
             )
 
             # Give the process a moment to start
-            # Docker containers need more time, especially on first run (image pull)
-            startup_wait = 2.0 if server_type == "github" else 0.5
+            startup_wait = 0.5
             await asyncio.sleep(startup_wait)
             
             # Check if process started successfully

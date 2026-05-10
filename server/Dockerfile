@@ -1,4 +1,15 @@
 # ============================================
+# Build GitHub MCP Server from source (pinned)
+# ============================================
+FROM golang:1.23-bookworm AS github-mcp-build
+
+ARG GITHUB_MCP_VERSION=v0.2.0
+RUN git clone --depth 1 --branch ${GITHUB_MCP_VERSION} \
+        https://github.com/github/github-mcp-server.git /src
+WORKDIR /src
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /github-mcp-server ./cmd/github-mcp-server
+
+# ============================================
 # Base Stage - Common dependencies
 # ============================================
 FROM python:3.12-slim AS base
@@ -199,6 +210,9 @@ RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy GitHub MCP Server binary from build stage
+COPY --from=github-mcp-build /github-mcp-server /usr/local/bin/github-mcp-server
 
 # Install kubectl for orchestrator to manage terminal pods
 RUN ARCH=$(uname -m) && \
