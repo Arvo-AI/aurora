@@ -1,9 +1,9 @@
 # ============================================
 # Build GitHub MCP Server from source (pinned)
 # ============================================
-FROM golang:1.23-bookworm AS github-mcp-build
+FROM golang:1.25-bookworm AS github-mcp-build
 
-ARG GITHUB_MCP_VERSION=v0.2.0
+ARG GITHUB_MCP_VERSION=v1.0.3
 RUN git clone --depth 1 --branch ${GITHUB_MCP_VERSION} \
         https://github.com/github/github-mcp-server.git /src
 WORKDIR /src
