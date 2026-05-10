@@ -81,8 +81,7 @@ def _validate_path_component(value: str, name: str) -> None:
 
 def get_terraform_directory(user_id: Optional[str] = None, session_id: Optional[str] = None):
     """Get the directory for Terraform files, optionally user-specific and session-specific."""
-    # Base terraform directory (use /home/appuser for terminal pods with read-only root filesystem)
-    base_terraform_dir = Path("/home/appuser/terraform_workdir")
+    base_terraform_dir = Path("/app/terraform_workdir")
 
     # Build user-scoped path for isolation
     if user_id:
