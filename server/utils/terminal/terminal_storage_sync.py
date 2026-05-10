@@ -38,8 +38,9 @@ def restore_terraform_files_from_storage(
             f"Restoring {len(file_infos)} terraform files from storage to pod {pod_name}"
         )
 
+        # Path targets terminal pods where /home/appuser is the writable emptyDir mount
         terraform_dir = (
-            f"/app/terraform_workdir/user_{user_id}/session_{session_id}"
+            f"/home/appuser/terraform_workdir/user_{user_id}/session_{session_id}"
         )
 
         mkdir_cmd = ["/bin/sh", "-c", f"mkdir -p {terraform_dir}"]
