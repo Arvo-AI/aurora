@@ -38,7 +38,8 @@ def restore_terraform_files_from_storage(
             f"Restoring {len(file_infos)} terraform files from storage to pod {pod_name}"
         )
 
-        # Path targets terminal pods where /home/appuser is the writable emptyDir mount
+        # Build correct terraform directory path (matches iac_write_tool.py)
+        # User IDs are now plain UUIDs without prefixes (Auth.js migration)
         terraform_dir = (
             f"/home/appuser/terraform_workdir/user_{user_id}/session_{session_id}"
         )
