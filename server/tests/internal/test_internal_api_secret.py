@@ -155,7 +155,7 @@ class TestInternalSecretGate:
 
         response = _last_json(writer)
         assert response.get("error") == "Unauthorized", (
-            "Empty X-Internal-Secret must be rejected. Got: {response!r}"
+            f"Empty X-Internal-Secret must be rejected. Got: {response!r}"
         )
 
     def test_case_sensitive_secret_comparison(self, _set_env_secret):
