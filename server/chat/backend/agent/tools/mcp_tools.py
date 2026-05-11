@@ -763,8 +763,38 @@ output = json
             elif server_type == "github":
                 github_creds = credentials.get("github", {})
                 token = github_creds.get("access_token", "")
+                # App-mode users have no OAuth access_token in user_tokens.
+                # Fall back to minting an installation token via the auth
+                # router — GitHub's MCP server accepts an installation
+                # token in GITHUB_PERSONAL_ACCESS_TOKEN since both use the
+                # same `Authorization: token <value>` header convention.
+                # Tokens last 1h which is well above the MCP server's
+                # warm-keep window for a single agent turn.
+                if not token and user_id:
+                    try:
+                        from utils.auth.github_auth_router import (
+                            NoGitHubAuthError,
+                            get_any_auth_for_user,
+                        )
+                        auth = get_any_auth_for_user(user_id)
+                        token = auth.token
+                        logging.info(
+                            " GitHub MCP credentials: using App installation token "
+                            "(installation_id=%s) — no OAuth token in user_tokens",
+                            auth.installation_id,
+                        )
+                    except NoGitHubAuthError:
+                        logging.warning(
+                            " No GitHub OAuth token AND no App installation for user %s",
+                            user_id,
+                        )
+                    except Exception as exc:
+                        logging.warning(
+                            " Failed to mint App installation token for user %s: %s",
+                            user_id, exc,
+                        )
                 if token:
-                    logging.info(f" Found GitHub token for MCP server (length: {len(token)})")
+                    logging.info(f" GitHub MCP token resolved (length: {len(token)})")
                 else:
                     logging.warning(" No GitHub token found in credentials")
                 return {
