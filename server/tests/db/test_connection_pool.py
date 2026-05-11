@@ -282,12 +282,6 @@ class TestRLSContextAdversarial:
         """Any user_id for which org resolution returns None must result in
         zero SET executions and no commit — never a half-stamped connection.
         """
-        import sys
-        import os as _os
-        _server_dir = _os.path.join(_os.path.dirname(__file__), _os.pardir, _os.pardir)
-        if _os.path.abspath(_server_dir) not in sys.path:
-            sys.path.insert(0, _os.path.abspath(_server_dir))
-
         from utils.auth import stateless_auth as sa_module
         from utils.auth.stateless_auth import set_rls_context
 
@@ -314,12 +308,6 @@ class TestRLSContextAdversarial:
         connection.  The fixture confirms SET is called with the *resolved*
         org, not any caller-supplied one.
         """
-        import sys
-        import os as _os
-        _server_dir = _os.path.join(_os.path.dirname(__file__), _os.pardir, _os.pardir)
-        if _os.path.abspath(_server_dir) not in sys.path:
-            sys.path.insert(0, _os.path.abspath(_server_dir))
-
         from utils.auth import stateless_auth as sa_module
         from utils.auth.stateless_auth import set_rls_context
 
