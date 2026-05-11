@@ -1363,7 +1363,8 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                msg_content = _extract_text_from_content(msg.content or "", include_thinking=False)
+                # include_thinking=True so reasoning is preserved in the saved message
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1545,7 +1546,7 @@ class Workflow:
                     or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
                 )
                 if not content and has_tool_calls:
-                    content = _extract_text_from_content(raw_content, include_thinking=False)
+                    content = _extract_text_from_content(raw_content, include_thinking=True)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)
