@@ -1076,14 +1076,14 @@ class Workflow:
                         content = ""
                         reasoning = ""
 
-                        # Check for reasoning content first (OpenRouter, DeepSeek-R1 etc.)
+                        # Check for reasoning content (OpenRouter, DeepSeek-R1 etc.)
                         if hasattr(chunk_obj, 'additional_kwargs'):
                             reasoning = chunk_obj.additional_kwargs.get("reasoning_content", "")
 
-                        # Only extract content if this is NOT a reasoning-only chunk.
-                        # Some providers (Google via OpenRouter) may duplicate reasoning
-                        # into delta.content; skip it when reasoning was detected.
-                        if not reasoning and hasattr(chunk_obj, 'content') and chunk_obj.content:
+                        # Extract visible content. _ReasoningChatOpenAI clears
+                        # chunk_obj.content for reasoning-only chunks upstream, so
+                        # this is safe to call unconditionally.
+                        if hasattr(chunk_obj, 'content') and chunk_obj.content:
                             content = _extract_text_from_content(chunk_obj.content, include_thinking=False)
 
                         # For background RCA chats, reasoning feeds into incident thoughts

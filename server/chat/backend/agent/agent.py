@@ -21,6 +21,29 @@ import asyncio
 _DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
 
 
+def _extract_reasoning_from_delta(delta: dict) -> tuple:
+    """Extract reasoning text from an OpenRouter streaming delta.
+
+    Returns (reasoning_text, has_reasoning_details) where has_reasoning_details
+    indicates the delta carried a reasoning_details array regardless of whether
+    any text was extractable.
+    """
+    reasoning = delta.get("reasoning") or ""
+    reasoning_details = delta.get("reasoning_details")
+    has_reasoning_details = bool(reasoning_details) and isinstance(reasoning_details, list)
+
+    if has_reasoning_details:
+        parts = [
+            detail.get("text", "")
+            for detail in reasoning_details
+            if isinstance(detail, dict) and detail.get("text")
+        ]
+        if parts:
+            reasoning = (reasoning + "".join(parts)) if reasoning else "".join(parts)
+
+    return reasoning, has_reasoning_details
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass that captures OpenRouter reasoning fields.
 
@@ -41,27 +64,18 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         if result is None:
             return None
         choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
-        if choices:
-            delta = choices[0].get("delta") or {}
+        if not choices:
+            return result
 
-            reasoning = delta.get("reasoning") or ""
+        delta = choices[0].get("delta") or {}
+        reasoning, has_reasoning_details = _extract_reasoning_from_delta(delta)
 
-            reasoning_details = delta.get("reasoning_details")
-            if reasoning_details and isinstance(reasoning_details, list):
-                parts = []
-                for detail in reasoning_details:
-                    if isinstance(detail, dict):
-                        text = detail.get("text", "")
-                        if text:
-                            parts.append(text)
-                if parts:
-                    reasoning = (reasoning + "".join(parts)) if reasoning else "".join(parts)
+        if reasoning and hasattr(result.message, "additional_kwargs"):
+            result.message.additional_kwargs["reasoning_content"] = reasoning
 
-            if reasoning and hasattr(result.message, "additional_kwargs"):
-                result.message.additional_kwargs["reasoning_content"] = reasoning
-                # Clear content so reasoning-only chunks don't appear as output
-                if not delta.get("content"):
-                    result.message.content = ""
+        if (reasoning or has_reasoning_details) and not delta.get("content"):
+            result.message.content = ""
+
         return result
 
 class Agent:
