@@ -76,7 +76,11 @@ class ForceToolChoice(AgentMiddleware):
     def _patch(self, request: ModelRequest) -> ModelRequest:
         if not self._fired:
             self._fired = True
-            request.tool_choice = self._tool_choice(request)
+            tool_choice = self._tool_choice(request)
+            override = getattr(request, "override", None)
+            if callable(override):
+                return override(tool_choice=tool_choice)
+            request.tool_choice = tool_choice
         return request
 
     def wrap_model_call(self, request, call_next):

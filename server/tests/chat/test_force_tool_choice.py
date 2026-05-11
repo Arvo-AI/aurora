@@ -117,3 +117,19 @@ def test_forces_only_first_model_call(force_tool_module):
 
     assert first.tool_choice == {"type": "tool", "name": "trigger_rca"}
     assert second.tool_choice is None
+
+
+def test_uses_model_request_override_when_available(force_tool_module):
+    class Request(SimpleNamespace):
+        def override(self, **kwargs):
+            return Request(**{**self.__dict__, **kwargs})
+
+    request = Request(model=None, tool_choice=None)
+
+    patched = force_tool_module.ForceToolChoice("trigger_rca", provider="google")._patch(
+        request
+    )
+
+    assert patched is not request
+    assert patched.tool_choice == "trigger_rca"
+    assert request.tool_choice is None
