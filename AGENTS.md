@@ -151,3 +151,29 @@ PostgreSQL tables use `FORCE ROW LEVEL SECURITY`. All queries on RLS-protected t
 - **Cross-org tasks** (iterating all users): Query the `users` table first (NOT RLS-protected), then iterate per-org setting RLS context before querying RLS tables.
 - **RLS-protected tables**: incidents, chat_sessions, user_tokens, user_connections, postmortems, llm_usage_tracking, incident_alerts, incident_lifecycle_events, github_connected_repos, execution_steps, and all monitoring event tables (datadog_events, grafana_alerts, etc.)
 - **NOT RLS-protected**: users, incident_thoughts, incident_suggestions (CASCADE delete from incidents)
+
+## Cursor Cloud specific instructions
+
+### Docker requirement
+This project runs entirely in Docker Compose. Docker must be installed and running before any `make` commands work. In Cloud Agent VMs, Docker requires `fuse-overlayfs` storage driver and `iptables-legacy` due to kernel constraints. The daemon is started with `sudo dockerd`.
+
+### Starting the dev environment
+1. Ensure Docker daemon is running (`sudo dockerd &>/tmp/dockerd.log &` then `sudo chmod 666 /var/run/docker.sock`)
+2. `make init` (only needed once - creates `.env` from `.env.example` and generates secrets)
+3. Add LLM API keys to `.env` (at minimum `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`)
+4. `make dev` (builds all images and starts the stack; first run takes ~5-8 minutes for image pulls/builds)
+5. After first `make dev`, get Vault token: `docker logs aurora-vault-init 2>&1 | grep "Root Token:"` and set `VAULT_TOKEN=<token>` in `.env`
+6. Restart services to pick up the vault token: `docker compose restart aurora-server celery_worker celery_beat chatbot aurora-mcp`
+
+### Running tests
+- **Backend tests**: `docker exec aurora-server sh -c 'cd /app && python -m pytest tests/ -v'` (771 tests, ~8s)
+- **Frontend lint**: Has a pre-existing `minimatch` v10 / `@eslint/eslintrc` compatibility issue; `next lint` fails with "module does not have an export named 'default'" in both the container and on the host. This is a known upstream dep resolution issue.
+- **Frontend build** (`next build`): Fails in the container with a pre-existing `<Html>` import error on the 404 page. Dev mode works fine.
+
+### Key ports
+Frontend :3000, Backend API :5080, Chatbot WS :5006, Vault :8200, Postgres :5432, Redis :6379, Weaviate :8080, SeaweedFS S3 :8333, Memgraph :7687, MCP :8811
+
+### Gotchas
+- The frontend Docker Compose config mounts `./client:/app` with anonymous volumes for `node_modules` and `.next`. Deleting `node_modules` on the host while the container is running will crash it. Restart with `docker compose up -d frontend` if this happens.
+- The `make dev` command is `docker compose up --build -d` - it rebuilds images each time. For faster restart after code changes use `docker compose restart <service>` or `make rebuild-server`.
+- Health endpoint: `curl $NEXT_PUBLIC_BACKEND_URL/health/` (port 5080 by default) returns JSON with status of all subsystems.
