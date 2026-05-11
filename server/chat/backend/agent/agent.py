@@ -528,6 +528,8 @@ class Agent:
                         openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
                         logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
                 elif detected_provider == "google":
+                    # OpenRouter path only. Direct Google SDK uses structured
+                    # thinking blocks filtered by include_thinking=False downstream.
                     reasoning_cfg = {"effort": "high"}
                     if not is_background:
                         reasoning_cfg["exclude"] = True

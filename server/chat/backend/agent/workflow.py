@@ -1363,8 +1363,7 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                # include_thinking=True so reasoning is preserved in the saved message
-                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=False)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1535,18 +1534,14 @@ class Workflow:
                 # Skip synthetic RCA summary injected by _compress_rca_context
                 if isinstance(raw_content, str) and raw_content.startswith(RCA_SUMMARY_PREFIX):
                     continue
-                # Extract text content (handles Gemini thinking model list format).
-                # Include thinking when text is empty and message has tool calls,
-                # so Gemini's reasoning appears in chat alongside tool cards.
-                # (Claude generates inline text with tool calls; Gemini puts reasoning
-                # in thinking blocks only, leaving text empty.)
+                # Extract text content (handles Gemini thinking model list format)
                 content = _extract_text_from_content(raw_content)
                 has_tool_calls = (
                     getattr(msg, 'tool_calls', [])
                     or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
                 )
                 if not content and has_tool_calls:
-                    content = _extract_text_from_content(raw_content, include_thinking=True)
+                    content = _extract_text_from_content(raw_content, include_thinking=False)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)
