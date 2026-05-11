@@ -1074,17 +1074,24 @@ class Workflow:
                     chunk_obj = chunk_data.get("chunk")
                     if chunk_obj:
                         content = ""
-                        if hasattr(chunk_obj, 'content') and chunk_obj.content:
-                            # Extract text content (handles Gemini thinking model list format)
-                            # include_thinking=True so reasoning flows to save_incident_thought() for RCA
-                            content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+                        reasoning = ""
 
-                        # Check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
-                        # regardless of whether content was found above
-                        if not content and hasattr(chunk_obj, 'additional_kwargs'):
-                            content = chunk_obj.additional_kwargs.get("reasoning_content", "")
+                        # Check for reasoning content first (OpenRouter, DeepSeek-R1 etc.)
+                        if hasattr(chunk_obj, 'additional_kwargs'):
+                            reasoning = chunk_obj.additional_kwargs.get("reasoning_content", "")
 
-                        # Only yield if we have actual text content
+                        # Only extract content if this is NOT a reasoning-only chunk.
+                        # Some providers (Google via OpenRouter) may duplicate reasoning
+                        # into delta.content; skip it when reasoning was detected.
+                        if not reasoning and hasattr(chunk_obj, 'content') and chunk_obj.content:
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=False)
+
+                        # For background RCA chats, reasoning feeds into incident thoughts
+                        is_background = getattr(input_state, "is_background", False)
+                        if not content and reasoning and is_background:
+                            content = reasoning
+
+                        # Only yield if we have actual text content (not reasoning)
                         if content:
                             chunk_id = getattr(chunk_obj, 'id', None)
                             if chunk_id:
@@ -1133,10 +1140,13 @@ class Workflow:
                         # when tools are bound in LangGraph (langgraph#4877).
                         if _model_turn_tokens == 0:
                             content = ""
+                            is_background = getattr(input_state, "is_background", False)
                             if hasattr(output, 'content') and output.content:
-                                content = _extract_text_from_content(output.content, include_thinking=True)
+                                content = _extract_text_from_content(output.content, include_thinking=is_background)
                             if not content and hasattr(output, 'additional_kwargs'):
-                                content = output.additional_kwargs.get("reasoning_content", "")
+                                reasoning = output.additional_kwargs.get("reasoning_content", "")
+                                if reasoning and is_background:
+                                    content = reasoning
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
                                 msg_id = getattr(output, 'id', None)

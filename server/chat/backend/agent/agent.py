@@ -24,10 +24,16 @@ _DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass that captures OpenRouter reasoning fields.
 
-    OpenRouter returns reasoning content in delta.reasoning / delta.reasoning_details,
-    but LangChain's _convert_delta_to_message_chunk ignores these fields. This subclass
-    captures them and puts reasoning into additional_kwargs["reasoning_content"] so that
-    workflow.py's streaming code can forward it to the ThoughtsPanel.
+    OpenRouter returns reasoning content in delta.reasoning and/or
+    delta.reasoning_details, but LangChain's _convert_delta_to_message_chunk
+    ignores these fields. This subclass captures them into
+    additional_kwargs["reasoning_content"] so workflow.py can separate reasoning
+    from user-visible output.
+
+    For Google models via OpenRouter, reasoning arrives in reasoning_details
+    (array of objects with .text) rather than the plain reasoning string field.
+    When reasoning_details is present, the chunk's content should be treated as
+    reasoning — not streamed to the user as normal output.
     """
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
@@ -37,9 +43,25 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
         if choices:
             delta = choices[0].get("delta") or {}
-            reasoning = delta.get("reasoning")
+
+            reasoning = delta.get("reasoning") or ""
+
+            reasoning_details = delta.get("reasoning_details")
+            if reasoning_details and isinstance(reasoning_details, list):
+                parts = []
+                for detail in reasoning_details:
+                    if isinstance(detail, dict):
+                        text = detail.get("text", "")
+                        if text:
+                            parts.append(text)
+                if parts:
+                    reasoning = (reasoning + "".join(parts)) if reasoning else "".join(parts)
+
             if reasoning and hasattr(result.message, "additional_kwargs"):
                 result.message.additional_kwargs["reasoning_content"] = reasoning
+                # Clear content so reasoning-only chunks don't appear as output
+                if not delta.get("content"):
+                    result.message.content = ""
         return result
 
 class Agent:
@@ -484,6 +506,7 @@ class Agent:
 
                 # Enable reasoning via OpenRouter's unified reasoning param
                 openrouter_model_kwargs = {}
+                is_background = getattr(state, "is_background", False)
                 if detected_provider == "openai":
                     from chat.backend.agent.providers.openai_provider import OpenAIProvider
                     native = model_name.split("/", 1)[-1] if "/" in model_name else model_name
@@ -491,8 +514,11 @@ class Agent:
                         openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
                         logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
                 elif detected_provider == "google":
-                    openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
-                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
+                    reasoning_cfg = {"effort": "high"}
+                    if not is_background:
+                        reasoning_cfg["exclude"] = True
+                    openrouter_model_kwargs["extra_body"] = {"reasoning": reasoning_cfg}
+                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter (exclude={not is_background})")
 
                 streaming_llm = _ReasoningChatOpenAI(
                     model=openrouter_model_name,
