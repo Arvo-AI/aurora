@@ -735,8 +735,13 @@ output = json
             # Get user credentials from Aurora's database
             credentials = get_user_cloud_credentials(user_id)
             if not credentials:
-                logging.warning(f" No credentials found for user {user_id}")
-                return {}
+                # App-mode github users have no entries in user_tokens.
+                # Don't bail here — the github branch below will mint an
+                # installation token from the App. Bail only for non-github.
+                if server_type != "github":
+                    logging.warning(f" No credentials found for user {user_id}")
+                    return {}
+                credentials = {}
             
             # Map credentials to environment variables for each server type
             if server_type == "aws":
