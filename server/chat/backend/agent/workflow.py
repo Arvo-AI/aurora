@@ -1083,11 +1083,11 @@ class Workflow:
                         # Extract visible content. _ReasoningChatOpenAI clears
                         # chunk_obj.content for reasoning-only chunks upstream, so
                         # this is safe to call unconditionally.
+                        is_background = getattr(input_state, "is_background", False)
                         if hasattr(chunk_obj, 'content') and chunk_obj.content:
-                            content = _extract_text_from_content(chunk_obj.content, include_thinking=False)
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=is_background)
 
                         # For background RCA chats, reasoning feeds into incident thoughts
-                        is_background = getattr(input_state, "is_background", False)
                         if not content and reasoning and is_background:
                             content = reasoning
 
