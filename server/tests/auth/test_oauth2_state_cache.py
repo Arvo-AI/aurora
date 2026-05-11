@@ -3,12 +3,16 @@
 Pins atomic single-use retrieval (replay protection) and the no-silent-
 in-memory-fallback rule -- both regressions would compromise the
 authorize/callback handshake for all OAuth2 integrations at once.
+Also pins adversarial replay, cross-user CSRF substitution, and concurrent
+race conditions on the single-use guarantee (TestStateReplayAndCSRF).
 """
 
 import importlib
 import json
 import os
 import sys
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -75,6 +79,27 @@ def _setex_payload(fake_redis):
     return json.loads(raw)
 
 
+def _in_memory_redis(fake_redis):
+    """Wire ``fake_redis`` to behave like a minimal in-process Redis store.
+
+    Returns the backing dict so tests can inspect or mutate it directly.
+    """
+    backing = {}
+    lock = threading.Lock()
+
+    def _setex(key, _ttl, value):
+        with lock:
+            backing[key] = value
+
+    def _getdel(key):
+        with lock:
+            return backing.pop(key, None)
+
+    fake_redis.setex.side_effect = _setex
+    fake_redis.getdel.side_effect = _getdel
+    return backing
+
+
 # ---------------------------------------------------------------------------
 # store_oauth2_state
 # ---------------------------------------------------------------------------
@@ -91,11 +116,16 @@ class TestStoreOauth2State:
         assert key == "oauth2:state:abc123"
 
     def test_writes_with_30_minute_ttl(self, fake_redis):
-        """30-minute TTL is the documented security boundary."""
+        """30-minute TTL is the documented security boundary.
+
+        Also pins the type: a float or timedelta that Redis silently rounds to
+        0 would make every token immediately stale without surfacing an error.
+        """
         store_oauth2_state(state="abc123", user_id="u-1", endpoint="ovh-eu")
 
         _, ttl_seconds, _ = fake_redis.setex.call_args.args
         assert ttl_seconds == 1800
+        assert isinstance(ttl_seconds, int)
 
     def test_payload_includes_user_id_endpoint_and_timestamp(self, fake_redis):
         store_oauth2_state(state="abc123", user_id="u-1", endpoint="ovh-eu")
@@ -318,3 +348,121 @@ class TestClearOauth2States:
         clear_oauth2_states()
 
         fake_redis.delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Replay, cross-user CSRF, and TTL adversarial cases
+# ---------------------------------------------------------------------------
+
+
+class TestStateReplayAndCSRF:
+    """State tokens must be single-use, owner-bound, and indistinguishable once consumed."""
+
+    def test_concurrent_retrieve_exactly_one_wins(self, fake_redis):
+        """Under concurrent load only one caller must receive the token payload."""
+        _in_memory_redis(fake_redis)
+
+        store_oauth2_state(state="tok-race", user_id="u-1", endpoint="ovh-eu")
+
+        results = []
+        barrier = threading.Barrier(10)
+
+        def _retrieve():
+            barrier.wait()
+            results.append(retrieve_oauth2_state("tok-race"))
+
+        threads = [threading.Thread(target=_retrieve) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        non_none = [r for r in results if r is not None]
+        assert len(non_none) == 1, (
+            f"Expected exactly 1 winner in concurrent GETDEL race, got {len(non_none)}"
+        )
+
+    def test_cross_user_payload_reflects_stored_owner(self, fake_redis):
+        """A state token issued for user A cannot be silently re-attributed to user B.
+
+        The cache module stores user_id faithfully and returns it verbatim;
+        it is the route layer's responsibility to compare result["user_id"]
+        against the authenticated caller.  This test pins that the returned
+        payload can never claim a different owner than the one who created it.
+        """
+        _in_memory_redis(fake_redis)
+
+        store_oauth2_state(state="tok-csrf", user_id="user-A", endpoint="ovh-eu")
+
+        result = retrieve_oauth2_state("tok-csrf")
+
+        assert result is not None
+        assert result["user_id"] == "user-A"
+        assert result["user_id"] != "user-B"
+
+    def test_state_for_user_a_is_not_retrievable_after_consumed_by_attacker(
+        self, fake_redis
+    ):
+        """Once the token is consumed -- by anyone -- it is gone for everyone."""
+        _in_memory_redis(fake_redis)
+
+        store_oauth2_state(state="tok-gone", user_id="user-A", endpoint="ovh-eu")
+
+        attacker_result = retrieve_oauth2_state("tok-gone")
+        legitimate_result = retrieve_oauth2_state("tok-gone")
+
+        assert attacker_result is not None
+        assert legitimate_result is None
+
+    def test_unknown_state_is_indistinguishable_from_consumed(self, fake_redis):
+        """A state token that was never stored returns None — same as an expired
+        or already-consumed one. The caller can never tell the difference, which
+        is the intended security property: there is no oracle for token existence.
+        """
+        fake_redis.getdel.return_value = None
+
+        result = retrieve_oauth2_state("tok-never-existed")
+
+        assert result is None
+
+    def test_expired_state_returns_none(self, fake_redis):
+        """After TTL expiry Redis evicts the key; retrieval must return None."""
+        backing = {}
+
+        def _setex(key, ttl, value):
+            backing[key] = (value, time.monotonic() + ttl)
+
+        def _getdel(key):
+            entry = backing.pop(key, None)
+            if entry is None:
+                return None
+            value, expires_at = entry
+            if time.monotonic() > expires_at:
+                return None
+            return value
+
+        fake_redis.setex.side_effect = _setex
+        fake_redis.getdel.side_effect = _getdel
+
+        store_oauth2_state(state="tok-expired", user_id="u-1", endpoint="ovh-eu")
+
+        expired_key = "oauth2:state:tok-expired"
+        if expired_key in backing:
+            value, _ = backing[expired_key]
+            backing[expired_key] = (value, time.monotonic() - 1)
+
+        result = retrieve_oauth2_state("tok-expired")
+        assert result is None
+
+    def test_multiple_distinct_tokens_are_independent(self, fake_redis):
+        """Consuming token A must not invalidate token B stored for the same user."""
+        _in_memory_redis(fake_redis)
+
+        store_oauth2_state(state="tok-alpha", user_id="u-1", endpoint="ovh-eu")
+        store_oauth2_state(state="tok-beta", user_id="u-1", endpoint="ovh-eu")
+
+        result_alpha = retrieve_oauth2_state("tok-alpha")
+        result_beta = retrieve_oauth2_state("tok-beta")
+
+        assert result_alpha is not None
+        assert result_beta is not None
