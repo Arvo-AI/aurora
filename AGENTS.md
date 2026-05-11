@@ -151,3 +151,30 @@ PostgreSQL tables use `FORCE ROW LEVEL SECURITY`. All queries on RLS-protected t
 - **Cross-org tasks** (iterating all users): Query the `users` table first (NOT RLS-protected), then iterate per-org setting RLS context before querying RLS tables.
 - **RLS-protected tables**: incidents, chat_sessions, user_tokens, user_connections, postmortems, llm_usage_tracking, incident_alerts, incident_lifecycle_events, github_connected_repos, execution_steps, and all monitoring event tables (datadog_events, grafana_alerts, etc.)
 - **NOT RLS-protected**: users, incident_thoughts, incident_suggestions (CASCADE delete from incidents)
+
+## Cursor Cloud specific instructions
+
+### Environment prerequisites
+- Docker and Docker Compose must be installed and the Docker daemon must be running before any `make` commands. The VM update script handles Docker installation.
+- After Docker starts, run `sudo chmod 666 /var/run/docker.sock` if you get permission errors.
+
+### Starting the dev environment
+1. Run `make init` if `.env` does not exist (idempotent, safe to re-run).
+2. Ensure at least one LLM API key is set in `.env` (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`). These are injected as environment variables from Cursor secrets.
+3. Run `make dev` to build and start all containers. First build takes several minutes due to large Docker images (server image includes gcloud SDK, AWS CLI, Azure CLI, Terraform, etc.).
+4. After first start, get the Vault root token from `docker logs aurora-vault-init 2>&1 | grep "Root Token:"` and set `VAULT_TOKEN` in `.env`, then `make down && make dev`.
+
+### Running tests
+- **Python CI tests** (no Docker required): `cd server && python3 -m pytest tests/architectural/ tests/auth/test_command_policy.py tests/auth/test_enforcer.py tests/auth/test_rbac_decorators.py tests/auth/test_stateless_auth.py tests/chat/test_tool_output_cap.py tests/db/test_connection_pool.py tests/secrets/test_secret_ref_utils.py tests/utils/ tests/security/ -v`. Requires: `pip install pytest Flask psycopg2-binary python-dotenv pyyaml pydantic langchain-core`.
+- **Note**: `tests/auth/test_oauth2_state_cache.py` requires Redis on the Docker network hostname `redis:6379` and will fail when run from the host.
+
+### Frontend lint known issue
+- `cd client && npm run lint` (or `bun run lint`) fails with `minimatch` default-export error due to `"minimatch": "^10.2.1"` override in `client/package.json` conflicting with `@eslint/eslintrc`. This is a pre-existing issue. CI does not enforce frontend ESLint. Use `bun run build` to validate frontend correctness instead.
+
+### Useful service ports (when running)
+- Frontend: port 3000
+- Backend API: port 5080 (health endpoint: `/health/`)
+- Chatbot WebSocket: port 5006
+- Vault UI: port 8200
+- SeaweedFS file browser: port 8888
+- Memgraph Lab: port 3001
