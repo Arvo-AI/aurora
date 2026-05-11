@@ -43,7 +43,7 @@ def get_connected_repos(**kwargs) -> str:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[GithubRepos:list]")
                 cur.execute(
-                    """SELECT repo_full_name, default_branch, is_private, metadata_summary, metadata_status
+                    """SELECT repo_full_name, default_branch, is_private
                        FROM github_connected_repos
                        WHERE user_id = %s
                        ORDER BY repo_full_name""",
@@ -64,7 +64,6 @@ def get_connected_repos(**kwargs) -> str:
                 "repo": r[0],
                 "branch": r[1] or "main",
                 "private": r[2],
-                "description": r[3] or ("(description generating...)" if r[4] != 'ready' else "(no description)"),
             }
             for r in rows
         ]
