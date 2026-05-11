@@ -126,9 +126,10 @@ class TestCrossTenantIncidentAccess:
     simply returns zero rows from the mock — which the route turns into a 404.
     """
 
-    def test_org_b_incident_uuid_in_url_returns_404(self, client, monkeypatch):
-        """Org-A user requests org-B's incident UUID → 404, never 200."""
-        # Cursor returns None: simulates RLS / org_id filter returning no rows.
+    def test_route_returns_404_when_cursor_returns_none(self, client, monkeypatch):
+        """Route returns 404 when the cursor returns no row — simulates the
+        org_id filter excluding the cross-tenant UUID."""
+        # Cursor returns None: simulates the org_id WHERE clause returning no rows.
         cursor = _make_cursor_returning(None)
         _patch_auth_and_pool(monkeypatch, cursor=cursor)
 
@@ -138,7 +139,7 @@ class TestCrossTenantIncidentAccess:
         )
 
         assert resp.status_code == 404, (
-            "An incident UUID belonging to org-B must return 404, not 200. "
+            "Route must return 404 when the org-filtered query returns no row. "
             f"Got {resp.status_code}: {resp.get_data(as_text=True)!r}"
         )
 

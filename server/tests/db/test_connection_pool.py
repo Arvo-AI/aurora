@@ -376,45 +376,6 @@ class TestRLSContextAdversarial:
         assert _RESET_SQL in _executed_sql(cursor)
         factory.return_value.putconn.assert_called_once_with(connection)
 
-    def test_rls_protected_query_without_context_returns_no_rows(self):
-        """When code queries an RLS-protected table on a connection that had
-        no myapp.current_org_id SET, the mock cursor returns no rows.  This
-        pins the expectation that the query path is gated — if it isn't, the
-        caller would silently process an empty result set as if nothing exists,
-        which is the correct safe failure mode (no data leakage).
-        """
-        cursor = MagicMock(name="cursor")
-        cursor.__enter__ = MagicMock(return_value=cursor)
-        cursor.__exit__ = MagicMock(return_value=False)
-        # Simulate zero rows — RLS-filtered empty result
-        cursor.fetchone.return_value = None
-        cursor.fetchall.return_value = []
-
-        conn = MagicMock(name="conn")
-        conn.cursor.return_value = cursor
-
-        # Execute a representative query against an RLS-protected table
-        # *without* calling set_rls_context first.
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM incidents WHERE user_id = %s", ("u-1",)
-            )
-            row = cur.fetchone()
-
-        assert row is None, (
-            "A query on an RLS-protected table without prior set_rls_context "
-            "must return no rows (mock simulates the DB's RLS filter)."
-        )
-
-        set_calls = [
-            c.args[0]
-            for c in cursor.execute.call_args_list
-            if c.args and "SET myapp." in c.args[0]
-        ]
-        assert not set_calls, (
-            "No SET myapp.* must have been issued — this path intentionally "
-            "skipped set_rls_context, confirming the gating assertion."
-        )
 
 
 class TestPostForkPoolRecreation:
