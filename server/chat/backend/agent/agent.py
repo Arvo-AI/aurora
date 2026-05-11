@@ -514,9 +514,13 @@ class Agent:
             middlewares = [ContextTrimMiddleware(model_name=model_name)]
             tool_choice_provider = detected_provider if _use_direct else "openrouter"
             if getattr(state, "trigger_action_id", None):
-                middlewares.insert(0, _ForceToolChoice("trigger_action", provider=tool_choice_provider))
+                middlewares.insert(
+                    0, _ForceToolChoice("trigger_action", provider=tool_choice_provider)
+                )
             elif getattr(state, "trigger_rca_requested", False):
-                middlewares.insert(0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider))
+                middlewares.insert(
+                    0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider)
+                )
 
             agent_graph = create_agent(
                 model=streaming_llm,
