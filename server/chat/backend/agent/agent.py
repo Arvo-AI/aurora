@@ -214,7 +214,7 @@ class Agent:
             else:
                 logging.info("Skipping storage file fetch: user_id or session_id missing")
         except Exception as e:
-            logging.error(f"Error fetching session files from storage: {e}")
+            logging.exception(f"Error fetching session files from storage: {e}")
 
     async def agentic_tool_flow(self, state: State) -> State:
         """Execute cloud tools using the agentic workflow with streaming callbacks."""
@@ -248,7 +248,7 @@ class Agent:
                         from chat.background.rca_prompt_builder import get_user_providers
                         provider_preference = get_user_providers(state.user_id)
                     except Exception as e:
-                        logging.error(f"Error getting connected providers: {e}")
+                        logging.exception(f"Error getting connected providers: {e}")
                         provider_preference = []
                     state.provider_preference = provider_preference
                 
@@ -746,9 +746,8 @@ class Agent:
                             if isinstance(content, list):
                                 text_parts = [p.get('text', '') if isinstance(p, dict) else str(p) for p in content]
                                 content = ' '.join(text_parts)
-                            if isinstance(content, str) and (
-                                content.startswith("[Tool Result:") or
-                                content.startswith("[CONVERSATION SUMMARY")
+                            if isinstance(content, str) and content.startswith(
+                                ("[Tool Result:", "[CONVERSATION SUMMARY")
                             ):
                                 continue
                             original_request = content
@@ -856,7 +855,7 @@ class Agent:
                                 raise
                                 
                 except Exception as e:
-                    logging.error(f"Agent execution failed after retries: {e}", exc_info=True)
+                    logging.exception(f"Agent execution failed after retries: {e}")
                     # Create error response message
                     error_msg = AIMessage(content=f"Error: {str(e)}\n\nTry a different approach.")
                     state.messages.append(error_msg)
@@ -904,9 +903,7 @@ class Agent:
                         # Don't let cleanup errors break the flow
             
         except Exception as e:
-            import traceback
-            logging.error(f"Error in agentic_tool_flow: {e}")
-            logging.error(f"Full traceback:\n{traceback.format_exc()}")
+            logging.exception(f"Error in agentic_tool_flow: {e}")
             
             # Still attempt cleanup on error
             try:

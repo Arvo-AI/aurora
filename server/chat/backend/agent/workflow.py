@@ -546,7 +546,7 @@ class Workflow:
                             logger.error(f"Cannot extract valid JSON from malformed args, using empty dict")
                             args = {}
                     except (json.JSONDecodeError, Exception) as e:
-                        logger.error(f"Failed to clean malformed args: {e}, using empty dict")
+                        logger.exception(f"Failed to clean malformed args: {e}, using empty dict")
                         args = {}
                 
                 elif args_stripped.startswith('{') and args_stripped.endswith('}'):
@@ -747,7 +747,7 @@ class Workflow:
                             "ui_messages": row[6],
                         }
         except Exception as e:
-            logger.error(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
+            logger.exception(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
         return None
 
     @staticmethod
@@ -1219,7 +1219,7 @@ class Workflow:
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
         except Exception as stream_exception:
-            logger.error(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}", exc_info=True)
+            logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
             raise
         
         # Consolidate message chunks and save final state
@@ -1721,7 +1721,7 @@ class Workflow:
                     return False
                     
         except Exception as e:
-            logger.error(f"Error saving UI messages: {e}")
+            logger.exception(f"Error saving UI messages: {e}")
             return False
 
     def _append_new_turn_ui_messages(
@@ -1806,7 +1806,7 @@ class Workflow:
 
         except Exception as e:
             # Broad catch: DB/persistence errors must not abort the workflow.
-            logger.error(f"Error appending UI messages: {e}")
+            logger.exception(f"Error appending UI messages: {e}")
             return False
 
     def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
@@ -1868,7 +1868,7 @@ class Workflow:
                     )
             return redacted
         except Exception as e:
-            logger.error(f"Output redaction (ui_message) failed open: {e}")
+            logger.exception(f"Output redaction (ui_message) failed open: {e}")
             return text
 
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
