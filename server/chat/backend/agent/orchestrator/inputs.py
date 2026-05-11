@@ -20,6 +20,12 @@ _HARD_CONSTRAINTS = [
 ]
 
 
+class ExtraConstraints(BaseModel):
+    focus: Optional[str] = None
+    boundary: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+
 class SubAgentInput(BaseModel):
     """All inputs a sub-agent needs to begin its investigation."""
 
@@ -28,7 +34,7 @@ class SubAgentInput(BaseModel):
     purpose: str
     time_window: Optional[str] = None
     evidence_refs: list[str] = []
-    extra_constraints: Optional[dict] = None
+    extra_constraints: Optional[ExtraConstraints] = None
 
     # strict — reject unknown keys from LLM output
     model_config = ConfigDict(extra="forbid")
@@ -111,7 +117,7 @@ def render_brief(
         lines.append(f"- {c}")
 
     if inp.extra_constraints:
-        for k, v in inp.extra_constraints.items():
+        for k, v in inp.extra_constraints.model_dump(exclude_none=True).items():
             lines.append(f"- {k}: {v}")
 
     # Render the agent_id/purpose pair through safe_dump so a purpose containing
