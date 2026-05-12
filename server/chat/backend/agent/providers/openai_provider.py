@@ -80,6 +80,7 @@ class OpenAIProvider(BaseLLMProvider):
                 f"Enabled reasoning=high+summary=auto + use_responses_api=True for {native_model}"
             )
 
+
         config.update(kwargs)
 
         return ChatOpenAI(**config)
