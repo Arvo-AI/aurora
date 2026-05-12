@@ -617,7 +617,7 @@ class TestRBACEscalationGuards:
             return jsonify(ok=True), 200
 
         with flask_app.test_request_context("/api/x"):
-            response, status = view()
+            _, status = view()
 
         assert status == 401
         assert "called" not in observed

@@ -37,9 +37,9 @@ def _exc_carrying_client_secret() -> Exception:
 
 
 def _evict_route_modules(*prefixes: str) -> None:
-    for mod in list(sys.modules):
-        if any(mod == p or mod.startswith(p + ".") for p in prefixes):
-            del sys.modules[mod]
+    to_delete = [mod for mod in sys.modules if any(mod == p or mod.startswith(p + ".") for p in prefixes)]
+    for mod in to_delete:
+        del sys.modules[mod]
 
 
 def _install_audit_stub() -> MagicMock:
@@ -47,6 +47,46 @@ def _install_audit_stub() -> MagicMock:
     stub.record_audit_event = MagicMock()
     sys.modules["routes.audit_routes"] = stub
     return stub
+
+
+def _make_test_app():
+    """Return a minimal Flask app for OAuth callback testing.
+
+    TESTING=True enables exception propagation for cleaner assertions.
+    Aurora has no Flask-side CSRF middleware, so this does not disable any
+    CSRF protection — the trust boundary is the Next.js proxy layer.
+    """
+    from flask import Flask as _Flask
+    tmp_app = _Flask(__name__)
+    tmp_app.config["TESTING"] = True  # NOSONAR
+    return tmp_app
+
+
+def _stub_limiter() -> None:
+    """Disable rate-limiting in the already-registered limiter stub."""
+    limiter_stub = sys.modules["utils.web.limiter_ext"]
+    limiter_stub.limiter = MagicMock()
+    limiter_stub.limiter.limit = lambda *a, **kw: (lambda f: f)
+
+
+def _patch_rbac_deps(monkeypatch, oauth_state_endpoint: str) -> None:
+    """Monkeypatch RBAC, state-cache, token-management, and DB pool deps."""
+    import utils.auth.rbac_decorators as rbac_mod
+    import utils.auth.oauth2_state_cache as state_cache_mod
+    import utils.auth.token_management as tok_mod
+    import utils.db.connection_pool as pool_mod
+
+    monkeypatch.setattr(rbac_mod, "get_user_id_from_request", MagicMock(return_value="u-1"))
+    monkeypatch.setattr(rbac_mod, "get_org_id_from_request", MagicMock(return_value="org-1"))
+    monkeypatch.setattr(rbac_mod, "enforce_with_reload", MagicMock(return_value=True))
+    monkeypatch.setattr(rbac_mod, "_audit_auth_failure", MagicMock())
+    monkeypatch.setattr(
+        state_cache_mod,
+        "retrieve_oauth2_state",
+        MagicMock(return_value={"user_id": "u-1", "endpoint": oauth_state_endpoint}),
+    )
+    monkeypatch.setattr(tok_mod, "store_tokens_in_db", MagicMock())
+    monkeypatch.setattr(pool_mod, "db_pool", MagicMock())
 
 
 # ---------------------------------------------------------------------------
@@ -76,45 +116,18 @@ class TestAtlassianOAuthCallbackRedaction:
         for pkg in _ATLASSIAN_HEAVY:
             sys.modules.setdefault(pkg, MagicMock())
         _install_audit_stub()
-        limiter_stub = sys.modules["utils.web.limiter_ext"]
-        limiter_stub.limiter = MagicMock()
-        limiter_stub.limiter.limit = lambda *a, **kw: (lambda f: f)
+        _stub_limiter()
 
     def _build_app(self, monkeypatch):
         _evict_route_modules("routes.atlassian")
-
-        import utils.auth.rbac_decorators as rbac_mod
-        import utils.auth.oauth2_state_cache as state_cache_mod
-        import utils.auth.token_management as tok_mod
-        import utils.db.connection_pool as pool_mod
-
-        monkeypatch.setattr(
-            rbac_mod, "get_user_id_from_request", MagicMock(return_value="u-1")
-        )
-        monkeypatch.setattr(
-            rbac_mod, "get_org_id_from_request", MagicMock(return_value="org-1")
-        )
-        monkeypatch.setattr(
-            rbac_mod, "enforce_with_reload", MagicMock(return_value=True)
-        )
-        monkeypatch.setattr(rbac_mod, "_audit_auth_failure", MagicMock())
-        monkeypatch.setattr(
-            state_cache_mod,
-            "retrieve_oauth2_state",
-            MagicMock(return_value={"user_id": "u-1", "endpoint": "atlassian:confluence"}),
-        )
+        _patch_rbac_deps(monkeypatch, "atlassian:confluence")
         sys.modules["connectors.atlassian_auth.auth"].exchange_code_for_token = (
             MagicMock(side_effect=_exc_carrying_client_secret())
         )
-        monkeypatch.setattr(tok_mod, "store_tokens_in_db", MagicMock())
-        monkeypatch.setattr(pool_mod, "db_pool", MagicMock())
 
-        from flask import Flask
         from routes.atlassian.atlassian_routes import atlassian_bp
 
-        app = Flask(__name__)
-        # Aurora has no Flask-side CSRF middleware; CSRF protection lives at
-        # the Next.js proxy layer, so there is nothing to disable here.  # NOSONAR
+        app = _make_test_app()
         app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
         return app
 
@@ -186,45 +199,18 @@ class TestNotionOAuthCallbackRedaction:
         for pkg in _NOTION_HEAVY:
             sys.modules.setdefault(pkg, MagicMock())
         _install_audit_stub()
-        limiter_stub = sys.modules["utils.web.limiter_ext"]
-        limiter_stub.limiter = MagicMock()
-        limiter_stub.limiter.limit = lambda *a, **kw: (lambda f: f)
+        _stub_limiter()
 
     def _build_app(self, monkeypatch):
         _evict_route_modules("routes.notion")
-
-        import utils.auth.rbac_decorators as rbac_mod
-        import utils.auth.oauth2_state_cache as state_cache_mod
-        import utils.auth.token_management as tok_mod
-        import utils.db.connection_pool as pool_mod
-
-        monkeypatch.setattr(
-            rbac_mod, "get_user_id_from_request", MagicMock(return_value="u-1")
-        )
-        monkeypatch.setattr(
-            rbac_mod, "get_org_id_from_request", MagicMock(return_value="org-1")
-        )
-        monkeypatch.setattr(
-            rbac_mod, "enforce_with_reload", MagicMock(return_value=True)
-        )
-        monkeypatch.setattr(rbac_mod, "_audit_auth_failure", MagicMock())
-        monkeypatch.setattr(
-            state_cache_mod,
-            "retrieve_oauth2_state",
-            MagicMock(return_value={"user_id": "u-1", "endpoint": "notion"}),
-        )
+        _patch_rbac_deps(monkeypatch, "notion")
         sys.modules["connectors.notion_connector.auth"].exchange_code_for_token = (
             MagicMock(side_effect=_exc_carrying_client_secret())
         )
-        monkeypatch.setattr(tok_mod, "store_tokens_in_db", MagicMock())
-        monkeypatch.setattr(pool_mod, "db_pool", MagicMock())
 
-        from flask import Flask
         from routes.notion.notion_routes import notion_bp
 
-        app = Flask(__name__)
-        # Aurora has no Flask-side CSRF middleware; CSRF protection lives at
-        # the Next.js proxy layer, so there is nothing to disable here.  # NOSONAR
+        app = _make_test_app()
         app.register_blueprint(notion_bp, url_prefix="/notion")
         return app
 
