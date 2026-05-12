@@ -13,14 +13,14 @@ import { SENTRY_PURPLE } from "@/components/sentry/constants";
 const PROVIDER_ID = 'sentry';
 
 function broadcastStateChange() {
-  if (typeof globalThis.window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent('providerStateChanged'));
-  window.dispatchEvent(new Event('sentryStateChanged'));
+  if (globalThis.window === undefined) return;
+  globalThis.window.dispatchEvent(new CustomEvent('providerStateChanged'));
+  globalThis.window.dispatchEvent(new Event('sentryStateChanged'));
 }
 
 function broadcastPreferenceChange(providers: string[]) {
-  if (typeof globalThis.window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers } }));
+  if (globalThis.window === undefined) return;
+  globalThis.window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers } }));
 }
 
 export default function SentryAuthPage() {
