@@ -18,7 +18,7 @@ export interface SentryStatus {
   orgSlug?: string;
   orgName?: string;
   validatedAt?: string;
-  hasWebhookSecret?: boolean;
+  webhookConfigured?: boolean;
   accessibleProjects?: SentryProjectSummary[];
   error?: string;
 }
@@ -49,7 +49,7 @@ export const sentryService = {
         orgSlug: (data?.orgSlug ?? data?.org_slug) as string | undefined,
         orgName: (data?.orgName ?? data?.org_name) as string | undefined,
         validatedAt: (data?.validatedAt ?? data?.validated_at) as string | undefined,
-        hasWebhookSecret: Boolean(data?.hasWebhookSecret ?? data?.has_webhook_secret),
+        webhookConfigured: Boolean(data?.webhookConfigured ?? data?.hasWebhookSecret ?? data?.has_webhook_secret),
         accessibleProjects: (data?.accessibleProjects ?? data?.accessible_projects) as SentryProjectSummary[] | undefined,
         error: data?.error as string | undefined,
       };
@@ -71,7 +71,7 @@ export const sentryService = {
       orgSlug: (data?.orgSlug ?? payload.orgSlug) as string | undefined,
       orgName: data?.orgName as string | undefined,
       validatedAt: data?.validatedAt as string | undefined,
-      hasWebhookSecret: Boolean(data?.hasWebhookSecret),
+      webhookConfigured: Boolean(data?.webhookConfigured ?? data?.hasWebhookSecret),
       accessibleProjects: data?.accessibleProjects as SentryProjectSummary[] | undefined,
     };
   },

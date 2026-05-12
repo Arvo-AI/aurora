@@ -13,7 +13,7 @@ const CACHE_KEYS = {
   STATUS: 'sentry_connection_status',
 };
 
-type CachedStatus = Pick<SentryStatus, 'connected' | 'region' | 'orgSlug' | 'hasWebhookSecret'>;
+type CachedStatus = Pick<SentryStatus, 'connected' | 'region' | 'orgSlug' | 'webhookConfigured'>;
 
 export default function SentryAuthPage() {
   const { toast } = useToast();
@@ -55,7 +55,7 @@ export default function SentryAuthPage() {
         connected: result.connected,
         region: result.region,
         orgSlug: result.orgSlug,
-        hasWebhookSecret: result.hasWebhookSecret,
+        webhookConfigured: result.webhookConfigured,
       };
       localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(cached));
     }
@@ -124,7 +124,7 @@ export default function SentryAuthPage() {
           connected: true,
           region: result.region,
           orgSlug: result.orgSlug,
-          hasWebhookSecret: result.hasWebhookSecret,
+          webhookConfigured: result.webhookConfigured,
         };
         localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(cached));
         localStorage.setItem('isSentryConnected', 'true');

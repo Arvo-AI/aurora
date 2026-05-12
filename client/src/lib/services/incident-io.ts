@@ -30,7 +30,7 @@ export interface IncidentIoAlertsResponse {
 
 export interface IncidentIoWebhookUrlResponse {
   webhookUrl: string;
-  hasWebhookSecret: boolean;
+  webhookConfigured: boolean;
   instructions: string[];
 }
 
