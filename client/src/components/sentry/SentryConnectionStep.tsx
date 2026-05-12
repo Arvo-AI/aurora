@@ -64,8 +64,8 @@ export function SentryConnectionStep({
               <li>Click <strong>Create New Integration</strong> and choose <strong>Internal Integration</strong>.</li>
               <li>Name it <code>Aurora</code> and paste the webhook URL below into the <strong>Webhook URL</strong> field.</li>
               <li>Under <strong>Permissions</strong>, grant read access to: <strong>Issue &amp; Event</strong>, <strong>Project</strong>, <strong>Organization</strong>.</li>
-              <li>Under <strong>Webhooks</strong>, subscribe to: <code>issue</code>, <code>error</code> (Business/Enterprise plans), <code>event_alert</code>.</li>
-              <li>Save. Sentry will display the <strong>Auth Token</strong> and <strong>Webhook Secret</strong> on the next screen &mdash; copy both before leaving the page.</li>
+              <li>Under <strong>Webhooks</strong>, subscribe to: <code>issue</code> and <code>error</code> (Business/Enterprise plans).</li>
+              <li>Save. Sentry will display the <strong>Auth Token</strong> and <strong>Client Secret</strong> on the next screen &mdash; copy both before leaving the page.</li>
             </ol>
 
             <div className="space-y-2 pt-2">
@@ -106,7 +106,7 @@ export function SentryConnectionStep({
 
           <div className="p-4 pt-0 space-y-4 text-sm border-t">
             <p className="text-muted-foreground">
-              Aurora stores your auth token and webhook secret securely using Vault. Only encrypted references are persisted in the database.
+              Aurora stores your auth token and client secret securely using Vault. Only encrypted references are persisted in the database.
             </p>
 
             <form className="space-y-4" onSubmit={onConnect}>
@@ -160,9 +160,9 @@ export function SentryConnectionStep({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="sentry-webhook-secret">Webhook Secret</Label>
+                <Label htmlFor="sentry-client-secret">Client Secret</Label>
                 <Input
-                  id="sentry-webhook-secret"
+                  id="sentry-client-secret"
                   type="password"
                   placeholder="Required to verify incoming webhooks"
                   value={webhookSecret}
@@ -170,7 +170,7 @@ export function SentryConnectionStep({
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  Aurora uses this to verify HMAC-SHA256 signatures on every webhook. Without it, webhook delivery is rejected.
+                  Shown by Sentry under <strong>Credentials</strong> when you save the Internal Integration. Aurora uses it to verify HMAC-SHA256 signatures on every webhook — without it, webhook delivery is rejected.
                 </p>
               </div>
 

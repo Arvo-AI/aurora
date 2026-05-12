@@ -812,10 +812,10 @@ Navigate to **Connectors** > **Sentry**. The page shows the **Webhook URL** Auro
 2. Click **Create New Integration** and choose **Internal Integration**
 3. Name it `Aurora` and paste the webhook URL from step 1 into the **Webhook URL** field
 4. Under **Permissions**, grant **read** access to: **Issue & Event**, **Project**, **Organization**
-5. Under **Webhooks**, subscribe to: `issue`, `error` (Business/Enterprise plans only), and optionally `event_alert`
+5. Under **Webhooks**, subscribe to `issue` and `error` (the `error` resource requires a Business/Enterprise plan)
 6. Click **Save Changes**. Sentry reveals two values on the next screen — copy both before navigating away:
    - **Auth Token** (starts with `sntrys_…`) under *Tokens*
-   - **Webhook Secret** (long hex string) under *Credentials*
+   - **Client Secret** (long hex string) under *Credentials*
 
 > **Read-only is sufficient.** Aurora never writes to Sentry during RCA. Granting read scopes only means revoking the integration immediately revokes Aurora's access.
 
@@ -833,7 +833,7 @@ Navigate to **Connectors** > **Sentry**. The page shows the **Webhook URL** Auro
    - **Organization Slug** — the slug in your Sentry URL (e.g. `acme-co`, not the display name)
    - **Region** — US or EU
    - **Auth Token** — the `sntrys_…` token from step 2
-   - **Webhook Secret** — the secret from step 2
+   - **Client Secret** — the secret from step 2
 3. Click **Connect**
 
 Aurora validates the token against the org, lists accessible projects, and stores both secrets in Vault.
@@ -850,7 +850,7 @@ All requests use `Authorization: Bearer <auth_token>` against `https://sentry.io
 
 #### How Aurora Processes Sentry Webhooks
 
-Sentry signs every webhook with HMAC-SHA256 of the raw JSON body using the integration's webhook secret. The signature lives in the `Sentry-Hook-Signature` header (hex digest, no prefix). Aurora rejects any request whose signature does not constant-time-match the secret stored at connect.
+Sentry signs every webhook with HMAC-SHA256 of the raw JSON body using the integration's client secret. The signature lives in the `Sentry-Hook-Signature` header (hex digest, no prefix). Aurora rejects any request whose signature does not constant-time-match the secret stored at connect.
 
 For each accepted webhook Aurora:
 1. Persists the raw payload to `sentry_events` (deduplicated by `org_id + issue_id + action`)
@@ -859,7 +859,7 @@ For each accepted webhook Aurora:
 4. Generates an incident summary from the payload
 5. Kicks off a background RCA chat session pre-loaded with the Sentry skill context
 
-Supported resources: `issue`, `error`, `event_alert`, `installation`, `comment`.
+Subscribed resources: `issue` and `error`. The route also accepts `installation` and `comment` payloads from Sentry but only `issue` / `error` drive incident creation.
 
 #### Disconnecting
 
@@ -871,9 +871,9 @@ Disconnecting deletes the user's Vault-stored credentials. Webhook deliveries fo
 |-------|----------|
 | "Invalid Sentry auth token or insufficient permissions" | Verify the token starts with `sntrys_` and the Internal Integration grants `Issue & Event: Read`, `Project: Read`, `Organization: Read` |
 | "Sentry organization '\<slug\>' not found" | Use the slug in your Sentry URL (lowercase, hyphenated), not the display name |
-| "Webhook signing secret not configured" on incoming webhooks | Reconnect Sentry with the webhook secret — Aurora cannot verify signatures without it |
-| "Invalid webhook signature" | Confirm the **Webhook Secret** in Aurora matches what Sentry shows under the integration's *Credentials* section. Save the integration in Sentry to rotate if needed |
-| No webhooks arriving despite events firing | In Sentry, open the Aurora integration and confirm at least one of `issue` / `error` / `event_alert` is checked under **Webhooks**, and that the Webhook URL field matches the URL Aurora shows |
+| "Webhook signing secret not configured" on incoming webhooks | Reconnect Sentry with the client secret — Aurora cannot verify signatures without it |
+| "Invalid webhook signature" | Confirm the **Client Secret** in Aurora matches what Sentry shows under the integration's *Credentials* section. Save the integration in Sentry to rotate if needed |
+| No webhooks arriving despite events firing | In Sentry, open the Aurora integration and confirm `issue` and `error` are checked under **Webhooks**, and that the Webhook URL field matches the URL Aurora shows |
 | "EU region issues" | Select **EU** in the region selector when connecting if your org is hosted on `de.sentry.io` |
 
 ---

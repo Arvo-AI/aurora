@@ -49,7 +49,7 @@ export function SentryWebhookStep({
               <span className="font-medium uppercase">{status.region || "US"}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Webhook Secret:</span>{" "}
+              <span className="text-muted-foreground">Client Secret:</span>{" "}
               {status.hasWebhookSecret ? (
                 <Badge variant="secondary" className="text-xs">Configured</Badge>
               ) : (
@@ -83,7 +83,7 @@ export function SentryWebhookStep({
             <ol className="space-y-1 list-decimal list-inside">
               <li>Open your <strong>Aurora</strong> Internal Integration in Sentry (<strong>Settings &rarr; Custom Integrations</strong>).</li>
               <li>Confirm the <strong>Webhook URL</strong> field matches the URL above exactly.</li>
-              <li>Confirm at least one resource subscription is checked: <code>issue</code>, <code>error</code>, or <code>event_alert</code>.</li>
+              <li>Confirm <code>issue</code> and <code>error</code> are checked under <strong>Webhooks</strong>.</li>
               <li>Save the integration. Aurora will start receiving alerts on the next event.</li>
             </ol>
           </div>

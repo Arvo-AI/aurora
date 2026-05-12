@@ -269,8 +269,8 @@ def webhook_url(user_id):
         "1. In Sentry, go to Settings → Custom Integrations → Create New Integration → Internal Integration.",
         "2. Name it 'Aurora' and paste the webhook URL above into the Webhook URL field.",
         "3. Under Permissions, grant read access to: Issue & Event, Project, Organization.",
-        "4. Under Webhooks, subscribe to: issue, error (Business/Enterprise plans), event_alert.",
-        "5. Save the integration. Copy the Auth Token AND Webhook Secret shown on the next screen.",
+        "4. Under Webhooks, subscribe to: issue and error (Business/Enterprise plans).",
+        "5. Save the integration. Copy the Auth Token AND Client Secret shown on the next screen.",
         "6. Paste both into Aurora's connection form to complete setup.",
     ]
 

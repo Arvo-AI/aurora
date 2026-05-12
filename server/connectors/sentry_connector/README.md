@@ -18,13 +18,12 @@ Sentry Internal Integration token authentication for querying the Sentry web API
      - Organization: `Read`
      - Member: `Read` (optional, for richer context)
    - **Webhooks** subscriptions:
-     - `issue` (created / resolved / assigned)
+     - `issue` (created / resolved / assigned / archived / unresolved)
      - `error` (created) — *Business/Enterprise plans only*
-     - `event_alert` (triggered)
 5. Click **Save Changes**.
 6. Sentry displays:
    - **Tokens → Auth Token** — copy this (starts with `sntrys_` or similar).
-   - **Webhook Secret** (a.k.a. *client secret*) — copy this; Aurora uses it to verify webhook signatures.
+   - **Client Secret** under *Credentials* — copy this; Aurora uses it to verify webhook signatures.
 
 ### 2. Connect in Aurora
 
@@ -35,7 +34,7 @@ In Aurora, open **Connectors → Sentry** and provide:
 | **Auth Token** | The auth token from the Internal Integration page |
 | **Organization Slug** | Your Sentry org slug (the part of the URL like `acme-co`) |
 | **Region** | `US` for `sentry.io`, `EU` for `de.sentry.io` |
-| **Webhook Secret** *(optional but recommended)* | Used to verify incoming webhook signatures |
+| **Client Secret** | Used to verify incoming webhook signatures; rejection is enforced |
 
 Aurora validates the token by calling `GET /api/0/organizations/{slug}/` and stores the credentials encrypted in HashiCorp Vault. Only an encrypted reference is saved in the database.
 
@@ -60,7 +59,6 @@ Signature verification: every webhook arrives with a `Sentry-Hook-Signature` hea
 Supported events:
 - `issue` (`created`, `resolved`, `assigned`, `archived`, `unresolved`)
 - `error` (`created`) — Business/Enterprise plans only
-- `event_alert` (`triggered`)
 
 ## Troubleshooting
 
@@ -68,5 +66,5 @@ Supported events:
 - **`403 lacks required permissions`** — The integration needs at least `issue:read`, `project:read`, and `org:read`.
 - **`404 not found` when validating** — The org slug is wrong. It's the slug, not the display name (e.g. `acme-co`, not `Acme Co`).
 - **Webhooks not arriving** — Check the integration's *Webhook URL* matches Aurora's URL exactly, and that at least one resource subscription is checked.
-- **Invalid webhook signature** — Re-copy the *Webhook Secret* from Sentry; the value is shown only once per integration creation.
+- **Invalid webhook signature** — Re-copy the *Client Secret* from Sentry's *Credentials* section; the value is regenerated whenever you reset it.
 - **EU region** — Make sure you selected `EU` in Aurora when the integration lives on `de.sentry.io`.
