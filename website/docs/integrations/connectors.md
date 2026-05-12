@@ -813,9 +813,8 @@ Navigate to **Connectors** > **Sentry**. The page shows the **Webhook URL** Auro
 3. Name it `Aurora` and paste the webhook URL from step 1 into the **Webhook URL** field
 4. Under **Permissions**, grant **read** access to: **Issue & Event**, **Project**, **Organization**
 5. Under **Webhooks**, subscribe to `issue` and `error` (the `error` resource requires a Business/Enterprise plan)
-6. Click **Save Changes**. Sentry reveals two values on the next screen — copy both before navigating away:
-   - **Auth Token** (starts with `sntrys_…`) under *Tokens*
-   - **Client Secret** (long hex string) under *Credentials*
+6. Click **Save Changes**. Under **Credentials**, copy the **Client Secret** (long hex string).
+7. Scroll to the **Tokens** section and click **Create New Token**. Sentry does **not** generate an auth token automatically — you must create one. Copy the resulting `sntrys_…` token immediately; it's shown once.
 
 > **Read-only is sufficient.** Aurora never writes to Sentry during RCA. Granting read scopes only means revoking the integration immediately revokes Aurora's access.
 

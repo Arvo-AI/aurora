@@ -270,8 +270,9 @@ def webhook_url(user_id):
         "2. Name it 'Aurora' and paste the webhook URL above into the Webhook URL field.",
         "3. Under Permissions, grant read access to: Issue & Event, Project, Organization.",
         "4. Under Webhooks, subscribe to: issue and error (Business/Enterprise plans).",
-        "5. Save the integration. Copy the Auth Token AND Client Secret shown on the next screen.",
-        "6. Paste both into Aurora's connection form to complete setup.",
+        "5. Save the integration, then copy the Client Secret from the Credentials section.",
+        "6. Under Tokens, click 'Create New Token' (Sentry does not auto-create one). Copy the sntrys_ token immediately — it is shown once.",
+        "7. Paste the auth token and client secret into Aurora's connection form to complete setup.",
     ]
 
     return jsonify({

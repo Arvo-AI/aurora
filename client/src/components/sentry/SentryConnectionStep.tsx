@@ -65,7 +65,8 @@ export function SentryConnectionStep({
               <li>Name it <code>Aurora</code> and paste the webhook URL below into the <strong>Webhook URL</strong> field.</li>
               <li>Under <strong>Permissions</strong>, grant read access to: <strong>Issue &amp; Event</strong>, <strong>Project</strong>, <strong>Organization</strong>.</li>
               <li>Under <strong>Webhooks</strong>, subscribe to: <code>issue</code> and <code>error</code> (Business/Enterprise plans).</li>
-              <li>Save. Sentry will display the <strong>Auth Token</strong> and <strong>Client Secret</strong> on the next screen &mdash; copy both before leaving the page.</li>
+              <li>Save. Under <strong>Credentials</strong>, copy the <strong>Client Secret</strong>.</li>
+              <li>Scroll to <strong>Tokens</strong> and click <strong>Create New Token</strong>. Sentry doesn&apos;t auto-generate one — you have to create it yourself. Copy the token (starts with <code>sntrys_</code>) before leaving the page; it&apos;s shown once.</li>
             </ol>
 
             <div className="space-y-2 pt-2">

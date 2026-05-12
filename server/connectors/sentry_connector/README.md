@@ -21,9 +21,8 @@ Sentry Internal Integration token authentication for querying the Sentry web API
      - `issue` (created / resolved / assigned / archived / unresolved)
      - `error` (created) — *Business/Enterprise plans only*
 5. Click **Save Changes**.
-6. Sentry displays:
-   - **Tokens → Auth Token** — copy this (starts with `sntrys_` or similar).
-   - **Client Secret** under *Credentials* — copy this; Aurora uses it to verify webhook signatures.
+6. Under **Credentials**, copy the **Client Secret** — Aurora uses it to verify webhook signatures.
+7. Scroll to **Tokens** and click **Create New Token**. Sentry does **not** auto-create one on save — you have to generate it yourself. Copy the resulting token (`sntrys_…`) immediately; it's only shown once.
 
 ### 2. Connect in Aurora
 
