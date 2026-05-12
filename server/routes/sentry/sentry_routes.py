@@ -10,6 +10,7 @@ Provides endpoints for:
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -451,7 +452,7 @@ def webhook(user_id: str):
         return jsonify({"error": "Invalid webhook signature"}), 401
 
     try:
-        payload = request.get_json(force=True, silent=True) or {}
+        payload = json.loads(raw_body) if raw_body else {}
     except Exception:
         payload = {}
 

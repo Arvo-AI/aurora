@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Copy, Check } from "lucide-react";
 
 interface SentryConnectionStepProps {
   authToken: string;
@@ -16,6 +17,9 @@ interface SentryConnectionStepProps {
   setWebhookSecret: (value: string) => void;
   loading: boolean;
   onConnect: (e: React.FormEvent<HTMLFormElement>) => void;
+  webhookUrl: string | null;
+  copied: boolean;
+  onCopyWebhook: () => void;
 }
 
 const REGION_HINTS = [
@@ -36,6 +40,9 @@ export function SentryConnectionStep({
   setWebhookSecret,
   loading,
   onConnect,
+  webhookUrl,
+  copied,
+  onCopyWebhook,
 }: SentryConnectionStepProps) {
   return (
     <Card>
@@ -56,11 +63,33 @@ export function SentryConnectionStep({
             <ol className="space-y-2 list-decimal list-inside">
               <li>In Sentry, go to <strong>Settings &rarr; Custom Integrations</strong> (under <em>Developer Settings</em>).</li>
               <li>Click <strong>Create New Integration</strong> and choose <strong>Internal Integration</strong>.</li>
-              <li>Name it <code>Aurora</code> and paste the Aurora webhook URL (shown after connecting) into the <strong>Webhook URL</strong> field.</li>
+              <li>Name it <code>Aurora</code> and paste the webhook URL below into the <strong>Webhook URL</strong> field.</li>
               <li>Under <strong>Permissions</strong>, grant read access to: <strong>Issue &amp; Event</strong>, <strong>Project</strong>, <strong>Organization</strong>.</li>
               <li>Under <strong>Webhooks</strong>, subscribe to: <code>issue</code>, <code>error</code> (Business/Enterprise plans), <code>event_alert</code>.</li>
               <li>Save. Sentry will display the <strong>Auth Token</strong> and <strong>Webhook Secret</strong> on the next screen &mdash; copy both before leaving the page.</li>
             </ol>
+
+            <div className="space-y-2 pt-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Aurora Webhook URL</Label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-muted px-3 py-2 rounded text-xs break-all">
+                  {webhookUrl ?? "Loading…"}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onCopyWebhook}
+                  disabled={!webhookUrl}
+                  className="shrink-0"
+                  aria-label={copied ? "Webhook URL copied" : "Copy webhook URL"}
+                >
+                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Paste this into Sentry&apos;s <strong>Webhook URL</strong> field before subscribing to webhook resources.</p>
+            </div>
+
             <div className="mt-4 p-3 bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 rounded">
               <p className="text-xs font-semibold text-purple-900 dark:text-purple-300">Read-only is enough</p>
               <p className="text-xs text-purple-800 dark:text-purple-400 mt-1">Aurora never writes to Sentry during RCA. Grant only read permissions; revoke the integration in Sentry at any time to immediately cut Aurora&apos;s access.</p>

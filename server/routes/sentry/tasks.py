@@ -219,11 +219,12 @@ def process_sentry_event(
 
                 if not event_id:
                     logger.error("[SENTRY][WEBHOOK] Failed to persist event for user %s", user_id)
+                    return
 
-                source_alert_id = (
-                    f"sentry-{issue_id}-{action}" if issue_id and action
-                    else f"sentry-{event_id or int(received_at.timestamp())}"
-                )
+                # source_alert_id is the integer PK of the source-specific event row.
+                # Mirrors the pattern used by incidentio/datadog/etc — the FK back to
+                # sentry_events.id, not a synthesized string.
+                source_alert_id = event_id
 
                 try:
                     correlator = AlertCorrelator()

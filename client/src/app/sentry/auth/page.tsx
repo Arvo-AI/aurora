@@ -105,6 +105,7 @@ export default function SentryAuthPage() {
 
   useEffect(() => {
     loadStatus();
+    loadWebhookUrl();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -267,6 +268,9 @@ export default function SentryAuthPage() {
             setWebhookSecret={setWebhookSecret}
             loading={loading}
             onConnect={handleConnect}
+            webhookUrl={webhookUrl}
+            copied={copied}
+            onCopyWebhook={handleCopyWebhook}
           />
         ) : status && webhookUrl ? (
           <SentryWebhookStep
