@@ -6,6 +6,11 @@ of those would be a cross-tenant privilege escalation) -- and the
 deliberate fail-open path for ``OPTIONS`` preflight requests, which
 must skip the auth check or browser CORS would break the entire
 frontend while the backend looks healthy.
+
+Also covers escalation-guard scenarios: bogus resource/action strings
+passed to the decorator, a misbehaving outer decorator that injects
+``user_id=None`` as a positional arg, and OPTIONS requests carrying
+a body that the wrapped function would otherwise act on.
 """
 
 import sys
@@ -362,6 +367,22 @@ class TestWrappedFunctionErrors:
         assert status == 500
         assert response.get_json() == {"error": "Internal server error"}
 
+    def test_exception_message_does_not_appear_in_500_body(self, flask_app, patch_auth):
+        """The 500 body must be the canned string, never ``repr(exc)``.
+
+        Downstream libraries (psycopg2, requests) can embed passwords or tokens
+        in exception text; that must not reach the HTTP response.
+        """
+        @require_permission("incidents", "read")
+        def leaky(user_id):
+            raise RuntimeError("password=db_password_DO_NOT_LEAK_XYZ wrong host")
+
+        with flask_app.test_request_context("/api/x"):
+            response, status = leaky()
+
+        assert status == 500
+        assert "db_password_DO_NOT_LEAK_XYZ" not in response.get_data(as_text=True)
+
     def test_httpexception_is_reraised(self, flask_app, patch_auth):
         """Flask error handlers rely on HTTPException reaching them unwrapped."""
 
@@ -472,3 +493,132 @@ class TestRequireAuthOnly:
         with flask_app.test_request_context("/api/x"):
             with pytest.raises(NotFound):
                 missing()
+
+
+# ---------------------------------------------------------------------------
+# Escalation guards: decorator misuse must not weaken the auth gate
+# ---------------------------------------------------------------------------
+
+
+class TestRBACEscalationGuards:
+    """@require_permission cannot be silently weakened by misuse at the
+    call site.  Empty / None resource+action strings must still 401 on
+    missing identity; an outer decorator that corrupts the user_id
+    positional arg must not bypass the wrapper's own identity resolution.
+    """
+
+    @pytest.mark.parametrize("resource,action", [
+        ("", ""),
+        (None, None),
+        ("", "read"),
+        ("incidents", ""),
+    ])
+    def test_empty_or_none_resource_action_still_401_without_user(
+        self, flask_app, patch_auth, monkeypatch, resource, action,
+    ):
+        """Bogus resource/action strings must not create a permissive fast-path.
+
+        The wrapper resolves identity before it ever reaches the enforcer, so
+        an empty or None permission spec is irrelevant -- a missing user_id
+        must still 401.
+        """
+        patch_auth.get_user_id_from_request.return_value = None
+        observed: dict = {}
+
+        @require_permission(resource, action)
+        def view(user_id):
+            observed["called"] = True
+            return jsonify(ok=True), 200
+
+        with flask_app.test_request_context("/api/x"):
+            response, status = view()
+
+        assert status == 401
+        assert response.get_json() == {"error": "Unauthorized"}
+        assert "called" not in observed
+
+    @pytest.mark.parametrize("resource,action", [
+        ("", ""),
+        (None, None),
+    ])
+    def test_empty_or_none_resource_action_enforcer_not_called_without_user(
+        self, flask_app, patch_auth, monkeypatch, resource, action,
+    ):
+        """Identity check must short-circuit before the enforcer is invoked."""
+        patch_auth.get_user_id_from_request.return_value = None
+
+        @require_permission(resource, action)
+        def view(user_id):
+            return jsonify(ok=True), 200
+
+        with flask_app.test_request_context("/api/x"):
+            view()
+
+        patch_auth.enforce_with_reload.assert_not_called()
+
+    def test_outer_decorator_injecting_none_user_id_still_401s(
+        self, flask_app, patch_auth,
+    ):
+        """An outer decorator that passes user_id=None positionally must not
+        slip through the wrapper's own identity resolution.
+
+        The wrapper calls get_user_id_from_request() independently; it never
+        trusts a user_id that arrives via *args or **kwargs from the caller.
+        """
+        patch_auth.get_user_id_from_request.return_value = None
+        observed: dict = {}
+
+        def poisoning_outer(fn):
+            """Simulates a misbehaving decorator that pre-populates user_id=None."""
+            from functools import wraps
+
+            @wraps(fn)
+            def wrapper(*args, **kwargs):
+                return fn(None, *args, **kwargs)
+            return wrapper
+
+        @poisoning_outer
+        @require_permission("incidents", "read")
+        def view(user_id):
+            observed["user_id"] = user_id
+            observed["called"] = True
+            return jsonify(ok=True), 200
+
+        with flask_app.test_request_context("/api/x"):
+            response, status = view()
+
+        assert status == 401
+        assert response.get_json() == {"error": "Unauthorized"}
+        assert "called" not in observed
+
+    def test_outer_decorator_injecting_victim_user_id_does_not_bypass(
+        self, flask_app, patch_auth,
+    ):
+        """An outer decorator injecting a real-looking user_id into *args must
+        not satisfy the wrapper's auth check -- it always resolves identity
+        from the request, not from caller-supplied arguments.
+        """
+        patch_auth.get_user_id_from_request.return_value = None
+        observed: dict = {}
+
+        def impersonating_outer(fn):
+            from functools import wraps
+
+            @wraps(fn)
+            def wrapper(*args, **kwargs):
+                return fn("victim-user-id", *args, **kwargs)
+            return wrapper
+
+        @impersonating_outer
+        @require_permission("incidents", "read")
+        def view(user_id):
+            observed["user_id"] = user_id
+            observed["called"] = True
+            return jsonify(ok=True), 200
+
+        with flask_app.test_request_context("/api/x"):
+            _, status = view()
+
+        assert status == 401
+        assert "called" not in observed
+

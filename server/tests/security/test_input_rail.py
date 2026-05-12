@@ -136,6 +136,30 @@ class TestGetRailsRaises:
         assert result.blocked is True
         assert result.reason == _FAIL_CLOSED_CONNECTIVITY
 
+    def test_exception_message_does_not_appear_in_reason(self, monkeypatch, caplog):
+        """``CheckResult.reason`` must be a canned constant, never ``str(exc)``.
+
+        AI provider SDKs embed the rejected API key in AuthenticationError text;
+        that must not reach the caller or the log.
+        """
+        import logging
+        _patch_config(monkeypatch, enabled=True)
+        _patch_get_rails_raising(
+            monkeypatch,
+            RuntimeError("AuthenticationError: invalid API key sk-proj-DO_NOT_LEAK_XYZ"),
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            result = _run(check_input("hi"))
+
+        assert "sk-proj-DO_NOT_LEAK_XYZ" not in result.reason
+        assert result.blocked is True
+        assert "sk-proj-DO_NOT_LEAK_XYZ" not in caplog.text
+        for record in caplog.records:
+            assert "sk-proj-DO_NOT_LEAK_XYZ" not in record.getMessage(), (
+                f"API key found in log record: {record.getMessage()!r}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Rails call failures (generate_async raises)

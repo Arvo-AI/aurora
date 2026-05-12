@@ -237,7 +237,7 @@ async def check_input(user_message: str) -> InputRailResult:
         )
     except Exception as exc:
         latency_ms = (time.perf_counter() - t0) * 1000
-        logger.exception("[Guardrails:InputRail] Error running input rail; failing closed")
+        logger.error("[Guardrails:InputRail] Error running input rail; failing closed", exc_info=False)
         reason = _classify_failure(exc)
         return InputRailResult(blocked=True, reason=reason, latency_ms=latency_ms)
 
