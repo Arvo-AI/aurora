@@ -213,7 +213,7 @@ except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
 
 try:
-    from routes.sentry import tasks as _sentry_tasks  # noqa: F401
+    import routes.sentry.tasks  # noqa: F401
     logging.info("Sentry tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import Sentry tasks: {e}")
