@@ -143,7 +143,15 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6
 RCA_MODEL=anthropic/claude-haiku-4.5
 ```
 
-See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider.
+If you enable the multi-agent RCA orchestrator (`ORCHESTRATOR_ENABLED=true`), the legacy `RCA_MODEL` is bypassed and you must set two additional vars — there is no fallback:
+
+```bash
+ORCHESTRATOR_ENABLED=true
+RCA_ORCHESTRATOR_MODEL=openai/gpt-5.5            # triage + synthesis
+RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6   # sub-agent investigators
+```
+
+See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider, and [LLM Providers — Multi-agent orchestrator](/docs/integrations/llm-providers#multi-agent-orchestrator) for the orchestrator split.
 
 **VM URLs** — replace `YOUR_VM_IP` with your VM's public IP (or internal/VPN IP — see note below):
 
