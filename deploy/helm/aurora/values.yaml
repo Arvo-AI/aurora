@@ -200,7 +200,13 @@ config:
   # read-only sub-agents. Operational kill-switch: set to "false" and restart
   # celery workers to fully revert.
   ORCHESTRATOR_ENABLED: "false"
-  
+  # Triage + synthesis brain. Required when ORCHESTRATOR_ENABLED=true.
+  # Provider/model format (e.g. anthropic/claude-sonnet-4.6).
+  RCA_ORCHESTRATOR_MODEL: ""
+  # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
+  # Needs reliable tool-calling.
+  RCA_SUBAGENT_MODEL: ""
+
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"
