@@ -2250,8 +2250,11 @@ def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
 def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_id=None) -> bool:
     """Check whether a Celery task is no longer running.
 
-    For STARTED tasks, optionally checks execution_steps for active tool calls
-    when cursor and incident_id are provided.
+    For STARTED tasks past the threshold, look for evidence the workflow is
+    still progressing before declaring it dead: any running ``execution_steps``
+    tool call OR any running ``rca_findings`` sub-agent counts as a heartbeat.
+    Multi-agent reasoning models can spend several minutes between tool calls
+    on the reasoning step alone, so checking only tool activity false-positives.
     """
     result = celery_app.AsyncResult(task_id)
     if result.state in ('FAILURE', 'REVOKED'):
@@ -2262,6 +2265,13 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
         if cursor and incident_id:
             cursor.execute("""
                 SELECT 1 FROM execution_steps
+                WHERE incident_id = %s AND status = 'running'
+                LIMIT 1
+            """, (incident_id,))
+            if cursor.fetchone():
+                return False
+            cursor.execute("""
+                SELECT 1 FROM rca_findings
                 WHERE incident_id = %s AND status = 'running'
                 LIMIT 1
             """, (incident_id,))

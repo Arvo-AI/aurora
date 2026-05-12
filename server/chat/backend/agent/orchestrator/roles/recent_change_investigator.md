@@ -3,7 +3,7 @@ name: recent_change_investigator
 description: Use when a deployment, config change, or code commit may have caused the incident
 tools: [source_control_read, ci_cd]
 model:
-max_turns: 12
+max_turns: 26
 max_seconds: 600
 rca_priority: 20
 ---

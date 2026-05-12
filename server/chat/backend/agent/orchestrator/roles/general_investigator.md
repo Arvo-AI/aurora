@@ -3,7 +3,7 @@ name: general_investigator
 description: Universal escape hatch — use for ANY investigation that doesn't cleanly fit a specialist (DNS, TLS/cert validity, third-party API health, queue depth, data correctness, config drift, IAM/permission audits, build provenance, dependency-version mismatches, anything novel). Prefer a specialist when one clearly fits; otherwise spawn one or more of these with a tightly-bounded purpose per spawn.
 tools: [logs, error_tracking, observability, runbooks, knowledge_base, source_control_read, ci_cd, metrics, runtime_state, ticket_history, on_call]
 model:
-max_turns: 12
+max_turns: 26
 max_seconds: 600
 rca_priority: 90
 ---

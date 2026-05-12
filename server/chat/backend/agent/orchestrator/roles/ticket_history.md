@@ -3,7 +3,7 @@ name: ticket_history
 description: Use when prior incidents or on-call handoff notes may contain relevant context for this failure
 tools: [ticket_history, on_call]
 model:
-max_turns: 12
+max_turns: 26
 max_seconds: 600
 rca_priority: 40
 ---

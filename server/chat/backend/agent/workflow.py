@@ -48,16 +48,22 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
         for part in content:
             if isinstance(part, dict):
                 part_type = part.get("type", "")
-                
-                # Extract text from both thinking and text blocks
-                # thinking blocks: use 'thinking' key
-                # text blocks: use 'text' key
+
+                # Extract text from thinking, reasoning, and text blocks.
+                # Anthropic / Gemini thinking blocks: use `thinking` key.
+                # OpenAI Responses-API reasoning blocks: text lives inside
+                #   `summary` as a list of {type:'summary_text', text:'…'}.
+                # Regular text blocks: use `text` key.
                 if part_type in ("thinking", "reasoning") and include_thinking:
                     thinking_text = part.get("thinking", "")
                     if thinking_text:
                         text_parts.append(str(thinking_text))
+                    for s_item in part.get("summary") or []:
+                        if isinstance(s_item, dict):
+                            s_text = s_item.get("text") or s_item.get("summary_text", "")
+                            if s_text:
+                                text_parts.append(str(s_text))
                 elif part_type == "text" or not part_type:
-                    # Regular text content
                     text = part.get("text", "")
                     if text:
                         text_parts.append(str(text))
