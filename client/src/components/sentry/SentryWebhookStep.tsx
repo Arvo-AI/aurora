@@ -25,6 +25,15 @@ export function SentryWebhookStep({
   loading,
 }: SentryWebhookStepProps) {
   const projectCount = status.accessibleProjects?.length ?? 0;
+  const secretBadge = status.hasWebhookSecret
+    ? <Badge variant="secondary" className="text-xs">Configured</Badge>
+    : <Badge variant="destructive" className="text-xs">Missing &mdash; reconnect to add</Badge>;
+  const details: Array<[string, React.ReactNode]> = [
+    ["Organization", <span key="org" className="font-medium">{status.orgName || status.orgSlug}</span>],
+    ["Region", <span key="region" className="font-medium uppercase">{status.region || "US"}</span>],
+    ["Client Secret", secretBadge],
+    ["Projects", <span key="projects" className="font-medium">{projectCount}</span>],
+  ];
   return (
     <Card>
       <CardHeader>
@@ -40,26 +49,11 @@ export function SentryWebhookStep({
         <div className="border rounded-lg p-4 space-y-3">
           <span className="font-semibold text-sm">Connection Details</span>
           <div className="grid md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="text-muted-foreground">Organization:</span>{" "}
-              <span className="font-medium">{status.orgName || status.orgSlug}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Region:</span>{" "}
-              <span className="font-medium uppercase">{status.region || "US"}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Client Secret:</span>{" "}
-              {status.hasWebhookSecret ? (
-                <Badge variant="secondary" className="text-xs">Configured</Badge>
-              ) : (
-                <Badge variant="destructive" className="text-xs">Missing &mdash; reconnect to add</Badge>
-              )}
-            </div>
-            <div>
-              <span className="text-muted-foreground">Projects:</span>{" "}
-              <span className="font-medium">{projectCount}</span>
-            </div>
+            {details.map(([label, node]) => (
+              <div key={label}>
+                <span className="text-muted-foreground">{label}:</span>{" "}{node}
+              </div>
+            ))}
           </div>
         </div>
 

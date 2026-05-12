@@ -3,17 +3,25 @@
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { sentryService, SentryStatus } from "@/lib/services/sentry";
+import { providerPreferencesService } from "@/lib/services/providerPreferences";
 import { SentryConnectionStep } from "@/components/sentry/SentryConnectionStep";
 import { SentryWebhookStep } from "@/components/sentry/SentryWebhookStep";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { SENTRY_PURPLE } from "@/components/sentry/constants";
 
-const CACHE_KEYS = {
-  STATUS: 'sentry_connection_status',
-};
+const PROVIDER_ID = 'sentry';
 
-type CachedStatus = Pick<SentryStatus, 'connected' | 'region' | 'orgSlug' | 'hasWebhookSecret'>;
+function broadcastStateChange() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('providerStateChanged'));
+  window.dispatchEvent(new Event('sentryStateChanged'));
+}
+
+function broadcastPreferenceChange(providers: string[]) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers } }));
+}
 
 export default function SentryAuthPage() {
   const { toast } = useToast();
@@ -26,15 +34,18 @@ export default function SentryAuthPage() {
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const updateLocalStorageConnection = (connected: boolean) => {
-    if (typeof window === 'undefined') return;
-    if (connected) {
-      localStorage.setItem('isSentryConnected', 'true');
+  const applyStatus = (next: SentryStatus | null) => {
+    setStatus(next);
+    if (next) {
+      sentryService.cacheStatus(next);
+      if (next.connected) {
+        setRegion(next.region || "us");
+        if (next.orgSlug) setOrgSlug(next.orgSlug);
+      }
     } else {
-      localStorage.removeItem('isSentryConnected');
+      sentryService.clearCachedStatus();
     }
-    window.dispatchEvent(new CustomEvent('providerStateChanged'));
-    window.dispatchEvent(new Event('sentryStateChanged'));
+    broadcastStateChange();
   };
 
   const loadWebhookUrl = async () => {
@@ -48,50 +59,19 @@ export default function SentryAuthPage() {
 
   const fetchAndUpdateStatus = async () => {
     const result = await sentryService.getStatus();
-    setStatus(result);
-
-    if (typeof window !== 'undefined' && result) {
-      const cached: CachedStatus = {
-        connected: result.connected,
-        region: result.region,
-        orgSlug: result.orgSlug,
-        hasWebhookSecret: result.hasWebhookSecret,
-      };
-      localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(cached));
-    }
-
-    updateLocalStorageConnection(result?.connected ?? false);
-
-    if (result?.connected) {
-      setRegion(result.region || "us");
-      if (result.orgSlug) setOrgSlug(result.orgSlug);
-      await loadWebhookUrl();
-    } else if (typeof window !== 'undefined') {
-      localStorage.removeItem(CACHE_KEYS.STATUS);
-    }
+    applyStatus(result);
+    if (result?.connected) await loadWebhookUrl();
   };
 
-  const loadStatus = async (skipCache = false) => {
+  const loadStatus = async () => {
     try {
-      if (!skipCache && typeof window !== 'undefined') {
-        const cachedStatus = localStorage.getItem(CACHE_KEYS.STATUS);
-
-        if (cachedStatus) {
-          const parsedStatus = JSON.parse(cachedStatus) as CachedStatus;
-          setStatus(parsedStatus);
-          updateLocalStorageConnection(parsedStatus?.connected ?? false);
-          if (parsedStatus?.connected) {
-            setRegion(parsedStatus.region || "us");
-            if (parsedStatus.orgSlug) setOrgSlug(parsedStatus.orgSlug);
-          }
-
-          // Show cache immediately, then revalidate in the background
-          // so a stale connection state corrects itself on the next tick.
-          fetchAndUpdateStatus();
-          return;
-        }
+      const cached = sentryService.loadCachedStatus();
+      if (cached) {
+        applyStatus({ ...cached } as SentryStatus);
+        // Background revalidate so a stale cached state self-corrects.
+        fetchAndUpdateStatus();
+        return;
       }
-
       await fetchAndUpdateStatus();
     } catch (error: unknown) {
       console.error('[sentry] Failed to load status', error);
@@ -108,50 +88,20 @@ export default function SentryAuthPage() {
   const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setLoading(true);
-
     try {
-      const payload = {
-        authToken,
-        orgSlug,
-        region,
-        webhookSecret,
-      };
-      const result = await sentryService.connect(payload);
-      setStatus(result);
-
-      if (typeof window !== 'undefined') {
-        const cached: CachedStatus = {
-          connected: true,
-          region: result.region,
-          orgSlug: result.orgSlug,
-          hasWebhookSecret: result.hasWebhookSecret,
-        };
-        localStorage.setItem(CACHE_KEYS.STATUS, JSON.stringify(cached));
-        localStorage.setItem('isSentryConnected', 'true');
-      }
-
+      const result = await sentryService.connect({ authToken, orgSlug, region, webhookSecret });
+      applyStatus(result);
       toast({
         title: 'Success',
         description: 'Sentry connected. Verify the webhook URL is set in your Sentry Internal Integration below.',
       });
-
       await loadWebhookUrl();
-      updateLocalStorageConnection(true);
-
-      try {
-        await fetch('/api/provider-preferences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'add', provider: 'sentry' }),
-        });
-        window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers: ['sentry'] } }));
-      } catch (prefErr: unknown) {
-        console.warn('[sentry] Failed to update provider preferences', prefErr);
+      if (await providerPreferencesService.addProvider(PROVIDER_ID)) {
+        broadcastPreferenceChange([PROVIDER_ID]);
       }
     } catch (error: unknown) {
       console.error('[sentry] Connect failed', error);
-      const message = getUserFriendlyError(error);
-      toast({ title: 'Failed to connect to Sentry', description: message, variant: 'destructive' });
+      toast({ title: 'Failed to connect to Sentry', description: getUserFriendlyError(error), variant: 'destructive' });
     } finally {
       setLoading(false);
       setAuthToken('');
@@ -162,43 +112,21 @@ export default function SentryAuthPage() {
   const handleDisconnect = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/connected-accounts/sentry', {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
+      const response = await fetch('/api/connected-accounts/sentry', { method: 'DELETE', credentials: 'include' });
       if (!response.ok && response.status !== 204) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to disconnect Sentry');
+        throw new Error((await response.text()) || 'Failed to disconnect Sentry');
       }
-
-      setStatus({ connected: false });
+      applyStatus({ connected: false });
       setWebhookUrl(null);
       setOrgSlug('');
       setRegion("us");
-
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(CACHE_KEYS.STATUS);
-        localStorage.removeItem('isSentryConnected');
-      }
-
-      updateLocalStorageConnection(false);
       toast({ title: 'Success', description: 'Sentry disconnected successfully.' });
-
-      try {
-        await fetch('/api/provider-preferences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'remove', provider: 'sentry' }),
-        });
-        window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers: [] } }));
-      } catch (prefErr: unknown) {
-        console.warn('[sentry] Failed to update provider preferences', prefErr);
+      if (await providerPreferencesService.removeProvider(PROVIDER_ID)) {
+        broadcastPreferenceChange([]);
       }
     } catch (error: unknown) {
       console.error('[sentry] Disconnect failed', error);
-      const message = getUserFriendlyError(error);
-      toast({ title: 'Failed to disconnect Sentry', description: message, variant: 'destructive' });
+      toast({ title: 'Failed to disconnect Sentry', description: getUserFriendlyError(error), variant: 'destructive' });
     } finally {
       setLoading(false);
     }
