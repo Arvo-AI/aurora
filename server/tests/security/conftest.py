@@ -48,15 +48,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 def _make_oauth_test_app(blueprint, url_prefix: str):
     """Return a minimal Flask test app with *blueprint* registered.
 
-    S4502 — why CSRFProtect is intentionally absent here:
-    Aurora's Flask layer is a pure JSON REST API; it never serves HTML forms
-    and has no flask-wtf / CSRFProtect dependency in production.  CSRF
-    protection for OAuth flows is implemented at the application layer via
-    single-use, Redis-backed, TTL-expiring state tokens
-    (utils.auth.oauth2_state_cache).  Additional Origin/Referer enforcement
-    lives in the Next.js proxy, upstream of Flask entirely.
-    Adding CSRFProtect to a throwaway test app would give a false sense of
-    security and is not consistent with the production architecture.
+    TESTING=True propagates exceptions for cleaner assertions.
     """
     from flask import Flask as _Flask
     application = _Flask(__name__)  # NOSONAR
