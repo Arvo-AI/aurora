@@ -36,6 +36,10 @@ export interface SentryWebhookInfo {
 }
 
 const API_BASE = '/api/sentry';
+const CACHE_KEY = 'sentry_connection_status';
+const CONNECTED_FLAG = 'isSentryConnected';
+
+export type CachedSentryStatus = Pick<SentryStatus, 'connected' | 'region' | 'orgSlug' | 'hasWebhookSecret'>;
 
 export const sentryService = {
   async getStatus(): Promise<SentryStatus | null> {
@@ -80,5 +84,31 @@ export const sentryService = {
     return apiRequest<SentryWebhookInfo>(`${API_BASE}/webhook-url`, {
       cache: 'no-store',
     });
+  },
+
+  loadCachedStatus(): CachedSentryStatus | null {
+    if (typeof window === 'undefined') return null;
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    try { return JSON.parse(raw) as CachedSentryStatus; } catch { return null; }
+  },
+
+  cacheStatus(status: SentryStatus): void {
+    if (typeof window === 'undefined') return;
+    const slim: CachedSentryStatus = {
+      connected: status.connected,
+      region: status.region,
+      orgSlug: status.orgSlug,
+      hasWebhookSecret: status.hasWebhookSecret,
+    };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(slim));
+    if (status.connected) localStorage.setItem(CONNECTED_FLAG, 'true');
+    else localStorage.removeItem(CONNECTED_FLAG);
+  },
+
+  clearCachedStatus(): void {
+    if (typeof window === 'undefined') return;
+    localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem(CONNECTED_FLAG);
   },
 };
