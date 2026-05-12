@@ -11,7 +11,7 @@ Sentry Internal Integration token authentication for querying the Sentry web API
 3. Click **Create New Integration** and choose **Internal Integration**.
 4. Configure:
    - **Name**: `Aurora` (or similar)
-   - **Webhook URL**: paste the Aurora webhook URL shown after connecting (e.g. `https://your-aurora-domain/sentry/webhook/{user_id}`)
+   - **Webhook URL**: paste the Aurora webhook URL shown on the Sentry connector page in Aurora before connecting (e.g. `https://your-aurora-domain/sentry/webhook/{user_id}`)
    - **Permissions** (minimum, all read-only):
      - Issue & Event: `Read`
      - Project: `Read`
@@ -66,7 +66,7 @@ Supported events:
 
 - **`401 Invalid Sentry auth token`** — Token is wrong, was rotated, or the integration was deleted.
 - **`403 lacks required permissions`** — The integration needs at least `issue:read`, `project:read`, and `org:read`.
-- **`404 not found`** when validating** — The org slug is wrong. It's the slug, not the display name (e.g. `acme-co`, not `Acme Co`).
+- **`404 not found` when validating** — The org slug is wrong. It's the slug, not the display name (e.g. `acme-co`, not `Acme Co`).
 - **Webhooks not arriving** — Check the integration's *Webhook URL* matches Aurora's URL exactly, and that at least one resource subscription is checked.
 - **Invalid webhook signature** — Re-copy the *Webhook Secret* from Sentry; the value is shown only once per integration creation.
 - **EU region** — Make sure you selected `EU` in Aurora when the integration lives on `de.sentry.io`.

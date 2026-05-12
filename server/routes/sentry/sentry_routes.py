@@ -25,6 +25,7 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
+from routes.sentry.tasks import extract_sentry_title, process_sentry_event
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,8 @@ def connect(user_id):
     try:
         client = SentryClient(auth_token=auth_token, org_slug=org_slug, region=region)
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        logger.warning("[SENTRY] SentryClient construction failed: %s", sanitize(str(exc)))
+        return jsonify({"error": "Invalid Sentry credentials format"}), 400
 
     try:
         org_info = client.validate_credentials()
@@ -242,7 +244,10 @@ def disconnect(user_id):
             logger.warning("[SENTRY] Failed to clean up secrets during disconnect")
             return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
-        logger.info("[SENTRY] Disconnected user %s (deleted %d token rows)", user_id, deleted)
+        logger.info(
+            "[SENTRY] Disconnected user %s (deleted %d token rows)",
+            sanitize(user_id), deleted,
+        )
         return jsonify({
             "success": True,
             "message": "Sentry disconnected successfully",
@@ -354,40 +359,42 @@ def list_issues(user_id):
 def list_ingested_events(user_id):
     """List Sentry webhook events stored in the database."""
     org_id = get_org_id_from_request()
-    limit = request.args.get("limit", default=50, type=int)
-    offset = request.args.get("offset", default=0, type=int)
+    raw_limit = request.args.get("limit", default=50, type=int) or 50
+    raw_offset = request.args.get("offset", default=0, type=int) or 0
+    limit = max(1, min(raw_limit, 200))
+    offset = max(0, raw_offset)
     resource_filter = request.args.get("resource")
 
     try:
         with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[Sentry]")
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[Sentry]")
 
-            base_query = """
-                SELECT id, issue_id, issue_title, level, project_slug, resource, action,
-                       payload, received_at, created_at
-                FROM sentry_events
-                WHERE org_id = %s
-            """
-            params = [org_id]
-            if resource_filter:
-                base_query += " AND resource = %s"
-                params.append(resource_filter)
+                base_query = """
+                    SELECT id, issue_id, issue_title, level, project_slug, resource, action,
+                           payload, received_at, created_at
+                    FROM sentry_events
+                    WHERE org_id = %s
+                """
+                params = [org_id]
+                if resource_filter:
+                    base_query += " AND resource = %s"
+                    params.append(resource_filter)
 
-            base_query += " ORDER BY received_at DESC LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
+                base_query += " ORDER BY received_at DESC LIMIT %s OFFSET %s"
+                params.extend([limit, offset])
 
-            cursor.execute(base_query, params)
-            rows = cursor.fetchall()
+                cursor.execute(base_query, params)
+                rows = cursor.fetchall()
 
-            count_query = "SELECT COUNT(*) FROM sentry_events WHERE org_id = %s"
-            count_params = [org_id]
-            if resource_filter:
-                count_query += " AND resource = %s"
-                count_params.append(resource_filter)
+                count_query = "SELECT COUNT(*) FROM sentry_events WHERE org_id = %s"
+                count_params = [org_id]
+                if resource_filter:
+                    count_query += " AND resource = %s"
+                    count_params.append(resource_filter)
 
-            cursor.execute(count_query, count_params)
-            total = cursor.fetchone()[0]
+                cursor.execute(count_query, count_params)
+                total = cursor.fetchone()[0]
 
         events = []
         for row in rows:
@@ -466,7 +473,6 @@ def webhook(user_id: str):
         "remote_addr": request.remote_addr,
     }
 
-    from routes.sentry.tasks import process_sentry_event, extract_sentry_title
     title = extract_sentry_title(payload, resource)
 
     logger.info(

@@ -679,7 +679,7 @@ def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
     org_slug = creds.get("org_slug")
     if not auth_token or not org_slug:
         return {"connected": False}
-    region = creds.get("region", "us")
+    region = (creds.get("region") or "us").strip().lower()
     base_url = "https://de.sentry.io" if region == "eu" else "https://sentry.io"
     try:
         r = requests.get(
@@ -729,10 +729,10 @@ PROVIDER_CHECKERS = {
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
-    "sentry":        _check_sentry,
+    "sentry": _check_sentry,
     # Credential-existence checks (no live API endpoint to validate against)
-    "netdata":       _check_netdata,
-    "newrelic":      _check_newrelic,
+    "netdata": _check_netdata,
+    "newrelic": _check_newrelic,
     "gcp": _check_gcp_credentials,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,

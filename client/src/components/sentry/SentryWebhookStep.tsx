@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Copy, Check, ExternalLink, Unplug } from "lucide-react";
 import type { SentryStatus } from "@/lib/services/sentry";
+import { SENTRY_PURPLE } from "./constants";
 
 interface SentryWebhookStepProps {
   status: SentryStatus;
@@ -14,8 +15,6 @@ interface SentryWebhookStepProps {
   onDisconnect: () => void;
   loading: boolean;
 }
-
-const SENTRY_PURPLE = "#362d59";
 
 export function SentryWebhookStep({
   status,

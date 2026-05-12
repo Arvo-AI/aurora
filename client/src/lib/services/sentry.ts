@@ -66,7 +66,7 @@ export const sentryService = {
       cache: 'no-store',
     });
     return {
-      connected: Boolean(data?.success ?? true),
+      connected: Boolean(data?.success),
       region: (data?.region ?? payload.region) as string | undefined,
       orgSlug: (data?.orgSlug ?? payload.orgSlug) as string | undefined,
       orgName: data?.orgName as string | undefined,

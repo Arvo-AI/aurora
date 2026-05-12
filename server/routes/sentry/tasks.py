@@ -7,11 +7,27 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+import psycopg2
+import requests
+
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_sentry_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.payload_timestamp import extract_alert_fired_at
+
+# Exceptions that warrant retrying the task — DB connectivity hiccups,
+# transient network errors talking to downstream services. Non-transient
+# errors (data validation, type mismatches, programmer errors) are
+# re-raised so they fail fast and stay visible.
+_TRANSIENT_EXCEPTIONS = (
+    psycopg2.OperationalError,
+    psycopg2.InterfaceError,
+    requests.ConnectionError,
+    requests.Timeout,
+    ConnectionError,
+    TimeoutError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -412,9 +428,12 @@ def process_sentry_event(
                                 "[SENTRY][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
                                 session_id, task.id,
                             )
-                    except Exception as e:
-                        logger.error("[SENTRY][WEBHOOK] Failed to trigger RCA: %s", e)
+                    except Exception:
+                        logger.exception("[SENTRY][WEBHOOK] Failed to trigger RCA")
 
-    except Exception as exc:
-        logger.exception("[SENTRY][WEBHOOK] Failed to process webhook payload")
+    except _TRANSIENT_EXCEPTIONS as exc:
+        logger.exception("[SENTRY][WEBHOOK] Transient failure; retrying")
         raise self.retry(exc=exc)
+    except Exception:
+        logger.exception("[SENTRY][WEBHOOK] Non-transient failure; not retrying")
+        raise

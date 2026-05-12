@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Copy, Check } from "lucide-react";
+import { SENTRY_PURPLE } from "./constants";
 
 interface SentryConnectionStepProps {
   authToken: string;
@@ -26,8 +27,6 @@ const REGION_HINTS = [
   { value: "us", label: "US (sentry.io)" },
   { value: "eu", label: "EU (de.sentry.io)" },
 ];
-
-const SENTRY_PURPLE = "#362d59";
 
 export function SentryConnectionStep({
   authToken,

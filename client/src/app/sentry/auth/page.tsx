@@ -7,8 +7,7 @@ import { SentryConnectionStep } from "@/components/sentry/SentryConnectionStep";
 import { SentryWebhookStep } from "@/components/sentry/SentryWebhookStep";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
-
-const SENTRY_PURPLE = "#362d59";
+import { SENTRY_PURPLE } from "@/components/sentry/constants";
 
 const CACHE_KEYS = {
   STATUS: 'sentry_connection_status',
@@ -26,7 +25,6 @@ export default function SentryAuthPage() {
   const [loading, setLoading] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   const updateLocalStorageConnection = (connected: boolean) => {
     if (typeof window === 'undefined') return;
@@ -87,11 +85,9 @@ export default function SentryAuthPage() {
             if (parsedStatus.orgSlug) setOrgSlug(parsedStatus.orgSlug);
           }
 
-          if (isInitialLoad) {
-            setIsInitialLoad(false);
-            fetchAndUpdateStatus();
-            return;
-          }
+          // Show cache immediately, then revalidate in the background
+          // so a stale connection state corrects itself on the next tick.
+          fetchAndUpdateStatus();
           return;
         }
       }
