@@ -1,12 +1,15 @@
 """
-Aurora MCP Server
+Aurora MCP Server — bootstrap + middleware + identity proxy.
 
-Exposes Aurora's full API surface to MCP-compatible clients (Claude Desktop,
-Cursor, Windsurf, etc.) via 5 curated tools for the core investigation workflow
-and a generic proxy tool that covers all ~340 API endpoints.
+Tool/resource/prompt definitions live in the `server/mcp/` package; this
+file just wires the FastMCP instance, owns the bearer-token middleware,
+and provides the shared `_api(method, path, ...)` helper that forwards
+user identity (resolved from the MCP token) to the Flask backend.
 
 Runs as a streamable-http server on port 8811 (default).
 """
+
+from __future__ import annotations
 
 import asyncio
 import atexit
@@ -14,6 +17,7 @@ import contextvars
 import logging
 import os
 import time
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 import psycopg2
@@ -66,8 +70,13 @@ class BearerTokenMiddleware:
 # Token resolution (only direct DB access in this server)
 # ---------------------------------------------------------------------------
 
-_pool: psycopg2.pool.ThreadedConnectionPool | None = None
-_last_used_cache: dict[str, float] = {}
+_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+_last_used_cache: Dict[str, float] = {}
+
+# token → (resolved_at_monotonic, user_id, org_id). Avoids a Postgres SELECT
+# on every list_tools / call_tool request.
+_TOKEN_READ_TTL = 60.0
+_token_read_cache: Dict[str, tuple] = {}
 
 
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
@@ -87,7 +96,7 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _pool
 
 
-def _shutdown_pool():
+def _shutdown_pool() -> None:
     if _pool is not None and not _pool.closed:
         _pool.closeall()
 
@@ -95,14 +104,18 @@ def _shutdown_pool():
 atexit.register(_shutdown_pool)
 
 
-def _resolve_token(token: str) -> tuple[str, str]:
+def _resolve_token(token: str) -> Tuple[str, str]:
     """Look up an MCP API token and return (user_id, org_id).
 
-    Uses a direct superuser pool intentionally -- token resolution is a
-    bootstrap step that precedes org context, so RLS does not apply.
-    Sets myapp.mcp_token_resolve to activate the permissive RLS policy that
-    allows point-lookups by token value without an org_id context.
+    Result is cached for _TOKEN_READ_TTL seconds. Revocations therefore take
+    up to that long to be observed by the MCP process — acceptable for a
+    bearer-token gating path used several times per MCP request.
     """
+    now = time.monotonic()
+    cached = _token_read_cache.get(token)
+    if cached is not None and now - cached[0] < _TOKEN_READ_TTL:
+        return cached[1], cached[2]
+
     pool = _get_pool()
     conn = pool.getconn()
     ok = False
@@ -119,12 +132,12 @@ def _resolve_token(token: str) -> tuple[str, str]:
             row = cur.fetchone()
             if not row:
                 raise ValueError("Invalid, expired, or revoked MCP token")
-            now = time.monotonic()
             if now - _last_used_cache.get(token, 0) > 60:
                 cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
                 _last_used_cache[token] = now
         conn.commit()
         ok = True
+        _token_read_cache[token] = (now, row[0], row[1])
         return row[0], row[1]
     finally:
         if not ok:
@@ -140,8 +153,32 @@ def _get_token() -> str:
         raise ValueError("No MCP token provided. Send a Bearer token in the Authorization header.")
 
 
-async def _api(method: str, path: str, *, params: dict | None = None,
-               body: dict | None = None, timeout: float = 30) -> dict:
+_http_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Lazily build a long-lived httpx client with keepalive pooling.
+
+    Reusing the client across requests preserves the TCP/TLS connection to
+    aurora-server, which matters in tight poll loops like chat_with_aurora.
+    """
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            base_url=API_BASE,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+        )
+    return _http_client
+
+
+async def _api(
+    method: str,
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    body: Optional[Dict[str, Any]] = None,
+    timeout: float = 30,
+) -> Dict[str, Any]:
     """Proxy a request to the Aurora Flask API with identity from the MCP token."""
     if not path.startswith("/"):
         raise ValueError(f"Path must be a relative path starting with /: {path}")
@@ -150,18 +187,20 @@ async def _api(method: str, path: str, *, params: dict | None = None,
     headers = {"X-User-ID": user_id, "X-Org-ID": org_id}
     if _INTERNAL_SECRET:
         headers["X-Internal-Secret"] = _INTERNAL_SECRET
-    async with httpx.AsyncClient(base_url=API_BASE, timeout=timeout) as client:
-        resp = await client.request(method, path, params=params, json=body, headers=headers)
+    client = _get_http_client()
+    resp = await client.request(
+        method, path, params=params, json=body, headers=headers, timeout=timeout,
+    )
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
         try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            code = exc.response.status_code
-            try:
-                detail = exc.response.json()
-            except Exception:
-                detail = {"error": exc.response.text[:500]}
-            raise ValueError(f"Aurora API returned {code}: {detail}")
-        return resp.json()
+            detail = exc.response.json()
+        except Exception:
+            detail = {"error": exc.response.text[:500]}
+        raise ValueError(f"Aurora API returned {code}: {detail}")
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -171,129 +210,75 @@ async def _api(method: str, path: str, *, params: dict | None = None,
 mcp = FastMCP(
     "Aurora",
     instructions=(
-        "Aurora is an AI-powered cloud operations platform. "
-        "Use the curated tools for incidents and infrastructure. "
-        "For anything else, use aurora_api -- read aurora://api-catalog first to discover endpoints."
+        "Aurora is an AI-powered cloud operations platform. For investigation, "
+        "incident triage, or any open-ended question, prefer `chat_with_aurora` "
+        "— Aurora's agent picks the right tools, runs RCAs, and cites sources. "
+        "Use the connector-specific tools (query_logs, query_metrics, github_rca…) "
+        "only when the user explicitly asks for raw data. Discover additional "
+        "tools via search_tools and invoke them via call_tool."
     ),
-    host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token in MCP_AUTH_TOKEN
+    host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token
     stateless_http=True,
     json_response=True,
 )
 
 
 # ---------------------------------------------------------------------------
-# Curated tools -- typed parameters, great UX for the core workflow
+# Wire tools / resources / prompts from the server/mcp/ package
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def list_incidents(status: str | None = None, limit: int = 20) -> dict:
-    """List Aurora incidents. Optionally filter by status (investigating/analyzed/merged/resolved)."""
-    params: dict = {"limit": limit}
-    if status:
-        params["status"] = status
-    return await _api("GET", "/api/incidents", params=params)
+from aurora_mcp.tools_always_on import register_tier1_tools  # noqa: E402
+from aurora_mcp.tools_gated import register_tier2_tools  # noqa: E402
+from aurora_mcp.dispatch import register_dispatch_tools  # noqa: E402
+from aurora_mcp.resources import register_resources  # noqa: E402
+from aurora_mcp.prompts import register_prompts  # noqa: E402
 
-
-@mcp.tool()
-async def get_incident(incident_id: str) -> dict:
-    """Get full incident details including summary, suggestions, citations, and alerts."""
-    return await _api("GET", f"/api/incidents/{incident_id}")
-
-
-@mcp.tool()
-async def ask_incident(incident_id: str, question: str) -> dict:
-    """Ask Aurora AI a question about an incident. Posts the question and polls for the response."""
-    result = await _api("POST", f"/api/incidents/{incident_id}/chat",
-                        body={"question": question, "mode": "ask"}, timeout=30)
-    session_id = result.get("session_id")
-    if not session_id:
-        return result
-
-    for _ in range(10):
-        await asyncio.sleep(2)
-        session = await _api("GET", f"/chat_api/sessions/{session_id}", timeout=15)
-        if session.get("status") not in ("processing", "pending"):
-            return session
-    return {"status": "still_processing", "session_id": session_id,
-            "message": "Response not ready after 20s. Poll: aurora_api GET /chat_api/sessions/{session_id}"}
-
-
-@mcp.tool()
-async def get_graph_stats() -> dict:
-    """Get infrastructure graph statistics: single points of failure, critical services, topology overview."""
-    return await _api("GET", "/api/graph/stats")
-
-
-@mcp.tool()
-async def search_knowledge_base(query: str, limit: int = 5) -> dict:
-    """Semantic search across Aurora's knowledge base documents."""
-    return await _api("POST", "/api/knowledge-base/search", body={"query": query, "limit": limit})
+register_tier1_tools(mcp, _api)
+register_tier2_tools(mcp, _api, _get_token, _resolve_token)
+register_dispatch_tools(mcp, _api, _get_token, _resolve_token)
+register_resources(mcp, _api, _get_token, _resolve_token)
+register_prompts(mcp)
 
 
 # ---------------------------------------------------------------------------
-# Generic proxy tool -- covers 100% of Aurora's API surface
+# Per-request tool-list filtering — hides Tier-2 tools the user can't use.
+#
+# In stateless_http=True FastMCP can't push notifications/tools/list_changed,
+# but we can still override list_tools to filter on every request. The bearer
+# token is set by BearerTokenMiddleware before list_tools fires.
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def aurora_api(method: str, path: str, params: dict | None = None,
-                     body: dict | None = None) -> dict:
-    """Call any Aurora API endpoint. Read the aurora://api-catalog resource first to discover
-    available endpoints. method: GET/POST/PATCH/PUT/DELETE. path: e.g. /api/connectors/status"""
-    if not path.startswith("/"):
-        return {"error": "path must start with / (e.g. /api/incidents)"}
-    timeout = 120.0 if "discover" in path else 30.0
-    return await _api(method, path, params=params, body=body, timeout=timeout)
+from aurora_mcp.registry import (  # noqa: E402
+    TIER2_TOOLS,
+    gated_tool_visible,
+)
+
+_GATED_NAMES = {spec.name: spec for spec in TIER2_TOOLS}
+_original_list_tools = mcp.list_tools  # bound method
 
 
-# ---------------------------------------------------------------------------
-# Resources
-# ---------------------------------------------------------------------------
+async def _filtered_list_tools():  # type: ignore[no-redef]
+    all_tools = await _original_list_tools()
+    # If the token isn't set yet (e.g. a probe before identifier injection),
+    # default to showing only always-on tools to keep the upfront surface lean.
+    try:
+        token = _current_bearer_token.get()
+        user_id, _org_id = _resolve_token(token)
+    except Exception:
+        return [t for t in all_tools if t.name not in _GATED_NAMES]
 
-@mcp.resource("aurora://api-catalog")
-async def api_catalog() -> str:
-    """List of all available Aurora API endpoints (auto-generated from Flask route map)."""
-    data = await _api("GET", "/api/routes")
-    lines = []
-    for route in data:
-        methods = ", ".join(route["methods"])
-        lines.append(f"{methods:30s} {route['path']}")
-    return "\n".join(lines)
-
-
-@mcp.resource("aurora://health")
-async def health() -> dict:
-    """Aurora system health: database, Redis, Weaviate, Celery status."""
-    return await _api("GET", "/health/")
-
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-@mcp.prompt()
-def investigate_incident(incident_id: str) -> str:
-    """Structured prompt for investigating an Aurora incident."""
-    return (
-        f"Investigate Aurora incident #{incident_id}. Steps:\n"
-        "1. get_incident to retrieve full details\n"
-        "2. Review the AI-generated summary, suggestions, and citations\n"
-        "3. Use ask_incident for follow-up questions\n"
-        "4. Check get_graph_stats for infrastructure impact\n"
-        "5. Search knowledge base for related runbooks\n"
-        "6. Summarize findings with root cause, impact, and recommended actions"
-    )
+    filtered = []
+    for t in all_tools:
+        spec = _GATED_NAMES.get(t.name)
+        if spec is None:
+            filtered.append(t)
+            continue
+        if gated_tool_visible(spec, user_id):
+            filtered.append(t)
+    return filtered
 
 
-@mcp.prompt()
-def blast_radius_analysis(service_name: str) -> str:
-    """Analyze the blast radius of a failing service."""
-    return (
-        f"Analyze the blast radius for service '{service_name}':\n"
-        "1. aurora_api GET /api/graph/services/{name}/impact to get downstream dependencies\n"
-        "2. get_graph_stats for overall topology context\n"
-        "3. list_incidents to check for active incidents on affected services\n"
-        "4. Summarize: which services are at risk, estimated user impact, mitigation steps"
-    )
+mcp.list_tools = _filtered_list_tools  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
