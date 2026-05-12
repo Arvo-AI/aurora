@@ -694,7 +694,7 @@ def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
                 "orgSlug": org_slug,
                 "orgName": data.get("name"),
                 "region": region,
-                "hasWebhookSecret": bool(creds.get("client_secret")),
+                "webhookConfigured": bool(creds.get("client_secret")),
             }
         return {"connected": False}
     except Exception:
