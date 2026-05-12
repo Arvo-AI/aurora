@@ -66,13 +66,6 @@ class OpenAIProvider(BaseLLMProvider):
             "stream_usage": True,
         }
 
-        # Enable reasoning for models that support it (GPT-5+, o-series).
-        # This makes the model emit text preambles alongside tool calls,
-        # which flow to the ThoughtsPanel during RCA.
-        if self._supports_reasoning(native_model):
-            config["reasoning_effort"] = "high"
-            logger.info(f"Enabled reasoning_effort=high for {native_model}")
-
         config.update(kwargs)
 
         return ChatOpenAI(**config)
