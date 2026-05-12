@@ -21,6 +21,32 @@ real-time webhooks for incident-correlation events (`pull_request`,
 rate-limit budget that scales with installation count rather than user
 count. For the capability matrix see the connector [README](./README.md).
 
+Phase 1a adds **PR Risk Review** to the App. The same install gains:
+
+- `Pull requests: write` so Aurora can submit GitHub PR Reviews
+  (approve / request_changes with up to three inline per-hunk comments
+  on HIGH-severity, HIGH-confidence findings) and dismiss prior
+  reviews on re-runs.
+- Subscriptions to `issue_comment` and `pull_request_review_comment`
+  so engineer replies to Aurora's reviews (`@<aurora-slug>` mentions
+  or threaded inline replies) re-trigger an investigation.
+
+Phase 1a is **advisory only** by design — customers are explicitly
+told NOT to add Aurora to branch protection as a required reviewer.
+A `request_changes` verdict surfaces as a red X on the PR but does
+not block merge until outcome data justifies blocking-capable
+reviews. See `services/change_intercept/` for the pipeline source.
+
+### Upgrading an existing install
+
+When the App's permissions / events change in GitHub's settings page,
+existing installs are flagged as **pending permissions update**. The
+org owner must visit their Aurora App settings page on GitHub, review
+the new requirements, and accept — no re-install needed. New customer
+installs pick the new permissions up automatically. Aurora's webhook
+handler watches for `installation.new_permissions_accepted` events
+and clears the pending flag automatically once accepted.
+
 ---
 
 ## Prerequisites
@@ -97,7 +123,7 @@ these exact values. Leave every other permission as **No access**.
 | **Contents** | Read and write | Read code/metadata for RCA. Write is reserved for future auto-fix PRs and is **not used by current code** (read-only enforced in the auth router). |
 | **Metadata** | Read-only | Mandatory baseline for any repo-scoped permission. |
 | **Issues** | Read-only | Correlate incidents with open issues. |
-| **Pull requests** | Read-only | RCA: which PR shipped the bad change. |
+| **Pull requests** | Read and write | Read for RCA (which PR shipped the bad change). Write is required by Phase 1a "PR Risk Review" to submit GitHub PR Reviews (approve / request_changes + inline per-hunk comments) and dismiss prior reviews on re-runs. |
 | **Actions** | Read-only | Inspect workflow runs around the incident window. |
 | **Deployments** | Read-only | Build the deploy timeline for RCA. |
 | **Commit statuses** | Read-only | Pull CI / commit status signals. |
@@ -120,6 +146,8 @@ Scroll to **Subscribe to events** and check these boxes:
 - [ ] `installation`
 - [ ] `installation_repositories`
 - [ ] `pull_request`
+- [ ] `issue_comment`                   <!-- Phase 1a: PR Risk Review reply ingestion -->
+- [ ] `pull_request_review_comment`     <!-- Phase 1a: PR Risk Review reply ingestion -->
 - [ ] `issues`
 - [ ] `deployment`
 - [ ] `deployment_status`
@@ -127,8 +155,15 @@ Scroll to **Subscribe to events** and check these boxes:
 - [ ] `check_run`
 - [ ] `check_suite`
 
-> **9 events total.** Do **not** subscribe to `push` or `release` — Aurora
+> **11 events total.** Do **not** subscribe to `push` or `release` — Aurora
 > does not handle them and they would generate substantial noise.
+>
+> The two comment events (`issue_comment`,
+> `pull_request_review_comment`) are required by Phase 1a "PR Risk
+> Review" so the dispatcher can capture engineer replies to Aurora's
+> PR Reviews (threaded replies on inline comments + `@<aurora-slug>`
+> mentions in top-level PR comments). Unrelated PR chatter is
+> filtered out inside the change-intercept adapter, not at GitHub.
 
 ---
 
