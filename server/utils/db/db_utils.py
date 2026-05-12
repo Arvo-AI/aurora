@@ -346,6 +346,7 @@ def initialize_tables():
                         repository_selection VARCHAR(20) NOT NULL DEFAULT 'selected',
                         suspended_at TIMESTAMP NULL,
                         permissions_pending_update BOOLEAN NOT NULL DEFAULT FALSE,
+                        change_intercept_dry_run BOOLEAN NOT NULL DEFAULT TRUE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
@@ -1474,6 +1475,25 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding disconnected_at column to user_github_installations: {e}"
+                )
+                conn.rollback()
+
+            # Migration: per-install dry-run flag for change-intercept (Phase 1a
+            # Part 3). Default TRUE so calibration mode is the safe default —
+            # the live-review path only fires when this is explicitly flipped
+            # to FALSE after the customer's calibration window completes.
+            try:
+                cursor.execute(
+                    "ALTER TABLE github_installations "
+                    "ADD COLUMN IF NOT EXISTS change_intercept_dry_run BOOLEAN NOT NULL DEFAULT TRUE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured change_intercept_dry_run column exists on github_installations table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding change_intercept_dry_run column to github_installations: {e}"
                 )
                 conn.rollback()
 
