@@ -1214,6 +1214,112 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
                 """,
+                # ─── Change-Intercept (Phase 1a "PR Risk Review") ───
+                # Three vendor-neutral tables for the PR-time risk review pipeline.
+                # Phase 1a: only GitHub is wired (vendor='github'). The schema is
+                # designed to accommodate future GitLab/Bitbucket adapters with
+                # zero schema churn — the vendor-specific bits live in the
+                # adapter, not the columns.
+                #
+                # change_events: webhook-captured snapshots. One row per PR open
+                # / push / reply that the dispatcher accepts. The unified diff,
+                # changed-files list, commit messages, and PR body are persisted
+                # at webhook time so the investigator never has to call back to
+                # the vendor mid-run.
+                #
+                # change_investigations: investigator output. Findings are a
+                # JSONB array of {severity, confidence, category, file_path,
+                # start_line, end_line, title, rationale, cited_tool_calls}.
+                # dry_run defaults TRUE so Part 2 calibration runs never
+                # accidentally post live reviews. Part 3 flips dry_run on a
+                # per-install basis once distribution looks sane.
+                #
+                # risk_outcomes: postmortem-to-investigation linkage populated
+                # by the nightly linker. Sparse — only populated when a
+                # postmortem-tagged incident can be traced back to a PR that
+                # Aurora reviewed. Powers precision/recall metrics on the
+                # request_changes class.
+                "change_events": """
+                    CREATE TABLE IF NOT EXISTS change_events (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        vendor VARCHAR(32) NOT NULL,
+                        kind VARCHAR(32) NOT NULL,
+                        external_id TEXT NOT NULL,
+                        dedup_key TEXT NOT NULL,
+                        installation_id BIGINT,
+                        repo TEXT,
+                        ref TEXT,
+                        base_ref TEXT,
+                        commit_sha TEXT,
+                        actor TEXT,
+                        target_env VARCHAR(32),
+                        change_body TEXT,
+                        change_diff TEXT,
+                        change_files JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        change_commits JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        follow_up_comment TEXT,
+                        parent_event_id UUID REFERENCES change_events(id) ON DELETE SET NULL,
+                        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (org_id, vendor, external_id, commit_sha, kind)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_change_events_org_received
+                        ON change_events(org_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_change_events_installation
+                        ON change_events(installation_id);
+                    CREATE INDEX IF NOT EXISTS idx_change_events_repo_ref
+                        ON change_events(org_id, repo, ref);
+                    CREATE INDEX IF NOT EXISTS idx_change_events_dedup
+                        ON change_events(org_id, dedup_key, received_at DESC);
+                """,
+                "change_investigations": """
+                    CREATE TABLE IF NOT EXISTS change_investigations (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        change_event_id UUID NOT NULL REFERENCES change_events(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        parent_investigation_id UUID REFERENCES change_investigations(id) ON DELETE SET NULL,
+                        verdict VARCHAR(16) NOT NULL,
+                        summary TEXT NOT NULL DEFAULT '',
+                        intent_alignment VARCHAR(16),
+                        intent_notes TEXT,
+                        findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        dropped_findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        tool_call_count INT NOT NULL DEFAULT 0,
+                        duration_ms INT NOT NULL DEFAULT 0,
+                        llm_model TEXT,
+                        external_verdict_id TEXT,
+                        inline_comment_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        dry_run BOOLEAN NOT NULL DEFAULT TRUE,
+                        investigated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_change_investigations_org_investigated
+                        ON change_investigations(org_id, investigated_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_change_investigations_event
+                        ON change_investigations(change_event_id);
+                    CREATE INDEX IF NOT EXISTS idx_change_investigations_parent
+                        ON change_investigations(parent_investigation_id)
+                        WHERE parent_investigation_id IS NOT NULL;
+                """,
+                "risk_outcomes": """
+                    CREATE TABLE IF NOT EXISTS risk_outcomes (
+                        change_investigation_id UUID PRIMARY KEY
+                            REFERENCES change_investigations(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        caused_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
+                        feedback_source VARCHAR(32),
+                        labeled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_risk_outcomes_org
+                        ON risk_outcomes(org_id, labeled_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_risk_outcomes_incident
+                        ON risk_outcomes(caused_incident_id)
+                        WHERE caused_incident_id IS NOT NULL;
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1278,6 +1384,13 @@ def initialize_tables():
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("github_connected_repos")
+            # Change-intercept tables (Phase 1a PR Risk Review). All three are
+            # per-org and must be RLS-protected. Celery webhook handlers
+            # MUST call set_rls_context() before INSERT/SELECT — there is no
+            # Flask request context inside the dispatcher.
+            rls_tables.append("change_events")
+            rls_tables.append("change_investigations")
+            rls_tables.append("risk_outcomes")
             # user_github_installations is intentionally NOT RLS-protected.
             # The webhook handler in tasks/github_webhook_tasks.py enumerates
             # ALL users who linked a given installation_id (cross-org) when
