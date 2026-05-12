@@ -14,6 +14,8 @@ Handler Matrix
 | installation                   | ``_handle_installation_event``                   |
 | installation_repositories      | ``_handle_installation_repositories_event``      |
 | pull_request                   | ``_handle_pull_request_event``                   |
+| issue_comment                  | ``_handle_issue_comment_event``                  |
+| pull_request_review_comment    | ``_handle_pull_request_review_comment_event``    |
 | issues                         | ``_handle_issues_event``                         |
 | deployment                     | ``_handle_deployment_event``                     |
 | deployment_status              | ``_handle_deployment_status_event``              |
@@ -22,6 +24,13 @@ Handler Matrix
 | check_suite                    | ``_handle_check_suite_event``                    |
 | <anything else>                | WARNING ``unknown_event`` + ``status=processed`` |
 +--------------------------------+--------------------------------------------------+
+
+The ``pull_request``, ``issue_comment`` and ``pull_request_review_comment``
+handlers additionally invoke ``_ingest_change_intercept_event`` to persist
+a ``change_events`` row per Aurora org linked to the installation —
+the Phase 1a "PR Risk Review" pipeline (see
+``services.change_intercept``). Phase 1a Part 1 stops at persistence;
+Part 2 enqueues an investigation Celery task off the new row.
 
 Excluded by design (per plan): ``push``, ``release`` — the Aurora
 GitHub App is NOT subscribed to these events; they should never reach
@@ -100,6 +109,321 @@ from celery_config import celery_app
 from utils.auth.log_redact import redact_token
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Change-Intercept persistence (Phase 1a, Part 1) ─────────────────
+#
+# The handlers below extend the existing RCA-correlation logs with a
+# new persistence step: a row in ``change_events`` per Aurora org
+# linked to the GitHub installation. This is the foundation the Part 2
+# investigator and Part 3 review-poster build on; Part 1 stops at
+# persistence (no LLM call, no PR comment).
+#
+# Why the change-intercept ingest lives inside the existing dispatcher
+# instead of behind a new Celery task: at Part 1 scope the work is a
+# small DB insert + a couple of REST calls. Adding a new queue would
+# require a separate worker definition and complicate ops without
+# buying isolation we need yet. Part 2 introduces ``launch_investigation``
+# on a dedicated ``change_intercept`` queue because the LLM call is
+# heavy and we want its retries / timeouts independent of the webhook
+# dispatcher.
+
+
+def _resolve_orgs_for_installation(installation_id: int) -> list[tuple[str, str]]:
+    """Return active ``(org_id, user_id)`` tuples for the installation.
+
+    One row per org — when an installation is linked by multiple users
+    in the same Aurora org, we pick the primary user (and fall back
+    to the earliest linked) so each org has a stable user_id for
+    ``set_rls_context``. Disconnected links are skipped.
+
+    Empty result means no Aurora user has linked this installation yet
+    — the dispatcher acknowledges the webhook delivery but persists
+    no ``change_events`` row.
+    """
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                # No RLS needed — user_github_installations is intentionally
+                # NOT RLS-protected so cross-org enumeration works.
+                cur.execute(
+                    """SELECT DISTINCT ON (org_id) org_id, user_id
+                         FROM user_github_installations
+                        WHERE installation_id = %s
+                          AND disconnected_at IS NULL
+                          AND org_id IS NOT NULL
+                          AND org_id <> ''
+                        ORDER BY org_id, is_primary DESC, linked_at ASC""",
+                    (installation_id,),
+                )
+                return [
+                    (row[0], row[1])
+                    for row in cur.fetchall()
+                    if row[0] and row[1]
+                ]
+    except Exception as exc:
+        logger.warning(
+            "change_intercept_event=resolve_orgs_failed installation_id=%s "
+            "error_class=%s",
+            installation_id,
+            type(exc).__name__,
+        )
+        return []
+
+
+def _lookup_parent_event_id(
+    cur,
+    org_id: str,
+    dedup_key: str,
+) -> str | None:
+    """Return the most recent code_change ``change_events.id`` for the
+    given ``(org_id, dedup_key)`` so a followup row can link back.
+
+    Returns ``None`` when no parent exists (the engineer commented on a
+    PR Aurora has never seen — possible if the App was installed AFTER
+    the PR was opened). The followup row is still persisted; the link
+    is just left null.
+    """
+    cur.execute(
+        """SELECT id FROM change_events
+            WHERE org_id = %s AND dedup_key = %s AND kind = 'code_change'
+            ORDER BY received_at DESC
+            LIMIT 1""",
+        (org_id, dedup_key),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _persist_change_event(
+    event: Any,  # NormalizedChangeEvent — typed loosely to avoid an import cycle
+    snapshot: Any,  # ChangeSnapshot
+    user_id: str,
+    delivery_id: str,
+) -> None:
+    """INSERT one ``change_events`` row under RLS context.
+
+    Idempotent via the ``(org_id, vendor, external_id, commit_sha, kind)``
+    UNIQUE constraint: a GitHub retry or a Celery retry that gets past
+    ``webhook_deliveries`` dedup lands on the unique-violation branch
+    and is treated as a successful re-ack rather than an error.
+
+    Args:
+        event: parsed event from the adapter. Must have ``org_id``
+            populated (used for the RLS sanity check below).
+        snapshot: fetched diff + files + commits + body + comments.
+        user_id: any user from the target org — used to set RLS
+            context. ``set_rls_context`` looks up the actual org from
+            this user and refuses to set RLS if it doesn't match.
+        delivery_id: ``X-GitHub-Delivery`` UUID for log correlation.
+    """
+    from psycopg2 import IntegrityError, errors as psycopg_errors
+
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                org_id = set_rls_context(
+                    cur, conn, user_id, log_prefix="[change_intercept]"
+                )
+                if not org_id:
+                    logger.warning(
+                        "change_intercept_event=persist_skipped reason=no_rls_context "
+                        "delivery_id=%s user=%s",
+                        delivery_id,
+                        user_id,
+                    )
+                    return
+                if org_id != event.org_id:
+                    # Defence in depth: the dispatcher passes the user
+                    # from the same org as the event, so this mismatch
+                    # would indicate a stale RLS cache or a corrupted
+                    # user→org link. Fail-closed.
+                    logger.error(
+                        "change_intercept_event=persist_skipped reason=org_mismatch "
+                        "delivery_id=%s event_org=%s rls_org=%s",
+                        delivery_id,
+                        event.org_id,
+                        org_id,
+                    )
+                    return
+
+                parent_event_id: str | None = None
+                if event.kind == "code_change_followup":
+                    parent_event_id = _lookup_parent_event_id(
+                        cur, org_id, event.dedup_key
+                    )
+
+                try:
+                    cur.execute(
+                        """INSERT INTO change_events (
+                               org_id, vendor, kind, external_id, dedup_key,
+                               installation_id, repo, ref, base_ref, commit_sha,
+                               actor, target_env, change_body, change_diff,
+                               change_files, change_commits, follow_up_comment,
+                               parent_event_id, payload
+                           ) VALUES (
+                               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                               %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s::jsonb
+                           )""",
+                        (
+                            event.org_id,
+                            event.vendor,
+                            event.kind,
+                            event.external_id,
+                            event.dedup_key,
+                            event.installation_id,
+                            event.repo,
+                            event.ref,
+                            event.base_ref,
+                            event.commit_sha,
+                            event.actor,
+                            event.target_env,
+                            snapshot.body or None,
+                            snapshot.diff or None,
+                            json.dumps(snapshot.files or []),
+                            json.dumps(snapshot.commits or []),
+                            event.follow_up_comment,
+                            parent_event_id,
+                            json.dumps(event.raw_payload or {}),
+                        ),
+                    )
+                    conn.commit()
+                    logger.info(
+                        "change_intercept_event=persisted delivery_id=%s "
+                        "org_id=%s kind=%s dedup_key=%s diff_bytes=%d files=%d "
+                        "commits=%d",
+                        delivery_id,
+                        event.org_id,
+                        event.kind,
+                        event.dedup_key,
+                        len(snapshot.diff or ""),
+                        len(snapshot.files or []),
+                        len(snapshot.commits or []),
+                    )
+                except (IntegrityError, psycopg_errors.UniqueViolation):
+                    conn.rollback()
+                    logger.info(
+                        "change_intercept_event=deduped delivery_id=%s "
+                        "org_id=%s kind=%s dedup_key=%s",
+                        delivery_id,
+                        event.org_id,
+                        event.kind,
+                        event.dedup_key,
+                    )
+    except Exception as exc:
+        # Never crash the webhook dispatcher on a change-intercept persistence
+        # failure — the existing RCA-correlation log already happened, the
+        # webhook delivery has been acknowledged at the HTTP layer, and the
+        # next GitHub retry (if any) will re-trigger the same insert.
+        logger.warning(
+            "change_intercept_event=persist_failed delivery_id=%s kind=%s "
+            "error_class=%s",
+            delivery_id,
+            getattr(event, "kind", "unknown"),
+            type(exc).__name__,
+        )
+
+
+def _ingest_change_intercept_event(
+    event_type: str,
+    payload: dict[str, Any],
+    delivery_id: str,
+) -> None:
+    """Run the change-intercept adapter pipeline for one webhook event.
+
+    For each Aurora org linked to the installation:
+        1. Adapter parses the payload into a ``NormalizedChangeEvent``.
+        2. Adapter fetches the snapshot (diff + files + commits + body).
+        3. We INSERT a ``change_events`` row under RLS context.
+
+    Failures at any step log and move on — Part 1 has no customer-
+    visible side effects, so a transient adapter failure is recovered
+    on the next GitHub retry rather than blocking the dispatcher.
+
+    Args:
+        event_type: ``pull_request`` / ``issue_comment`` /
+            ``pull_request_review_comment``.
+        payload: parsed webhook body.
+        delivery_id: ``X-GitHub-Delivery`` UUID for log correlation.
+    """
+    installation_id = _extract_installation_id(payload)
+    if installation_id is None:
+        return
+
+    linked = _resolve_orgs_for_installation(installation_id)
+    if not linked:
+        logger.info(
+            "change_intercept_event=no_linked_orgs delivery_id=%s installation_id=%s "
+            "event_type=%s",
+            delivery_id,
+            installation_id,
+            event_type,
+        )
+        return
+
+    try:
+        from services.change_intercept.adapters.registry import (
+            UnknownVendorError,
+            get_adapter,
+        )
+
+        adapter = get_adapter("github")
+    except UnknownVendorError:
+        return
+    except Exception as exc:
+        logger.warning(
+            "change_intercept_event=adapter_load_failed delivery_id=%s "
+            "error_class=%s",
+            delivery_id,
+            type(exc).__name__,
+        )
+        return
+
+    for org_id, user_id in linked:
+        try:
+            event = adapter.parse(event_type, payload, org_id=org_id)
+        except Exception as exc:
+            logger.warning(
+                "change_intercept_event=parse_failed delivery_id=%s org_id=%s "
+                "event_type=%s error_class=%s",
+                delivery_id,
+                org_id,
+                event_type,
+                type(exc).__name__,
+            )
+            continue
+
+        if event is None:
+            continue
+
+        try:
+            snapshot = adapter.fetch_snapshot(event)
+        except Exception as exc:
+            # Persist with an empty snapshot rather than dropping the event
+            # entirely — the webhook delivery and parsed-event metadata are
+            # still valuable signals (we know the PR exists; we just can't
+            # render the diff yet). Part 2 can re-fetch on demand.
+            logger.warning(
+                "change_intercept_event=fetch_snapshot_failed delivery_id=%s "
+                "org_id=%s dedup_key=%s error_class=%s",
+                delivery_id,
+                org_id,
+                event.dedup_key,
+                type(exc).__name__,
+            )
+            # Lazy import to avoid a top-level cycle.
+            from services.change_intercept.adapters.base import ChangeSnapshot
+
+            snapshot = ChangeSnapshot(body="", diff="")
+
+        _persist_change_event(
+            event, snapshot, user_id=user_id, delivery_id=delivery_id
+        )
 
 
 def _update_delivery_status(
@@ -619,6 +943,106 @@ def _handle_pull_request_event(
         _fmt_field(installation_id),
         delivery_id,
     )
+
+    # Change-Intercept persistence (Phase 1a, Part 1). Additive — the RCA
+    # log above is independent of this and survives any failure here.
+    _ingest_change_intercept_event(
+        event_type="pull_request",
+        payload=payload,
+        delivery_id=delivery_id,
+    )
+
+    _update_delivery_status(delivery_id, status="processed")
+
+
+def _handle_issue_comment_event(
+    payload: dict[str, Any],
+    action: str | None,
+    delivery_id: str,
+) -> None:
+    """Log + persist an ``issue_comment.<action>`` webhook.
+
+    The dispatcher subscribes to this event so the change-intercept
+    adapter can capture top-level PR comments addressed to Aurora
+    (via ``@<slug>`` mention). Non-PR Issues that happen to fire this
+    event are filtered out by the adapter's ``is_reply_to_us``.
+
+    Fields logged per spec: ``repo, issue_number, action, author,
+    comment_id, in_reply_to_id`` — matches the existing structured-
+    log shape for cross-reference with the RCA correlation lines.
+    """
+    repo = _safe_get(payload, "repository", "full_name")
+    issue_number = _safe_get(payload, "issue", "number")
+    is_pr = _safe_get(payload, "issue", "pull_request") is not None
+    comment_id = _safe_get(payload, "comment", "id")
+    author = _safe_get(payload, "comment", "user", "login")
+    in_reply_to_id = _safe_get(payload, "comment", "in_reply_to_id")
+    installation_id = _extract_installation_id(payload)
+
+    logger.info(
+        "event_type=issue_comment repo=%s issue_number=%s action=%s is_pr=%s "
+        "author=%s comment_id=%s in_reply_to_id=%s installation_id=%s "
+        "delivery_id=%s status=processed",
+        _fmt_field(repo),
+        _fmt_field(issue_number),
+        _fmt_field(action),
+        _fmt_field(is_pr),
+        _fmt_field(author),
+        _fmt_field(comment_id),
+        _fmt_field(in_reply_to_id),
+        _fmt_field(installation_id),
+        delivery_id,
+    )
+
+    _ingest_change_intercept_event(
+        event_type="issue_comment",
+        payload=payload,
+        delivery_id=delivery_id,
+    )
+
+    _update_delivery_status(delivery_id, status="processed")
+
+
+def _handle_pull_request_review_comment_event(
+    payload: dict[str, Any],
+    action: str | None,
+    delivery_id: str,
+) -> None:
+    """Log + persist a ``pull_request_review_comment.<action>`` webhook.
+
+    These are inline-thread events — engineers replying directly to
+    Aurora's per-hunk comments. The adapter's ``is_reply_to_us``
+    matches on ``in_reply_to_id`` + bot self-filter.
+    """
+    repo = _safe_get(payload, "repository", "full_name")
+    pr_number = _safe_get(payload, "pull_request", "number")
+    comment_id = _safe_get(payload, "comment", "id")
+    author = _safe_get(payload, "comment", "user", "login")
+    in_reply_to_id = _safe_get(payload, "comment", "in_reply_to_id")
+    commit_id = _safe_get(payload, "comment", "commit_id")
+    installation_id = _extract_installation_id(payload)
+
+    logger.info(
+        "event_type=pull_request_review_comment repo=%s pr_number=%s action=%s "
+        "author=%s comment_id=%s in_reply_to_id=%s commit_id=%s "
+        "installation_id=%s delivery_id=%s status=processed",
+        _fmt_field(repo),
+        _fmt_field(pr_number),
+        _fmt_field(action),
+        _fmt_field(author),
+        _fmt_field(comment_id),
+        _fmt_field(in_reply_to_id),
+        _fmt_field(commit_id),
+        _fmt_field(installation_id),
+        delivery_id,
+    )
+
+    _ingest_change_intercept_event(
+        event_type="pull_request_review_comment",
+        payload=payload,
+        delivery_id=delivery_id,
+    )
+
     _update_delivery_status(delivery_id, status="processed")
 
 
@@ -911,6 +1335,12 @@ def dispatch_github_webhook(
             "installation": _handle_installation_event,
             "installation_repositories": _handle_installation_repositories_event,
             "pull_request": _handle_pull_request_event,
+            # Comment events subscribed for change-intercept reply handling.
+            # The adapter's ``is_reply_to_us`` decides whether a comment is
+            # addressed to Aurora; unrelated PR chatter is filtered out
+            # there rather than at the dispatcher level.
+            "issue_comment": _handle_issue_comment_event,
+            "pull_request_review_comment": _handle_pull_request_review_comment_event,
             "issues": _handle_issues_event,
             "deployment": _handle_deployment_event,
             "deployment_status": _handle_deployment_status_event,
