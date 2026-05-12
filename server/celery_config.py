@@ -134,6 +134,15 @@ celery_app.conf.update(
             'task': 'utils.aws.credential_refresh.refresh_aws_credentials',
             'schedule': 600.0,  # Every 10 minutes
         },
+        # Phase 1a Part 3: nightly scan that links incidents back to
+        # the change_investigations that reviewed their causal PR.
+        # 24h cadence is enough — the linker is precision-first and
+        # the input data (incident text + postmortem content) doesn't
+        # update faster than that.
+        'change-intercept-link-outcomes': {
+            'task': 'services.change_intercept.tasks.link_risk_outcomes',
+            'schedule': 86400.0,  # Daily
+        },
     },
     beat_schedule_filename='celerybeat-schedule',
     worker_hijack_root_logger=False

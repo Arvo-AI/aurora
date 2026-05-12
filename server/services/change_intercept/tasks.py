@@ -53,6 +53,16 @@ from utils.auth.log_redact import redact_token
 logger = logging.getLogger(__name__)
 
 
+# Thrash guard: max followup investigations Aurora will run per PR
+# before refusing to re-investigate until a new commit lands. Engineer
+# replies past this cap get a static one-time response from the
+# adapter (in live mode) and are logged as ``status=thrash_guard``
+# in dry-run mode. Per the design doc, start at 5 and revisit after
+# calibration data shows how often genuine multi-round conversations
+# happen vs. dispute spirals.
+MAX_FOLLOWUPS_PER_CHANGE: int = 5
+
+
 # Subset of fields the task reads from ``change_events`` — keeps the
 # query specific and the worker memory profile predictable.
 _CHANGE_EVENT_COLUMNS: tuple[str, ...] = (
@@ -60,7 +70,9 @@ _CHANGE_EVENT_COLUMNS: tuple[str, ...] = (
     "org_id",
     "vendor",
     "kind",
+    "external_id",
     "dedup_key",
+    "installation_id",
     "repo",
     "ref",
     "base_ref",
@@ -74,6 +86,34 @@ _CHANGE_EVENT_COLUMNS: tuple[str, ...] = (
     "follow_up_comment",
     "parent_event_id",
 )
+
+
+@celery_app.task(
+    name="services.change_intercept.tasks.link_risk_outcomes",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+)
+def link_risk_outcomes(self, *, lookback_hours: int = 36) -> dict[str, Any]:
+    """Nightly task: scan recent incidents and link them to the
+    ``change_investigations`` rows whose PR they reference.
+
+    Thin Celery wrapper around :func:`services.change_intercept.linker.run_linker`.
+    Keeping the regex + DB logic in a pure module means tests can
+    import the matcher without bootstrapping the full Celery / Vault
+    stack.
+    """
+    try:
+        from services.change_intercept.linker import run_linker
+
+        return run_linker(lookback_hours=lookback_hours)
+    except Exception as exc:
+        logger.exception(
+            "change_intercept_linker=task_failed lookback_hours=%d error_class=%s",
+            lookback_hours,
+            type(exc).__name__,
+        )
+        raise self.retry(exc=exc)
 
 
 @celery_app.task(
@@ -124,6 +164,28 @@ def launch_investigation(
             )
             return {"status": "event_not_found"}
 
+        # ─── 1b. Thrash guard (followups only) ───────────────────
+        if event_row.get("kind") == "code_change_followup":
+            followup_count = _count_followup_investigations(
+                org_id=event_row["org_id"],
+                dedup_key=event_row.get("dedup_key") or "",
+                user_id_for_rls=user_id_for_rls,
+            )
+            if followup_count >= MAX_FOLLOWUPS_PER_CHANGE:
+                logger.info(
+                    "change_intercept_event=launch_investigation status=thrash_guard "
+                    "change_event_id=%s dedup_key=%s followup_count=%d cap=%d",
+                    change_event_id,
+                    event_row.get("dedup_key"),
+                    followup_count,
+                    MAX_FOLLOWUPS_PER_CHANGE,
+                )
+                return {
+                    "status": "thrash_guard",
+                    "followup_count": followup_count,
+                    "cap": MAX_FOLLOWUPS_PER_CHANGE,
+                }
+
         # ─── 2. Build the prompt ─────────────────────────────────
         prompt, prior_investigation_id = _build_prompt_for_event(
             event_row, user_id_for_rls
@@ -162,12 +224,22 @@ def launch_investigation(
             parent_investigation_id=prior_investigation_id,
         )
 
+        # ─── 7. Optionally post the live review (Part 3) ─────────
+        live_review = _maybe_post_live_review(
+            event_row=event_row,
+            validation=validation,
+            rendered=rendered,
+            prior_investigation_id=prior_investigation_id,
+            investigation_id=investigation_id,
+            user_id_for_rls=user_id_for_rls,
+        )
+
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.info(
             "change_intercept_event=launch_investigation status=done "
             "change_event_id=%s investigation_id=%s verdict=%s "
             "findings=%d dropped=%d inline=%d duration_ms=%d "
-            "downgraded=%s",
+            "downgraded=%s dry_run=%s posted=%s",
             change_event_id,
             investigation_id,
             validation.verdict,
@@ -176,6 +248,8 @@ def launch_investigation(
             sum(1 for f in validation.findings if f.will_post_inline),
             duration_ms,
             validation.downgraded_to_approve,
+            live_review["dry_run"],
+            live_review["posted"],
         )
 
         return {
@@ -185,8 +259,9 @@ def launch_investigation(
             "findings_count": len(validation.findings),
             "inline_count": sum(1 for f in validation.findings if f.will_post_inline),
             "downgraded": validation.downgraded_to_approve,
-            "dry_run": True,
+            "dry_run": live_review["dry_run"],
             "review_event": rendered.verdict_event,
+            "posted_verdict_id": live_review["verdict_id"],
         }
     except Exception as exc:
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -275,6 +350,56 @@ def _load_prior_investigation(
                 "summary": summary,
                 "findings": findings_list,
             }, str(investigation_id)
+
+
+def _count_followup_investigations(
+    *,
+    org_id: str,
+    dedup_key: str,
+    user_id_for_rls: str,
+) -> int:
+    """Count followup investigations Aurora has already run for this PR.
+
+    A "followup" is any ``change_investigations`` row whose joined
+    ``change_events.kind == 'code_change_followup'``. The thrash guard
+    uses this to cap engagement when an engineer keeps replying past
+    the point where Aurora has anything new to say.
+
+    Returns 0 on lookup failure — fail-open here is safer than
+    accidentally double-blocking on a transient DB blip.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                if not set_rls_context(
+                    cur,
+                    conn,
+                    user_id_for_rls,
+                    log_prefix="[change_intercept:thrash]",
+                ):
+                    return 0
+                cur.execute(
+                    """SELECT COUNT(*)
+                         FROM change_investigations ci
+                         JOIN change_events ce ON ce.id = ci.change_event_id
+                        WHERE ce.org_id = %s
+                          AND ce.dedup_key = %s
+                          AND ce.kind = 'code_change_followup'""",
+                    (org_id, dedup_key),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.warning(
+            "change_intercept_event=thrash_count_failed dedup_key=%s "
+            "error_class=%s",
+            dedup_key,
+            type(exc).__name__,
+        )
+        return 0
 
 
 def _persist_investigation(
@@ -414,3 +539,283 @@ def _ensure_list(value: Any) -> list[Any]:
         except json.JSONDecodeError:
             return []
     return []
+
+
+# ─── Live review posting (Phase 1a Part 3) ──────────────────────────
+
+
+def _maybe_post_live_review(
+    *,
+    event_row: dict[str, Any],
+    validation: Any,
+    rendered: Any,
+    prior_investigation_id: str | None,
+    investigation_id: str,
+    user_id_for_rls: str,
+) -> dict[str, Any]:
+    """Post the rendered review to the vendor when the install allows.
+
+    Decision tree:
+
+        1. Look up the install's ``change_intercept_dry_run`` flag.
+           ``True`` (default) → return without posting; the dry-run
+           row already exists.
+        2. ``False`` AND this is a followup → dismiss the prior
+           verdict first, then post the new one.
+        3. ``False`` AND this is an initial event → just post.
+        4. Persist the returned ``verdict_id`` + ``inline_comment_ids``
+           on ``change_investigations``.
+
+    Returns a small dict the caller embeds in its status log:
+        ``{"dry_run": bool, "posted": bool, "verdict_id": str | None}``.
+
+    All adapter calls go through a single try/except — a posting
+    failure is non-fatal: the investigation row is already persisted
+    with ``dry_run=TRUE`` semantics, so we log the failure and move on
+    rather than retrying the whole Celery task and risking a duplicate
+    investigation row on retry.
+    """
+    from services.change_intercept.install_config import is_dry_run
+
+    installation_id = _resolve_installation_id(event_row, user_id_for_rls)
+    if installation_id is None:
+        return {"dry_run": True, "posted": False, "verdict_id": None}
+
+    if is_dry_run(installation_id):
+        return {"dry_run": True, "posted": False, "verdict_id": None}
+
+    try:
+        from services.change_intercept.adapters.registry import get_adapter
+
+        adapter = get_adapter(event_row.get("vendor") or "github")
+        normalized_event = _rebuild_normalized_event(event_row, installation_id)
+
+        # Dismiss the prior verdict before posting the new one. For
+        # initial code_change events there is no prior; for followups
+        # we look up the most recent posted investigation for the same
+        # PR and dismiss its review id (if any).
+        prior_posted = _load_prior_posted_verdict(
+            org_id=event_row["org_id"],
+            dedup_key=event_row.get("dedup_key") or "",
+            current_investigation_id=investigation_id,
+            user_id_for_rls=user_id_for_rls,
+        )
+        if prior_posted is not None:
+            from services.change_intercept.adapters.base import PostedVerdict
+
+            adapter.dismiss_prior(
+                normalized_event,
+                PostedVerdict(
+                    verdict_id=prior_posted["verdict_id"],
+                    inline_comment_ids=prior_posted.get("inline_comment_ids") or [],
+                ),
+            )
+
+        # Build the investigation payload the adapter expects. The
+        # adapter is vendor-neutral so it accepts the already-rendered
+        # body / comments + the commit_sha to anchor the review.
+        investigation_payload = {
+            "verdict_event": rendered.verdict_event,
+            "body": rendered.body,
+            "inline_comments": rendered.inline_comments,
+            "commit_sha": event_row.get("commit_sha"),
+        }
+        posted = adapter.post_verdict(normalized_event, investigation_payload)
+
+        _persist_posted_verdict_ids(
+            investigation_id=investigation_id,
+            posted_verdict_id=posted.verdict_id,
+            inline_comment_ids=posted.inline_comment_ids,
+            org_id=event_row["org_id"],
+            user_id_for_rls=user_id_for_rls,
+        )
+
+        logger.info(
+            "change_intercept_event=live_review_posted investigation_id=%s "
+            "verdict_id=%s inline=%d",
+            investigation_id,
+            posted.verdict_id,
+            len(posted.inline_comment_ids),
+        )
+        return {
+            "dry_run": False,
+            "posted": True,
+            "verdict_id": posted.verdict_id,
+        }
+    except Exception as exc:
+        logger.warning(
+            "change_intercept_event=live_review_failed investigation_id=%s "
+            "error_class=%s",
+            investigation_id,
+            type(exc).__name__,
+        )
+        return {"dry_run": False, "posted": False, "verdict_id": None}
+
+
+def _resolve_installation_id(
+    event_row: dict[str, Any], user_id_for_rls: str
+) -> int | None:
+    """Return the installation_id for the event, falling back to a join
+    on ``user_github_installations`` when the change_events row doesn't
+    carry one (older rows from before installation_id became standard)."""
+    direct = event_row.get("installation_id")
+    if isinstance(direct, int):
+        return direct
+    if not direct:
+        # Some psycopg2 versions return numeric IDs as Decimal — coerce.
+        try:
+            return int(event_row.get("installation_id"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        from utils.db.connection_pool import db_pool
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT installation_id FROM user_github_installations
+                        WHERE user_id = %s AND disconnected_at IS NULL
+                        ORDER BY is_primary DESC, linked_at ASC
+                        LIMIT 1""",
+                    (user_id_for_rls,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row and row[0] else None
+    except Exception:
+        return None
+
+
+def _rebuild_normalized_event(
+    event_row: dict[str, Any], installation_id: int
+) -> Any:
+    """Reconstruct a ``NormalizedChangeEvent`` from a persisted row.
+
+    The adapter only reads a handful of fields out of the dataclass,
+    but we instantiate it through the canonical constructor so future
+    fields stay in sync.
+    """
+    from services.change_intercept.adapters.base import NormalizedChangeEvent
+
+    return NormalizedChangeEvent(
+        vendor=event_row.get("vendor") or "github",
+        kind=event_row.get("kind") or "code_change",
+        org_id=event_row["org_id"],
+        installation_id=installation_id,
+        external_id=event_row.get("external_id") or "",
+        dedup_key=event_row.get("dedup_key") or "",
+        repo=event_row.get("repo"),
+        ref=event_row.get("ref"),
+        base_ref=event_row.get("base_ref"),
+        commit_sha=event_row.get("commit_sha"),
+        actor=event_row.get("actor"),
+        target_env=event_row.get("target_env"),
+        action="reply" if event_row.get("kind") == "code_change_followup" else "opened",
+        parent_external_id=_parent_external_id_from_event(event_row),
+        follow_up_comment=event_row.get("follow_up_comment"),
+    )
+
+
+def _parent_external_id_from_event(event_row: dict[str, Any]) -> str | None:
+    """For followups, the parent PR number comes from the dedup_key
+    (``github:owner/repo:<pr_number>``)."""
+    if event_row.get("kind") != "code_change_followup":
+        return None
+    dedup_key = event_row.get("dedup_key") or ""
+    parts = dedup_key.rsplit(":", 1)
+    return parts[1] if len(parts) == 2 and parts[1].isdigit() else None
+
+
+def _load_prior_posted_verdict(
+    *,
+    org_id: str,
+    dedup_key: str,
+    current_investigation_id: str,
+    user_id_for_rls: str,
+) -> dict[str, Any] | None:
+    """Find the most recent posted verdict for ``(org_id, dedup_key)``.
+
+    Skips the current investigation (we're about to post for it, not
+    dismiss it). Returns ``None`` if no prior review was posted —
+    either there's no prior at all or every prior was dry-run.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            if not set_rls_context(
+                cur,
+                conn,
+                user_id_for_rls,
+                log_prefix="[change_intercept:prior_posted]",
+            ):
+                return None
+            cur.execute(
+                """SELECT ci.external_verdict_id, ci.inline_comment_ids
+                     FROM change_investigations ci
+                     JOIN change_events ce ON ce.id = ci.change_event_id
+                    WHERE ce.org_id = %s
+                      AND ce.dedup_key = %s
+                      AND ci.id <> %s
+                      AND ci.external_verdict_id IS NOT NULL
+                 ORDER BY ci.investigated_at DESC
+                    LIMIT 1""",
+                (org_id, dedup_key, current_investigation_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            verdict_id, comment_ids = row
+            return {
+                "verdict_id": verdict_id,
+                "inline_comment_ids": comment_ids
+                if isinstance(comment_ids, list)
+                else [],
+            }
+
+
+def _persist_posted_verdict_ids(
+    *,
+    investigation_id: str,
+    posted_verdict_id: str,
+    inline_comment_ids: list[str],
+    org_id: str,
+    user_id_for_rls: str,
+) -> None:
+    """UPDATE the change_investigations row with the vendor-native ids.
+
+    Called after a successful ``post_verdict`` so the next
+    ``dismiss_prior`` (on the next push or reply) can target the
+    correct review.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            rls_org = set_rls_context(
+                cur,
+                conn,
+                user_id_for_rls,
+                log_prefix="[change_intercept:save_posted]",
+            )
+            if rls_org != org_id:
+                logger.warning(
+                    "change_intercept_event=save_posted_skipped reason=org_mismatch "
+                    "investigation_id=%s",
+                    investigation_id,
+                )
+                return
+            cur.execute(
+                """UPDATE change_investigations
+                      SET external_verdict_id = %s,
+                          inline_comment_ids = %s::jsonb
+                    WHERE id = %s""",
+                (
+                    posted_verdict_id,
+                    json.dumps(list(inline_comment_ids or [])),
+                    investigation_id,
+                ),
+            )
+            conn.commit()
