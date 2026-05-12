@@ -94,7 +94,16 @@ celery_app.conf.update(
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'tasks.github_webhook_tasks',
+        'services.change_intercept.tasks',
     ],
+    task_routes={
+        # Phase 1a "PR Risk Review" tasks land on their own queue so
+        # their (heavy, LLM-bound) workload is isolated from the
+        # webhook dispatcher's hot path.
+        'services.change_intercept.tasks.launch_investigation': {
+            'queue': 'change_intercept',
+        },
+    },
     # Periodic task schedule
     beat_schedule={
         'cleanup-idle-terminal-pods': {
@@ -213,6 +222,12 @@ try:
     logging.info("GitHub webhook dispatcher task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")
+
+try:
+    from services.change_intercept import tasks as _change_intercept_tasks  # noqa: F401
+    logging.info("Change-intercept investigation tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import change-intercept tasks: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):

@@ -202,7 +202,7 @@ def _persist_change_event(
     snapshot: Any,  # ChangeSnapshot
     user_id: str,
     delivery_id: str,
-) -> None:
+) -> str | None:
     """INSERT one ``change_events`` row under RLS context.
 
     Idempotent via the ``(org_id, vendor, external_id, commit_sha, kind)``
@@ -218,6 +218,14 @@ def _persist_change_event(
             context. ``set_rls_context`` looks up the actual org from
             this user and refuses to set RLS if it doesn't match.
         delivery_id: ``X-GitHub-Delivery`` UUID for log correlation.
+
+    Returns:
+        The new row's UUID as a string when persistence succeeded, or
+        ``None`` on dedup (UniqueViolation) / RLS-mismatch / failure.
+        The dispatcher uses this return value to decide whether to
+        enqueue ``launch_investigation`` — re-dispatching on dedup
+        would duplicate work, and an RLS mismatch is a hard failure
+        we don't want to amplify.
     """
     from psycopg2 import IntegrityError, errors as psycopg_errors
 
@@ -237,7 +245,7 @@ def _persist_change_event(
                         delivery_id,
                         user_id,
                     )
-                    return
+                    return None
                 if org_id != event.org_id:
                     # Defence in depth: the dispatcher passes the user
                     # from the same org as the event, so this mismatch
@@ -250,7 +258,7 @@ def _persist_change_event(
                         event.org_id,
                         org_id,
                     )
-                    return
+                    return None
 
                 parent_event_id: str | None = None
                 if event.kind == "code_change_followup":
@@ -269,7 +277,7 @@ def _persist_change_event(
                            ) VALUES (
                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                                %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s::jsonb
-                           )""",
+                           ) RETURNING id""",
                         (
                             event.org_id,
                             event.vendor,
@@ -292,6 +300,7 @@ def _persist_change_event(
                             json.dumps(event.raw_payload or {}),
                         ),
                     )
+                    new_id_row = cur.fetchone()
                     conn.commit()
                     logger.info(
                         "change_intercept_event=persisted delivery_id=%s "
@@ -305,6 +314,7 @@ def _persist_change_event(
                         len(snapshot.files or []),
                         len(snapshot.commits or []),
                     )
+                    return str(new_id_row[0]) if new_id_row else None
                 except (IntegrityError, psycopg_errors.UniqueViolation):
                     conn.rollback()
                     logger.info(
@@ -315,6 +325,7 @@ def _persist_change_event(
                         event.kind,
                         event.dedup_key,
                     )
+                    return None
     except Exception as exc:
         # Never crash the webhook dispatcher on a change-intercept persistence
         # failure — the existing RCA-correlation log already happened, the
@@ -325,6 +336,71 @@ def _persist_change_event(
             "error_class=%s",
             delivery_id,
             getattr(event, "kind", "unknown"),
+            type(exc).__name__,
+        )
+        return None
+
+
+# PR actions that justify spending an LLM call. ``synchronize`` is
+# deliberately excluded — per the resolved open question we don't
+# re-investigate on every push; comment-reuse on subsequent pushes is
+# handled by GitHub's automatic outdated-comment behaviour. The
+# engineer can request a fresh investigation via ``@<slug> re-review``.
+_INVESTIGATE_PR_ACTIONS: frozenset[str] = frozenset(
+    {"opened", "reopened", "ready_for_review"}
+)
+
+
+def _should_enqueue_investigation(event: Any) -> bool:
+    """Return True iff the parsed event warrants a fresh investigation.
+
+    Code-change events fire only on opened / reopened / ready_for_review.
+    Code-change-followup events ALWAYS fire (the dispatcher's
+    ``is_reply_to_us`` already filtered out non-Aurora chatter and bot
+    self-comments, so anything reaching here is an engineer reply we
+    explicitly want to respond to).
+    """
+    kind = getattr(event, "kind", "")
+    action = getattr(event, "action", "")
+    if kind == "code_change":
+        return action in _INVESTIGATE_PR_ACTIONS
+    if kind == "code_change_followup":
+        return True
+    return False
+
+
+def _enqueue_investigation(
+    change_event_id: str,
+    user_id: str,
+    delivery_id: str,
+) -> None:
+    """Dispatch ``launch_investigation`` for ``change_event_id``.
+
+    Failure is non-fatal: the row is already persisted, so the
+    investigation can be backfilled later by a calibration job or an
+    ops-side recheck if Celery hiccups. The webhook dispatcher MUST
+    NOT crash on enqueue failure — that would mark
+    ``webhook_deliveries`` as failed and GitHub would retry the whole
+    delivery, duplicating the event row insertion attempt.
+    """
+    try:
+        from services.change_intercept.tasks import launch_investigation
+
+        launch_investigation.delay(
+            change_event_id=change_event_id, user_id_for_rls=user_id
+        )
+        logger.info(
+            "change_intercept_event=investigation_enqueued delivery_id=%s "
+            "change_event_id=%s",
+            delivery_id,
+            change_event_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "change_intercept_event=enqueue_failed delivery_id=%s "
+            "change_event_id=%s error_class=%s",
+            delivery_id,
+            change_event_id,
             type(exc).__name__,
         )
 
@@ -421,9 +497,21 @@ def _ingest_change_intercept_event(
 
             snapshot = ChangeSnapshot(body="", diff="")
 
-        _persist_change_event(
+        new_event_id = _persist_change_event(
             event, snapshot, user_id=user_id, delivery_id=delivery_id
         )
+
+        # Enqueue investigation for actionable events (Part 2). Per the
+        # resolved open question on token spend, ``synchronize`` is
+        # persisted for audit but does NOT re-investigate; the engineer
+        # must explicitly ``@<slug> re-review`` (which lands here as a
+        # reply event via _classify_reply, match_kind='re_review').
+        if new_event_id is not None and _should_enqueue_investigation(event):
+            _enqueue_investigation(
+                change_event_id=new_event_id,
+                user_id=user_id,
+                delivery_id=delivery_id,
+            )
 
 
 def _update_delivery_status(
