@@ -96,9 +96,13 @@ export default function SentryAuthPage() {
         description: 'Sentry connected. Verify the webhook URL is set in your Sentry Internal Integration below.',
       });
       await loadWebhookUrl();
-      if (await providerPreferencesService.addProvider(PROVIDER_ID)) {
-        broadcastPreferenceChange([PROVIDER_ID]);
-      }
+      // Notify listeners regardless of the preference write — the connection
+      // already succeeded above, and a transient failure on the preference sync
+      // shouldn't leave the rest of the app stuck on the previous state.
+      providerPreferencesService.addProvider(PROVIDER_ID).catch((prefErr) => {
+        console.warn('[sentry] Failed to add provider preference', prefErr);
+      });
+      broadcastPreferenceChange([PROVIDER_ID]);
     } catch (error: unknown) {
       console.error('[sentry] Connect failed', error);
       toast({ title: 'Failed to connect to Sentry', description: getUserFriendlyError(error), variant: 'destructive' });
@@ -121,9 +125,12 @@ export default function SentryAuthPage() {
       setOrgSlug('');
       setRegion("us");
       toast({ title: 'Success', description: 'Sentry disconnected successfully.' });
-      if (await providerPreferencesService.removeProvider(PROVIDER_ID)) {
-        broadcastPreferenceChange([]);
-      }
+      // The DELETE above already succeeded — surface the state change to other
+      // components regardless of whether the preference-sync POST succeeds.
+      providerPreferencesService.removeProvider(PROVIDER_ID).catch((prefErr) => {
+        console.warn('[sentry] Failed to remove provider preference', prefErr);
+      });
+      broadcastPreferenceChange([]);
     } catch (error: unknown) {
       console.error('[sentry] Disconnect failed', error);
       toast({ title: 'Failed to disconnect Sentry', description: getUserFriendlyError(error), variant: 'destructive' });
