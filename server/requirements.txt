@@ -32,7 +32,7 @@ kubernetes==26.1.0
 langchain==1.2.6
 nemoguardrails>=0.21.0
 langchain_community==0.3.31
-langchain_core==1.2.31
+langchain_core==1.3.3
 langchain_openai==1.1.14
 langchain-anthropic>=0.3.0
 google-genai==1.58.0  # Pin to avoid interactions module using extra_items TypedDict (requires Python 3.13+)
@@ -60,7 +60,7 @@ requests==2.33.1
 rsa==4.9
 six==1.17.0
 typing_extensions>=4.12.2
-urllib3==2.6.3
+urllib3==2.7.0
 Werkzeug==3.1.6
 weaviate_client>=4.15.0  # Updated for httpx>=0.28 compatibility
 websockets==15.0

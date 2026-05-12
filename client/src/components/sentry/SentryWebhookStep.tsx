@@ -50,7 +50,7 @@ export function SentryWebhookStep({
             </div>
             <div>
               <span className="text-muted-foreground">Client Secret:</span>{" "}
-              {status.hasWebhookSecret ? (
+              {status.webhookConfigured ? (
                 <Badge variant="secondary" className="text-xs">Configured</Badge>
               ) : (
                 <Badge variant="destructive" className="text-xs">Missing &mdash; reconnect to add</Badge>

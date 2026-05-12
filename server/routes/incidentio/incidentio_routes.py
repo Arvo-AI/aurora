@@ -310,7 +310,7 @@ def get_webhook_url(user_id):
 
     return jsonify({
         "webhookUrl": webhook_url,
-        "hasWebhookSecret": has_secret,
+        "webhookConfigured": has_secret,
         "instructions": [
             "1. Go to incident.io → Settings → Webhooks",
             "2. Click 'Add endpoint'",

@@ -196,7 +196,7 @@ def connect(user_id):
         "orgName": org_info.get("name"),
         "projectCount": len(accessible_projects),
         "accessibleProjects": accessible_projects[:10],
-        "hasWebhookSecret": bool(webhook_secret),
+        "webhookConfigured": bool(webhook_secret),
         "validated": True,
     })
 
@@ -229,7 +229,7 @@ def status(user_id):
         "orgSlug": creds.get("org_slug"),
         "orgName": org_info.get("name") or creds.get("org_name"),
         "validatedAt": creds.get("validated_at"),
-        "hasWebhookSecret": bool(creds.get("client_secret")),
+        "webhookConfigured": bool(creds.get("client_secret")),
         "accessibleProjects": creds.get("accessible_projects", []),
     })
 
@@ -239,19 +239,20 @@ def status(user_id):
 def disconnect(user_id):
     """Remove stored Sentry credentials and backing Vault secrets."""
     try:
-        success, deleted = delete_user_secret(user_id, "sentry")
-        if not success:
+        result = delete_user_secret(user_id, "sentry")
+        if not result[0]:
             logger.warning("[SENTRY] Failed to clean up secrets during disconnect")
             return jsonify({"success": False, "error": "Failed to delete stored credentials"}), 500
 
+        rows_removed = int(result[1])
         logger.info(
-            "[SENTRY] Disconnected user %s (deleted %d token rows)",
-            sanitize(user_id), deleted,
+            "[SENTRY] Disconnected user %s (removed %d token rows)",
+            sanitize(user_id), rows_removed,
         )
         return jsonify({
             "success": True,
             "message": "Sentry disconnected successfully",
-            "tokensDeleted": deleted,
+            "tokensDeleted": rows_removed,
         })
     except Exception as exc:
         logger.exception("[SENTRY] Failed to disconnect user %s: %s", user_id, exc)

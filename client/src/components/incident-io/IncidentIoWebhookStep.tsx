@@ -77,7 +77,7 @@ function WebhookSecretField({
 function WebhookConfig({
   webhookData,
   loadingWebhook,
-  hasWebhookSecret,
+  webhookConfigured,
   webhookSecret,
   setWebhookSecret,
   savingSecret,
@@ -86,7 +86,7 @@ function WebhookConfig({
 }: {
   readonly webhookData: IncidentIoWebhookUrlResponse | null;
   readonly loadingWebhook: boolean;
-  readonly hasWebhookSecret: boolean;
+  readonly webhookConfigured: boolean;
   readonly webhookSecret: string;
   readonly setWebhookSecret: (v: string) => void;
   readonly savingSecret: boolean;
@@ -125,7 +125,7 @@ function WebhookConfig({
       </div>
 
       <WebhookSecretField
-        hasSecret={hasWebhookSecret}
+        hasSecret={webhookConfigured}
         value={webhookSecret}
         onChange={setWebhookSecret}
         onSave={onSaveSecret}
@@ -165,7 +165,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
   const [updatingPostback, setUpdatingPostback] = useState(false);
   const [webhookSecret, setWebhookSecret] = useState("");
   const [savingSecret, setSavingSecret] = useState(false);
-  const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
+  const [webhookConfiguredState, setWebhookConfiguredState] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -183,7 +183,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
         if (isMounted) {
           setWebhookData(webhookResponse);
           if (webhookResponse) {
-            setHasWebhookSecret(webhookResponse.hasWebhookSecret);
+            setWebhookConfiguredState(webhookResponse.webhookConfigured);
           }
           if (rcaSettings) {
             setRcaEnabled(rcaSettings.rcaEnabled);
@@ -267,7 +267,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
       if (success) {
         toast({ title: "Webhook secret saved", description: "Webhook signatures will now be verified." });
         setWebhookSecret("");
-        setHasWebhookSecret(true);
+        setWebhookConfiguredState(true);
       } else {
         toast({ title: "Failed to save", description: "Could not save webhook secret. Please try again.", variant: "destructive" });
       }
@@ -349,7 +349,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
           <WebhookConfig
             webhookData={webhookData}
             loadingWebhook={loadingWebhook}
-            hasWebhookSecret={hasWebhookSecret}
+            webhookConfigured={webhookConfiguredState}
             webhookSecret={webhookSecret}
             setWebhookSecret={setWebhookSecret}
             savingSecret={savingSecret}
