@@ -87,14 +87,14 @@ export const sentryService = {
   },
 
   loadCachedStatus(): CachedSentryStatus | null {
-    if (typeof window === 'undefined') return null;
+    if (typeof globalThis.window === 'undefined') return null;
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     try { return JSON.parse(raw) as CachedSentryStatus; } catch { return null; }
   },
 
   cacheStatus(status: SentryStatus): void {
-    if (typeof window === 'undefined') return;
+    if (typeof globalThis.window === 'undefined') return;
     const slim: CachedSentryStatus = {
       connected: status.connected,
       region: status.region,
@@ -107,7 +107,7 @@ export const sentryService = {
   },
 
   clearCachedStatus(): void {
-    if (typeof window === 'undefined') return;
+    if (typeof globalThis.window === 'undefined') return;
     localStorage.removeItem(CACHE_KEY);
     localStorage.removeItem(CONNECTED_FLAG);
   },

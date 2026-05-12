@@ -13,13 +13,13 @@ import { SENTRY_PURPLE } from "@/components/sentry/constants";
 const PROVIDER_ID = 'sentry';
 
 function broadcastStateChange() {
-  if (typeof window === 'undefined') return;
+  if (typeof globalThis.window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('providerStateChanged'));
   window.dispatchEvent(new Event('sentryStateChanged'));
 }
 
 function broadcastPreferenceChange(providers: string[]) {
-  if (typeof window === 'undefined') return;
+  if (typeof globalThis.window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('providerPreferenceChanged', { detail: { providers } }));
 }
 
@@ -67,7 +67,7 @@ export default function SentryAuthPage() {
     try {
       const cached = sentryService.loadCachedStatus();
       if (cached) {
-        applyStatus({ ...cached } as SentryStatus);
+        applyStatus({ ...cached });
         // Background revalidate so a stale cached state self-corrects.
         fetchAndUpdateStatus();
         return;
