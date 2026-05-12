@@ -48,14 +48,24 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 def _make_oauth_test_app(blueprint, url_prefix: str):
     """Return a minimal Flask test app with *blueprint* registered.
 
-    TESTING=True propagates exceptions for cleaner assertions.
+    S4502 — why CSRFProtect is intentionally absent here:
+    Aurora's Flask layer is a pure JSON REST API; it never serves HTML forms
+    and has no flask-wtf / CSRFProtect dependency in production.  CSRF
+    protection for OAuth flows is implemented at the application layer via
+    single-use, Redis-backed, TTL-expiring state tokens
+    (utils.auth.oauth2_state_cache).  Additional Origin/Referer enforcement
+    lives in the Next.js proxy, upstream of Flask entirely.
+    Adding CSRFProtect to a throwaway test app would give a false sense of
+    security and is not consistent with the production architecture.
     """
-    from flask import Flask as _Flask  # NOSONAR
-    application = _Flask(__name__)
+    from flask import Flask as _Flask
+    application = _Flask(__name__)  # NOSONAR
     application.config["TESTING"] = True
     application.register_blueprint(blueprint, url_prefix=url_prefix)
     return application
 
+
+_LIMITER_EXT = "utils.web.limiter_ext"
 
 _ATLASSIAN_HEAVY = (
     "connectors.atlassian_auth",
@@ -64,7 +74,7 @@ _ATLASSIAN_HEAVY = (
     "connectors.confluence_connector.client",
     "connectors.jira_connector",
     "connectors.jira_connector.client",
-    "utils.web.limiter_ext",
+    _LIMITER_EXT,
     "config.rate_limiting",
 )
 
@@ -72,7 +82,7 @@ _NOTION_HEAVY = (
     "connectors.notion_connector",
     "connectors.notion_connector.auth",
     "connectors.notion_connector.client",
-    "utils.web.limiter_ext",
+    _LIMITER_EXT,
     "config.rate_limiting",
 )
 
@@ -83,7 +93,7 @@ def _stub_heavy_packages(packages: tuple) -> None:
     stub = MagicMock(name="routes.audit_routes")
     stub.record_audit_event = MagicMock()
     sys.modules["routes.audit_routes"] = stub
-    limiter_stub = sys.modules["utils.web.limiter_ext"]
+    limiter_stub = sys.modules[_LIMITER_EXT]
     limiter_stub.limiter = MagicMock()
     limiter_stub.limiter.limit = lambda *a, **kw: (lambda f: f)
 
