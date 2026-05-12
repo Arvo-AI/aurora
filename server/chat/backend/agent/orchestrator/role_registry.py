@@ -38,7 +38,7 @@ class RoleMeta:
     max_turns: int
     max_seconds: int
     rca_priority: int
-    model: Optional[str]  # None → falls back to MAIN_MODEL
+    model: Optional[str]  # None → falls back to ModelConfig.RCA_SUBAGENT_MODEL
     body: str             # markdown after frontmatter
 
 

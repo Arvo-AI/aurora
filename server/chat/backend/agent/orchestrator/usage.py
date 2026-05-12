@@ -21,7 +21,7 @@ def track_orchestrator_call(state, raw_msg, prompt, request_type: str, start_tim
     user_id = getattr(state, "user_id", None)
     if not user_id:
         return
-    model_name = ModelConfig.MAIN_MODEL
+    model_name = ModelConfig.RCA_ORCHESTRATOR_MODEL or ModelConfig.MAIN_MODEL
     api_provider = ModelMapper.detect_provider(model_name) or "unknown"
     try:
         LLMUsageTracker.track_llm_call(

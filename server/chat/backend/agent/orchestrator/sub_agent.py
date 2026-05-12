@@ -445,6 +445,7 @@ async def _run(input_dict: dict) -> FindingRef:
         tool_capture = None
 
     from chat.backend.agent.orchestrator.role_registry import RoleRegistry
+    from chat.backend.agent.llm import ModelConfig
     role_meta = RoleRegistry.get_instance().get(inp.role_name)
     if not role_meta:
         logger.error("sub_agent: role %r not found in registry", inp.role_name)
@@ -462,6 +463,29 @@ async def _run(input_dict: dict) -> FindingRef:
             storage_uri=f"rca/{incident_id}/findings/{inp.agent_id}.md" if incident_id else None,
             status="failed",
             error_message=f"role {inp.role_name!r} not found",
+        )
+
+    sub_agent_model = role_meta.model or ModelConfig.RCA_SUBAGENT_MODEL
+    if not sub_agent_model:
+        err = (
+            "RCA_SUBAGENT_MODEL must be set when ORCHESTRATOR_ENABLED=true "
+            "(or set `model:` frontmatter on the role)"
+        )
+        logger.error("sub_agent: %s — role=%r agent=%s", err, inp.role_name, inp.agent_id)
+        if incident_id and user_id:
+            await asyncio.to_thread(
+                _write_stub_to_storage, inp.agent_id, inp.role_name, incident_id, user_id,
+                "failed", err,
+            )
+            await asyncio.to_thread(
+                _update_db_terminal, inp.agent_id, incident_id, user_id, "failed",
+                tool_call_history=[],
+            )
+        return FindingRef(
+            agent_id=inp.agent_id, role_name=inp.role_name,
+            storage_uri=f"rca/{incident_id}/findings/{inp.agent_id}.md" if incident_id else None,
+            status="failed",
+            error_message=err,
         )
 
     from chat.backend.agent.orchestrator.inputs import render_brief
@@ -520,6 +544,7 @@ async def _run(input_dict: dict) -> FindingRef:
             org_id=org_id,
             is_background=True,
             mode="ask",
+            model=sub_agent_model,
         )
 
         postgres_client = PostgreSQLClient()

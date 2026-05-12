@@ -115,10 +115,14 @@ async def _synthesis(state: State) -> dict:
     combined = "\n\n---\n\n".join(finding_bodies)
 
     try:
+        if not ModelConfig.RCA_ORCHESTRATOR_MODEL:
+            raise RuntimeError(
+                "RCA_ORCHESTRATOR_MODEL must be set when ORCHESTRATOR_ENABLED=true"
+            )
         # Non-streaming: structured-output chunks must not leak into chat.
         # The user-facing summary is appended below as an AIMessage that the
         # existing chat pipeline handles.
-        llm = create_chat_model(model=ModelConfig.MAIN_MODEL, streaming=False)
+        llm = create_chat_model(model=ModelConfig.RCA_ORCHESTRATOR_MODEL, streaming=False)
         structured = llm.with_structured_output(SynthesisDecision, include_raw=True)
 
         # Pass available role names to constrain follow-up dispatch — prevents
