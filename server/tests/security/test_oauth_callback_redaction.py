@@ -20,6 +20,11 @@ _server_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))
 
+# REDIS_URL is required at import time by utils.auth.oauth2_state_cache.
+# Set a test default before _build_app imports that module so the collection
+# step does not raise even when Redis is not running.
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+
 
 _CLIENT_SECRET_MARKER = "client_secret_DO_NOT_ECHO_XYZ"
 
@@ -108,6 +113,8 @@ class TestAtlassianOAuthCallbackRedaction:
         from routes.atlassian.atlassian_routes import atlassian_bp
 
         app = Flask(__name__)
+        # Aurora has no Flask-side CSRF middleware; CSRF protection lives at
+        # the Next.js proxy layer, so there is nothing to disable here.  # NOSONAR
         app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
         return app
 
@@ -129,6 +136,7 @@ class TestAtlassianOAuthCallbackRedaction:
                 )
 
         assert _CLIENT_SECRET_MARKER not in resp.get_data(as_text=True)
+        assert _CLIENT_SECRET_MARKER not in caplog.text
         for record in caplog.records:
             assert _CLIENT_SECRET_MARKER not in record.getMessage(), (
                 f"client_secret found in log record: {record.getMessage()!r}"
@@ -215,6 +223,8 @@ class TestNotionOAuthCallbackRedaction:
         from routes.notion.notion_routes import notion_bp
 
         app = Flask(__name__)
+        # Aurora has no Flask-side CSRF middleware; CSRF protection lives at
+        # the Next.js proxy layer, so there is nothing to disable here.  # NOSONAR
         app.register_blueprint(notion_bp, url_prefix="/notion")
         return app
 
@@ -231,6 +241,7 @@ class TestNotionOAuthCallbackRedaction:
                 )
 
         assert _CLIENT_SECRET_MARKER not in resp.get_data(as_text=True)
+        assert _CLIENT_SECRET_MARKER not in caplog.text
         for record in caplog.records:
             assert _CLIENT_SECRET_MARKER not in record.getMessage(), (
                 f"client_secret found in log record: {record.getMessage()!r}"

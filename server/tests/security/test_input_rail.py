@@ -154,6 +154,7 @@ class TestGetRailsRaises:
 
         assert "sk-proj-DO_NOT_LEAK_XYZ" not in result.reason
         assert result.blocked is True
+        assert "sk-proj-DO_NOT_LEAK_XYZ" not in caplog.text
         for record in caplog.records:
             assert "sk-proj-DO_NOT_LEAK_XYZ" not in record.getMessage(), (
                 f"API key found in log record: {record.getMessage()!r}"

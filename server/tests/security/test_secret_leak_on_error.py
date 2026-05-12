@@ -67,6 +67,7 @@ class TestCommandSafetyNoSecretLeak:
         assert _LLM_API_KEY_MARKER not in verdict.thought
         assert _LLM_API_KEY_MARKER not in verdict.observation
         assert verdict.conclusion is True
+        assert _LLM_API_KEY_MARKER not in caplog.text
 
         for record in caplog.records:
             assert _LLM_API_KEY_MARKER not in record.getMessage(), (
@@ -92,11 +93,10 @@ class TestDbConnectionNoSecretLeak:
         monkeypatch.setattr(adapters_mod.db_pool, "_get_pool", MagicMock(return_value=fake_pool))
 
         with caplog.at_level(logging.DEBUG):
-            try:
+            with pytest.raises(Exception):
                 adapters_mod.connect_to_db_as_admin()
-            except Exception:
-                pass
 
+        assert _DB_PASSWORD_MARKER not in caplog.text
         for record in caplog.records:
             assert _DB_PASSWORD_MARKER not in record.getMessage(), (
                 f"DB password found in log record: {record.getMessage()!r}"
