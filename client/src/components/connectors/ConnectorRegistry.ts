@@ -115,6 +115,18 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "sentry",
+      name: "Sentry",
+      description: "Connect Sentry to ingest issue and error alerts and query full stacktraces and breadcrumbs for automated root cause analysis.",
+      iconPath: "/sentry.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/sentry/auth",
+      storageKey: "isSentryConnected",
+      useCustomConnection: true,
+    });
+
+    this.register({
         id: "thousandeyes",
         name: "ThousandEyes",
         description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",
