@@ -39,7 +39,7 @@ const API_BASE = '/api/sentry';
 const CACHE_KEY = 'sentry_connection_status';
 const CONNECTED_FLAG = 'isSentryConnected';
 
-export type CachedSentryStatus = Pick<SentryStatus, 'connected' | 'region' | 'orgSlug' | 'hasWebhookSecret'>;
+export type CachedSentryStatus = Pick<SentryStatus, 'connected' | 'region' | 'orgSlug'>;
 
 export const sentryService = {
   async getStatus(): Promise<SentryStatus | null> {
@@ -99,7 +99,6 @@ export const sentryService = {
       connected: status.connected,
       region: status.region,
       orgSlug: status.orgSlug,
-      hasWebhookSecret: status.hasWebhookSecret,
     };
     localStorage.setItem(CACHE_KEY, JSON.stringify(slim));
     if (status.connected) localStorage.setItem(CONNECTED_FLAG, 'true');
