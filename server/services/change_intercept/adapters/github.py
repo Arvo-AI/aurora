@@ -157,6 +157,18 @@ def _bot_login_for(slug: str) -> str:
     return f"{slug}[bot]" if slug else ""
 
 
+def _coerce_str(value: Any) -> str:
+    """Return ``value`` as a stripped string, or empty for non-strings.
+
+    Local copy of the same helper in :mod:`verdict_validator` to keep
+    the adapter free of cross-package imports — both modules treat the
+    helper as a tiny private convenience, not a shared contract.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
 def _safe_get(payload: dict[str, Any], *keys: Any) -> Any:
     """Walk a nested dict / list; return ``None`` on any missing step.
 
@@ -265,6 +277,98 @@ def _get(
         raise GitHubFetchError(
             f"GitHub GET returned non-2xx for url={url} "
             f"(status={response.status_code}): {_redact(response.text or '')[:200]}"
+        )
+    return response
+
+
+def _post(
+    url: str,
+    installation_id: int,
+    *,
+    json_body: dict[str, Any],
+    accept: str = "application/vnd.github+json",
+) -> requests.Response:
+    """Issue a POST with the App's installation token.
+
+    Used by ``post_verdict`` to submit a Review and (potentially) by
+    a future ``post_comment`` helper for the thrash-guard escalation
+    note. Raises :class:`GitHubFetchError` on transport errors or
+    non-2xx; the caller catches and decides whether to surface to the
+    operator or retry.
+    """
+    try:
+        headers = _auth_headers(installation_id, accept)
+    except (GitHubAppInstallationNotFound, GitHubAppInstallationSuspended):
+        raise
+    except GitHubAppTokenError as exc:
+        raise GitHubFetchError(
+            f"Failed to obtain installation token for installation_id={installation_id}: "
+            f"{type(exc).__name__}: {_redact(str(exc))}"
+        ) from exc
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=json_body,
+            timeout=_GITHUB_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise GitHubFetchError(
+            f"GitHub POST failed for url={url}: "
+            f"{type(exc).__name__}: {_redact(str(exc))}"
+        ) from exc
+
+    if response.status_code >= 300:
+        raise GitHubFetchError(
+            f"GitHub POST returned non-2xx for url={url} "
+            f"(status={response.status_code}): {_redact(response.text or '')[:300]}"
+        )
+    return response
+
+
+def _put(
+    url: str,
+    installation_id: int,
+    *,
+    json_body: dict[str, Any] | None = None,
+    accept: str = "application/vnd.github+json",
+    ok_statuses: tuple[int, ...] = (200, 201, 204),
+) -> requests.Response:
+    """Issue a PUT with the App's installation token.
+
+    Used by ``dismiss_prior`` to call
+    ``PUT /pulls/{n}/reviews/{id}/dismissals``. Accepts a tuple of
+    success status codes — GitHub returns 200 on dismissal but other
+    PUT endpoints may return 201/204.
+    """
+    try:
+        headers = _auth_headers(installation_id, accept)
+    except (GitHubAppInstallationNotFound, GitHubAppInstallationSuspended):
+        raise
+    except GitHubAppTokenError as exc:
+        raise GitHubFetchError(
+            f"Failed to obtain installation token for installation_id={installation_id}: "
+            f"{type(exc).__name__}: {_redact(str(exc))}"
+        ) from exc
+
+    try:
+        response = requests.put(
+            url,
+            headers=headers,
+            json=json_body if json_body is not None else {},
+            timeout=_GITHUB_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise GitHubFetchError(
+            f"GitHub PUT failed for url={url}: "
+            f"{type(exc).__name__}: {_redact(str(exc))}"
+        ) from exc
+
+    if response.status_code not in ok_statuses:
+        raise GitHubFetchError(
+            f"GitHub PUT returned unexpected status for url={url} "
+            f"(status={response.status_code}): {_redact(response.text or '')[:300]}"
         )
     return response
 
@@ -873,17 +977,140 @@ class GitHubChangeAdapter:
                 )
         return comments
 
-    # ─── Part 3 stubs ────────────────────────────────────────────────
+    # ─── Live review posting (Part 3) ────────────────────────────────
 
     def post_verdict(
         self,
         event: NormalizedChangeEvent,
         investigation: dict[str, Any],
     ) -> PostedVerdict:
-        """Submit Aurora's PR Review. Wired in Part 3."""
-        raise NotImplementedError(
-            "post_verdict is wired in Part 3 of the rollout — "
-            "Part 1 only persists change_events rows for audit."
+        """Submit Aurora's PR Review.
+
+        Builds a single ``POST /repos/{owner}/{repo}/pulls/{n}/reviews``
+        call with ``{event, body, comments[]}``. The ``comments[]``
+        array maps directly to the ``rendered_review.inline_comments``
+        the review-poster produced — each entry becomes one inline
+        per-hunk comment on the PR.
+
+        Args:
+            event: the parsed event the verdict is for. Must carry
+                ``installation_id``, ``repo``, and (for code_change
+                kinds) ``external_id`` set to the PR number.
+            investigation: rendered review payload — caller passes
+                ``{verdict_event, body, inline_comments, commit_sha}``
+                where ``inline_comments`` is the list of
+                ``{path, start_line, end_line, body}`` dicts produced
+                by ``pr_review_poster.render_review``. ``commit_sha``
+                pins the review to the exact SHA the investigator
+                analysed (GitHub's API uses this to anchor inline
+                comments correctly across subsequent pushes).
+
+        Returns:
+            :class:`PostedVerdict` carrying the review id (persisted
+            as ``change_investigations.external_verdict_id``) and the
+            per-comment ids (persisted as
+            ``change_investigations.inline_comment_ids``).
+
+        Raises:
+            GitHubFetchError: on any non-2xx response or transport
+                failure. The Celery task catches this and persists the
+                investigation without ``external_verdict_id`` so the
+                row reflects a posting failure rather than a missing
+                investigation.
+        """
+        if event.installation_id is None or event.repo is None:
+            raise GitHubFetchError(
+                "post_verdict requires installation_id + repo on the event"
+            )
+        pr_number = event.parent_external_id or event.external_id
+        if not pr_number or not pr_number.isdigit():
+            raise GitHubFetchError(
+                f"post_verdict requires a numeric PR id; got {pr_number!r}"
+            )
+
+        verdict_event = _coerce_str(investigation.get("verdict_event")) or "COMMENT"
+        body = _coerce_str(investigation.get("body"))
+        inline_comments_in = investigation.get("inline_comments") or []
+        if not isinstance(inline_comments_in, list):
+            inline_comments_in = []
+
+        github_comments: list[dict[str, Any]] = []
+        for raw in inline_comments_in:
+            if not isinstance(raw, dict):
+                continue
+            translated = _to_github_review_comment(raw)
+            if translated is not None:
+                github_comments.append(translated)
+
+        url = f"{_API_BASE}/repos/{event.repo}/pulls/{pr_number}/reviews"
+        payload: dict[str, Any] = {
+            "event": verdict_event,
+            "body": body,
+        }
+        # Pin the review to the investigated SHA when we have one. GitHub
+        # uses ``commit_id`` to anchor inline comments to a specific
+        # commit on the PR — without it, comments anchor to HEAD which
+        # can race with engineer pushes mid-investigation.
+        commit_sha = _coerce_str(investigation.get("commit_sha")) or _coerce_str(
+            event.commit_sha
+        )
+        if commit_sha:
+            payload["commit_id"] = commit_sha
+        if github_comments:
+            payload["comments"] = github_comments
+
+        response = _post(url, event.installation_id, json_body=payload)
+        try:
+            response_payload = response.json()
+        except ValueError as exc:
+            raise GitHubFetchError(
+                f"post_verdict received non-JSON body: {type(exc).__name__}"
+            ) from exc
+
+        review_id = response_payload.get("id")
+        if not isinstance(review_id, int):
+            raise GitHubFetchError(
+                "post_verdict response missing 'id' field"
+            )
+
+        # The Reviews API doesn't return per-comment ids on the initial
+        # POST — fetch the review's comments to capture them so a
+        # subsequent ``dismiss_prior`` can target them individually if
+        # we ever need per-comment dismissal. The fetch is cheap (one
+        # paginated GET) and only fires when we actually posted inline
+        # comments.
+        inline_comment_ids: list[str] = []
+        if github_comments:
+            try:
+                inline_comment_ids = _fetch_review_comment_ids(
+                    repo=event.repo,
+                    pr_number=pr_number,
+                    review_id=review_id,
+                    installation_id=event.installation_id,
+                )
+            except GitHubFetchError as exc:
+                # Non-fatal — we still have the review id, and the
+                # next dismiss_prior will dismiss the whole review.
+                logger.warning(
+                    "github_adapter_event=post_verdict status=comment_id_fetch_failed "
+                    "review_id=%s error_class=%s",
+                    review_id,
+                    type(exc).__name__,
+                )
+
+        logger.info(
+            "github_adapter_event=post_verdict status=ok review_id=%s "
+            "verdict_event=%s comment_count=%d repo=%s pr=%s",
+            review_id,
+            verdict_event,
+            len(github_comments),
+            event.repo,
+            pr_number,
+        )
+
+        return PostedVerdict(
+            verdict_id=str(review_id),
+            inline_comment_ids=inline_comment_ids,
         )
 
     def dismiss_prior(
@@ -891,7 +1118,144 @@ class GitHubChangeAdapter:
         event: NormalizedChangeEvent,
         prior_verdict: PostedVerdict,
     ) -> None:
-        """Dismiss the prior Review before re-posting. Wired in Part 3."""
-        raise NotImplementedError(
-            "dismiss_prior is wired in Part 3 of the rollout."
+        """Dismiss the prior Review before re-posting.
+
+        Calls ``PUT /repos/{owner}/{repo}/pulls/{n}/reviews/{id}/dismissals``
+        with a brief message. Inline comments are left in place but
+        marked outdated by GitHub when their anchored lines change on
+        a subsequent push.
+
+        404 / 422 are treated as success: the prior review may already
+        be dismissed, or the PR may be closed / merged. Either way we
+        don't want to crash the followup investigation that triggered
+        this call.
+
+        Args:
+            event: the parsed event we're re-running for.
+            prior_verdict: the ``PostedVerdict`` we previously stored
+                on ``change_investigations.external_verdict_id``.
+        """
+        if event.installation_id is None or event.repo is None:
+            logger.warning(
+                "github_adapter_event=dismiss_prior status=skipped "
+                "reason=missing_install_or_repo external_id=%s",
+                event.external_id,
+            )
+            return
+        pr_number = event.parent_external_id or event.external_id
+        if not pr_number or not pr_number.isdigit():
+            logger.warning(
+                "github_adapter_event=dismiss_prior status=skipped "
+                "reason=non_numeric_pr",
+            )
+            return
+        if not prior_verdict.verdict_id:
+            return
+
+        url = (
+            f"{_API_BASE}/repos/{event.repo}/pulls/{pr_number}/reviews/"
+            f"{prior_verdict.verdict_id}/dismissals"
         )
+        try:
+            _put(
+                url,
+                event.installation_id,
+                json_body={
+                    "message": (
+                        "Aurora is re-evaluating this PR with new context "
+                        "(commit push or engineer reply)."
+                    ),
+                    "event": "DISMISS",
+                },
+            )
+            logger.info(
+                "github_adapter_event=dismiss_prior status=ok "
+                "review_id=%s repo=%s pr=%s",
+                prior_verdict.verdict_id,
+                event.repo,
+                pr_number,
+            )
+        except GitHubFetchError as exc:
+            # 404 / 422 happen when the prior review is already dismissed,
+            # was deleted, or the PR was closed. None are recoverable by
+            # retry and none should block the new review.
+            logger.info(
+                "github_adapter_event=dismiss_prior status=ignored "
+                "review_id=%s reason=%s",
+                prior_verdict.verdict_id,
+                type(exc).__name__,
+            )
+
+
+# ─── Helpers private to the live-posting path ───────────────────────
+
+
+_GITHUB_REVIEW_EVENTS = frozenset(
+    {"APPROVE", "REQUEST_CHANGES", "COMMENT", "PENDING"}
+)
+
+
+def _to_github_review_comment(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Translate one ``RenderedReview.inline_comments`` entry into the
+    shape GitHub's Reviews API expects.
+
+    The vendor-neutral entry has ``{path, start_line, end_line, body}``.
+    GitHub's wire format is ``{path, line, side, body[, start_line,
+    start_side]}`` where ``line`` is the END line and ``start_line`` is
+    populated only for multi-line ranges. Returns ``None`` for malformed
+    entries (the caller drops them without crashing).
+    """
+    path = _coerce_str(raw.get("path"))
+    body = _coerce_str(raw.get("body"))
+    start_line = raw.get("start_line")
+    end_line = raw.get("end_line")
+    if not path or not body:
+        return None
+    try:
+        start_line_i = int(start_line) if start_line is not None else None
+    except (TypeError, ValueError):
+        return None
+    try:
+        end_line_i = int(end_line) if end_line is not None else None
+    except (TypeError, ValueError):
+        end_line_i = None
+    if start_line_i is None or start_line_i <= 0:
+        return None
+
+    comment: dict[str, Any] = {
+        "path": path,
+        "body": body,
+        "side": "RIGHT",
+    }
+    if end_line_i is not None and end_line_i > start_line_i:
+        comment["start_line"] = start_line_i
+        comment["start_side"] = "RIGHT"
+        comment["line"] = end_line_i
+    else:
+        comment["line"] = start_line_i
+    return comment
+
+
+def _fetch_review_comment_ids(
+    *,
+    repo: str,
+    pr_number: str,
+    review_id: int,
+    installation_id: int,
+) -> list[str]:
+    """GET the per-comment ids for a freshly posted Review.
+
+    Uses ``GET /repos/{owner}/{repo}/pulls/{n}/reviews/{id}/comments``.
+    Returns a list of stringified comment ids the caller persists to
+    ``change_investigations.inline_comment_ids``.
+    """
+    url = f"{_API_BASE}/repos/{repo}/pulls/{pr_number}/reviews/{review_id}/comments"
+    items = _paginated_get(url, installation_id)
+    ids: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        comment_id = item.get("id")
+        if isinstance(comment_id, int):
+            ids.append(str(comment_id))
+    return ids

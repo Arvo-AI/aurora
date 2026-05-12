@@ -150,30 +150,23 @@ def test_adapter_protocol_methods_exist() -> None:
         )
 
 
-def test_post_verdict_and_dismiss_prior_raise_not_implemented_in_part_1() -> None:
-    """Part 3 wires these. A Part 1/2 call should fail loudly so we never
-    accidentally post a customer-visible review before the calibration
-    gate."""
+def test_post_verdict_and_dismiss_prior_are_callable_in_part_3() -> None:
+    """Phase 1a Part 3 wires the real implementation. The customer-
+    visible-review safety net is no longer at the method-implementation
+    level; it now lives in the ``github_installations.change_intercept_dry_run``
+    flag (default TRUE) which the Celery task consults before calling
+    post_verdict.
+
+    This test only asserts the methods are real (no longer
+    NotImplementedError). End-to-end behaviour is covered by
+    ``test_github_adapter`` which patches the HTTP layer."""
     adapter: Any = get_adapter("github")
-    event = NormalizedChangeEvent(
-        vendor="github",
-        kind="code_change",
-        org_id="org-1",
-        installation_id=42,
-        external_id="100",
-        dedup_key="github:acme/widgets:100",
-        repo="acme/widgets",
-        ref="feat/foo",
-        base_ref="main",
-        commit_sha="deadbeef",
-        actor="alice",
-        target_env="prod",
-        action="opened",
-    )
-    with pytest.raises(NotImplementedError):
-        adapter.post_verdict(event, investigation={})
-    with pytest.raises(NotImplementedError):
-        adapter.dismiss_prior(event, prior_verdict=PostedVerdict(verdict_id="x"))
+    # Methods must exist and not raise NotImplementedError at lookup.
+    # Real network calls are exercised in test_github_adapter with
+    # mocked HTTP; here we just pin the contract that the symbols
+    # remain callable post-Part-3.
+    assert callable(adapter.post_verdict)
+    assert callable(adapter.dismiss_prior)
 
 
 def test_base_module_re_exports_required_symbols() -> None:
