@@ -728,6 +728,45 @@ def setup_scaleway_environment_isolated(user_id: str, selected_project_id: str |
         return False, None, None, None
 
 
+def setup_sentry_environment_isolated(user_id: str, selected_project_id: str | None = None):
+    """Set up Sentry environment with isolated credentials for sentry-cli."""
+    try:
+        fn_start = time.perf_counter()
+        logger.info("Setting up isolated Sentry environment...")
+
+        from utils.secrets.secret_ref_utils import get_user_token_data
+        token_data = get_user_token_data(user_id, 'sentry')
+
+        if not token_data:
+            logger.warning("No Sentry credentials found for user %s", user_id)
+            return False, None, None, None
+
+        auth_token = token_data.get("auth_token") or ""
+        org_slug = token_data.get("org_slug") or ""
+
+        if not auth_token:
+            logger.warning("No Sentry auth token found for user %s", user_id)
+            return False, None, None, None
+
+        isolated_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": "/home/appuser",
+            "USER": os.environ.get("USER", ""),
+            "SENTRY_AUTH_TOKEN": auth_token,
+            "SENTRY_ORG": org_slug,
+            "SENTRY_FORCE_ENV_TOKEN": "1",  # Skip .sentryclirc lookup, use env var only
+        }
+
+        logger.info("Sentry isolated environment configured (org: %s)", org_slug)
+        logger.info("TIME: setup_sentry_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
+
+        return True, org_slug, "internal_integration_token", isolated_env
+
+    except Exception as e:
+        logger.error(f"Failed to setup Sentry environment: {e}")
+        return False, None, None, None
+
+
 def setup_tailscale_environment_isolated(user_id: str, selected_tailnet: str | None = None):
     """Set up Tailscale environment with isolated credentials - NO global state modification.
 
@@ -1322,7 +1361,8 @@ Security & Compliance
         # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
         # the subcommand without the provider prefix, e.g. "ecs list-clusters").
         _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale"}
+                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale",
+                       "sentry": "sentry"}
         prefix = _CLI_PREFIX.get(provider.lower(), "")
         gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
         from utils.auth.command_gate import gate_command
@@ -1383,6 +1423,11 @@ Security & Compliance
             if not success:
                 return json.dumps({"error": f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", "final_command": command, "requires_connection": True})
             resource_id = project_id
+        elif normalized_provider == 'sentry':
+            success, org_slug, auth_method, isolated_env = setup_sentry_environment_isolated(user_id, selected_project_id)
+            if not success:
+                return json.dumps({"error": "Failed to setup Sentry environment. Please connect your Sentry account first.", "final_command": command, "requires_connection": True})
+            resource_id = org_slug
         elif normalized_provider == 'tailscale':
             # Tailscale isolated setup - uses REST API, not CLI
             success, tailnet, auth_method, isolated_env = setup_tailscale_environment_isolated(user_id, selected_project_id)
@@ -1608,6 +1653,9 @@ Security & Compliance
         elif provider.lower() == 'scaleway':
             supported_cli_tools = ['scw', 'kubectl', 'helm', 'terraform']
             default_cli = 'scw'
+        elif provider.lower() == 'sentry':
+            supported_cli_tools = ['sentry']
+            default_cli = 'sentry'
         else:
             supported_cli_tools = []
             default_cli = ''
@@ -1628,6 +1676,8 @@ Security & Compliance
             command = f"ovhcloud {command}"
         elif provider.lower() == 'scaleway' and cli_tool == 'scw' and not terraform_invocation and not command.strip().startswith('scw'):
             command = f"scw {command}"
+        elif provider.lower() == 'sentry' and cli_tool == 'sentry' and not command.strip().startswith('sentry'):
+            command = f"sentry {command}"
 
         # Apply provider-specific convenience flags
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud':
@@ -1688,6 +1738,10 @@ Security & Compliance
             # Exclude kubeconfig commands - they need raw YAML output for kubectl
             if '-o' not in command and '--output' not in command and ('list' in command or 'get' in command) and 'kubeconfig' not in command:
                 command += " -o json"
+
+        elif provider.lower() == 'sentry' and cli_tool == 'sentry':
+            if '--json' not in command and ('list' in command or 'view' in command or 'events' in command):
+                command += " --json"
                 
         # --- Auto-inject impersonation flag for gsutil ---------------------------------
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gsutil' and auth_method == 'impersonated':

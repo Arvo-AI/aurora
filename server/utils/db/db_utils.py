@@ -557,6 +557,24 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_datadog_events_status ON datadog_events(status);
                     CREATE INDEX IF NOT EXISTS idx_datadog_events_received_at ON datadog_events(received_at DESC);
                 """,
+                "sentry_events": """
+                    CREATE TABLE IF NOT EXISTS sentry_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        event_type VARCHAR(100),
+                        event_title TEXT,
+                        status VARCHAR(50),
+                        scope TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_user_id ON sentry_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_status ON sentry_events(status);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_received_at ON sentry_events(received_at DESC);
+                """,
                 "newrelic_events": """
                     CREATE TABLE IF NOT EXISTS newrelic_events (
                         id SERIAL PRIMARY KEY,
@@ -1255,6 +1273,7 @@ def initialize_tables():
             # Add monitoring tables
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
+            rls_tables.append("sentry_events")
             rls_tables.append("netdata_alerts")
             rls_tables.append("splunk_alerts")
             rls_tables.append("incidentio_alerts")

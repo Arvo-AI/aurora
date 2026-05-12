@@ -21,6 +21,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_grafana_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils import safe_json_dump
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +121,6 @@ def _format_alert_summary(payload: Dict[str, Any]) -> str:
     return f"{title} [{state}]" + (f" (rule={rule_uid})" if rule_uid else "")
 
 
-def _safe_json_dump(data: Dict[str, Any]) -> str:
-    try:
-        return json.dumps(data, ensure_ascii=False)
-    except Exception:  # pragma: no cover - defensive
-        return str(data)
-
-
 @celery_app.task(
     bind=True, max_retries=3, default_retry_delay=30, name="grafana.process_alert"
 )
@@ -149,7 +143,7 @@ def process_grafana_alert(
         summary = _format_alert_summary(payload)
         logger.info("[GRAFANA][ALERT][USER:%s] %s", user_id or "unknown", summary)
 
-        logger.debug("[GRAFANA][ALERT] full payload=%s", _safe_json_dump(payload))
+        logger.debug("[GRAFANA][ALERT] full payload=%s", safe_json_dump(payload))
 
         # Persist alert to database if user_id is provided
         if user_id:

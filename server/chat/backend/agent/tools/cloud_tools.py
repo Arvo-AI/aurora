@@ -1813,6 +1813,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         ))
         logging.info(f"Added Datadog tool for user {user_id}")
 
+    # Add Sentry tool if connected
     # Add New Relic tool if connected
     if user_id and is_newrelic_connected(user_id):
         context_wrapped_nr = with_user_context(query_newrelic)

@@ -390,6 +390,11 @@ from routes.datadog import bp as datadog_bp  # noqa: F401
 import routes.datadog.tasks  # noqa: F401
 app.register_blueprint(datadog_bp, url_prefix="/datadog")
 
+# --- Sentry Integration Routes ---
+from routes.sentry import bp as sentry_bp  # noqa: F401
+import routes.sentry.tasks  # noqa: F401
+app.register_blueprint(sentry_bp, url_prefix="/sentry")
+
 # --- Netdata Integration Routes ---
 from routes.netdata import bp as netdata_bp  # noqa: F401
 import routes.netdata.tasks  # noqa: F401

@@ -12,6 +12,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_opsgenie_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils import safe_json_dump
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +49,6 @@ def _extract_service(payload: Dict[str, Any]) -> str:
     return str(service)[:255] if service else "unknown"
 
 
-def _safe_json_dump(data: Dict[str, Any]) -> str:
-    try:
-        return json.dumps(data, ensure_ascii=False)
-    except Exception:
-        logger.warning("JSON serialization failed, falling back to str(): %s", type(data))
-        return str(data)
-
-
-
 @celery_app.task(
     bind=True, max_retries=3, default_retry_delay=30, name="opsgenie.process_event"
 )
@@ -71,7 +63,7 @@ def process_opsgenie_event(
     action = payload.get("action", "unknown")
     alert_message = alert.get("message", "OpsGenie Alert")
     logger.info("[OPSGENIE][WEBHOOK][USER:%s] action=%s message=%s", user_id or "unknown", action, alert_message)
-    logger.debug("[OPSGENIE][WEBHOOK] payload=%s", _safe_json_dump(payload))
+    logger.debug("[OPSGENIE][WEBHOOK] payload=%s", safe_json_dump(payload))
 
     try:
         if not user_id:

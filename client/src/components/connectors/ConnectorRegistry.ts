@@ -53,6 +53,18 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "sentry",
+      name: "Sentry",
+      description: "Connect Sentry for application error tracking, stack traces, and performance monitoring. Receive alerts and investigate issues during root cause analysis.",
+      iconPath: "/sentry.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/sentry/auth",
+      storageKey: "isSentryConnected",
+      useCustomConnection: true,
+    });
+
+    this.register({
       id: "netdata",
       name: "Netdata",
       description: "Real-time infrastructure monitoring with Netdata Cloud. Receive alerts and monitor system metrics across all your nodes.",

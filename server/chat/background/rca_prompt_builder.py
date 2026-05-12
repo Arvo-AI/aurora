@@ -600,6 +600,10 @@ def build_rca_prompt(
     elif source == 'opsgenie':
         tags = alert_details.get('tags', [])
         labels_str = ", ".join(tags[:10]) if tags else "none"
+    elif source == 'sentry':
+        event_type = alert_details.get('event_type', 'unknown')
+        action = alert_details.get('action', '')
+        labels_str = f"event_type={event_type}, action={action}"
     else:
         labels_str = str(labels)
 
@@ -631,6 +635,14 @@ def build_rca_prompt(
     if source == 'newrelic':
         if 'issueUrl' in alert_details:
             prompt_parts.append(f"- **Issue URL**: {alert_details['issueUrl']}")
+    if source == 'sentry':
+        if 'event_type' in alert_details:
+            prompt_parts.append(f"- **Event Type**: {alert_details['event_type']}")
+        payload = alert_details.get('payload', {})
+        data = payload.get('data', {}) if isinstance(payload, dict) else {}
+        issue_url = data.get('issue', {}).get('web_url') or data.get('event', {}).get('url')
+        if issue_url:
+            prompt_parts.append(f"- **Issue URL**: {issue_url}")
 
     # providers list is already verified by get_user_providers() — only
     # cloud providers with valid role-auth + SkillRegistry-validated integrations.

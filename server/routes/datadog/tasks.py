@@ -11,6 +11,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_datadog_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils import safe_json_dump
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +38,6 @@ def _summarize_event(payload: Dict[str, Any]) -> str:
     if monitor_id:
         parts.append(f"monitor={monitor_id}")
     return " ".join(parts)
-
-
-def _safe_json_dump(data: Dict[str, Any]) -> str:
-    try:
-        return json.dumps(data, ensure_ascii=False)
-    except Exception:  # pragma: no cover - defensive
-        return str(data)
 
 
 def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bool:
@@ -118,7 +112,7 @@ def process_datadog_event(
     """Background processor for Datadog webhook payloads."""
     summary = _summarize_event(payload)
     logger.info("[DATADOG][WEBHOOK][USER:%s] %s", user_id or "unknown", summary)
-    logger.debug("[DATADOG][WEBHOOK] payload=%s", _safe_json_dump(payload))
+    logger.debug("[DATADOG][WEBHOOK] payload=%s", safe_json_dump(payload))
 
     try:
         if not user_id:

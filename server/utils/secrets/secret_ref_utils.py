@@ -67,6 +67,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
     "incidentio",  # incident.io connector tokens
+    "sentry",   # Sentry connector tokens
 }
 
 

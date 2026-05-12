@@ -11,6 +11,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_splunk_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils import safe_json_dump
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +73,6 @@ def _format_alert_summary(payload: Dict[str, Any]) -> str:
     return f"{name} (results={result_count})"
 
 
-def _safe_json_dump(data: Dict[str, Any]) -> str:
-    """Safe JSON serialization for logging."""
-    try:
-        return json.dumps(data, ensure_ascii=False)
-    except Exception:
-        return str(data)
-
-
 @celery_app.task(
     bind=True, max_retries=3, default_retry_delay=30, name="splunk.process_alert"
 )
@@ -101,7 +94,7 @@ def process_splunk_alert(
             "user_id": user_id,
         }
 
-        logger.debug("[SPLUNK][ALERT] full payload=%s", _safe_json_dump(details))
+        logger.debug("[SPLUNK][ALERT] full payload=%s", safe_json_dump(details))
 
         if user_id:
             from utils.db.connection_pool import db_pool

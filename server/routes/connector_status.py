@@ -618,6 +618,27 @@ def _check_tailscale(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /sentry/status — validates via Sentry Organizations API."""
+    auth_token = creds.get("auth_token")
+    org_slug = creds.get("org_slug")
+    if not auth_token or not org_slug:
+        return {"connected": False}
+    base_url = (creds.get("base_url")).rstrip("/")
+    try:
+        r = requests.get(
+            f"{base_url}/api/0/organizations/{org_slug}/",
+            headers={"Authorization": f"Bearer {auth_token}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return {"connected": True, "orgSlug": org_slug, "orgName": data.get("name")}
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 # ── Providers where credential-existence is sufficient ──────────────
 
 
@@ -701,6 +722,7 @@ PROVIDER_CHECKERS = {
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
+    "sentry": _check_sentry,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
