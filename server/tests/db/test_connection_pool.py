@@ -1,9 +1,9 @@
-"""Tests the Flask connection pool that stamps every request's DB session
-with tenant identity (current_user_id, current_org_id) on entry and
-RESETs it on release. Pins the SET-on-entry / RESET-on-exit contract so
-a connection can't be returned to the pool with another tenant's RLS
-context still attached -- the foundation that makes RLS safe across
-shared connections.
+"""Tests the Flask connection pool's tenant-isolation contract.
+
+Pins SET-on-entry / RESET-on-exit behaviour so connections are never
+returned to the pool with a prior tenant's RLS context attached.  Also
+covers adversarial inputs to ``set_rls_context`` (invalid/hostile user IDs,
+forgotten calls in Celery tasks) and post-fork pool recreation.
 """
 
 import os
@@ -252,6 +252,130 @@ class TestGetConnectionCleanup:
             assert conn is connection
 
         factory.return_value.putconn.assert_called_once_with(connection)
+
+
+class TestRLSContextAdversarial:
+    """Adversarial inputs to set_rls_context and pool-release behaviour for
+    tasks that forget to call it.
+
+    Invariant: no malformed user_id, cross-org user_id, or absent RLS call
+    must leave a previous tenant's identity attached to a returned connection.
+    Every path must either refuse to configure RLS (returning None, emitting no
+    SET) or guarantee that the pool's RESET fires on release.
+    """
+
+    # ------------------------------------------------------------------
+    # Invalid / hostile user_id values passed to set_rls_context
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("bad_user_id", [
+        None,
+        "",
+        "../etc/passwd",
+        "org-b-victim-uuid",          # UUID belonging to a different org
+        "\x00null-byte",
+        "a" * 512,                    # pathologically long identifier
+    ])
+    def test_unresolvable_user_id_does_not_set_rls_vars(
+        self, bad_user_id, monkeypatch
+    ):
+        """Any user_id for which org resolution returns None must result in
+        zero SET executions and no commit — never a half-stamped connection.
+        """
+        from utils.auth import stateless_auth as sa_module
+        from utils.auth.stateless_auth import set_rls_context
+
+        # Simulate org lookup returning nothing for every hostile input.
+        monkeypatch.setattr(sa_module, "_user_org_cache", {})
+        monkeypatch.setattr(
+            sa_module, "get_org_id_for_user", MagicMock(return_value=None)
+        )
+
+        cursor, conn = MagicMock(name="cursor"), MagicMock(name="conn")
+        result = set_rls_context(cursor, conn, bad_user_id)
+
+        assert result is None, (
+            f"set_rls_context must return None for unresolvable user_id={bad_user_id!r}"
+        )
+        cursor.execute.assert_not_called()
+        conn.commit.assert_not_called()
+
+    def test_cross_org_user_id_resolved_to_foreign_org_does_not_set_requester_org(
+        self, monkeypatch
+    ):
+        """A user_id that resolves to org-B must configure RLS for org-B —
+        never silently leave org-A's vars from a prior borrow on the same
+        connection.  The fixture confirms SET is called with the *resolved*
+        org, not any caller-supplied one.
+        """
+        from utils.auth import stateless_auth as sa_module
+        from utils.auth.stateless_auth import set_rls_context
+
+        monkeypatch.setattr(sa_module, "_user_org_cache", {})
+        monkeypatch.setattr(
+            sa_module, "get_org_id_for_user", MagicMock(return_value="org-B")
+        )
+
+        cursor, conn = MagicMock(name="cursor"), MagicMock(name="conn")
+        result = set_rls_context(cursor, conn, "user-in-org-B")
+
+        assert result == "org-B"
+        set_sql = [c.args[0] for c in cursor.execute.call_args_list]
+        set_params = [c.args[1] for c in cursor.execute.call_args_list if len(c.args) > 1]
+        assert "SET myapp.current_org_id = %s;" in set_sql
+        assert ("org-B",) in set_params
+        # Must NOT contain anything that looks like org-A
+        assert ("org-A",) not in set_params
+
+    # ------------------------------------------------------------------
+    # Pool RESET fires even when set_rls_context was never called
+    # (simulates a Celery task that forgets the call)
+    # ------------------------------------------------------------------
+
+    def test_reset_fires_when_celery_task_skips_set_rls_context(
+        self, fresh_pool
+    ):
+        """A task that borrows a connection but never calls set_rls_context
+        must still trigger the RESET on release — the connection must not
+        be returned to the pool with stale session vars attached.
+        """
+        pool, factory = fresh_pool
+        connection, cursor = _make_conn()
+        factory.return_value.getconn.return_value = connection
+
+        # No Flask request context → simulates a bare Celery worker invocation.
+        with pool.get_connection() as conn:
+            # Deliberately omit set_rls_context to mirror the Celery
+            # "forgot to set RLS" scenario.
+            assert conn is connection
+
+        assert _RESET_SQL in _executed_sql(cursor), (
+            "Pool RESET must run even when set_rls_context was never called."
+        )
+        factory.return_value.putconn.assert_called_once_with(connection)
+
+    def test_reset_fires_after_set_rls_context_raises(self, fresh_pool, flask_app):
+        """If set_rls_context's underlying cursor.execute raises mid-way,
+        the pool must still RESET and return the connection — a partial SET
+        must not be left on a connection that goes back to the pool.
+        """
+        pool, factory = fresh_pool
+        connection, cursor = _make_conn()
+        # First execute (SET user_id) raises; subsequent calls (RESET) succeed.
+        cursor.execute.side_effect = [Exception("db gone"), None, None]
+        factory.return_value.getconn.return_value = connection
+
+        with (
+            flask_app.test_request_context(
+                "/api/x", headers={"X-User-ID": "u-1", "X-Org-ID": "org-7"}
+            ),
+            pool.get_connection() as conn,
+        ):
+            assert conn is connection
+
+        assert _RESET_SQL in _executed_sql(cursor)
+        factory.return_value.putconn.assert_called_once_with(connection)
+
 
 
 class TestPostForkPoolRecreation:

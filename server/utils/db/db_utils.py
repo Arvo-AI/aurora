@@ -596,6 +596,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
                 """,
+                "sentry_events": """
+                    CREATE TABLE IF NOT EXISTS sentry_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        issue_id VARCHAR(255),
+                        issue_title TEXT,
+                        level VARCHAR(50),
+                        project_slug VARCHAR(255),
+                        resource VARCHAR(50),
+                        action VARCHAR(50),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_sentry_events_org_issue_action
+                        ON sentry_events(org_id, issue_id, action) WHERE issue_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_user_id ON sentry_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_resource ON sentry_events(resource);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_project ON sentry_events(project_slug);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_received_at ON sentry_events(received_at DESC);
+                """,
                 "netdata_alerts": """
                     CREATE TABLE IF NOT EXISTS netdata_verification_tokens (
                         user_id TEXT PRIMARY KEY,
@@ -1065,6 +1088,19 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
                         ON org_command_policies(org_id);
                 """,
+                "org_tool_permissions": """
+                    CREATE TABLE IF NOT EXISTS org_tool_permissions (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        tool_key VARCHAR(100) NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT false,
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, tool_key)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_otp_org
+                        ON org_tool_permissions(org_id);
+                """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1268,6 +1304,7 @@ def initialize_tables():
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
             rls_tables.append("newrelic_events")
+            rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
 
             # Add monitoring tables
@@ -1295,6 +1332,7 @@ def initialize_tables():
             rls_tables.append("github_connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("org_tool_permissions")
             rls_tables.append("actions")
             rls_tables.append("action_runs")
             rls_tables.append("postmortem_versions")

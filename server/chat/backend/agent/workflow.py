@@ -546,7 +546,7 @@ class Workflow:
                             logger.error(f"Cannot extract valid JSON from malformed args, using empty dict")
                             args = {}
                     except (json.JSONDecodeError, Exception) as e:
-                        logger.error(f"Failed to clean malformed args: {e}, using empty dict")
+                        logger.exception(f"Failed to clean malformed args: {e}, using empty dict")
                         args = {}
                 
                 elif args_stripped.startswith('{') and args_stripped.endswith('}'):
@@ -747,7 +747,7 @@ class Workflow:
                             "ui_messages": row[6],
                         }
         except Exception as e:
-            logger.error(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
+            logger.exception(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
         return None
 
     @staticmethod
@@ -1074,17 +1074,24 @@ class Workflow:
                     chunk_obj = chunk_data.get("chunk")
                     if chunk_obj:
                         content = ""
+                        reasoning = ""
+
+                        # Check for reasoning content (OpenRouter, DeepSeek-R1 etc.)
+                        if hasattr(chunk_obj, 'additional_kwargs'):
+                            reasoning = chunk_obj.additional_kwargs.get("reasoning_content", "")
+
+                        # Extract visible content. _ReasoningChatOpenAI clears
+                        # chunk_obj.content for reasoning-only chunks upstream, so
+                        # this is safe to call unconditionally.
+                        is_background = getattr(input_state, "is_background", False)
                         if hasattr(chunk_obj, 'content') and chunk_obj.content:
-                            # Extract text content (handles Gemini thinking model list format)
-                            # include_thinking=True so reasoning flows to save_incident_thought() for RCA
-                            content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=is_background)
 
-                        # Check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
-                        # regardless of whether content was found above
-                        if not content and hasattr(chunk_obj, 'additional_kwargs'):
-                            content = chunk_obj.additional_kwargs.get("reasoning_content", "")
+                        # For background RCA chats, reasoning feeds into incident thoughts
+                        if not content and reasoning and is_background:
+                            content = reasoning
 
-                        # Only yield if we have actual text content
+                        # Only yield if we have actual text content (not reasoning)
                         if content:
                             chunk_id = getattr(chunk_obj, 'id', None)
                             if chunk_id:
@@ -1133,10 +1140,13 @@ class Workflow:
                         # when tools are bound in LangGraph (langgraph#4877).
                         if _model_turn_tokens == 0:
                             content = ""
+                            is_background = getattr(input_state, "is_background", False)
                             if hasattr(output, 'content') and output.content:
-                                content = _extract_text_from_content(output.content, include_thinking=True)
+                                content = _extract_text_from_content(output.content, include_thinking=is_background)
                             if not content and hasattr(output, 'additional_kwargs'):
-                                content = output.additional_kwargs.get("reasoning_content", "")
+                                reasoning = output.additional_kwargs.get("reasoning_content", "")
+                                if reasoning and is_background:
+                                    content = reasoning
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
                                 msg_id = getattr(output, 'id', None)
@@ -1209,7 +1219,7 @@ class Workflow:
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
         except Exception as stream_exception:
-            logger.error(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}", exc_info=True)
+            logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
             raise
         
         # Consolidate message chunks and save final state
@@ -1353,8 +1363,7 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                # include_thinking=True so reasoning is preserved in the saved message
-                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=False)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1525,18 +1534,14 @@ class Workflow:
                 # Skip synthetic RCA summary injected by _compress_rca_context
                 if isinstance(raw_content, str) and raw_content.startswith(RCA_SUMMARY_PREFIX):
                     continue
-                # Extract text content (handles Gemini thinking model list format).
-                # Include thinking when text is empty and message has tool calls,
-                # so Gemini's reasoning appears in chat alongside tool cards.
-                # (Claude generates inline text with tool calls; Gemini puts reasoning
-                # in thinking blocks only, leaving text empty.)
+                # Extract text content (handles Gemini thinking model list format)
                 content = _extract_text_from_content(raw_content)
                 has_tool_calls = (
                     getattr(msg, 'tool_calls', [])
                     or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
                 )
                 if not content and has_tool_calls:
-                    content = _extract_text_from_content(raw_content, include_thinking=True)
+                    content = _extract_text_from_content(raw_content, include_thinking=False)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)
@@ -1711,7 +1716,7 @@ class Workflow:
                     return False
                     
         except Exception as e:
-            logger.error(f"Error saving UI messages: {e}")
+            logger.exception(f"Error saving UI messages: {e}")
             return False
 
     def _append_new_turn_ui_messages(
@@ -1796,7 +1801,7 @@ class Workflow:
 
         except Exception as e:
             # Broad catch: DB/persistence errors must not abort the workflow.
-            logger.error(f"Error appending UI messages: {e}")
+            logger.exception(f"Error appending UI messages: {e}")
             return False
 
     def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
@@ -1858,7 +1863,7 @@ class Workflow:
                     )
             return redacted
         except Exception as e:
-            logger.error(f"Output redaction (ui_message) failed open: {e}")
+            logger.exception(f"Output redaction (ui_message) failed open: {e}")
             return text
 
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):

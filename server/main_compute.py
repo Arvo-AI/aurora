@@ -209,6 +209,7 @@ _OPEN_PREFIXES = (
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
     "/newrelic/webhook/",
+    "/sentry/webhook/",
     "/pagerduty/webhook/",
     "/opsgenie/webhook/",
     "/jenkins/webhook/",
@@ -335,6 +336,10 @@ app.register_blueprint(org_bp)
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
 
+# --- Tool Permissions Routes ---
+from routes.tool_permissions import tool_permissions_bp
+app.register_blueprint(tool_permissions_bp)
+
 # --- GitHub Integration Routes ---
 from routes.github.github import github_bp
 from routes.github.github_user_repos import github_user_repos_bp
@@ -433,6 +438,11 @@ app.register_blueprint(bigpanda_bp, url_prefix="/bigpanda")
 from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
 import routes.newrelic.tasks  # noqa: F401
+
+# --- Sentry Integration Routes ---
+from routes.sentry import bp as sentry_bp  # noqa: F401
+app.register_blueprint(sentry_bp, url_prefix="/sentry")
+from routes.sentry import tasks as _sentry_tasks  # noqa: F401
 
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401

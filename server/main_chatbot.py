@@ -1533,6 +1533,20 @@ async def handle_connection(websocket) -> None:
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
             _incident_id = _rbac_incident_id
 
+            # Fetch org tool permissions for gate bypass
+            _permitted_tools = None
+            try:
+                with db_pool.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:perms]")
+                        cur.execute(
+                            "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                            (org_id,),
+                        )
+                        _permitted_tools = {row[0] for row in cur.fetchall()}
+            except Exception as e:
+                logger.warning("[Chatbot] Failed to fetch tool permissions: %s", e)
+
             state = State(
                 user_id=user_id,
                 session_id=session_id,
@@ -1547,6 +1561,7 @@ async def handle_connection(websocket) -> None:
                 mode=mode,
                 trigger_rca_requested=bool(trigger_rca_requested),
                 trigger_action_id=trigger_action_id or None,
+                permitted_tools=_permitted_tools,
             )
 
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")

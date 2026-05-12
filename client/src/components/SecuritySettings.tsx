@@ -12,6 +12,19 @@ import { useUser } from "@/hooks/useAuthHooks";
 import { isAdmin } from "@/lib/roles";
 import { Trash2, Plus, Terminal, ChevronRight, ChevronDown, Loader2, Lock, CheckCircle2, XCircle, Shield, ShieldCheck, ShieldX, BookOpen } from "lucide-react";
 import { commandPolicyService, type CommandPolicyRule, type PolicyTemplate } from "@/lib/services/command-policies";
+import { toolPermissionService, type ToolPermission } from "@/lib/services/tool-permissions";
+import { getConnectedAccounts, fetchConnectedAccounts, subscribe as subscribeAccounts } from "@/lib/connected-accounts-cache";
+import Image from "next/image";
+
+const CONNECTOR_ICONS: Record<string, string> = {
+  github: "/github-mark.svg",
+  bitbucket: "/bitbucket.svg",
+  terraform: "/terraform-icon-svgrepo-com.svg",
+  notion: "/notion.svg",
+  spinnaker: "/spinnaker.svg",
+};
+
+const ALWAYS_SHOW_CONNECTORS = new Set(["terraform"]);
 
 function RuleList({
   rules,
@@ -282,6 +295,12 @@ export function SecuritySettings() {
   const [applyingTemplate, setApplyingTemplate] = useState<string | null>(null);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
 
+  const [toolPerms, setToolPerms] = useState<Record<string, ToolPermission[]>>({});
+  const [toolPermsLoading, setToolPermsLoading] = useState(true);
+  const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
+  const [expandedConnectors, setExpandedConnectors] = useState<Set<string>>(new Set());
+  const [connectedProviders, setConnectedProviders] = useState<Set<string>>(new Set());
+
   const fetchPolicies = useCallback(async () => {
     try {
       const data = await commandPolicyService.getPolicies();
@@ -306,7 +325,33 @@ export function SecuritySettings() {
     }
   }, []);
 
-  useEffect(() => { fetchPolicies(); fetchTemplates(); }, [fetchPolicies, fetchTemplates]);
+  const fetchToolPerms = useCallback(async () => {
+    try {
+      let data = await toolPermissionService.getPermissions();
+      if (!data.seeded) {
+        await toolPermissionService.seedDefaults();
+        data = await toolPermissionService.getPermissions();
+      }
+      setToolPerms(data.tools_by_connector);
+    } catch {
+      // Non-blocking
+    } finally {
+      setToolPermsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchPolicies(); fetchTemplates(); if (admin) fetchToolPerms(); }, [fetchPolicies, fetchTemplates, fetchToolPerms, admin]);
+
+  useEffect(() => {
+    fetchConnectedAccounts().then(() => {
+      const { providerIds } = getConnectedAccounts();
+      setConnectedProviders(new Set(providerIds));
+    });
+    return subscribeAccounts(() => {
+      const { providerIds } = getConnectedAccounts();
+      setConnectedProviders(new Set(providerIds));
+    });
+  }, []);
 
   const handleToggleList = async (list: "allowlist" | "denylist", enabled: boolean) => {
     try {
@@ -386,6 +431,131 @@ export function SecuritySettings() {
     } catch {
       toast({ title: "Failed to remove template", variant: "destructive" });
     }
+  };
+
+  const handleToggleTool = async (toolKey: string, enabled: boolean) => {
+    if (togglingTools.has(toolKey)) return;
+    setTogglingTools((prev) => new Set(prev).add(toolKey));
+    setToolPerms((prev) => {
+      const next = { ...prev };
+      for (const connector of Object.keys(next)) {
+        next[connector] = next[connector].map((t) =>
+          t.tool_key === toolKey ? { ...t, enabled } : t
+        );
+      }
+      return next;
+    });
+    try {
+      await toolPermissionService.toggleTool(toolKey, enabled);
+    } catch {
+      toast({ title: "Failed to update tool permission", variant: "destructive" });
+      await fetchToolPerms();
+    } finally {
+      setTogglingTools((prev) => {
+        const next = new Set(prev);
+        next.delete(toolKey);
+        return next;
+      });
+    }
+  };
+
+  const toggleConnectorExpanded = (connector: string) => {
+    setExpandedConnectors((prev) => {
+      const next = new Set(prev);
+      next.has(connector) ? next.delete(connector) : next.add(connector);
+      return next;
+    });
+  };
+
+  const handleToggleTier = async (tools: ToolPermission[], enabled: boolean) => {
+    const keys = tools.map((t) => t.tool_key);
+    setToolPerms((prev) => {
+      const next = { ...prev };
+      for (const connector of Object.keys(next)) {
+        next[connector] = next[connector].map((t) =>
+          keys.includes(t.tool_key) ? { ...t, enabled } : t
+        );
+      }
+      return next;
+    });
+    try {
+      await Promise.all(keys.map((k) => toolPermissionService.toggleTool(k, enabled)));
+    } catch {
+      toast({ title: "Failed to update tier permissions", variant: "destructive" });
+      await fetchToolPerms();
+    }
+  };
+
+  const renderConnectorGroup = (connector: string, tools: ToolPermission[]) => {
+    const expanded = expandedConnectors.has(connector);
+    const enabledCount = tools.filter((t) => t.enabled).length;
+    const tierOrder: string[] = [];
+    for (const t of tools) {
+      if (!tierOrder.includes(t.tier)) tierOrder.push(t.tier);
+    }
+    const grouped = tierOrder
+      .map((tier) => ({ tier, items: tools.filter((t) => t.tier === tier) }))
+      .filter(({ items }) => items.length > 0);
+    return (
+      <div key={connector} className="rounded-lg border bg-card overflow-hidden">
+        <button
+          type="button"
+          className="flex items-center justify-between w-full px-3.5 py-2.5 hover:bg-muted/30 transition-colors"
+          onClick={() => toggleConnectorExpanded(connector)}
+        >
+          <div className="flex items-center gap-2">
+            {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+            {CONNECTOR_ICONS[connector] && (
+              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white dark:bg-white/10 shrink-0">
+                <Image src={CONNECTOR_ICONS[connector]} alt={connector} width={16} height={16} className={connector === "github" ? "dark:invert" : ""} />
+              </div>
+            )}
+            <span className="text-sm font-medium capitalize">{connector}</span>
+            <Badge variant="secondary" className="text-[10px] font-normal">
+              {enabledCount}/{tools.length}
+            </Badge>
+          </div>
+        </button>
+        {expanded && (
+          <div className="border-t">
+            {grouped.map(({ tier, items }) => {
+              const tierEnabled = items.every((t) => t.enabled);
+              const tierPartial = !tierEnabled && items.some((t) => t.enabled);
+              return (
+                <div key={tier}>
+                  <div className="flex items-center justify-between px-3.5 py-1.5 bg-muted/40 border-b">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{tier}</span>
+                    <div className="flex items-center gap-1.5">
+                      {tierPartial && <span className="text-[10px] text-muted-foreground">{items.filter((t) => t.enabled).length}/{items.length}</span>}
+                      <Switch
+                        checked={tierEnabled}
+                        onCheckedChange={(v) => handleToggleTier(items, v)}
+                        className="shrink-0 scale-75"
+                        disabled={!admin}
+                      />
+                    </div>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {items.map((tool) => (
+                      <div key={tool.tool_key} className="flex items-center gap-3 px-3.5 py-2 hover:bg-muted/20">
+                        <Switch
+                          checked={tool.enabled}
+                          onCheckedChange={(v) => handleToggleTool(tool.tool_key, v)}
+                          className="shrink-0 scale-90"
+                          disabled={!admin || togglingTools.has(tool.tool_key)}
+                          aria-label={tool.label}
+                        />
+                        <span className="text-xs flex-1 min-w-0 truncate">{tool.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (loading) {
@@ -596,6 +766,43 @@ export function SecuritySettings() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Tool Permissions */}
+      <div className="pt-4 border-t">
+        <div className="flex items-center gap-2.5 mb-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10">
+            <Shield className="h-4 w-4 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Action Tool Permissions</h2>
+            <p className="text-xs text-muted-foreground">Tools enabled here can run without confirmation in chats and background actions</p>
+          </div>
+        </div>
+
+        {(() => {
+          if (toolPermsLoading) {
+            return (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            );
+          }
+          if (Object.keys(toolPerms).length === 0) {
+            return (
+              <div className="rounded-lg border bg-card p-4 text-center">
+                <p className="text-xs text-muted-foreground">Could not load tool permissions. Ensure the backend is running.</p>
+              </div>
+            );
+          }
+          return (
+          <div className="space-y-2">
+            {Object.entries(toolPerms)
+              .filter(([connector]) => ALWAYS_SHOW_CONNECTORS.has(connector) || connectedProviders.has(connector))
+              .map(([connector, tools]) => renderConnectorGroup(connector, tools))}
+          </div>
+          );
+        })()}
       </div>
     </div>
   );

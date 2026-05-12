@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -35,6 +35,25 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_permitted_tools(user_id: str) -> Optional[set]:
+    """Resolve permitted tools for background chats. Always fetches fresh from DB."""
+    try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return None
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:perms]")
+                cur.execute(
+                    "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                    (org_id,),
+                )
+                return {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        logger.warning("[BackgroundChat] Failed to fetch tool permissions: %s", e)
+        return None
 
 
 def cancel_rca_for_incident(incident_id: str, user_id: str) -> bool:
@@ -1168,8 +1187,9 @@ async def _execute_background_chat(
             question=rail_question,
             model=ModelConfig.RCA_MODEL,
             mode=mode,
-            is_background=True,  # Key flag for background behavior
-            rca_context=rca_context,  # RCA context for prompt_builder
+            is_background=True,
+            rca_context=rca_context,
+            permitted_tools=_resolve_permitted_tools(user_id),
         )
         logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
         

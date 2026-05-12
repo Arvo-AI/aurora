@@ -104,7 +104,8 @@ def iac_plan(
             try:
                 vars_dict = json.loads(vars) if isinstance(vars, str) else vars
                 for key, value in vars_dict.items():
-                    plan_command += f" -var={shlex.quote(f'{key}={value}')}"
+                    serialized = json.dumps(value) if not isinstance(value, str) else value
+                    plan_command += f" -var={shlex.quote(f'{key}={serialized}')}"
             except (json.JSONDecodeError, TypeError):
                 plan_command += f" -var={shlex.quote(str(vars))}"
 
@@ -237,7 +238,7 @@ def iac_apply(
 
         if not gate_action(
             user_id=user_id or "",
-            tool_name="iac_tool",
+            tool_name="iac_tool:apply",
             summary=plan_summary_msg,
         ).allowed:
             tool_capture = get_tool_capture()
@@ -533,7 +534,7 @@ def iac_destroy(
 
         if not gate_action(
             user_id=user_id or "",
-            tool_name="iac_tool",
+            tool_name="iac_tool:destroy",
             summary=plan_summary_msg,
         ).allowed:
             tool_capture = get_tool_capture()

@@ -40,30 +40,6 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest==9.0.3 Flask==3.1.3 psycopg2-binary==2.9.12 python-dotenv==1.2.2 pyyaml==6.0.1 pydantic==2.13.3 langchain-core==1.2.31
 
-      - name: Run architectural & unit tests
+      - name: Run all tests
         working-directory: server
-        run: |
-          tests=(
-            tests/architectural/test_connector_rbac.py
-            tests/auth/test_command_policy.py
-            tests/auth/test_enforcer.py
-            tests/auth/test_oauth2_state_cache.py
-            tests/auth/test_rbac_decorators.py
-            tests/auth/test_stateless_auth.py
-            tests/chat/test_tool_output_cap.py
-            tests/db/test_connection_pool.py
-            tests/secrets/test_secret_ref_utils.py
-            tests/utils/test_log_sanitizer.py
-            tests/utils/test_payload_timestamp.py
-            tests/utils/test_webhook_signature.py
-          )
-          if [ -f tests/architectural/test_rls_coverage.py ]; then
-            tests+=(tests/architectural/test_rls_coverage.py)
-          else
-            echo "::warning::tests/architectural/test_rls_coverage.py not present yet; skipping."
-          fi
-          python -m pytest "${tests[@]}" -v
-
-      - name: Run security tests
-        working-directory: server
-        run: python -m pytest tests/security/ -v
+        run: python -m pytest tests/ -v

@@ -81,6 +81,7 @@ celery_app.conf.update(
         'routes.pagerduty.tasks',
         'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
+        'routes.sentry.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
         'routes.incidentio.tasks',
@@ -210,6 +211,12 @@ try:
     logging.info("New Relic tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
+
+try:
+    import routes.sentry.tasks  # noqa: F401
+    logging.info("Sentry tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Sentry tasks: {e}")
 
 try:
     import routes.github.github_repo_metadata  # noqa: F401

@@ -21,13 +21,42 @@ import asyncio
 _DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
 
 
+def _extract_reasoning_from_delta(delta: dict) -> tuple:
+    """Extract reasoning text from an OpenRouter streaming delta.
+
+    Returns (reasoning_text, has_reasoning_details) where has_reasoning_details
+    indicates the delta carried a reasoning_details array regardless of whether
+    any text was extractable.
+    """
+    reasoning = delta.get("reasoning") or ""
+    reasoning_details = delta.get("reasoning_details")
+    has_reasoning_details = bool(reasoning_details) and isinstance(reasoning_details, list)
+
+    if has_reasoning_details:
+        parts = [
+            detail.get("text", "")
+            for detail in reasoning_details
+            if isinstance(detail, dict) and detail.get("text")
+        ]
+        if parts:
+            reasoning = (reasoning + "".join(parts)) if reasoning else "".join(parts)
+
+    return reasoning, has_reasoning_details
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass that captures OpenRouter reasoning fields.
 
-    OpenRouter returns reasoning content in delta.reasoning / delta.reasoning_details,
-    but LangChain's _convert_delta_to_message_chunk ignores these fields. This subclass
-    captures them and puts reasoning into additional_kwargs["reasoning_content"] so that
-    workflow.py's streaming code can forward it to the ThoughtsPanel.
+    OpenRouter returns reasoning content in delta.reasoning and/or
+    delta.reasoning_details, but LangChain's _convert_delta_to_message_chunk
+    ignores these fields. This subclass captures them into
+    additional_kwargs["reasoning_content"] so workflow.py can separate reasoning
+    from user-visible output.
+
+    For Google models via OpenRouter, reasoning arrives in reasoning_details
+    (array of objects with .text) rather than the plain reasoning string field.
+    When reasoning_details is present, the chunk's content should be treated as
+    reasoning — not streamed to the user as normal output.
     """
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
@@ -35,11 +64,18 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         if result is None:
             return None
         choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
-        if choices:
-            delta = choices[0].get("delta") or {}
-            reasoning = delta.get("reasoning")
-            if reasoning and hasattr(result.message, "additional_kwargs"):
-                result.message.additional_kwargs["reasoning_content"] = reasoning
+        if not choices:
+            return result
+
+        delta = choices[0].get("delta") or {}
+        reasoning, has_reasoning_details = _extract_reasoning_from_delta(delta)
+
+        if reasoning and hasattr(result.message, "additional_kwargs"):
+            result.message.additional_kwargs["reasoning_content"] = reasoning
+
+        if (reasoning or has_reasoning_details) and not delta.get("content"):
+            result.message.content = ""
+
         return result
 
 class Agent:
@@ -178,7 +214,7 @@ class Agent:
             else:
                 logging.info("Skipping storage file fetch: user_id or session_id missing")
         except Exception as e:
-            logging.error(f"Error fetching session files from storage: {e}")
+            logging.exception(f"Error fetching session files from storage: {e}")
 
     async def agentic_tool_flow(self, state: State) -> State:
         """Execute cloud tools using the agentic workflow with streaming callbacks."""
@@ -212,7 +248,7 @@ class Agent:
                         from chat.background.rca_prompt_builder import get_user_providers
                         provider_preference = get_user_providers(state.user_id)
                     except Exception as e:
-                        logging.error(f"Error getting connected providers: {e}")
+                        logging.exception(f"Error getting connected providers: {e}")
                         provider_preference = []
                     state.provider_preference = provider_preference
                 
@@ -484,6 +520,7 @@ class Agent:
 
                 # Enable reasoning via OpenRouter's unified reasoning param
                 openrouter_model_kwargs = {}
+                is_background = getattr(state, "is_background", False)
                 if detected_provider == "openai":
                     from chat.backend.agent.providers.openai_provider import OpenAIProvider
                     native = model_name.split("/", 1)[-1] if "/" in model_name else model_name
@@ -491,8 +528,13 @@ class Agent:
                         openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
                         logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
                 elif detected_provider == "google":
-                    openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
-                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
+                    # OpenRouter path only. Direct Google SDK uses structured
+                    # thinking blocks filtered by include_thinking=False downstream.
+                    reasoning_cfg = {"effort": "high"}
+                    if not is_background:
+                        reasoning_cfg["exclude"] = True
+                    openrouter_model_kwargs["extra_body"] = {"reasoning": reasoning_cfg}
+                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter (exclude={not is_background})")
 
                 streaming_llm = _ReasoningChatOpenAI(
                     model=openrouter_model_name,
@@ -706,9 +748,8 @@ class Agent:
                             if isinstance(content, list):
                                 text_parts = [p.get('text', '') if isinstance(p, dict) else str(p) for p in content]
                                 content = ' '.join(text_parts)
-                            if isinstance(content, str) and (
-                                content.startswith("[Tool Result:") or
-                                content.startswith("[CONVERSATION SUMMARY")
+                            if isinstance(content, str) and content.startswith(
+                                ("[Tool Result:", "[CONVERSATION SUMMARY")
                             ):
                                 continue
                             original_request = content
@@ -816,7 +857,7 @@ class Agent:
                                 raise
                                 
                 except Exception as e:
-                    logging.error(f"Agent execution failed after retries: {e}", exc_info=True)
+                    logging.exception(f"Agent execution failed after retries: {e}")
                     # Create error response message
                     error_msg = AIMessage(content=f"Error: {str(e)}\n\nTry a different approach.")
                     state.messages.append(error_msg)
@@ -864,9 +905,7 @@ class Agent:
                         # Don't let cleanup errors break the flow
             
         except Exception as e:
-            import traceback
-            logging.error(f"Error in agentic_tool_flow: {e}")
-            logging.error(f"Full traceback:\n{traceback.format_exc()}")
+            logging.exception(f"Error in agentic_tool_flow: {e}")
             
             # Still attempt cleanup on error
             try:
