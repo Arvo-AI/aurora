@@ -360,8 +360,9 @@ class SecretRefManager:
     # ------------------------------------------------------------------
 
     def _clear_secret_ref(self, user_id: str, provider: str) -> None:
-        """Set secret_ref to NULL for the given user/provider (stale reference cleanup)."""
-        write_filter, write_params = _org_write_filter(user_id)
+        """Set secret_ref to NULL for the org-visible row for provider (stale reference cleanup)."""
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -370,8 +371,8 @@ class SecretRefManager:
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:clearRef]")
             cursor.execute(
                 f"UPDATE user_tokens SET is_active = FALSE, secret_ref = '' "
-                f"WHERE {write_filter} AND provider = %s",
-                write_params + (provider,),
+                f"WHERE {predicate} AND provider = %s",
+                (*pred_params, provider),
             )
             conn.commit()
             logger.info(
@@ -387,17 +388,15 @@ class SecretRefManager:
                 conn.close()
 
     def delete_user_secret(self, user_id: str, provider: str) -> Tuple[bool, int]:
-        """Delete a user's secret from Vault and clear its reference from the database.
+        """Delete a provider's credentials from Vault and the database for the whole org.
 
-        Scoping: deletes only the requesting user's own row.  This prevents one
-        org member's disconnect from wiping another member's independently-stored
-        credentials for the same provider.
-
-        After deletion, other org members whose only access was via this row will
-        see the provider as disconnected, which is the correct outcome — the
-        credential no longer exists for the org.
+        Scoping uses the org-read predicate (user_id OR org_id) so any authorized
+        org member can disconnect a connector regardless of who originally created it.
+        Deleting the shared row removes access for all org members, which is the
+        correct outcome — the credential no longer exists for the org.
         """
-        write_filter, write_params = _org_write_filter(user_id)
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         delete_success = True
@@ -411,8 +410,8 @@ class SecretRefManager:
 
             cursor.execute(
                 f"SELECT secret_ref FROM user_tokens "
-                f"WHERE {write_filter} AND provider = %s AND secret_ref IS NOT NULL",
-                write_params + (provider,),
+                f"WHERE {predicate} AND provider = %s AND secret_ref IS NOT NULL",
+                (*pred_params, provider),
             )
             for row in cursor.fetchall():
                 if not self.delete_secret(row[0]):
@@ -420,8 +419,8 @@ class SecretRefManager:
                     delete_success = False
 
             cursor.execute(
-                f"DELETE FROM user_tokens WHERE {write_filter} AND provider = %s",
-                write_params + (provider,),
+                f"DELETE FROM user_tokens WHERE {predicate} AND provider = %s",
+                (*pred_params, provider),
             )
             deleted_rows = cursor.rowcount
             conn.commit()
