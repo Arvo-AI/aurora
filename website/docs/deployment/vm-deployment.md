@@ -143,11 +143,11 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6
 RCA_MODEL=anthropic/claude-haiku-4.5
 ```
 
-If you enable the multi-agent RCA orchestrator (`ORCHESTRATOR_ENABLED=true`), the legacy `RCA_MODEL` is bypassed and you must set two additional vars — there is no fallback:
+The multi-agent RCA orchestrator is **on by default** (`ORCHESTRATOR_ENABLED=true`) and bypasses `RCA_MODEL`. Both sub-model env vars are required — if you don't set them, RCAs gracefully degrade to the legacy single-agent path on each run:
 
 ```bash
-ORCHESTRATOR_ENABLED=true
-RCA_ORCHESTRATOR_MODEL=openai/gpt-5.5            # triage + synthesis
+ORCHESTRATOR_ENABLED=true                        # default; set false to opt out
+RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7 # triage + synthesis
 RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6   # sub-agent investigators
 ```
 

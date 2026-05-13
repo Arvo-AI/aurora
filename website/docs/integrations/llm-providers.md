@@ -182,8 +182,8 @@ Run models locally on your own hardware with [Ollama](https://ollama.com/). No A
 
 Aurora ships two RCA paths and the env vars differ between them:
 
-- **Legacy single-agent RCA** (default): one ReAct loop drives the entire investigation. Configured via `RCA_MODEL`.
-- **Multi-agent RCA orchestrator** (`ORCHESTRATOR_ENABLED=true`): a lead orchestrator triages each incident and may fan out parallel read-only sub-agents. Configured via `RCA_ORCHESTRATOR_MODEL` (triage + synthesis) and `RCA_SUBAGENT_MODEL` (sub-agents). When orchestration is enabled, `RCA_MODEL` is ignored.
+- **Multi-agent RCA orchestrator** (`ORCHESTRATOR_ENABLED=true`, default): a lead orchestrator triages each incident and may fan out parallel read-only sub-agents. Configured via `RCA_ORCHESTRATOR_MODEL` (triage + synthesis) and `RCA_SUBAGENT_MODEL` (sub-agents). When orchestration is enabled, `RCA_MODEL` is ignored.
+- **Legacy single-agent RCA** (`ORCHESTRATOR_ENABLED=false`): one ReAct loop drives the entire investigation. Configured via `RCA_MODEL`.
 
 ### Single-agent RCA
 
@@ -219,13 +219,13 @@ When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
 
 ### Multi-agent orchestrator
 
-When `ORCHESTRATOR_ENABLED=true`, the legacy `RCA_MODEL` is bypassed and the orchestrator splits work across two distinct models. Both env vars are **required** — there is no fallback, and orchestrator nodes will fail loudly if either is unset.
+When `ORCHESTRATOR_ENABLED=true` (default), the legacy `RCA_MODEL` is bypassed and the orchestrator splits work across two distinct models. Both env vars are **required** — there is no fallback, and unset values cause orchestrator nodes to fail loudly and the run gracefully degrades to single-agent mode.
 
 ```bash
-ORCHESTRATOR_ENABLED=true
+ORCHESTRATOR_ENABLED=true                        # default
 
 # Brain: triage + synthesis. Needs reliable structured-output JSON.
-RCA_ORCHESTRATOR_MODEL=openai/gpt-5.5
+RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7
 
 # Investigator: sub-agents. Needs reliable tool-calling — must always
 # end its turn with a tool call (including the terminal `write_findings`).

@@ -129,9 +129,9 @@ class Workflow:
     def _create_workflow(self) -> StateGraph:
         """Create and configure the workflow graph.
 
-        When ORCHESTRATOR_ENABLED=false (default), returns the existing single-node
-        graph unchanged. Orchestrator imports are lazy so the inert path never pulls
-        in orchestrator deps.
+        When ORCHESTRATOR_ENABLED=false, returns the existing single-node graph
+        unchanged. Default is true. Orchestrator imports are lazy so the inert
+        path never pulls in orchestrator deps.
         """
         workflow = StateGraph(State)
 

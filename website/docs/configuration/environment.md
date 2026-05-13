@@ -258,8 +258,8 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 |----------|---------|-------------|
 | `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Used by the legacy single-agent RCA path; ignored when `ORCHESTRATOR_ENABLED=true`. |
 | `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-4.6` |
-| `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator. When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents. When `false`, RCA uses the single-agent path with `RCA_MODEL`. |
-| `RCA_ORCHESTRATOR_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Brain model used for triage + synthesis decisions. Needs reliable structured-output JSON. No fallback — orchestrator nodes error out if unset. Format: `provider/model`. |
+| `ORCHESTRATOR_ENABLED` | `true` | Multi-agent RCA orchestrator. When `true` (default), a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents. When `false`, RCA falls back to the legacy single-agent path with `RCA_MODEL`. |
+| `RCA_ORCHESTRATOR_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Brain model used for triage + synthesis decisions. Needs reliable structured-output JSON. No fallback — orchestrator nodes error out if unset and gracefully degrade to single-agent mode. Format: `provider/model`. |
 | `RCA_SUBAGENT_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Sub-agent investigator model. Needs reliable tool-calling — must always end its turn with a tool call (including the terminal `write_findings`). Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
 
