@@ -18,6 +18,7 @@ def ensure_local_ssh_keys(user_id: str) -> bool:
         
         # Get user's SSH keys (org-aware: includes keys connected by any org member)
         from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+        from psycopg2 import sql as pgsql
         org_id = _resolve_org(user_id)
         predicate, pred_params = _org_read_predicate(user_id, org_id)
         ssh_keys = {}
@@ -26,7 +27,7 @@ def ensure_local_ssh_keys(user_id: str) -> bool:
             from utils.auth.stateless_auth import set_rls_context
             set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetupLocal:ensure_local_ssh_keys]")
             cursor.execute(
-                f"SELECT provider FROM user_tokens WHERE {predicate} AND provider LIKE %s",
+                pgsql.SQL("SELECT provider FROM user_tokens WHERE {} AND provider LIKE %s").format(predicate),
                 (*pred_params, '%_ssh_%')
             )
             

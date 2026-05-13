@@ -87,16 +87,17 @@ def _resolve_repository(
         from utils.db.connection_pool import db_pool
         from utils.auth.stateless_auth import set_rls_context
         from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+        from psycopg2 import sql as pgsql
         org_id = _resolve_org(user_id)
         predicate, pred_params = _org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[GithubRCA:resolve]")
                 cur.execute(
-                    f"""SELECT DISTINCT ON (repo_full_name) repo_full_name
+                    pgsql.SQL("""SELECT DISTINCT ON (repo_full_name) repo_full_name
                        FROM github_connected_repos
-                       WHERE {predicate}
-                       ORDER BY repo_full_name, updated_at DESC""",
+                       WHERE {}
+                       ORDER BY repo_full_name, updated_at DESC""").format(predicate),
                     pred_params,
                 )
                 rows = cur.fetchall()

@@ -22,6 +22,7 @@ def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
     keyed by a readable name: e.g., {"scaleway_4b9511a5": "<private key>"}
     """
     from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+    from psycopg2 import sql as pgsql
     org_id = _resolve_org(user_id)
     predicate, pred_params = _org_read_predicate(user_id, org_id)
     ssh_keys: Dict[str, str] = {}
@@ -29,7 +30,7 @@ def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
         cursor = conn.cursor()
         set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetup:_fetch_user_ssh_keys]")
         cursor.execute(
-            f"SELECT provider FROM user_tokens WHERE {predicate} AND provider LIKE %s",
+            pgsql.SQL("SELECT provider FROM user_tokens WHERE {} AND provider LIKE %s").format(predicate),
             (*pred_params, SSH_PROVIDER_PATTERN)
         )
         for row in cursor.fetchall():

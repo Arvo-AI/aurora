@@ -9,6 +9,7 @@ import logging
 import json
 from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
+from psycopg2 import sql as pgsql
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import safe_provider
@@ -80,18 +81,19 @@ def _resolve_org(user_id: str) -> Optional[str]:
         return None
 
 
-def _org_read_predicate(user_id: str, org_id: Optional[str]) -> Tuple[str, Tuple]:
+def _org_read_predicate(user_id: str, org_id: Optional[str]) -> Tuple[pgsql.SQL, Tuple]:
     """SQL predicate for all credential queries: match the requesting user OR
     any row belonging to their org.  Every user belongs to an org and there is
     exactly one credential row per provider per org, so this predicate is used
     for reads, writes, updates, and deletes alike.
 
-    Returns (sql_fragment, params) for use as the first condition in a WHERE
-    clause, e.g. ``WHERE {predicate} AND provider = %s``.
+    Returns (sql_fragment, params) where sql_fragment is a psycopg2.sql.SQL
+    object for safe query composition.  Use as:
+        ``sql.SQL("... WHERE {} AND ...").format(predicate)``
     """
     if org_id:
-        return "(user_id = %s OR org_id = %s)", (user_id, org_id)
-    return "user_id = %s", (user_id,)
+        return pgsql.SQL("(user_id = %s OR org_id = %s)"), (user_id, org_id)
+    return pgsql.SQL("user_id = %s"), (user_id,)
 
 
 class SecretRefManager:
@@ -166,8 +168,8 @@ class SecretRefManager:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:updateToken]")
             cursor.execute(
-                f"UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
-                f"WHERE {predicate} AND provider = %s",
+                pgsql.SQL("UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
+                          "WHERE {} AND provider = %s").format(predicate),
                 (secret_ref,) + pred_params + (provider,),
             )
             if cursor.rowcount > 0:
@@ -202,12 +204,12 @@ class SecretRefManager:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:hasCreds]")
             cursor.execute(
-                f"""SELECT 1 FROM user_tokens
-                   WHERE {predicate}
+                pgsql.SQL("""SELECT 1 FROM user_tokens
+                   WHERE {}
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
-                   LIMIT 1""",
+                   LIMIT 1""").format(predicate),
                 (*pred_params, provider_base),
             )
             return cursor.fetchone() is not None
@@ -236,13 +238,13 @@ class SecretRefManager:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:getToken]")
             cursor.execute(
-                f"""SELECT secret_ref, client_id, client_secret
+                pgsql.SQL("""SELECT secret_ref, client_id, client_secret
                    FROM user_tokens
-                   WHERE {predicate}
+                   WHERE {}
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
-                   LIMIT 1""",
+                   LIMIT 1""").format(predicate),
                 (*pred_params, provider_base),
             )
 
@@ -308,8 +310,8 @@ class SecretRefManager:
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:migrate]")
 
             cursor.execute(
-                f"SELECT token_data FROM user_tokens "
-                f"WHERE {predicate} AND provider = %s AND secret_ref IS NULL",
+                pgsql.SQL("SELECT token_data FROM user_tokens "
+                          "WHERE {} AND provider = %s AND secret_ref IS NULL").format(predicate),
                 pred_params + (provider,),
             )
 
@@ -326,8 +328,8 @@ class SecretRefManager:
             secret_ref = self.store_secret(secret_name, token_json)
 
             cursor.execute(
-                f"UPDATE user_tokens SET secret_ref = %s "
-                f"WHERE {predicate} AND provider = %s",
+                pgsql.SQL("UPDATE user_tokens SET secret_ref = %s "
+                          "WHERE {} AND provider = %s").format(predicate),
                 (secret_ref,) + pred_params + (provider,),
             )
 
@@ -361,8 +363,8 @@ class SecretRefManager:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:clearRef]")
             cursor.execute(
-                f"UPDATE user_tokens SET is_active = FALSE, secret_ref = NULL "
-                f"WHERE {predicate} AND provider = %s",
+                pgsql.SQL("UPDATE user_tokens SET is_active = FALSE, secret_ref = NULL "
+                          "WHERE {} AND provider = %s").format(predicate),
                 (*pred_params, provider),
             )
             conn.commit()
@@ -400,8 +402,8 @@ class SecretRefManager:
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:deleteSecret]")
 
             cursor.execute(
-                f"SELECT secret_ref FROM user_tokens "
-                f"WHERE {predicate} AND provider = %s AND secret_ref IS NOT NULL",
+                pgsql.SQL("SELECT secret_ref FROM user_tokens "
+                          "WHERE {} AND provider = %s AND secret_ref IS NOT NULL").format(predicate),
                 (*pred_params, provider),
             )
             for row in cursor.fetchall():
@@ -410,7 +412,7 @@ class SecretRefManager:
                     delete_success = False
 
             cursor.execute(
-                f"DELETE FROM user_tokens WHERE {predicate} AND provider = %s",
+                pgsql.SQL("DELETE FROM user_tokens WHERE {} AND provider = %s").format(predicate),
                 (*pred_params, provider),
             )
             deleted_rows = cursor.rowcount
@@ -468,13 +470,13 @@ def get_token_owner_id(user_id: str, provider: str) -> str:
         cursor = conn.cursor()
         set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:tokenOwner]")
         cursor.execute(
-            f"""SELECT user_id FROM user_tokens
-               WHERE {predicate}
+            pgsql.SQL("""SELECT user_id FROM user_tokens
+               WHERE {}
                  AND provider = %s
                  AND secret_ref IS NOT NULL
                  AND is_active = TRUE
                ORDER BY (org_id IS NOT NULL) DESC, created_at DESC
-               LIMIT 1""",
+               LIMIT 1""").format(predicate),
             (*pred_params, provider_base),
         )
         row = cursor.fetchone()

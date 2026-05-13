@@ -71,18 +71,19 @@ def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
 @require_permission("vms", "read")
 def list_manual_vms(user_id):
     from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+    from psycopg2 import sql as pgsql
     org_id = _resolve_org(user_id)
     predicate, pred_params = _org_read_predicate(user_id, org_id)
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")
             cur.execute(
-                f"""
+                pgsql.SQL("""
                 SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at, user_id
                 FROM user_manual_vms
-                WHERE {predicate}
+                WHERE {}
                 ORDER BY created_at DESC
-                """,
+                """).format(predicate),
                 pred_params,
             )
             rows = cur.fetchall()

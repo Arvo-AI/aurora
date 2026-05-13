@@ -23,13 +23,14 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
     """
     try:
         from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+        from psycopg2 import sql as pgsql
         org_id = _resolve_org(user_id)
         predicate, pred_params = _org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:has_row]")
                 cursor.execute(
-                    f"SELECT is_active FROM user_tokens WHERE {predicate} AND provider = 'grafana' ORDER BY is_active DESC LIMIT 1",
+                    pgsql.SQL("SELECT is_active FROM user_tokens WHERE {} AND provider = 'grafana' ORDER BY is_active DESC LIMIT 1").format(predicate),
                     (*pred_params,),
                 )
                 row = cursor.fetchone()
@@ -45,14 +46,15 @@ def _set_grafana_active(user_id: str, active: bool) -> bool:
     """Flip is_active on the existing Grafana user_tokens row (org-scoped)."""
     try:
         from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+        from psycopg2 import sql as pgsql
         org_id = _resolve_org(user_id)
         predicate, pred_params = _org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:set_active]")
                 cursor.execute(
-                    f"UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
-                    f"WHERE {predicate} AND provider = 'grafana'",
+                    pgsql.SQL("UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
+                              "WHERE {} AND provider = 'grafana'").format(predicate),
                     (active, *pred_params),
                 )
                 updated = cursor.rowcount > 0

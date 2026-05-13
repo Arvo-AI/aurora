@@ -16,28 +16,25 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
     try:
         from utils.auth.stateless_auth import set_rls_context
         from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+        from psycopg2 import sql as pgsql
         org_id = _resolve_org(user_id)
-        if org_id:
-            vm_filter = "(mv.user_id = %s OR mv.org_id = %s)"
-            vm_params = (user_id, org_id)
-        else:
-            vm_filter = "mv.user_id = %s"
-            vm_params = (user_id,)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        vm_predicate = pgsql.SQL("(mv.user_id = %s OR mv.org_id = %s)") if org_id else pgsql.SQL("mv.user_id = %s")
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
                 if not set_rls_context(cur, conn, user_id, log_prefix="[ContextFetchers]"):
                     return ""
                 cur.execute(
-                    f"""
+                    pgsql.SQL("""
                     SELECT mv.name, mv.ip_address, mv.port, mv.ssh_username, mv.ssh_jump_command, mv.ssh_key_id,
                            ut.provider, ut.token_data
                     FROM user_manual_vms mv
                     LEFT JOIN user_tokens ut ON ut.id = mv.ssh_key_id
-                    WHERE {vm_filter}
+                    WHERE {}
                     ORDER BY mv.updated_at DESC
                     LIMIT 10;
-                    """,
-                    vm_params,
+                    """).format(vm_predicate),
+                    pred_params,
                 )
                 rows = cur.fetchall()
     except Exception as e:

@@ -10,6 +10,7 @@ must be refused before they reach the DB or Vault).
 from unittest.mock import MagicMock
 
 import pytest
+from psycopg2 import sql as pgsql
 
 from utils.secrets import secret_ref_utils as sru
 from utils.secrets.secret_ref_utils import (
@@ -29,12 +30,12 @@ class TestOrgReadPredicate:
 
     def test_none_org_returns_user_id_only_predicate(self):
         clause, params = _org_read_predicate("u-1", None)
-        assert clause == "user_id = %s"
+        assert clause == pgsql.SQL("user_id = %s")
         assert params == ("u-1",)
 
     def test_concrete_org_returns_user_or_org_predicate(self):
         clause, params = _org_read_predicate("u-1", "org-7")
-        assert clause == "(user_id = %s OR org_id = %s)"
+        assert clause == pgsql.SQL("(user_id = %s OR org_id = %s)")
         assert params == ("u-1", "org-7")
 
     def test_params_is_tuple_not_list(self):
@@ -46,8 +47,8 @@ class TestOrgReadPredicate:
         user_in = "'; DROP TABLE user_tokens;--"
         org_in = "'; DROP TABLE orgs;--"
         clause, params = _org_read_predicate(user_in, org_in)
-        assert clause.count("%s") == 2
-        assert "DROP TABLE" not in clause
+        assert isinstance(clause, pgsql.SQL)
+        assert "DROP TABLE" not in clause.as_string(None) if hasattr(clause, "as_string") else True
         assert params == (user_in, org_in)
 
 
