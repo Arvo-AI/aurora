@@ -93,7 +93,7 @@ def _validate_uuid(value: str, label: str) -> str:
     try:
         return str(_uuid.UUID(str(value)))
     except (ValueError, AttributeError):
-        raise ValueError(f"Invalid {label} format: {value!r}")
+        raise ValueError(f"Invalid {label} format") from None
 
 
 def _org_read_predicate(user_id: str, org_id: Optional[str]) -> Tuple[str, Tuple]:
@@ -494,7 +494,7 @@ def get_token_owner_id(user_id: str, provider: str) -> str:
                  AND provider = %s
                  AND secret_ref IS NOT NULL
                  AND is_active = TRUE
-               ORDER BY (org_id IS NOT NULL) DESC, created_at DESC
+               ORDER BY (org_id IS NOT NULL) DESC, timestamp DESC
                LIMIT 1""",
             (*pred_params, provider_base),
         )

@@ -228,6 +228,16 @@ def update_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:update]")
+            cur.execute(
+                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                (vm_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                return jsonify({"error": "Manual VM not found"}), 404
+            if existing[0] != user_id:
+                return jsonify({"error": "Cannot modify a shared VM"}), 403
+
             query = sql.SQL(
                 """
                 UPDATE user_manual_vms
@@ -253,6 +263,15 @@ def delete_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:delete]")
+            cur.execute(
+                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                (vm_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                return jsonify({"error": "Manual VM not found"}), 404
+            if existing[0] != user_id:
+                return jsonify({"error": "Cannot delete a shared VM"}), 403
             cur.execute(
                 "DELETE FROM user_manual_vms WHERE id = %s AND user_id = %s RETURNING id;",
                 (vm_id, user_id),
@@ -292,15 +311,17 @@ def check_manual_vm_connection(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-load]")
                 cur.execute(
                     """
-                    SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username
+                    SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, user_id
                     FROM user_manual_vms
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s
                     """,
-                    (vm_id, user_id),
+                    (vm_id,),
                 )
                 vm_row = cur.fetchone()
         if not vm_row:
             return jsonify({"error": "Manual VM not found"}), 404
+        if vm_row[5] != user_id:
+            return jsonify({"error": "Cannot run connection check on a shared VM"}), 403
 
         ip_address = ip_address or vm_row[0]
         port = port or vm_row[1]
