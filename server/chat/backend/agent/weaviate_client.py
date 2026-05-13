@@ -37,6 +37,7 @@ class WeaviateClient:
             grpc_port=int(os.getenv("WEAVIATE_GRPC_PORT", "50051")),
             grpc_secure=weaviate_secure,
             headers=headers,
+            skip_init_checks=True,
         )
 
         assert self.client.is_ready(), "Weaviate client is not ready. Check the connection."

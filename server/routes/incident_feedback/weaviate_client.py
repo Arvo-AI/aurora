@@ -98,6 +98,7 @@ def _get_weaviate_client():
                     additional_config=AdditionalConfig(
                         timeout=Timeout(init=10, query=30, insert=60)
                     ),
+                    skip_init_checks=True,
                 )
             else:
                 _client = weaviate.connect_to_local(
@@ -108,6 +109,7 @@ def _get_weaviate_client():
                     additional_config=AdditionalConfig(
                         timeout=Timeout(init=10, query=30, insert=60)
                     ),
+                    skip_init_checks=True,
                 )
 
             logger.info(f"[AURORA LEARN] Connected to {WEAVIATE_HOST}:{WEAVIATE_PORT}")
