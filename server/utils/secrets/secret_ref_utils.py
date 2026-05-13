@@ -361,7 +361,7 @@ class SecretRefManager:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:clearRef]")
             cursor.execute(
-                f"UPDATE user_tokens SET is_active = FALSE, secret_ref = '' "
+                f"UPDATE user_tokens SET is_active = FALSE, secret_ref = NULL "
                 f"WHERE {predicate} AND provider = %s",
                 (*pred_params, provider),
             )
@@ -473,6 +473,7 @@ def get_token_owner_id(user_id: str, provider: str) -> str:
                  AND provider = %s
                  AND secret_ref IS NOT NULL
                  AND is_active = TRUE
+               ORDER BY (org_id IS NOT NULL) DESC, created_at DESC
                LIMIT 1""",
             (*pred_params, provider_base),
         )

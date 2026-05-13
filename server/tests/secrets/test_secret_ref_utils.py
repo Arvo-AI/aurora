@@ -43,12 +43,12 @@ class TestOrgReadPredicate:
 
     def test_clause_uses_parameter_placeholders_not_inlined_values(self):
         """SQL injection guard: values must go through %s."""
-        clause, params = _org_read_predicate(
-            "'; DROP TABLE user_tokens;--", "'; DROP TABLE orgs;--"
-        )
+        user_in = "'; DROP TABLE user_tokens;--"
+        org_in = "'; DROP TABLE orgs;--"
+        clause, params = _org_read_predicate(user_in, org_in)
         assert clause.count("%s") == 2
         assert "DROP TABLE" not in clause
-        assert "DROP TABLE" not in "".join(str(p) for p in params if "DROP" not in str(p))
+        assert params == (user_in, org_in)
 
 
 # ---------------------------------------------------------------------------

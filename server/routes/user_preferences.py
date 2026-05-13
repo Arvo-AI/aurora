@@ -103,13 +103,29 @@ def get_batch_preferences(user_id):
         org_id = set_rls_context(cursor, conn, user_id, log_prefix="[UserPrefs:get]")
 
         placeholders = ','.join(['%s'] * len(keys))
-        pref_col = "org_id" if org_id else "user_id"
-        pref_val = org_id if org_id else user_id
-        cursor.execute(
-            f"SELECT preference_key, preference_value FROM user_preferences WHERE {pref_col} = %s AND preference_key IN ({placeholders})",
-            [pref_val] + keys
-        )
-        results = cursor.fetchall()
+        if org_id:
+            cursor.execute(
+                f"SELECT preference_key, preference_value, user_id FROM user_preferences "
+                f"WHERE (org_id = %s OR user_id = %s) AND preference_key IN ({placeholders})",
+                [org_id, user_id] + keys,
+            )
+            rows = cursor.fetchall()
+            # Prefer user-scoped row over org-scoped row for the same key
+            user_prefs: dict = {}
+            org_prefs: dict = {}
+            for key, value, row_user_id in rows:
+                if row_user_id == user_id:
+                    user_prefs[key] = value
+                else:
+                    org_prefs[key] = value
+            results = list({**org_prefs, **user_prefs}.items())
+        else:
+            cursor.execute(
+                f"SELECT preference_key, preference_value FROM user_preferences "
+                f"WHERE user_id = %s AND preference_key IN ({placeholders})",
+                [user_id] + keys,
+            )
+            results = cursor.fetchall()
         
         preferences = {}
         for key, value in results:

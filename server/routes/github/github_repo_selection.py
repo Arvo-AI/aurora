@@ -87,7 +87,10 @@ def save_repo_selections(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
 
                 cur.execute(
-                    f"SELECT repo_full_name, user_id FROM github_connected_repos WHERE {predicate}",
+                    f"""SELECT DISTINCT ON (repo_full_name) repo_full_name, user_id
+                        FROM github_connected_repos
+                        WHERE {predicate}
+                        ORDER BY repo_full_name, updated_at DESC""",
                     pred_params,
                 )
                 # {repo_full_name: owner_user_id} — we need the owner to delete the right row
@@ -104,6 +107,7 @@ def save_repo_selections(user_id):
                         continue
                     incoming.add(full_name)
 
+                    owner_id = existing.get(full_name, user_id)
                     cur.execute(
                         """INSERT INTO github_connected_repos
                                (user_id, org_id, repo_full_name, repo_id, default_branch,
@@ -115,7 +119,7 @@ def save_repo_selections(user_id):
                                is_private = EXCLUDED.is_private,
                                updated_at = NOW()""",
                         (
-                            user_id,
+                            owner_id,
                             org_id,
                             full_name,
                             repo.get("id"),
@@ -188,17 +192,26 @@ def update_repo_metadata(user_id, repo_full_name):
         if summary is None:
             return jsonify({"error": "metadata_summary is required"}), 400
 
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:update_repo_metadata]")
                 cur.execute(
+                    f"SELECT user_id FROM github_connected_repos WHERE {predicate} AND repo_full_name = %s LIMIT 1",
+                    (*pred_params, repo_full_name),
+                )
+                owner_row = cur.fetchone()
+                if owner_row is None:
+                    return jsonify({"error": "Repository not found"}), 404
+                owner_id = owner_row[0]
+                cur.execute(
                     """UPDATE github_connected_repos
                        SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
                        WHERE user_id = %s AND repo_full_name = %s""",
-                    (summary, user_id, repo_full_name),
+                    (summary, owner_id, repo_full_name),
                 )
-                if cur.rowcount == 0:
-                    return jsonify({"error": "Repository not found"}), 404
                 conn.commit()
         return jsonify({"message": "Metadata updated"})
     except Exception as e:
@@ -216,24 +229,33 @@ def trigger_metadata_generation(user_id):
         if not repo_full_name:
             return jsonify({"error": "repo_full_name is required"}), 400
 
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:trigger_metadata_generation]")
                 cur.execute(
+                    f"SELECT user_id FROM github_connected_repos WHERE {predicate} AND repo_full_name = %s LIMIT 1",
+                    (*pred_params, repo_full_name),
+                )
+                owner_row = cur.fetchone()
+                if owner_row is None:
+                    return jsonify({"error": "Repository not found"}), 404
+                owner_id = owner_row[0]
+                cur.execute(
                     """UPDATE github_connected_repos SET metadata_status = 'generating', updated_at = NOW()
                        WHERE user_id = %s AND repo_full_name = %s""",
-                    (user_id, repo_full_name),
+                    (owner_id, repo_full_name),
                 )
-                if cur.rowcount == 0:
-                    return jsonify({"error": "Repository not found"}), 404
                 conn.commit()
 
         from routes.github.github_repo_metadata import generate_repo_metadata
         try:
-            generate_repo_metadata.delay(user_id, repo_full_name)
+            generate_repo_metadata.delay(owner_id, repo_full_name)
         except Exception as e:
             logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
-            _update_metadata_status(user_id, repo_full_name, "pending")
+            _update_metadata_status(owner_id, repo_full_name, "pending")
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:

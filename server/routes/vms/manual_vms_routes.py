@@ -37,7 +37,7 @@ def _validate_required(fields: Dict[str, Any]):
         raise ValueError(f"Missing required field(s): {', '.join(missing)}")
 
 
-def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
+def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
     (
         vm_id,
         name,
@@ -62,6 +62,7 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
         "createdAt": created_at.isoformat() if created_at else None,
         "updatedAt": updated_at.isoformat() if updated_at else None,
         "source": "manual",
+        "isShared": is_shared,
     }
 
 
@@ -77,7 +78,7 @@ def list_manual_vms(user_id):
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")
             cur.execute(
                 f"""
-                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
+                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at, user_id
                 FROM user_manual_vms
                 WHERE {predicate}
                 ORDER BY created_at DESC
@@ -85,7 +86,12 @@ def list_manual_vms(user_id):
                 pred_params,
             )
             rows = cur.fetchall()
-    return jsonify({"vms": [_serialize_vm_row(r) for r in rows]})
+    vms = []
+    for r in rows:
+        row_data = r[:10]
+        row_owner_id = r[10]
+        vms.append(_serialize_vm_row(row_data, is_shared=(row_owner_id != user_id)))
+    return jsonify({"vms": vms})
 
 
 @manual_vms_bp.route("/api/vms/manual", methods=["POST"])

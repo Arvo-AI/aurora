@@ -15,10 +15,14 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
 
     try:
         from utils.auth.stateless_auth import set_rls_context
-        from utils.secrets.secret_ref_utils import _resolve_org
+        from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
         org_id = _resolve_org(user_id)
-        vm_filter = "mv.org_id = %s" if org_id else "mv.user_id = %s"
-        vm_param = org_id if org_id else user_id
+        if org_id:
+            vm_filter = "(mv.user_id = %s OR mv.org_id = %s)"
+            vm_params = (user_id, org_id)
+        else:
+            vm_filter = "mv.user_id = %s"
+            vm_params = (user_id,)
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
                 if not set_rls_context(cur, conn, user_id, log_prefix="[ContextFetchers]"):
@@ -33,7 +37,7 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
                     ORDER BY mv.updated_at DESC
                     LIMIT 10;
                     """,
-                    (vm_param,),
+                    vm_params,
                 )
                 rows = cur.fetchall()
     except Exception as e:
