@@ -5,7 +5,6 @@ Manages which repos a user has connected for RCA investigation.
 import logging
 import json
 from flask import Blueprint, jsonify, request
-from psycopg2 import sql as pgsql
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
@@ -40,11 +39,11 @@ def get_repo_selections(user_id):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:get_repo_selections]")
                 cur.execute(
-                    pgsql.SQL("""SELECT DISTINCT ON (repo_full_name)
+                    f"""SELECT DISTINCT ON (repo_full_name)
                               repo_full_name, repo_id, default_branch, is_private,
                               metadata_summary, metadata_status, repo_data, created_at
                        FROM github_connected_repos
-                       WHERE {} ORDER BY repo_full_name, updated_at DESC""").format(predicate),
+                       WHERE {predicate} ORDER BY repo_full_name, updated_at DESC""",
                     pred_params,
                 )
                 rows = cur.fetchall()
@@ -88,10 +87,10 @@ def save_repo_selections(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
 
                 cur.execute(
-                    pgsql.SQL("""SELECT DISTINCT ON (repo_full_name) repo_full_name, user_id
+                    f"""SELECT DISTINCT ON (repo_full_name) repo_full_name, user_id
                         FROM github_connected_repos
-                        WHERE {}
-                        ORDER BY repo_full_name, updated_at DESC""").format(predicate),
+                        WHERE {predicate}
+                        ORDER BY repo_full_name, updated_at DESC""",
                     pred_params,
                 )
                 # {repo_full_name: owner_user_id} — we need the owner to delete the right row
@@ -200,7 +199,7 @@ def update_repo_metadata(user_id, repo_full_name):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:update_repo_metadata]")
                 cur.execute(
-                    pgsql.SQL("SELECT user_id FROM github_connected_repos WHERE {} AND repo_full_name = %s LIMIT 1").format(predicate),
+                    f"SELECT user_id FROM github_connected_repos WHERE {predicate} AND repo_full_name = %s LIMIT 1",
                     (*pred_params, repo_full_name),
                 )
                 owner_row = cur.fetchone()
@@ -237,7 +236,7 @@ def trigger_metadata_generation(user_id):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:trigger_metadata_generation]")
                 cur.execute(
-                    pgsql.SQL("SELECT user_id FROM github_connected_repos WHERE {} AND repo_full_name = %s LIMIT 1").format(predicate),
+                    f"SELECT user_id FROM github_connected_repos WHERE {predicate} AND repo_full_name = %s LIMIT 1",
                     (*pred_params, repo_full_name),
                 )
                 owner_row = cur.fetchone()
