@@ -16,17 +16,16 @@ from utils.secrets.secret_ref_utils import (
     SUPPORTED_SECRET_PROVIDERS,
     SecretRefManager,
     _org_read_predicate,
-    _org_write_filter,
 )
 
 
 # ---------------------------------------------------------------------------
-# _org_read_predicate / _org_write_filter
+# _org_read_predicate
 # ---------------------------------------------------------------------------
 
 
 class TestOrgReadPredicate:
-    """SQL predicate builder for credential reads — allows org-shared rows."""
+    """SQL predicate builder for all credential queries — reads, writes, and deletes."""
 
     def test_none_org_returns_user_id_only_predicate(self):
         clause, params = _org_read_predicate("u-1", None)
@@ -50,26 +49,6 @@ class TestOrgReadPredicate:
         assert clause.count("%s") == 2
         assert "DROP TABLE" not in clause
         assert "DROP TABLE" not in "".join(str(p) for p in params if "DROP" not in str(p))
-
-
-class TestOrgWriteFilter:
-    """SQL filter for writes/updates/deletes — scoped to requesting user only."""
-
-    def test_returns_user_id_predicate(self):
-        clause, params = _org_write_filter("u-1")
-        assert clause == "user_id = %s"
-        assert params == ("u-1",)
-
-    def test_params_is_tuple_not_list(self):
-        _, params = _org_write_filter("u-1")
-        assert isinstance(params, tuple)
-
-    def test_clause_uses_parameter_placeholder_not_inlined_value(self):
-        """SQL injection guard: user_id must go through %s."""
-        clause, params = _org_write_filter("'; DROP TABLE user_tokens;--")
-        assert "%s" in clause
-        assert "DROP TABLE" not in clause
-        assert params == ("'; DROP TABLE user_tokens;--",)
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +217,6 @@ class TestHasUserCredentialsNullOrgPath:
     to route through ``_org_read_predicate`` which falls back to user_id-only
     matching when org_id is None.
     """
-
     def test_db_still_queried_when_org_is_none(self, monkeypatch):
         """_resolve_org=None must not short-circuit; row found by user_id alone."""
         cursor = MagicMock()

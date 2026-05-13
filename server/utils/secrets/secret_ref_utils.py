@@ -81,26 +81,16 @@ def _resolve_org(user_id: str) -> Optional[str]:
 
 
 def _org_read_predicate(user_id: str, org_id: Optional[str]) -> Tuple[str, Tuple]:
-    """SQL predicate for credential reads: match the requesting user OR any row
-    shared with their org.  This is an OR-based scope so that org members can
-    retrieve tokens stored by any other member in the same org.
+    """SQL predicate for all credential queries: match the requesting user OR
+    any row belonging to their org.  Every user belongs to an org and there is
+    exactly one credential row per provider per org, so this predicate is used
+    for reads, writes, updates, and deletes alike.
 
-    Returns (sql_fragment, params) intended for use as the first condition in a
-    WHERE clause, e.g. ``WHERE {predicate} AND provider = %s``.
+    Returns (sql_fragment, params) for use as the first condition in a WHERE
+    clause, e.g. ``WHERE {predicate} AND provider = %s``.
     """
     if org_id:
         return "(user_id = %s OR org_id = %s)", (user_id, org_id)
-    return "user_id = %s", (user_id,)
-
-
-def _org_write_filter(user_id: str) -> Tuple[str, Tuple]:
-    """SQL filter for credential writes/updates/deletes: restrict to the
-    requesting user's own row only.
-
-    Writes must never silently touch another org member's row.  Use this for
-    UPDATE and the migration SELECT that locates the row to mutate.
-    Returns (sql_fragment, params) for use in a WHERE clause.
-    """
     return "user_id = %s", (user_id,)
 
 
@@ -167,7 +157,8 @@ class SecretRefManager:
 
     def update_user_token_with_secret_ref(self, user_id: str, provider: str, secret_ref: str) -> bool:
         """Update a user's token record to point at a Vault secret reference."""
-        write_filter, write_params = _org_write_filter(user_id)
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -176,8 +167,8 @@ class SecretRefManager:
             set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:updateToken]")
             cursor.execute(
                 f"UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
-                f"WHERE {write_filter} AND provider = %s",
-                (secret_ref,) + write_params + (provider,),
+                f"WHERE {predicate} AND provider = %s",
+                (secret_ref,) + pred_params + (provider,),
             )
             if cursor.rowcount > 0:
                 conn.commit()
@@ -251,9 +242,8 @@ class SecretRefManager:
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
-                   ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
                    LIMIT 1""",
-                (*pred_params, provider_base, user_id),
+                (*pred_params, provider_base),
             )
 
             result = cursor.fetchone()
@@ -308,7 +298,8 @@ class SecretRefManager:
 
     def migrate_token_to_secret_ref(self, user_id: str, provider: str, secret_name_prefix: str = "aurora-dev") -> bool:
         """Migrate an existing token from token_data column to Vault."""
-        write_filter, write_params = _org_write_filter(user_id)
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -318,8 +309,8 @@ class SecretRefManager:
 
             cursor.execute(
                 f"SELECT token_data FROM user_tokens "
-                f"WHERE {write_filter} AND provider = %s AND secret_ref IS NULL",
-                write_params + (provider,),
+                f"WHERE {predicate} AND provider = %s AND secret_ref IS NULL",
+                pred_params + (provider,),
             )
 
             result = cursor.fetchone()
@@ -336,8 +327,8 @@ class SecretRefManager:
 
             cursor.execute(
                 f"UPDATE user_tokens SET secret_ref = %s "
-                f"WHERE {write_filter} AND provider = %s",
-                (secret_ref,) + write_params + (provider,),
+                f"WHERE {predicate} AND provider = %s",
+                (secret_ref,) + pred_params + (provider,),
             )
 
             conn.commit()
@@ -482,9 +473,8 @@ def get_token_owner_id(user_id: str, provider: str) -> str:
                  AND provider = %s
                  AND secret_ref IS NOT NULL
                  AND is_active = TRUE
-               ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
                LIMIT 1""",
-            (*pred_params, provider_base, user_id),
+            (*pred_params, provider_base),
         )
         row = cursor.fetchone()
         return row[0] if row else user_id

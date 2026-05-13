@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
-from utils.secrets.secret_ref_utils import _resolve_org
+from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
@@ -34,26 +34,18 @@ def get_repo_selections(user_id):
     """Return all connected repos with metadata for this org."""
     try:
         org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:get_repo_selections]")
-                if org_id:
-                    cur.execute(
-                        """SELECT DISTINCT ON (repo_full_name)
-                                  repo_full_name, repo_id, default_branch, is_private,
-                                  metadata_summary, metadata_status, repo_data, created_at
-                           FROM github_connected_repos
-                           WHERE org_id = %s ORDER BY repo_full_name, updated_at DESC""",
-                        (org_id,),
-                    )
-                else:
-                    cur.execute(
-                        """SELECT repo_full_name, repo_id, default_branch, is_private,
-                                  metadata_summary, metadata_status, repo_data, created_at
-                           FROM github_connected_repos
-                           WHERE user_id = %s ORDER BY repo_full_name""",
-                        (user_id,),
-                    )
+                cur.execute(
+                    f"""SELECT DISTINCT ON (repo_full_name)
+                              repo_full_name, repo_id, default_branch, is_private,
+                              metadata_summary, metadata_status, repo_data, created_at
+                       FROM github_connected_repos
+                       WHERE {predicate} ORDER BY repo_full_name, updated_at DESC""",
+                    pred_params,
+                )
                 rows = cur.fetchall()
 
         repos = [
@@ -88,23 +80,16 @@ def save_repo_selections(user_id):
             return jsonify({"error": "repositories array is required"}), 400
 
         org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
 
-                # Build existing set at org scope so deselections by any org member
-                # correctly remove rows originally created by a different member.
-                if org_id:
-                    cur.execute(
-                        "SELECT repo_full_name, user_id FROM github_connected_repos WHERE org_id = %s",
-                        (org_id,),
-                    )
-                else:
-                    cur.execute(
-                        "SELECT repo_full_name, user_id FROM github_connected_repos WHERE user_id = %s",
-                        (user_id,),
-                    )
+                cur.execute(
+                    f"SELECT repo_full_name, user_id FROM github_connected_repos WHERE {predicate}",
+                    pred_params,
+                )
                 # {repo_full_name: owner_user_id} — we need the owner to delete the right row
                 existing = {r[0]: r[1] for r in cur.fetchall()}
 

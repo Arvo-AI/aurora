@@ -103,16 +103,12 @@ def get_batch_preferences(user_id):
         org_id = set_rls_context(cursor, conn, user_id, log_prefix="[UserPrefs:get]")
 
         placeholders = ','.join(['%s'] * len(keys))
-        if org_id:
-            cursor.execute(
-                f"SELECT preference_key, preference_value FROM user_preferences WHERE org_id = %s AND preference_key IN ({placeholders})",
-                [org_id] + keys
-            )
-        else:
-            cursor.execute(
-                f"SELECT preference_key, preference_value FROM user_preferences WHERE user_id = %s AND preference_key IN ({placeholders})",
-                [user_id] + keys
-            )
+        pref_col = "org_id" if org_id else "user_id"
+        pref_val = org_id if org_id else user_id
+        cursor.execute(
+            f"SELECT preference_key, preference_value FROM user_preferences WHERE {pref_col} = %s AND preference_key IN ({placeholders})",
+            [pref_val] + keys
+        )
         results = cursor.fetchall()
         
         preferences = {}
