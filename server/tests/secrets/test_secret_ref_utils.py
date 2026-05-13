@@ -15,49 +15,58 @@ from utils.secrets import secret_ref_utils as sru
 from utils.secrets.secret_ref_utils import (
     SUPPORTED_SECRET_PROVIDERS,
     SecretRefManager,
-    _org_clause,
+    _org_read_predicate,
+    _org_write_filter,
 )
 
 
 # ---------------------------------------------------------------------------
-# _org_clause
+# _org_read_predicate / _org_write_filter
 # ---------------------------------------------------------------------------
 
 
-class TestOrgClause:
-    """Pure SQL fragment builder concatenated into every credential WHERE clause."""
+class TestOrgReadPredicate:
+    """SQL predicate builder for credential reads — allows org-shared rows."""
 
-    def test_none_org_returns_empty_fragment_and_empty_params(self):
-        assert _org_clause(None) == ("", ())
+    def test_none_org_returns_user_id_only_predicate(self):
+        clause, params = _org_read_predicate("u-1", None)
+        assert clause == "user_id = %s"
+        assert params == ("u-1",)
 
-    def test_empty_string_org_returns_empty_fragment(self):
-        """Falsy values follow the same path as ``None``."""
-        assert _org_clause("") == ("", ())
-
-    def test_concrete_org_returns_and_clause_and_param_tuple(self):
-        clause, params = _org_clause("org-7")
-
-        assert clause == "AND (org_id = %s OR org_id IS NULL)"
-        assert params == ("org-7",)
-
-    def test_clause_starts_with_and_so_it_appends_to_existing_where(self):
-        """Callers concatenate this onto a WHERE; missing AND is a SyntaxError."""
-        clause, _ = _org_clause("org-7")
-        assert clause.startswith("AND ")
-
-    def test_clause_includes_org_id_is_null_for_legacy_rows(self):
-        """Pre-multi-tenancy rows have NULL org_id; they must remain visible."""
-        clause, _ = _org_clause("org-7")
-        assert "org_id IS NULL" in clause
+    def test_concrete_org_returns_user_or_org_predicate(self):
+        clause, params = _org_read_predicate("u-1", "org-7")
+        assert clause == "(user_id = %s OR org_id = %s)"
+        assert params == ("u-1", "org-7")
 
     def test_params_is_tuple_not_list(self):
-        _, params = _org_clause("org-7")
+        _, params = _org_read_predicate("u-1", "org-7")
+        assert isinstance(params, tuple)
+
+    def test_clause_uses_parameter_placeholders_not_inlined_values(self):
+        """SQL injection guard: values must go through %s."""
+        clause, params = _org_read_predicate(
+            "'; DROP TABLE user_tokens;--", "'; DROP TABLE orgs;--"
+        )
+        assert clause.count("%s") == 2
+        assert "DROP TABLE" not in clause
+        assert "DROP TABLE" not in "".join(str(p) for p in params if "DROP" not in str(p))
+
+
+class TestOrgWriteFilter:
+    """SQL filter for writes/updates/deletes — scoped to requesting user only."""
+
+    def test_returns_user_id_predicate(self):
+        clause, params = _org_write_filter("u-1")
+        assert clause == "user_id = %s"
+        assert params == ("u-1",)
+
+    def test_params_is_tuple_not_list(self):
+        _, params = _org_write_filter("u-1")
         assert isinstance(params, tuple)
 
     def test_clause_uses_parameter_placeholder_not_inlined_value(self):
-        """SQL injection guard: org_id must go through %s, not f-string interpolation."""
-        clause, params = _org_clause("'; DROP TABLE user_tokens;--")
-
+        """SQL injection guard: user_id must go through %s."""
+        clause, params = _org_write_filter("'; DROP TABLE user_tokens;--")
         assert "%s" in clause
         assert "DROP TABLE" not in clause
         assert params == ("'; DROP TABLE user_tokens;--",)
@@ -226,7 +235,8 @@ class TestProviderParserRejectsMalformed:
 class TestHasUserCredentialsNullOrgPath:
     """When _resolve_org returns None the SQL must not pass None as a %s param
     for org_id — ``org_id = NULL`` is always false in PostgreSQL.  The fix is
-    to route through ``_org_clause`` which returns an empty fragment for None.
+    to route through ``_org_read_predicate`` which falls back to user_id-only
+    matching when org_id is None.
     """
 
     def test_db_still_queried_when_org_is_none(self, monkeypatch):
