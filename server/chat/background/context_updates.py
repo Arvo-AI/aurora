@@ -354,6 +354,10 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
         logger.debug("[RCA-UPDATE] State is_background=%s, skipping", getattr(state, "is_background", None))
         return None
     if not getattr(state, "rca_context", None):
+        sid = getattr(state, "session_id", "") or ""
+        if "::sa_" in sid:
+            # Sub-agent session — rca_context is intentionally not propagated.
+            return None
         logger.warning("[RCA-UPDATE] State has is_background=True but rca_context is None, skipping context update injection")
         return None
 

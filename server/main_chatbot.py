@@ -324,6 +324,7 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+    incident_id = incident_id or getattr(state, "incident_id", None)
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
@@ -373,21 +374,34 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 if len(text_to_save) > 20:  # Lower minimum to save smaller chunks
                     try:
                         from utils.db.connection_pool import db_pool
-                        from datetime import datetime
+                        from datetime import datetime, timezone
                         cleaned_text = clean_markdown(text_to_save)
-                        
+
                         # Only save if cleaned text has substantial content
                         if len(cleaned_text) > 20:  # Lower threshold
+                            now = datetime.now(timezone.utc)
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
                                     # No RLS needed — incident_thoughts not RLS-protected
                                     cursor.execute(
                                         "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
                                         "VALUES (%s, %s, %s, %s)",
-                                        (incident_id, datetime.now(), cleaned_text, "analysis")
+                                        (incident_id, now, cleaned_text, "analysis")
                                     )
+                                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                                    cursor.execute(
+                                        "UPDATE incidents SET updated_at = %s WHERE id = %s",
+                                        (now, incident_id),
+                                    )
+                                    incident_touched = cursor.rowcount == 1
                                 conn.commit()
-                                logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                                if incident_touched:
+                                    logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                                else:
+                                    logger.warning(
+                                        "[BackgroundChat] Thought saved, but incidents.updated_at heartbeat touched 0 rows for incident %s — RLS context may be wrong",
+                                        incident_id,
+                                    )
                                 accumulated_thought.clear()
                                 if remaining:
                                     accumulated_thought.append(remaining)
@@ -1571,7 +1585,9 @@ async def handle_connection(websocket) -> None:
             # Set UI state in workflow before processing so it gets saved
             wf._ui_state = ui_state
             
-            task = asyncio.create_task(process_workflow_async(wf, state, websocket, user_id))
+            task = asyncio.create_task(
+                process_workflow_async(wf, state, websocket, user_id, incident_id=_incident_id)
+            )
             session_tasks[effective_session_id] = (task, wf)
             task.add_done_callback(lambda _t, _sid=effective_session_id: session_tasks.pop(_sid, None))
 

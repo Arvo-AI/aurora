@@ -1170,6 +1170,79 @@ def build_newrelic_rca_prompt(
     return build_rca_prompt('newrelic', alert_details, providers, user_id)
 
 
+def build_sentry_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> tuple[str, str]:
+    """Build RCA prompt from a Sentry Integration Platform webhook payload."""
+    from routes.sentry.tasks import extract_sentry_title
+    data = payload.get("data") or {}
+    issue = data.get("issue") if isinstance(data.get("issue"), dict) else {}
+    event = data.get("event") if isinstance(data.get("event"), dict) else {}
+    error = data.get("error") if isinstance(data.get("error"), dict) else {}
+
+    title = extract_sentry_title(payload)
+    action = payload.get("action") or "unknown"
+    level = (
+        issue.get("level")
+        or event.get("level")
+        or error.get("level")
+        or "unknown"
+    )
+
+    project = issue.get("project") or event.get("project") or {}
+    project_slug = project.get("slug") if isinstance(project, dict) else None
+    project_name = project.get("name") if isinstance(project, dict) else None
+
+    culprit = issue.get("culprit") or event.get("culprit") or ""
+    short_id = issue.get("shortId") or ""
+    permalink = issue.get("permalink") or issue.get("web_url") or event.get("web_url") or ""
+    environment = event.get("environment") or ""
+    release = event.get("release") or ""
+    count = issue.get("count")
+    user_count = issue.get("userCount")
+    first_seen = issue.get("firstSeen") or ""
+    last_seen = issue.get("lastSeen") or ""
+
+    message_parts: List[str] = []
+    if culprit:
+        message_parts.append(f"Culprit: {culprit}")
+    if project_slug or project_name:
+        message_parts.append(f"Project: {project_slug or project_name}")
+    if environment:
+        message_parts.append(f"Environment: {environment}")
+    if release:
+        message_parts.append(f"Release: {release}")
+    if count is not None:
+        message_parts.append(f"Event count: {count}")
+    if user_count is not None:
+        message_parts.append(f"Users affected: {user_count}")
+    if first_seen:
+        message_parts.append(f"First seen: {first_seen}")
+    if last_seen and last_seen != first_seen:
+        message_parts.append(f"Last seen: {last_seen}")
+
+    labels: Dict[str, str] = {}
+    if level and level != "unknown":
+        labels["level"] = str(level)
+    if short_id:
+        labels["shortId"] = str(short_id)
+    if project_slug:
+        labels["projectSlug"] = str(project_slug)
+
+    alert_details = {
+        "title": title,
+        "status": f"{action} (level: {level})",
+        "message": ". ".join(message_parts) if message_parts else title,
+        "labels": labels,
+    }
+    if permalink:
+        alert_details["issueUrl"] = permalink
+
+    return build_rca_prompt("sentry", alert_details, providers, user_id)
+
+
 def build_chat_rca_prompt(
     description: str,
     title: str = "",

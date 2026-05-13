@@ -578,6 +578,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
                 """,
+                "sentry_events": """
+                    CREATE TABLE IF NOT EXISTS sentry_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        issue_id VARCHAR(255),
+                        issue_title TEXT,
+                        level VARCHAR(50),
+                        project_slug VARCHAR(255),
+                        resource VARCHAR(50),
+                        action VARCHAR(50),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_sentry_events_org_issue_action
+                        ON sentry_events(org_id, issue_id, action) WHERE issue_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_user_id ON sentry_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_resource ON sentry_events(resource);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_project ON sentry_events(project_slug);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_received_at ON sentry_events(received_at DESC);
+                """,
                 "netdata_alerts": """
                     CREATE TABLE IF NOT EXISTS netdata_verification_tokens (
                         user_id TEXT PRIMARY KEY,
@@ -1168,6 +1191,37 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_incident ON incident_lifecycle_events(incident_id, created_at);
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_user ON incident_lifecycle_events(user_id, created_at DESC);
                 """,
+                "rca_findings": """
+                    CREATE TABLE IF NOT EXISTS rca_findings (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        agent_id VARCHAR(64) NOT NULL,
+                        role_name VARCHAR(128) NOT NULL,
+                        purpose TEXT NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'running',
+                        wave INTEGER NOT NULL DEFAULT 1,
+                        storage_uri TEXT,
+                        current_action TEXT,
+                        self_assessed_strength VARCHAR(20),
+                        tools_used JSONB DEFAULT '[]'::jsonb,
+                        citations JSONB DEFAULT '[]'::jsonb,
+                        follow_ups_suggested JSONB DEFAULT '[]'::jsonb,
+                        tool_call_history JSONB DEFAULT '[]'::jsonb,
+                        child_session_id VARCHAR(255),
+                        error_message TEXT,
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        org_id VARCHAR(255),
+                        user_id VARCHAR(255) NOT NULL
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_rca_findings_incident_agent
+                    ON rca_findings(incident_id, agent_id);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_incident_status
+                    ON rca_findings(incident_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
+                    ON rca_findings(org_id, started_at DESC);
+                """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -1263,6 +1317,7 @@ def initialize_tables():
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
             rls_tables.append("newrelic_events")
+            rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
 
             # Add monitoring tables
@@ -1290,6 +1345,7 @@ def initialize_tables():
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
+            rls_tables.append("rca_findings")
             rls_tables.append("actions")
             rls_tables.append("action_runs")
             rls_tables.append("postmortem_versions")

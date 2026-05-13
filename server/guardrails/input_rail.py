@@ -57,25 +57,28 @@ class InputRailResult:
     latency_ms: float = 0.0
 
 
-class _GeminiMaxTokensCompat(BaseChatModel):
-    """Adapt ``ChatGoogleGenerativeAI`` for NeMo Guardrails self-check tasks.
+class _GuardrailsLLMCompat(BaseChatModel):
+    """Adapt non-string-content chat models for NeMo Guardrails self-check tasks.
 
     Two incompatibilities are bridged here:
 
     1. NeMo calls ``llm.bind(max_tokens=3, ...)`` at invoke time
        (``nemoguardrails/library/self_check/input_check/actions.py``). Gemini's
        ``GenerateContentConfig`` only knows ``max_output_tokens`` and rejects
-       the alias as ``extra_forbidden``. We rename the key at bind time.
-    2. ``gemini-2.5`` and newer return structured content (a list of
-       ``{"type": "thinking" | "text", ...}`` blocks) while NeMo calls
-       ``.strip()`` on the returned string. We flatten list content to its
-       text blocks so the ``str`` contract NeMo expects holds.
+       the alias as ``extra_forbidden``. We rename the key at bind time when
+       ``rename_max_tokens`` is set (Gemini direct path only).
+    2. Reasoning models (Gemini ``gemini-2.5+``, OpenAI ``gpt-5+`` via the
+       Responses API) return structured content (a list of
+       ``{"type": "reasoning" | "thinking" | "text", ...}`` blocks) while NeMo
+       calls ``.strip()`` on the returned string. We flatten list content to
+       its text blocks so the ``str`` contract NeMo expects holds.
 
-    The wrapper is only installed when the guardrails model is Gemini routed
-    via the direct Google provider, so every other provider is untouched.
+    The wrapper is installed for Gemini direct and for OpenAI reasoning models
+    routed through the Responses API; other providers stay untouched.
     """
 
     inner: BaseChatModel
+    rename_max_tokens: bool = False
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -83,16 +86,20 @@ class _GeminiMaxTokensCompat(BaseChatModel):
     def _llm_type(self) -> str:
         return self.inner._llm_type
 
-    @staticmethod
-    def _rename(kwargs: dict) -> dict:
-        if "max_tokens" in kwargs and "max_output_tokens" not in kwargs:
+    def _rename(self, kwargs: dict) -> dict:
+        if self.rename_max_tokens and "max_tokens" in kwargs and "max_output_tokens" not in kwargs:
             kwargs = dict(kwargs)
             kwargs["max_output_tokens"] = kwargs.pop("max_tokens")
         return kwargs
 
     @staticmethod
     def _flatten(result):
-        """Collapse Gemini thinking-block lists to plain text on each message."""
+        """Collapse reasoning-block lists to plain text on each message.
+
+        Handles Gemini ``thinking`` blocks and OpenAI Responses-API
+        ``reasoning`` blocks alongside regular ``text`` blocks; only
+        ``text`` content is preserved so NeMo's ``.strip()`` succeeds.
+        """
         from langchain_core.messages import BaseMessage
         for gen in getattr(result, "generations", []) or []:
             msg = getattr(gen, "message", None)
@@ -127,15 +134,17 @@ class _GeminiMaxTokensCompat(BaseChatModel):
 def _build_llm() -> BaseChatModel:
     """Build the chat model for the input rail using the shared factory.
 
-    When guardrails are served by Gemini via the direct Google provider, wrap
-    the model so NeMo's ``max_tokens`` bind kwarg is translated to the name
-    google-genai expects.
+    Reasoning-capable models return structured content blocks that break
+    NeMo's ``str.strip()`` assumption — wrap them so list content gets
+    flattened to plain text. Gemini direct additionally needs the
+    ``max_tokens`` kwarg renamed.
     """
     import os
 
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.model_mapper import ModelMapper
     from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.providers.openai_provider import OpenAIProvider
     from utils.security.config import config as gc
 
     model_name = gc.llm_model or ModelConfig.MAIN_MODEL
@@ -144,7 +153,11 @@ def _build_llm() -> BaseChatModel:
     provider, _ = ModelMapper.split_provider_model(model_name)
     provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct").lower()
     if provider == "google" and provider_mode == "direct":
-        return _GeminiMaxTokensCompat(inner=llm)
+        return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=True)
+    if provider == "openai" and provider_mode == "direct":
+        native = ModelMapper.get_native_name(model_name, "openai")
+        if OpenAIProvider._supports_reasoning(native):
+            return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=False)
     return llm
 
 

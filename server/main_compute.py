@@ -209,6 +209,7 @@ _OPEN_PREFIXES = (
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
     "/newrelic/webhook/",
+    "/sentry/webhook/",
     "/pagerduty/webhook/",
     "/opsgenie/webhook/",
     "/jenkins/webhook/",
@@ -433,6 +434,11 @@ from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
 import routes.newrelic.tasks  # noqa: F401
 
+# --- Sentry Integration Routes ---
+from routes.sentry import bp as sentry_bp  # noqa: F401
+app.register_blueprint(sentry_bp, url_prefix="/sentry")
+from routes.sentry import tasks as _sentry_tasks  # noqa: F401
+
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
@@ -489,6 +495,8 @@ from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 app.register_blueprint(incident_feedback_bp)
+from routes.incidents_findings import findings_bp
+app.register_blueprint(findings_bp)
 
 from routes.actions import actions_bp
 app.register_blueprint(actions_bp, url_prefix="/api/actions")

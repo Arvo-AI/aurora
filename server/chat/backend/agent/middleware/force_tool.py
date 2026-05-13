@@ -13,13 +13,30 @@ class ForceToolChoice(AgentMiddleware):
         self._tool_name = tool_name
         self._fired = False
 
+    def _tool_choice_for(self, model) -> object:
+        """Return the provider-native `tool_choice` value forcing a single tool.
+
+        Direct providers each use their own shape; LLM_PROVIDER_MODE=openrouter
+        is OpenAI-compatible so the OpenAI shape works universally there.
+        """
+        llm_type = getattr(model, "_llm_type", "") or ""
+        # Unwrap RunnableBinding / similar (request.model may be wrapped)
+        inner = getattr(model, "bound", None)
+        if inner is not None and not llm_type:
+            llm_type = getattr(inner, "_llm_type", "") or ""
+
+        if "anthropic" in llm_type:
+            return {"type": "tool", "name": self._tool_name}
+        # OpenAI (direct + openrouter), default for unknown providers.
+        return {
+            "type": "function",
+            "function": {"name": self._tool_name},
+        }
+
     def _patch(self, request: ModelRequest) -> ModelRequest:
         if not self._fired:
             self._fired = True
-            request.tool_choice = {
-                "type": "function",
-                "function": {"name": self._tool_name},
-            }
+            request.tool_choice = self._tool_choice_for(request.model)
         return request
 
     def wrap_model_call(self, request, call_next):

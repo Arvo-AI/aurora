@@ -140,6 +140,11 @@ from .newrelic_tool import (
     is_newrelic_connected,
     QueryNewRelicArgs,
 )
+from .sentry_tool import (
+    query_sentry,
+    is_sentry_connected,
+    QuerySentryArgs,
+)
 from .thousandeyes_tool import (
     thousandeyes_list_tests,
     thousandeyes_get_test_detail,
@@ -1835,6 +1840,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryNewRelicArgs,
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
+
+    # Add Sentry tool if connected
+    if user_id and is_sentry_connected(user_id):
+        context_wrapped_sentry = with_user_context(query_sentry)
+        notification_wrapped_sentry = with_completion_notification(context_wrapped_sentry)
+        final_sentry_func = wrap_func_with_capture(notification_wrapped_sentry, "query_sentry") if tool_capture else notification_wrapped_sentry
+
+        tools.append(StructuredTool.from_function(
+            func=final_sentry_func,
+            name="query_sentry",
+            description=(
+                "Query Sentry for error tracking data: issues, full event stacktraces, projects, or Discover-style event searches. "
+                "resource_type must be one of 'issues', 'issue_detail', 'issue_event', 'projects', 'events'. "
+                "For 'issues' and 'events', the query is a Sentry search expression (e.g. 'is:unresolved level:error environment:production'). "
+                "For 'issue_detail' and 'issue_event', the query MUST be the numeric Sentry issue id. "
+                "Examples: query_sentry(resource_type='issues', query='is:unresolved level:error', stats_period='24h') "
+                "or query_sentry(resource_type='issue_event', query='1234567890') for full stacktrace + breadcrumbs "
+                "or query_sentry(resource_type='projects') to list projects."
+            ),
+            args_schema=QuerySentryArgs,
+        ))
+        logging.info(f"Added Sentry tool for user {user_id}")
 
     # --- OpsGenie / JSM Operations tool ---
     if user_id and is_opsgenie_connected(user_id):

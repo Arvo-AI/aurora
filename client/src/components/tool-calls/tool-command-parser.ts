@@ -50,38 +50,35 @@ export function parseCloudExecCommand(
   toolOutput: any,
   defaultCommand: string
 ): ParsedCloudExecCommand {
-  let command = defaultCommand
-
-  // Phase 1: Extract from input (available immediately when tool starts)
-  if (toolInput && !toolOutput) {
+  // Always extract from input when present so we have a fallback if the output
+  // is missing, partial, or truncated (sub-agent citations carry truncated
+  // output_excerpts that can't be JSON-parsed).
+  let inputCommand: string | undefined
+  if (toolInput) {
     try {
       const inputStr = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput)
-      const parsableInput = inputStr.replace(/'/g, '"')
-      const parsed = JSON.parse(parsableInput)
-      const inputCommand = parsed.command || parsed.kwargs?.command
-      if (inputCommand && typeof inputCommand === 'string') {
+      const parsed = JSON.parse(inputStr.replaceAll("'", '"'))
+      const raw = parsed.command || parsed.kwargs?.command
+      if (raw && typeof raw === 'string') {
         const provider = parsed.provider || parsed.kwargs?.provider
-
         if (provider) {
           const providerCli = getProviderCli(provider)
-          // Backend sends raw command without prefix; add it for immediate display
-          command = RECOGNIZED_CLI_REGEX.test(inputCommand.trim())
-            ? inputCommand
-            : providerCli ? `${providerCli} ${inputCommand}` : inputCommand
+          inputCommand = RECOGNIZED_CLI_REGEX.test(raw.trim())
+            ? raw
+            : providerCli ? `${providerCli} ${raw}` : raw
         } else {
-          command = inputCommand
+          inputCommand = raw
         }
       }
-      return { command, phase: 'input' }
     } catch (error) {
-      console.warn('[parseCloudExecCommand] Phase 1 parse failed:', {
+      console.warn('[parseCloudExecCommand] input parse failed:', {
         input_preview: typeof toolInput === 'string' ? toolInput.substring(0, 100) : '[object]',
         error: error instanceof Error ? error.message : String(error)
       })
     }
   }
 
-  // Phase 2: Extract from output (available after completion, shows full command with flags)
+  // Output's final_command shows shell substitutions resolved — prefer it when available.
   if (toolOutput) {
     try {
       const outputStr = typeof toolOutput === 'string' ? toolOutput : JSON.stringify(toolOutput)
@@ -90,14 +87,14 @@ export function parseCloudExecCommand(
         return { command: parsed.final_command, phase: 'output' }
       }
     } catch (error) {
-      console.warn('[parseCloudExecCommand] Phase 2 parse failed:', {
+      console.warn('[parseCloudExecCommand] output parse failed:', {
         output_preview: typeof toolOutput === 'string' ? toolOutput.substring(0, 100) : '[object]',
         error: error instanceof Error ? error.message : String(error)
       })
     }
   }
 
-  return { command, phase: 'input' }
+  return { command: inputCommand ?? defaultCommand, phase: 'input' }
 }
 
 export function parseGitHubToolCommand(toolName: string, toolInput: string): string {

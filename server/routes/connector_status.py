@@ -673,6 +673,34 @@ def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True, "spaceName": creds.get("space_name")}
 
 
+def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate Sentry credentials by hitting the org endpoint."""
+    auth_token = creds.get("auth_token")
+    org_slug = creds.get("org_slug")
+    if not auth_token or not org_slug:
+        return {"connected": False}
+    region = (creds.get("region") or "us").strip().lower()
+    base_url = "https://de.sentry.io" if region == "eu" else "https://sentry.io"
+    try:
+        r = requests.get(
+            f"{base_url}/api/0/organizations/{org_slug}/",
+            headers={"Authorization": f"Bearer {auth_token}", "Accept": "application/json"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code == 200:
+            data = r.json() if r.content else {}
+            return {
+                "connected": True,
+                "orgSlug": org_slug,
+                "orgName": data.get("name"),
+                "region": region,
+                "hasWebhookSecret": bool(creds.get("client_secret")),
+            }
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 # ── Provider checker registry ──────────────────────────────────────
 
 
@@ -701,6 +729,7 @@ PROVIDER_CHECKERS = {
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
+    "sentry": _check_sentry,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,

@@ -66,12 +66,19 @@ class OpenAIProvider(BaseLLMProvider):
             "stream_usage": True,
         }
 
-        # Enable reasoning for models that support it (GPT-5+, o-series).
-        # This makes the model emit text preambles alongside tool calls,
-        # which flow to the ThoughtsPanel during RCA.
+        # Reasoning models (GPT-5+, o-series) require the Responses API
+        # (/v1/responses) when tools are combined with reasoning effort —
+        # Chat Completions returns 400 for that combination. They also
+        # reject the `temperature` parameter outright. `summary: "auto"`
+        # surfaces reasoning summaries to the streaming output so they
+        # flow into the ThoughtsPanel / sub-agent panes during RCA.
         if self._supports_reasoning(native_model):
-            config["reasoning_effort"] = "high"
-            logger.info(f"Enabled reasoning_effort=high for {native_model}")
+            config["reasoning"] = {"effort": "high", "summary": "auto"}
+            config["use_responses_api"] = True
+            config.pop("temperature", None)
+            logger.info(
+                f"Enabled reasoning=high+summary=auto + use_responses_api=True for {native_model}"
+            )
 
         config.update(kwargs)
 

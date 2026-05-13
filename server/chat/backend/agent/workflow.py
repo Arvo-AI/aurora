@@ -48,16 +48,22 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
         for part in content:
             if isinstance(part, dict):
                 part_type = part.get("type", "")
-                
-                # Extract text from both thinking and text blocks
-                # thinking blocks: use 'thinking' key
-                # text blocks: use 'text' key
+
+                # Extract text from thinking, reasoning, and text blocks.
+                # Anthropic / Gemini thinking blocks: use `thinking` key.
+                # OpenAI Responses-API reasoning blocks: text lives inside
+                #   `summary` as a list of {type:'summary_text', text:'…'}.
+                # Regular text blocks: use `text` key.
                 if part_type in ("thinking", "reasoning") and include_thinking:
                     thinking_text = part.get("thinking", "")
                     if thinking_text:
                         text_parts.append(str(thinking_text))
+                    for s_item in part.get("summary") or []:
+                        if isinstance(s_item, dict):
+                            s_text = s_item.get("text") or s_item.get("summary_text", "")
+                            if s_text:
+                                text_parts.append(str(s_text))
                 elif part_type == "text" or not part_type:
-                    # Regular text content
                     text = part.get("text", "")
                     if text:
                         text_parts.append(str(text))
@@ -121,11 +127,58 @@ class Workflow:
             logger.debug(f"Still waiting for {len(still_ongoing)} tool call(s): {still_ongoing}")
 
     def _create_workflow(self) -> StateGraph:
-        """Create and configure the workflow graph."""
+        """Create and configure the workflow graph.
+
+        When ORCHESTRATOR_ENABLED=false, returns the existing single-node graph
+        unchanged. Default is true. Orchestrator imports are lazy so the inert
+        path never pulls in orchestrator deps.
+        """
         workflow = StateGraph(State)
-        workflow.add_node("agentic_tool_flow", self.agent.agentic_tool_flow)
-        workflow.add_edge(START, "agentic_tool_flow") 
-        workflow.add_edge("agentic_tool_flow", END)
+
+        from chat.backend.agent.orchestrator import is_orchestrator_enabled
+
+        if not is_orchestrator_enabled():
+            workflow.add_node("agentic_tool_flow", self.agent.agentic_tool_flow)
+            workflow.add_edge(START, "agentic_tool_flow")
+            workflow.add_edge("agentic_tool_flow", END)
+            return workflow
+
+        # Multi-agent graph (only reached when ORCHESTRATOR_ENABLED=true)
+        from chat.backend.agent.orchestrator.triage import triage_node, route_triage
+        from chat.backend.agent.orchestrator.dispatcher import dispatch_node, dispatch_to_sub_agents
+        from chat.backend.agent.orchestrator.sub_agent import sub_agent_node
+        from chat.backend.agent.orchestrator.synthesis import synthesis_node, route_after_synthesis
+
+        workflow.add_node("triage", triage_node)
+        workflow.add_node("direct_react", self.agent.agentic_tool_flow)
+        workflow.add_node("dispatch", dispatch_node)
+        workflow.add_node("sub_agent", sub_agent_node)
+        workflow.add_node("synthesis", synthesis_node)
+
+        # Only background RCA sessions enter the orchestrator. Foreground chats
+        # bypass triage so they don't pay the role-discovery + LLM call cost.
+        def _route_start(state) -> str:
+            is_bg = getattr(state, "is_background", False)
+            if isinstance(state, dict):
+                is_bg = state.get("is_background", False)
+            return "triage" if is_bg else "direct_react"
+
+        workflow.add_conditional_edges(
+            START, _route_start, {"triage": "triage", "direct_react": "direct_react"}
+        )
+        workflow.add_conditional_edges(
+            "triage",
+            route_triage,
+            {"direct_react": "direct_react", "dispatch": "dispatch"},
+        )
+        workflow.add_edge("direct_react", END)
+        workflow.add_conditional_edges("dispatch", dispatch_to_sub_agents, ["sub_agent"])
+        workflow.add_edge("sub_agent", "synthesis")
+        workflow.add_conditional_edges(
+            "synthesis",
+            route_after_synthesis,
+            {"dispatch": "dispatch", "end": END},
+        )
         return workflow
 
     def get_compiled_workflow(self) -> CompiledStateGraph:
@@ -299,7 +352,7 @@ class Workflow:
                 existing_call.setdefault("tool_name", tool_name)
                 existing_call.setdefault("call_id", tool_call_id)
                 existing_call.setdefault("run_id", run_id)
-                existing_call.setdefault("start_time", datetime.now())
+                existing_call.setdefault("start_time", datetime.now(timezone.utc))
 
                 if meaningful_input:
                     existing_call["input"] = tool_input
@@ -546,7 +599,7 @@ class Workflow:
                             logger.error(f"Cannot extract valid JSON from malformed args, using empty dict")
                             args = {}
                     except (json.JSONDecodeError, Exception) as e:
-                        logger.error(f"Failed to clean malformed args: {e}, using empty dict")
+                        logger.exception(f"Failed to clean malformed args: {e}, using empty dict")
                         args = {}
                 
                 elif args_stripped.startswith('{') and args_stripped.endswith('}'):
@@ -747,7 +800,7 @@ class Workflow:
                             "ui_messages": row[6],
                         }
         except Exception as e:
-            logger.error(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
+            logger.exception(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
         return None
 
     @staticmethod
@@ -1069,22 +1122,36 @@ class Workflow:
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":
+                    # Suppress triage/synthesis chunks — they emit structured-output
+                    # JSON that would leak into chat. Sub-agent tokens are intentionally
+                    # allowed through so the user sees live progress in Thoughts while
+                    # N sub-agents run; routing them into per-agent panels is future work.
+                    _node = (event.get("metadata") or {}).get("langgraph_node")
+                    if _node in ("triage", "synthesis"):
+                        continue
                     _token_count += 1
                     chunk_data = event.get("data", {})
                     chunk_obj = chunk_data.get("chunk")
                     if chunk_obj:
                         content = ""
+                        reasoning = ""
+
+                        # Check for reasoning content (OpenRouter, DeepSeek-R1 etc.)
+                        if hasattr(chunk_obj, 'additional_kwargs'):
+                            reasoning = chunk_obj.additional_kwargs.get("reasoning_content", "")
+
+                        # Extract visible content. _ReasoningChatOpenAI clears
+                        # chunk_obj.content for reasoning-only chunks upstream, so
+                        # this is safe to call unconditionally.
+                        is_background = getattr(input_state, "is_background", False)
                         if hasattr(chunk_obj, 'content') and chunk_obj.content:
-                            # Extract text content (handles Gemini thinking model list format)
-                            # include_thinking=True so reasoning flows to save_incident_thought() for RCA
-                            content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=is_background)
 
-                        # Check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
-                        # regardless of whether content was found above
-                        if not content and hasattr(chunk_obj, 'additional_kwargs'):
-                            content = chunk_obj.additional_kwargs.get("reasoning_content", "")
+                        # For background RCA chats, reasoning feeds into incident thoughts
+                        if not content and reasoning and is_background:
+                            content = reasoning
 
-                        # Only yield if we have actual text content
+                        # Only yield if we have actual text content (not reasoning)
                         if content:
                             chunk_id = getattr(chunk_obj, 'id', None)
                             if chunk_id:
@@ -1117,6 +1184,41 @@ class Workflow:
                 # Handle model turn completion — extract thinking/text as fallback
                 # when on_chat_model_stream didn't fire (LangGraph + Gemini bug)
                 elif event_type == "on_chat_model_end":
+                    # Don't render orchestrator-aux model turns into the lead's
+                    # chat: triage/synthesis use structured output that would
+                    # leak as JSON tokens, and sub-agents own their own
+                    # tool_capture. For triage/synthesis we still accumulate
+                    # usage; sub-agent usage is persisted under child sessions.
+                    _meta = event.get("metadata") or {}
+                    _node = _meta.get("langgraph_node") or ""
+                    _ns = _meta.get("langgraph_checkpoint_ns") or ""
+                    _is_subagent = _node == "sub_agent" or "sub_agent:" in _ns
+                    _is_orch_aux = _node in ("triage", "synthesis") or any(
+                        seg in _ns for seg in ("triage:", "synthesis:")
+                    )
+                    if _is_orch_aux:
+                        _aux_output = (event.get("data") or {}).get("output")
+                        _aux_usage = getattr(_aux_output, "usage_metadata", None) if _aux_output else None
+                        if _aux_usage:
+                            input_tokens = _aux_usage.get("input_tokens", 0)
+                            output_tokens = _aux_usage.get("output_tokens", 0)
+                            input_details = _aux_usage.get("input_token_details", {})
+                            cached_input_tokens = (
+                                input_details.get("cache_read", 0)
+                                if isinstance(input_details, dict) else 0
+                            )
+                            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+                            estimated_cost = LLMUsageTracker.calculate_cost(
+                                input_tokens, output_tokens, input_state.model or "",
+                                cached_input_tokens=cached_input_tokens,
+                            )
+                            _session_usage["total_input_tokens"] += input_tokens
+                            _session_usage["total_output_tokens"] += output_tokens
+                            _session_usage["total_cost"] += estimated_cost
+                            _session_usage["request_count"] += 1
+                        continue
+                    if _is_subagent:
+                        continue
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
                     if output:
@@ -1133,10 +1235,13 @@ class Workflow:
                         # when tools are bound in LangGraph (langgraph#4877).
                         if _model_turn_tokens == 0:
                             content = ""
+                            is_background = getattr(input_state, "is_background", False)
                             if hasattr(output, 'content') and output.content:
-                                content = _extract_text_from_content(output.content, include_thinking=True)
+                                content = _extract_text_from_content(output.content, include_thinking=is_background)
                             if not content and hasattr(output, 'additional_kwargs'):
-                                content = output.additional_kwargs.get("reasoning_content", "")
+                                reasoning = output.additional_kwargs.get("reasoning_content", "")
+                                if reasoning and is_background:
+                                    content = reasoning
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
                                 msg_id = getattr(output, 'id', None)
@@ -1209,7 +1314,7 @@ class Workflow:
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
         except Exception as stream_exception:
-            logger.error(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}", exc_info=True)
+            logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
             raise
         
         # Consolidate message chunks and save final state
@@ -1353,8 +1458,7 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                # include_thinking=True so reasoning is preserved in the saved message
-                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=False)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1525,18 +1629,14 @@ class Workflow:
                 # Skip synthetic RCA summary injected by _compress_rca_context
                 if isinstance(raw_content, str) and raw_content.startswith(RCA_SUMMARY_PREFIX):
                     continue
-                # Extract text content (handles Gemini thinking model list format).
-                # Include thinking when text is empty and message has tool calls,
-                # so Gemini's reasoning appears in chat alongside tool cards.
-                # (Claude generates inline text with tool calls; Gemini puts reasoning
-                # in thinking blocks only, leaving text empty.)
+                # Extract text content (handles Gemini thinking model list format)
                 content = _extract_text_from_content(raw_content)
                 has_tool_calls = (
                     getattr(msg, 'tool_calls', [])
                     or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
                 )
                 if not content and has_tool_calls:
-                    content = _extract_text_from_content(raw_content, include_thinking=True)
+                    content = _extract_text_from_content(raw_content, include_thinking=False)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)
@@ -1711,7 +1811,7 @@ class Workflow:
                     return False
                     
         except Exception as e:
-            logger.error(f"Error saving UI messages: {e}")
+            logger.exception(f"Error saving UI messages: {e}")
             return False
 
     def _append_new_turn_ui_messages(
@@ -1796,7 +1896,7 @@ class Workflow:
 
         except Exception as e:
             # Broad catch: DB/persistence errors must not abort the workflow.
-            logger.error(f"Error appending UI messages: {e}")
+            logger.exception(f"Error appending UI messages: {e}")
             return False
 
     def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
@@ -1858,7 +1958,7 @@ class Workflow:
                     )
             return redacted
         except Exception as e:
-            logger.error(f"Output redaction (ui_message) failed open: {e}")
+            logger.exception(f"Output redaction (ui_message) failed open: {e}")
             return text
 
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):

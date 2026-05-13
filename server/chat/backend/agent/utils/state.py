@@ -1,4 +1,5 @@
-from typing import List, Any, Dict, Literal, Optional
+import operator
+from typing import List, Any, Dict, Optional, Annotated
 from langchain_core.messages import AnyMessage
 from pydantic import BaseModel, ConfigDict
 
@@ -36,5 +37,11 @@ class State(BaseModel):
     )
     guardrail_blocked: bool = False  # Set by workflow when input rail blocks the message
     permitted_tools: Optional[set] = None
+
+    # --- Multi-agent orchestrator fields (defaults preserve single-agent behavior) ---
+    triage_decision: Optional[Dict[str, Any]] = None
+    subagent_inputs: List[Dict[str, Any]] = []
+    finding_refs: Annotated[List[Dict[str, Any]], operator.add] = []
+    synthesis_wave: int = 0
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
