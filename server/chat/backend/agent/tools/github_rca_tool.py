@@ -7,7 +7,7 @@ wrapping existing GitHub MCP tools with timeline correlation and intelligent rep
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List, Literal
 from pydantic import BaseModel, Field
 
@@ -70,82 +70,28 @@ def _resolve_repository(
     explicit_repo: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], str]:
     """
-    Resolve repository using priority order:
-    1. Explicit repo parameter
-    2. Single connected repo (auto-select if only one)
-    3. Error if multiple repos and none specified
+no put itr i    Resolve repository using priority order.
+    Delegates to shared vcs_rca_utils with provider='github'.
 
     Returns: (owner, repo_name, source_description)
     """
-    if explicit_repo:
-        parsed = _parse_owner_repo(explicit_repo)
-        if parsed:
-            return parsed[0], parsed[1], "explicit parameter"
-        logger.warning(f"Invalid repo format: {explicit_repo}")
-
-    try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[GithubRCA:resolve]")
-                cur.execute(
-                    "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
-                    (user_id,),
-                )
-                rows = cur.fetchall()
-
-        if not rows:
-            return None, None, "no repository found"
-
-        if len(rows) == 1:
-            parsed = _parse_owner_repo(rows[0][0])
-            if parsed:
-                return parsed[0], parsed[1], "connected repository"
-            logger.warning(f"Invalid repo format in DB: {rows[0][0]}")
-            return None, None, f"invalid repo format: {rows[0][0]}"
-
-        repo_list = ", ".join(r[0] for r in rows)
-        logger.info(f"Multiple repos connected ({repo_list}), agent must specify repo= explicitly")
-        return None, None, f"multiple repos connected ({repo_list}). Call get_connected_repos and pass repo='owner/repo' explicitly"
-    except Exception as e:
-        logger.warning(f"Error resolving repository: {e}")
-        return None, None, f"database error while resolving repository: {e}"
+    from .vcs_rca_utils import resolve_repository
+    repo_path, source = resolve_repository(user_id, "github", explicit_repo)
+    if not repo_path:
+        return None, None, source
+    parsed = _parse_owner_repo(repo_path)
+    if parsed:
+        return parsed[0], parsed[1], source
+    return None, None, f"invalid repo format: {repo_path}"
 
 
 def _calculate_time_windows(
     incident_time: Optional[str],
     time_window_hours: int = 24
 ) -> Tuple[datetime, datetime]:
-    """
-    Calculate investigation time windows based on incident time.
-
-    Returns: (start_time, end_time)
-    """
-    # Validate time_window_hours - clamp to sensible default if invalid
-    if not isinstance(time_window_hours, int) or time_window_hours <= 0:
-        logger.warning(f"Invalid time_window_hours={time_window_hours}, using default of 24")
-        time_window_hours = 24
-
-    # Parse incident time or use current time
-    if incident_time:
-        try:
-            # Handle various ISO 8601 formats
-            incident_time_clean = incident_time.replace('Z', '+00:00')
-            end_time = datetime.fromisoformat(incident_time_clean)
-            # Ensure timezone awareness
-            if end_time.tzinfo is None:
-                end_time = end_time.replace(tzinfo=timezone.utc)
-        except ValueError as e:
-            logger.warning(f"Could not parse incident_time '{incident_time}': {e}, using current time")
-            end_time = datetime.now(timezone.utc)
-    else:
-        end_time = datetime.now(timezone.utc)
-
-    # Calculate start time
-    start_time = end_time - timedelta(hours=time_window_hours)
-
-    return start_time, end_time
+    """Delegate to shared vcs_rca_utils."""
+    from .vcs_rca_utils import calculate_time_windows
+    return calculate_time_windows(incident_time, time_window_hours)
 
 
 def _call_github_mcp_sync(
@@ -562,37 +508,9 @@ def _generate_correlation_hints(
     action: str,
     results: Dict[str, Any]
 ) -> List[str]:
-    """Generate hints to help correlate findings with incident."""
-    hints = []
-
-    if action == "deployment_check":
-        if results.get("failed_runs"):
-            hints.append(f"Found {len(results['failed_runs'])} FAILED workflow runs in time window - investigate these first")
-        if results.get("suspicious_runs"):
-            hints.append(f"Found {len(results['suspicious_runs'])} workflow runs completed within 2 hours of incident")
-
-    elif action == "commits":
-        if results.get("suspicious_commits"):
-            hints.append(f"Found {len(results['suspicious_commits'])} commits within 2 hours of incident - high priority for review")
-        total = results.get("summary", {}).get("total_commits", 0)
-        if total > 10:
-            hints.append(f"High commit activity ({total} commits) - consider narrowing time window")
-
-    elif action == "diff":
-        summary = results.get("summary", {})
-        if summary.get("total_changes", 0) > 100:
-            hints.append(f"Large change ({summary.get('total_changes')} lines) - review carefully")
-        files = results.get("files_changed", [])
-        config_files = [f for f in files if any(ext in f.get("filename", "").lower()
-                       for ext in ['.yaml', '.yml', '.json', '.env', 'config', 'k8s/', 'deploy/', 'terraform/'])]
-        if config_files:
-            hints.append(f"Found {len(config_files)} config/infra files changed - likely candidates for root cause")
-
-    elif action == "pull_requests":
-        if results.get("recently_merged"):
-            hints.append(f"Found {len(results['recently_merged'])} PRs merged within 2 hours of incident")
-
-    return hints
+    """Delegate to shared vcs_rca_utils."""
+    from .vcs_rca_utils import generate_correlation_hints
+    return generate_correlation_hints(action, results)
 
 
 def _format_output(

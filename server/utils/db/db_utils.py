@@ -316,11 +316,12 @@ def initialize_tables():
                         UNIQUE(user_id, provider)
                     );
                 """,
-                "github_connected_repos": """
-                    CREATE TABLE IF NOT EXISTS github_connected_repos (
+                "connected_repos": """
+                    CREATE TABLE IF NOT EXISTS connected_repos (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
                         org_id VARCHAR(255),
+                        provider VARCHAR(20) NOT NULL DEFAULT 'github',
                         repo_full_name VARCHAR(512) NOT NULL,
                         repo_id INTEGER,
                         default_branch VARCHAR(255),
@@ -330,7 +331,7 @@ def initialize_tables():
                         repo_data JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, repo_full_name)
+                        UNIQUE(user_id, provider, repo_full_name)
                     );
                 """,
                 "user_manual_vms": """
@@ -1341,7 +1342,7 @@ def initialize_tables():
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
-            rls_tables.append("github_connected_repos")
+            rls_tables.append("connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
@@ -2375,7 +2376,7 @@ def initialize_tables():
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
                 "incident_lifecycle_events",
-                "github_connected_repos",
+                "connected_repos",
             ]
             for tbl in org_id_tables:
                 try:
@@ -2680,6 +2681,21 @@ def initialize_tables():
                     logging.info(f"De-duplicated {cursor.rowcount} organization name(s).")
             except Exception as e:
                 logging.warning(f"Error de-duplicating organization names: {e}")
+                conn.rollback()
+
+            # Migration: Rename github_connected_repos → connected_repos (now multi-provider).
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'github_connected_repos')
+                           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'connected_repos') THEN
+                            ALTER TABLE github_connected_repos RENAME TO connected_repos;
+                        END IF;
+                    END $$;
+                """)
+            except Exception as e:
+                logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
                 conn.rollback()
 
             conn.commit()

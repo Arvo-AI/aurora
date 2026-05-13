@@ -48,6 +48,7 @@ _viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
 _background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
+from .gitlab_tool import gitlab_tool, GitLabToolArgs
 from .cloud_exec_tool import cloud_exec
 
 from .zip_file_tool import analyze_zip_file
@@ -1294,6 +1295,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (cloudbees_rca, "cloudbees_rca"),
         (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
+        (gitlab_tool, "gitlab"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
@@ -1340,7 +1342,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Process Aurora native tools
     for func, name in tool_functions:
         # Apply forced context wrapper for critical tools that should never have parameters mixed up
-        if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix']:
+        if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix', 'gitlab']:
             context_wrapped = with_forced_context(func)
             logging.info(f"Applied with_forced_context decorator to {name}")
         else:
@@ -1408,6 +1410,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),
                 args_schema=GitHubFixArgs
+            )
+        elif name == 'gitlab':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Unified GitLab tool for all GitLab operations. "
+                    "Actions: 'list_projects' (discover connected projects), "
+                    "'deployment_check' (CI/CD pipelines), 'commits' (recent commits with timeline correlation), "
+                    "'diff' (file changes for a commit — needs commit_sha), "
+                    "'merge_requests' (merged MRs in time window), "
+                    "'suggest_fix' (propose a code fix for review), "
+                    "'apply_fix' (create MR from approved suggestion — needs suggestion_id), "
+                    "'commit_terraform' (push Terraform files — needs repo, commit_message). "
+                    "Pass repo='namespace/project' to target a specific project. "
+                    "Pass incident_time (ISO 8601) for automatic time window correlation."
+                ),
+                args_schema=GitLabToolArgs
             )
         elif name == 'jenkins_rca':
             tool = StructuredTool.from_function(

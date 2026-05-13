@@ -156,6 +156,11 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       return;
     }
 
+    if (connector.id === "gitlab") {
+      router.push("/gitlab/connect");
+      return;
+    }
+
     if (connector.id === "slack") {
       if (!isConnected) {
         await handleSlackOAuth();

@@ -87,8 +87,8 @@ def prepare_github_commit_suggestion(
                     set_rls_context(cur, conn, user_id, log_prefix="[IaC:repos]")
                     cur.execute(
                         """SELECT repo_full_name, default_branch
-                           FROM github_connected_repos
-                           WHERE user_id = %s ORDER BY created_at DESC LIMIT 1""",
+                           FROM connected_repos
+                           WHERE user_id = %s AND provider = 'github' ORDER BY created_at DESC LIMIT 1""",
                         (user_id,),
                     )
                     row = cur.fetchone()

@@ -32,7 +32,7 @@ def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:_update_metadata_status]")
                 cur.execute(
-                    "UPDATE github_connected_repos SET metadata_status = %s, updated_at = NOW() WHERE user_id = %s AND repo_full_name = %s",
+                    "UPDATE connected_repos SET metadata_status = %s, updated_at = NOW() WHERE user_id = %s AND provider = 'github' AND repo_full_name = %s",
                     (status, user_id, repo_full_name),
                 )
                 conn.commit()
@@ -51,8 +51,8 @@ def get_repo_selections(user_id):
                 cur.execute(
                     """SELECT repo_full_name, repo_id, default_branch, is_private,
                               metadata_summary, metadata_status, repo_data, created_at
-                       FROM github_connected_repos
-                       WHERE user_id = %s ORDER BY repo_full_name""",
+                       FROM connected_repos
+                       WHERE user_id = %s AND provider = 'github' ORDER BY repo_full_name""",
                     (user_id,),
                 )
                 rows = cur.fetchall()
@@ -94,7 +94,7 @@ def save_repo_selections(user_id):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
                 cur.execute(
-                    "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
+                    "SELECT repo_full_name FROM connected_repos WHERE user_id = %s AND provider = 'github'",
                     (user_id,),
                 )
                 existing = {r[0] for r in cur.fetchall()}
@@ -111,11 +111,11 @@ def save_repo_selections(user_id):
                     incoming.add(full_name)
 
                     cur.execute(
-                        """INSERT INTO github_connected_repos
-                               (user_id, org_id, repo_full_name, repo_id, default_branch,
+                        """INSERT INTO connected_repos
+                               (user_id, org_id, provider, repo_full_name, repo_id, default_branch,
                                 is_private, repo_data, metadata_status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
-                           ON CONFLICT (user_id, repo_full_name) DO UPDATE SET
+                           VALUES (%s, %s, 'github', %s, %s, %s, %s, %s, 'pending')
+                           ON CONFLICT (user_id, provider, repo_full_name) DO UPDATE SET
                                repo_data = EXCLUDED.repo_data,
                                default_branch = EXCLUDED.default_branch,
                                is_private = EXCLUDED.is_private,
@@ -141,7 +141,7 @@ def save_repo_selections(user_id):
                 removed = existing - incoming
                 if removed:
                     cur.execute(
-                        "DELETE FROM github_connected_repos WHERE user_id = %s AND repo_full_name = ANY(%s)",
+                        "DELETE FROM connected_repos WHERE user_id = %s AND provider = 'github' AND repo_full_name = ANY(%s)",
                         (user_id, list(removed)),
                     )
 
@@ -174,7 +174,7 @@ def clear_repo_selections(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
-                cur.execute("DELETE FROM github_connected_repos WHERE user_id = %s", (user_id,))
+                cur.execute("DELETE FROM connected_repos WHERE user_id = %s AND provider = 'github'", (user_id,))
                 conn.commit()
         return jsonify({"message": "All repository selections cleared"})
     except Exception as e:
@@ -196,9 +196,9 @@ def update_repo_metadata(user_id, repo_full_name):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:update_repo_metadata]")
                 cur.execute(
-                    """UPDATE github_connected_repos
+                    """UPDATE connected_repos
                        SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
-                       WHERE user_id = %s AND repo_full_name = %s""",
+                       WHERE user_id = %s AND provider = 'github' AND repo_full_name = %s""",
                     (summary, user_id, repo_full_name),
                 )
                 if cur.rowcount == 0:
@@ -224,8 +224,8 @@ def trigger_metadata_generation(user_id):
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:trigger_metadata_generation]")
                 cur.execute(
-                    """UPDATE github_connected_repos SET metadata_status = 'generating', updated_at = NOW()
-                       WHERE user_id = %s AND repo_full_name = %s""",
+                    """UPDATE connected_repos SET metadata_status = 'generating', updated_at = NOW()
+                       WHERE user_id = %s AND provider = 'github' AND repo_full_name = %s""",
                     (user_id, repo_full_name),
                 )
                 if cur.rowcount == 0:
