@@ -84,15 +84,16 @@ def _resolve_org(user_id: str) -> Optional[str]:
 def _validate_uuid(value: str, label: str) -> str:
     """Validate that value is a well-formed UUID before use in SQL.
 
-    This sanitizes user-supplied IDs so taint-analysis tools can confirm
-    that only structurally valid values reach database queries.
+    Returns the canonical string form of the UUID (always lowercase, standard
+    hyphenated format). This both validates the input and produces a value
+    derived from a uuid.UUID object rather than from the raw user input,
+    which breaks the taint chain for static analysis tools such as CodeQL.
     Raises ValueError if the format is invalid.
     """
     try:
-        _uuid.UUID(str(value))
+        return str(_uuid.UUID(str(value)))
     except (ValueError, AttributeError):
         raise ValueError(f"Invalid {label} format: {value!r}")
-    return str(value)
 
 
 def _org_read_predicate(user_id: str, org_id: Optional[str]) -> Tuple[str, Tuple]:

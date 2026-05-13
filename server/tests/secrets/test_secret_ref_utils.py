@@ -34,8 +34,9 @@ class TestValidateUuid:
     def test_valid_uuid_returned_unchanged(self):
         assert _validate_uuid(_UID, "user_id") == _UID
 
-    def test_uppercase_uuid_accepted(self):
-        assert _validate_uuid(_UID.upper(), "user_id") == _UID.upper()
+    def test_uppercase_uuid_normalised_to_lowercase(self):
+        """Returns canonical (lowercase) form, not the original casing."""
+        assert _validate_uuid(_UID.upper(), "user_id") == _UID
 
     @pytest.mark.parametrize("bad", [
         "",
