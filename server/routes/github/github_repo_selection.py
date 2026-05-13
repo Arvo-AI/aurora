@@ -8,22 +8,10 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
+from utils.secrets.secret_ref_utils import _resolve_org
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
-
-
-def _get_user_org_id(user_id: str) -> str | None:
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                # No RLS needed — users not RLS-protected
-                cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                row = cur.fetchone()
-                return row[0] if row else None
-    except Exception as e:
-        logger.warning(f"Error fetching org_id for user {user_id}: {e}")
-        return None
 
 
 def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
@@ -43,18 +31,29 @@ def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
 @github_repo_selection_bp.route("/repo-selections", methods=["GET"])
 @require_permission("connectors", "read")
 def get_repo_selections(user_id):
-    """Return all connected repos with metadata for this user."""
+    """Return all connected repos with metadata for this org."""
     try:
+        org_id = _resolve_org(user_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:get_repo_selections]")
-                cur.execute(
-                    """SELECT repo_full_name, repo_id, default_branch, is_private,
-                              metadata_summary, metadata_status, repo_data, created_at
-                       FROM github_connected_repos
-                       WHERE user_id = %s ORDER BY repo_full_name""",
-                    (user_id,),
-                )
+                if org_id:
+                    cur.execute(
+                        """SELECT DISTINCT ON (repo_full_name)
+                                  repo_full_name, repo_id, default_branch, is_private,
+                                  metadata_summary, metadata_status, repo_data, created_at
+                           FROM github_connected_repos
+                           WHERE org_id = %s ORDER BY repo_full_name, updated_at DESC""",
+                        (org_id,),
+                    )
+                else:
+                    cur.execute(
+                        """SELECT repo_full_name, repo_id, default_branch, is_private,
+                                  metadata_summary, metadata_status, repo_data, created_at
+                           FROM github_connected_repos
+                           WHERE user_id = %s ORDER BY repo_full_name""",
+                        (user_id,),
+                    )
                 rows = cur.fetchall()
 
         repos = [
@@ -88,16 +87,26 @@ def save_repo_selections(user_id):
         if not isinstance(repositories, list):
             return jsonify({"error": "repositories array is required"}), 400
 
-        org_id = _get_user_org_id(user_id)
+        org_id = _resolve_org(user_id)
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
-                cur.execute(
-                    "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
-                    (user_id,),
-                )
-                existing = {r[0] for r in cur.fetchall()}
+
+                # Build existing set at org scope so deselections by any org member
+                # correctly remove rows originally created by a different member.
+                if org_id:
+                    cur.execute(
+                        "SELECT repo_full_name, user_id FROM github_connected_repos WHERE org_id = %s",
+                        (org_id,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT repo_full_name, user_id FROM github_connected_repos WHERE user_id = %s",
+                        (user_id,),
+                    )
+                # {repo_full_name: owner_user_id} — we need the owner to delete the right row
+                existing = {r[0]: r[1] for r in cur.fetchall()}
 
                 incoming = set()
                 newly_added = []
@@ -138,11 +147,13 @@ def save_repo_selections(user_id):
                 if repositories and not incoming:
                     return jsonify({"error": "No valid repositories in request (all missing full_name)"}), 400
 
-                removed = existing - incoming
-                if removed:
+                # Delete deselected repos, targeting the row's original owner
+                removed = set(existing.keys()) - incoming
+                for repo_name in removed:
+                    owner_id = existing[repo_name]
                     cur.execute(
-                        "DELETE FROM github_connected_repos WHERE user_id = %s AND repo_full_name = ANY(%s)",
-                        (user_id, list(removed)),
+                        "DELETE FROM github_connected_repos WHERE user_id = %s AND repo_full_name = %s",
+                        (owner_id, repo_name),
                     )
 
                 conn.commit()

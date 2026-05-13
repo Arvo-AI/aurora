@@ -617,7 +617,9 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
                         }
                         if project_id:
                             updated_storage["projectId"] = project_id
-                        store_tokens_in_db(user_id, updated_storage, 'ovh')
+                        from utils.secrets.secret_ref_utils import get_token_owner_id
+                        owner_id = get_token_owner_id(user_id, "ovh")
+                        store_tokens_in_db(owner_id, updated_storage, 'ovh')
                         logger.info("Successfully refreshed OVH access token")
                     else:
                         logger.error(f"Failed to refresh OVH token: {refresh_response.status_code}")

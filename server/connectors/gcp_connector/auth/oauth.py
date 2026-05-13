@@ -192,7 +192,9 @@ def get_credentials(token_data=None):
                 
                 if user_id:
                     from utils.auth.token_management import store_tokens_in_db
-                    store_tokens_in_db(user_id, token_data, "gcp")
+                    from utils.secrets.secret_ref_utils import get_token_owner_id
+                    owner_id = get_token_owner_id(user_id, "gcp")
+                    store_tokens_in_db(owner_id, token_data, "gcp")
                     logger.info("Successfully refreshed and stored access token")
                 else:
                     logger.warning("Token refreshed but no user_id available to store updated token")

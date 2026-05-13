@@ -69,18 +69,31 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
 @limiter.limit("30 per minute;200 per hour")
 @require_permission("vms", "read")
 def list_manual_vms(user_id):
+    from utils.secrets.secret_ref_utils import _resolve_org
+    org_id = _resolve_org(user_id)
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")
-            cur.execute(
-                """
-                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
-                FROM user_manual_vms
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-                """,
-                (user_id,),
-            )
+            if org_id:
+                cur.execute(
+                    """
+                    SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
+                    FROM user_manual_vms
+                    WHERE org_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (org_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
+                    FROM user_manual_vms
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (user_id,),
+                )
             rows = cur.fetchall()
     return jsonify({"vms": [_serialize_vm_row(r) for r in rows]})
 

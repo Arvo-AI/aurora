@@ -18,24 +18,26 @@ SSH_PROVIDER_PATTERN = '%_ssh_%'
 
 def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
     """
-    Return all SSH private keys for a user, keyed by a readable name:
-    e.g., {"scaleway_4b9511a5": "<private key>", "ovh_abc123": "<private key>"}
+    Return all SSH private keys visible to user_id (including org-shared keys),
+    keyed by a readable name: e.g., {"scaleway_4b9511a5": "<private key>"}
     """
+    from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+    org_id = _resolve_org(user_id)
+    predicate, pred_params = _org_read_predicate(user_id, org_id)
     ssh_keys: Dict[str, str] = {}
     with db_pool.get_admin_connection() as conn:
         cursor = conn.cursor()
         set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetup:_fetch_user_ssh_keys]")
         cursor.execute(
-            "SELECT provider FROM user_tokens WHERE user_id = %s AND provider LIKE %s",
-            (user_id, SSH_PROVIDER_PATTERN)
+            f"SELECT provider FROM user_tokens WHERE {predicate} AND provider LIKE %s",
+            (*pred_params, SSH_PROVIDER_PATTERN)
         )
         for row in cursor.fetchall():
             provider = row[0] if isinstance(row, tuple) else row
             try:
                 token_data = get_token_data(user_id, provider)
                 if token_data and "private_key" in token_data:
-                    # provider is like "scaleway_ssh_<vmId>" or "ovh_ssh_<vmId>"
-                    vm_key = provider.replace("_ssh_", "_")  # scaleway_<vmId>
+                    vm_key = provider.replace("_ssh_", "_")
                     ssh_keys[vm_key] = token_data["private_key"]
             except (KeyError, ValueError, TypeError) as e:
                 logger.warning(f"Failed to load SSH key for {provider}: {e}")

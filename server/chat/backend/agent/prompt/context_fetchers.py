@@ -15,22 +15,38 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
 
     try:
         from utils.auth.stateless_auth import set_rls_context
+        from utils.secrets.secret_ref_utils import _resolve_org
+        org_id = _resolve_org(user_id)
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
                 if not set_rls_context(cur, conn, user_id, log_prefix="[ContextFetchers]"):
                     return ""
-                cur.execute(
-                    """
-                    SELECT mv.name, mv.ip_address, mv.port, mv.ssh_username, mv.ssh_jump_command, mv.ssh_key_id,
-                           ut.provider, ut.token_data
-                    FROM user_manual_vms mv
-                    LEFT JOIN user_tokens ut ON ut.id = mv.ssh_key_id
-                    WHERE mv.user_id = %s
-                    ORDER BY mv.updated_at DESC
-                    LIMIT 10;
-                    """,
-                    (user_id,),
-                )
+                if org_id:
+                    cur.execute(
+                        """
+                        SELECT mv.name, mv.ip_address, mv.port, mv.ssh_username, mv.ssh_jump_command, mv.ssh_key_id,
+                               ut.provider, ut.token_data
+                        FROM user_manual_vms mv
+                        LEFT JOIN user_tokens ut ON ut.id = mv.ssh_key_id
+                        WHERE mv.org_id = %s
+                        ORDER BY mv.updated_at DESC
+                        LIMIT 10;
+                        """,
+                        (org_id,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT mv.name, mv.ip_address, mv.port, mv.ssh_username, mv.ssh_jump_command, mv.ssh_key_id,
+                               ut.provider, ut.token_data
+                        FROM user_manual_vms mv
+                        LEFT JOIN user_tokens ut ON ut.id = mv.ssh_key_id
+                        WHERE mv.user_id = %s
+                        ORDER BY mv.updated_at DESC
+                        LIMIT 10;
+                        """,
+                        (user_id,),
+                    )
                 rows = cur.fetchall()
     except Exception as e:
         logging.getLogger(__name__).warning(f"Failed to fetch manual VMs for user {user_id}: {e}")

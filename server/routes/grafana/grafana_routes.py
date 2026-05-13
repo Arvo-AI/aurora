@@ -17,17 +17,20 @@ grafana_bp = Blueprint("grafana", __name__)
 
 
 def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
-    """Check if a user_tokens row exists for Grafana (regardless of is_active).
+    """Check if a user_tokens row exists for Grafana visible to user_id (including org-shared).
 
     Returns (row_exists, is_active).
     """
     try:
+        from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+        org_id = _resolve_org(user_id)
+        predicate, pred_params = _org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:has_row]")
                 cursor.execute(
-                    "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
-                    (user_id,),
+                    f"SELECT is_active FROM user_tokens WHERE {predicate} AND provider = 'grafana' LIMIT 1",
+                    (*pred_params,),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -220,18 +223,23 @@ def get_alerts(user_id):
 @grafana_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
-    """Get the webhook URL that should be configured in Grafana."""
-    # Use ngrok URL for development if available, otherwise use backend URL
+    """Get the webhook URL that should be configured in Grafana.
+
+    When credentials are org-shared, returns the URL belonging to the token
+    owner so org members see the same webhook URL without needing their own row.
+    """
+    from utils.secrets.secret_ref_utils import get_token_owner_id
+    webhook_owner_id = get_token_owner_id(user_id, "grafana")
+
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
 
-    # For development, prefer ngrok URL if available
     if ngrok_url and backend_url.startswith("http://localhost"):
         base_url = ngrok_url
     else:
         base_url = backend_url
 
-    webhook_url = f"{base_url}/grafana/alerts/webhook/{user_id}"
+    webhook_url = f"{base_url}/grafana/alerts/webhook/{webhook_owner_id}"
 
     return jsonify({
         "webhookUrl": webhook_url,

@@ -100,13 +100,19 @@ def get_batch_preferences(user_id):
         from utils.db.db_utils import connect_to_db_as_user
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        set_rls_context(cursor, conn, user_id, log_prefix="[UserPrefs:get]")
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[UserPrefs:get]")
 
         placeholders = ','.join(['%s'] * len(keys))
-        cursor.execute(
-            f"SELECT preference_key, preference_value FROM user_preferences WHERE user_id = %s AND preference_key IN ({placeholders})",
-            [user_id] + keys
-        )
+        if org_id:
+            cursor.execute(
+                f"SELECT preference_key, preference_value FROM user_preferences WHERE org_id = %s AND preference_key IN ({placeholders})",
+                [org_id] + keys
+            )
+        else:
+            cursor.execute(
+                f"SELECT preference_key, preference_value FROM user_preferences WHERE user_id = %s AND preference_key IN ({placeholders})",
+                [user_id] + keys
+            )
         results = cursor.fetchall()
         
         preferences = {}
