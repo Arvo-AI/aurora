@@ -38,7 +38,7 @@ def openai_provider_module(monkeypatch):
 
     class BaseLLMProvider:
         def __init__(self):
-            pass
+            pass  # Stub — real implementation lives in base_provider.py
 
     base_provider.BaseLLMProvider = BaseLLMProvider
 

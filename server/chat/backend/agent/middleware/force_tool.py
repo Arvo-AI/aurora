@@ -8,6 +8,13 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest
 
 
+_PROVIDER_SIGNATURES: list[tuple[str, str, str, str]] = [
+    ("langchain_anthropic", "chatanthropic", "anthropic", "anthropic"),
+    ("langchain_google", "chatgooglegenerativeai", "google", "google"),
+    ("langchain_openai", "chatopenai", "openai", "openai"),
+]
+
+
 class ForceToolChoice(AgentMiddleware):
     """Set tool_choice on the first model invocation, then step aside."""
 
@@ -15,6 +22,13 @@ class ForceToolChoice(AgentMiddleware):
         self._tool_name = tool_name
         self._provider = provider
         self._fired = False
+
+    @staticmethod
+    def _match_provider(module: str, name: str, llm_type: str) -> str | None:
+        for mod_key, cls_key, type_key, provider in _PROVIDER_SIGNATURES:
+            if mod_key in module or name == cls_key or type_key in llm_type:
+                return provider
+        return None
 
     @staticmethod
     def _infer_provider(model: Any) -> str | None:
@@ -31,24 +45,9 @@ class ForceToolChoice(AgentMiddleware):
             name = candidate.__class__.__name__.lower()
             llm_type = str(getattr(candidate, "_llm_type", "")).lower()
 
-            if (
-                "langchain_anthropic" in module
-                or name == "chatanthropic"
-                or "anthropic" in llm_type
-            ):
-                return "anthropic"
-            if (
-                "langchain_google" in module
-                or name == "chatgooglegenerativeai"
-                or "google" in llm_type
-            ):
-                return "google"
-            if (
-                "langchain_openai" in module
-                or name == "chatopenai"
-                or "openai" in llm_type
-            ):
-                return "openai"
+            matched = ForceToolChoice._match_provider(module, name, llm_type)
+            if matched:
+                return matched
 
             for attr in ("bound", "model", "runnable"):
                 nested = getattr(candidate, attr, None)
