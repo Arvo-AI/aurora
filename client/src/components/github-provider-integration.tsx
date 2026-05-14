@@ -24,6 +24,21 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
 import { GitHubAppService, type GitHubInstallation, type GitHubDiscoveredInstallation } from '@/lib/github-app';
+import { queryClient } from '@/lib/query';
+
+/**
+ * Synchronously update the cached connectors-status map so the GitHub
+ * card on the /connectors page flips its chip BEFORE the next network
+ * round-trip resolves. The async revalidation triggered by the
+ * `providerStateChanged` dispatch will confirm (or correct) the
+ * optimistic value moments later.
+ */
+const setGithubConnectedOptimistically = (connected: boolean) => {
+  const key = '/api/connectors/status';
+  const prev = queryClient.read<Record<string, boolean>>(key) ?? {};
+  if (prev.github === connected) return;
+  queryClient.set(key, { ...prev, github: connected });
+};
 export type { GitHubInstallation, GitHubInstallationsResponse } from '@/lib/github-app';
 
 export type GitHubAuthMethod = 'oauth' | 'app';
@@ -192,7 +207,13 @@ export class GitHubIntegrationService {
 export default function GitHubProviderIntegration() {
   const [userId, setUserId] = useState<string | null>(null);
   const githubStatus = useGitHubStatus(userId);
-  const [isLoading, setIsLoading] = useState(false);
+  // Per-button "in flight" state. The two CTAs used to share one
+  // `isLoading` boolean which made BOTH buttons spin when only one
+  // popup was open — and if a popup was dismissed without finalize
+  // firing, the spinner stayed forever. Split + cleared by the
+  // unmount/visibility safety in the popup flows.
+  const [isInstallingApp, setIsInstallingApp] = useState(false);
+  const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   const { toast } = useToast();
 
   // Repo picker state
@@ -204,8 +225,12 @@ export default function GitHubProviderIntegration() {
   const [expanded, setExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Saved repos
+  // Saved repos. ``savedReposLoaded`` lets the header avoid the
+  // "green check + 0 repos connected" flash that appears when
+  // useGitHubStatus has confirmed isConnected=true but loadSavedRepos
+  // hasn't completed yet — the two data sources race on dialog open.
   const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
+  const [savedReposLoaded, setSavedReposLoaded] = useState(false);
   // Per-repo description draft while user is editing inline
   const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
   // Background poll until metadata generation finishes for newly added repos
@@ -213,6 +238,21 @@ export default function GitHubProviderIntegration() {
   // Pending popup-flow cleanups so unmounting the component doesn't
   // leak a window-level "message" listener or a closed-popup poller.
   const popupCleanupsRef = useRef<Array<() => void>>([]);
+
+  // Tracks the previous isAuthenticated value across renders so we can
+  // detect a true → false transition and surface a proactive toast
+  // when the user uninstalls the App on GitHub (vs disconnecting from
+  // inside Aurora). null until the first definitive status arrives so
+  // we don't toast on initial mount.
+  const wasAuthenticatedRef = useRef<boolean | null>(null);
+  // Set true right before any user-initiated disconnect so the
+  // transition handler doesn't double-toast on top of the explicit
+  // disconnect confirmation we already show.
+  const expectedDisconnectRef = useRef(false);
+  // Snapshot of the most-recently-known account_login(s) so the
+  // proactive toast can name them ("AuroraArvo was removed from
+  // Arvo-AI") instead of being generic.
+  const lastAccountLoginsRef = useRef<string[]>([]);
 
   // Disconnect-confirm dialog: lets the user opt into ALSO uninstalling
   // the GitHub App on github.com (otherwise we only soft-delete on the
@@ -326,7 +366,52 @@ export default function GitHubProviderIntegration() {
       setCheckedRepos(new Set(repos.map(r => r.repo_full_name)));
       startMetadataPolling(repos);
     } catch { setSavedRepos([]); }
+    finally { setSavedReposLoaded(true); }
   }, [userId, startMetadataPolling]);
+
+  // Snapshot the linked account names whenever installations refresh.
+  // The proactive disconnect toast reads this AFTER installations has
+  // already been emptied (by the transition that's firing the toast),
+  // so we need a value captured just before.
+  useEffect(() => {
+    if (installations.length > 0) {
+      lastAccountLoginsRef.current = installations.map(i => i.account_login);
+    }
+  }, [installations]);
+
+  // Detect a true → false isAuthenticated transition that we did NOT
+  // initiate (i.e., the user uninstalled the App on GitHub instead of
+  // clicking Disconnect in Aurora). Fire a single toast with the
+  // account name(s) so the disconnection isn't silent.
+  useEffect(() => {
+    // Wait for the first definitive status (`hasReposConnected !==
+    // null` means useGitHubStatus has finished its initial fetch).
+    if (githubStatus.hasReposConnected === null) return;
+
+    const prev = wasAuthenticatedRef.current;
+    wasAuthenticatedRef.current = githubStatus.isAuthenticated;
+
+    if (prev !== true || githubStatus.isAuthenticated !== false) return;
+
+    // The user clicked Disconnect themselves — handleDisconnect already
+    // shows its own toast. Skip the proactive one to avoid stacking.
+    if (expectedDisconnectRef.current) {
+      expectedDisconnectRef.current = false;
+      return;
+    }
+
+    const names = lastAccountLoginsRef.current;
+    const accountPhrase =
+      names.length === 0 ? '' :
+      names.length === 1 ? ` from ${names[0]}` :
+      ` from ${names.length} accounts (${names.slice(0, 2).join(', ')}${names.length > 2 ? ', …' : ''})`;
+    toast({
+      title: 'GitHub App was uninstalled',
+      description: `Aurora detected the App was removed${accountPhrase} on GitHub. Reinstall it any time from this connector to re-enable investigations.`,
+      variant: 'destructive',
+    });
+    lastAccountLoginsRef.current = [];
+  }, [githubStatus.isAuthenticated, githubStatus.hasReposConnected, toast]);
 
   useEffect(() => () => {
     if (pollingRef.current) {
@@ -391,6 +476,10 @@ export default function GitHubProviderIntegration() {
       const selected = allRepos.filter(r => checkedRepos.has(r.full_name));
       await GitHubIntegrationService.saveRepoSelections(selected);
       toast({ title: "Repositories saved", description: `${selected.length} repositories connected.` });
+      // Optimistic chip update — `selected.length > 0` here means the
+      // user has at least one repo connected, so the connectors-page
+      // card should be green.
+      setGithubConnectedOptimistically(selected.length > 0);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       await loadSavedRepos();
@@ -401,7 +490,7 @@ export default function GitHubProviderIntegration() {
 
   const handleAppInstall = async () => {
     if (!userId) return;
-    setIsLoading(true);
+    setIsInstallingApp(true);
     try {
       const installUrl = await GitHubAppService.getInstallUrl();
       const installUrlState = new URL(installUrl).searchParams.get('state');
@@ -417,7 +506,7 @@ export default function GitHubProviderIntegration() {
           description: "Allow popups for Aurora to continue the GitHub App install flow.",
           variant: "destructive",
         });
-        setIsLoading(false);
+        setIsInstallingApp(false);
         return;
       }
 
@@ -436,6 +525,7 @@ export default function GitHubProviderIntegration() {
           checkClosed = null;
         }
         window.removeEventListener('message', onMessage);
+        document.removeEventListener('visibilitychange', onVisibility);
       };
       const finalize = async () => {
         if (finalized) return;
@@ -443,12 +533,17 @@ export default function GitHubProviderIntegration() {
         cleanup();
         // Drop ourselves from the unmount cleanup list — we already ran.
         popupCleanupsRef.current = popupCleanupsRef.current.filter(c => c !== cleanup);
-        setIsLoading(false);
+        setIsInstallingApp(false);
         githubStatus.refresh();
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
         try {
           const linked = await GitHubAppService.listInstallations();
-          if (!linked.installations || linked.installations.length === 0) {
+          const linkedCount = linked.installations?.length ?? 0;
+          // Flip the connectors-page chip optimistically based on what
+          // listInstallations just returned. The async revalidation
+          // triggered by providerStateChanged will reconcile.
+          setGithubConnectedOptimistically(linkedCount > 0);
+          if (linkedCount === 0) {
             const discovered = await GitHubAppService.discoverInstallations();
             setDiscoveredInstallations(discovered.installations || []);
           } else {
@@ -458,6 +553,18 @@ export default function GitHubProviderIntegration() {
           // discovery is best-effort; silent on failure
         }
       };
+      // Safety net: if the user dismissed the popup, navigated away on
+      // GitHub, or browser blocked our message-passing without firing
+      // the close detector, finalize on tab visibility return so the
+      // spinner doesn't stick forever. Only triggers once the user is
+      // back in the Aurora tab AND the popup looks gone.
+      const onVisibility = () => {
+        if (document.visibilityState !== 'visible') return;
+        if (popup.closed || finalized) {
+          finalize();
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibility);
 
       // Instant path: the success template posts a message right after
       // GitHub's redirect, so we can refresh before the popup actually
@@ -494,7 +601,7 @@ export default function GitHubProviderIntegration() {
         description: err.message || "Failed to prepare the GitHub App install flow.",
         variant: "destructive",
       });
-      setIsLoading(false);
+      setIsInstallingApp(false);
     }
   };
 
@@ -537,6 +644,8 @@ export default function GitHubProviderIntegration() {
     try {
       await GitHubAppService.claimInstallation(installationId);
       setDiscoveredInstallations(prev => prev.filter(d => d.installation_id !== installationId));
+      // Claim succeeded → at least one linked install → connected.
+      setGithubConnectedOptimistically(true);
       await fetchInstallations();
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -555,7 +664,7 @@ export default function GitHubProviderIntegration() {
 
   const handleOAuthLogin = async () => {
     if (!userId) return;
-    setIsLoading(true);
+    setIsConnectingOAuth(true);
     try {
       const oauthUrl = await GitHubIntegrationService.initiateOAuth();
       const popup = window.open(oauthUrl, 'github-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
@@ -565,7 +674,7 @@ export default function GitHubProviderIntegration() {
           description: "Allow popups for Aurora to continue the GitHub OAuth flow.",
           variant: "destructive",
         });
-        setIsLoading(false);
+        setIsConnectingOAuth(false);
         return;
       }
 
@@ -578,13 +687,17 @@ export default function GitHubProviderIntegration() {
           checkClosed = null;
         }
         window.removeEventListener('message', onMessage);
+        document.removeEventListener('visibilitychange', onVisibility);
       };
       const finalize = () => {
         if (finalized) return;
         finalized = true;
         cleanup();
         popupCleanupsRef.current = popupCleanupsRef.current.filter(c => c !== cleanup);
-        setIsLoading(false);
+        setIsConnectingOAuth(false);
+        // OAuth popup got far enough to message us back / close →
+        // backend stored a token → optimistically connected.
+        setGithubConnectedOptimistically(true);
         githubStatus.refresh();
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
       };
@@ -599,7 +712,15 @@ export default function GitHubProviderIntegration() {
           finalize();
         }
       };
+      // Same visibility safety net as handleAppInstall — covers the
+      // "user navigated away on GitHub then came back to Aurora" case
+      // where the popup stayed open or the postMessage never fired.
+      const onVisibility = () => {
+        if (document.visibilityState !== 'visible') return;
+        if (popup.closed || finalized) finalize();
+      };
       window.addEventListener('message', onMessage);
+      document.addEventListener('visibilitychange', onVisibility);
       checkClosed = setInterval(() => {
         if (popup.closed) finalize();
       }, 500);
@@ -616,7 +737,7 @@ export default function GitHubProviderIntegration() {
         description: err.message || 'Failed to connect to GitHub via OAuth',
         variant: 'destructive',
       });
-      setIsLoading(false);
+      setIsConnectingOAuth(false);
     }
   };
 
@@ -632,16 +753,24 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     const hadAppInstall = installations.length > 0;
     const primaryInstall = installations[0];
+    // Mark this transition as user-initiated so the proactive
+    // "uninstalled on GitHub" toast doesn't fire on top of the
+    // explicit disconnect confirmation we show below.
+    expectedDisconnectRef.current = true;
     setIsDisconnecting(true);
     try {
       await GitHubIntegrationService.clearRepoSelections();
       const result = await GitHubIntegrationService.disconnect({ alsoUninstall });
       setSavedRepos([]);
+      setSavedReposLoaded(false);
       setCheckedRepos(new Set());
       setAllRepos([]);
       setHasLoadedRepos(false);
       setExpanded(false);
       setInstallations([]);
+      // Disconnect succeeded — flip the chip to "Not connected"
+      // immediately so the connectors-page card matches the dialog.
+      setGithubConnectedOptimistically(false);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       setShowDisconnectDialog(false);
@@ -693,8 +822,22 @@ export default function GitHubProviderIntegration() {
   const handleUnlinkInstallation = async (installationId: number) => {
     if (!userId) return;
     try {
+      // If this was the user's only install, isAuthenticated is about
+      // to flip to false — flag the transition as expected so the
+      // proactive "uninstalled on GitHub" toast doesn't double up on
+      // the explicit "Installation unlinked" toast we show below.
+      if (installations.length <= 1) {
+        expectedDisconnectRef.current = true;
+      }
       await GitHubAppService.unlinkInstallation(installationId);
       toast({ title: "Installation unlinked", description: "GitHub App installation removed from Aurora" });
+      // Optimistic chip update — was this the LAST install?
+      // installations state still includes the row we're removing
+      // (fetchInstallations hasn't run yet), so 1 means we're about
+      // to be at zero.
+      if (installations.length <= 1) {
+        setGithubConnectedOptimistically(false);
+      }
       await fetchInstallations();
       if (installationFilter === String(installationId)) setInstallationFilter('all');
       githubStatus.refresh();
@@ -771,7 +914,14 @@ export default function GitHubProviderIntegration() {
               {githubStatus.isConnected ? (
                 <div className="flex items-center gap-1">
                   <Check className="w-3 h-3 text-green-500" />
-                  <span className="text-xs text-muted-foreground">{savedRepos.length} repo{savedRepos.length !== 1 ? 's' : ''} connected</span>
+                  {savedReposLoaded ? (
+                    <span className="text-xs text-muted-foreground">{savedRepos.length} repo{savedRepos.length !== 1 ? 's' : ''} connected</span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Loading repositories…
+                    </span>
+                  )}
                 </div>
               ) : githubStatus.isAuthenticated ? (
                 <span className="text-xs text-yellow-600 font-medium">Select repositories to connect</span>
@@ -886,23 +1036,23 @@ export default function GitHubProviderIntegration() {
             {authConfig.app_enabled && (
               <Button
                 onClick={handleAppInstall}
-                disabled={isLoading || !userId}
+                disabled={isInstallingApp || isConnectingOAuth || !userId}
                 size="sm"
                 data-testid="github-install-app-cta"
               >
-                {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                {isInstallingApp ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
                 Install GitHub App
               </Button>
             )}
             {authConfig.oauth_enabled && (
               <Button
                 onClick={handleOAuthLogin}
-                disabled={isLoading || !userId}
+                disabled={isInstallingApp || isConnectingOAuth || !userId}
                 size="sm"
                 variant={authConfig.app_enabled ? 'outline' : 'default'}
                 data-testid="github-oauth-cta"
               >
-                {isLoading ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                {isConnectingOAuth ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
                 Connect via OAuth
               </Button>
             )}

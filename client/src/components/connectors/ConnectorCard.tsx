@@ -512,10 +512,18 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showScalewayDialog={showScalewayDialog}
         showNotionDialog={showNotionDialog}
         onGitHubDialogChange={(open) => {
-          if (!open && githubStatus.isAuthenticated && !githubStatus.isConnected) {
-            toast({ title: "Select at least one repository", description: "GitHub requires at least one connected repo to be useful during investigations.", variant: "destructive" });
-            return;
-          }
+          // Always let the user close the dialog. The previous guard
+          // blocked close + fired a destructive toast when the user
+          // had auth but no repos selected — but that condition is
+          // also briefly true after the user uninstalls on GitHub
+          // (status check hasn't propagated yet), causing the same
+          // toast to fire on every escape/X/click-outside attempt
+          // and stacking toasts in a red wall.
+          //
+          // The "no repos picked" state is already obvious from the
+          // dialog header ("Select repositories to connect" in
+          // yellow) and the connector card chip; we don't need to
+          // also nag on dismiss.
           setShowGitHubDialog(open);
           if (!open) {
             // Refresh immediately — the lingering setTimeout was the

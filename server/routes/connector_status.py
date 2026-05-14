@@ -270,7 +270,7 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_github(user_id: str) -> Dict[str, Any]:
+def _check_github(user_id: str, app_runtime_ready: bool) -> Dict[str, Any]:
     """Mirrors /github/status — App-aware AND OAuth-aware (hybrid mode).
 
     Connected when EITHER:
@@ -283,20 +283,19 @@ def _check_github(user_id: str) -> Dict[str, Any]:
         ``GITHUB_AUTH_MODE=oauth`` deployments and for hybrid users
         whose only credential is OAuth.
 
-    The App branch also requires the runtime gate
-    ``GITHUB_APP_ENABLED`` (set by boot-time env validation). If mode
-    says App but env is incomplete, every App-token route returns 503
-    — reporting "connected" off DB rows would lie about a connector
-    that can't actually do work.
+    The App branch also requires ``app_runtime_ready`` — captured by
+    the route handler from ``app.config["GITHUB_APP_ENABLED"]`` while
+    still on the request thread. We pass it explicitly because this
+    function runs inside ThreadPoolExecutor where ``current_app`` is
+    not bound; reading from the Flask config there silently failed
+    every check and reset the connector card on every page refresh.
 
     No live GitHub API call here — minting a token per status check
     dwarfs the value of a DB lookup that already reflects webhook
     updates and the per-user reconcile throttle in github_app.py.
     """
-    from flask import current_app
     from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
 
-    app_runtime_ready = bool(current_app.config.get("GITHUB_APP_ENABLED"))
     if is_app_enabled() and app_runtime_ready:
         try:
             with db_pool.get_admin_connection() as conn:
@@ -761,17 +760,31 @@ PROVIDER_CHECKERS = {
 @require_permission("connectors", "read")
 def all_connector_status(user_id):
     org_id = get_org_id_from_request() or ""
-    results = _check_all_connectors(user_id, org_id)
+    # Capture the Flask-config-bound runtime flag while we're still on
+    # the request thread; the worker pool below has no app context, so
+    # `current_app.config[...]` would raise inside _check_github.
+    from flask import current_app
+    app_runtime_ready = bool(current_app.config.get("GITHUB_APP_ENABLED"))
+    results = _check_all_connectors(user_id, org_id, app_runtime_ready=app_runtime_ready)
     return jsonify({"connectors": results})
 
 
 def get_connected_count(user_id: str, org_id: str) -> int:
     """Return the number of connectors with a live connection."""
-    results = _check_all_connectors(user_id, org_id)
+    from flask import current_app
+    try:
+        app_runtime_ready = bool(current_app.config.get("GITHUB_APP_ENABLED"))
+    except RuntimeError:
+        app_runtime_ready = False
+    results = _check_all_connectors(user_id, org_id, app_runtime_ready=app_runtime_ready)
     return sum(1 for c in results.values() if c.get("connected"))
 
 
-def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]]:
+def _check_all_connectors(
+    user_id: str,
+    org_id: str,
+    app_runtime_ready: bool = False,
+) -> Dict[str, Dict[str, Any]]:
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
@@ -813,7 +826,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
         if provider == "grafana":
             return provider, _check_grafana(user_id, org_id)
         if provider == "github":
-            return provider, _check_github(user_id)
+            return provider, _check_github(user_id, app_runtime_ready)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
