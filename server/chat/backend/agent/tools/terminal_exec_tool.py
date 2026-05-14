@@ -10,7 +10,7 @@ import re
 import shlex
 from typing import Optional, Dict
 from utils.terminal.terminal_run import terminal_run
-from .cloud_exec_tool import cloud_exec
+from .cloud_exec_tool import cloud_exec, _ISOLATED_HOME
 from .iac_tool import run_iac_tool
 
 logger = logging.getLogger(__name__)
@@ -339,7 +339,7 @@ def terminal_exec(
             "final_command": command,
             "return_code": result.returncode,
             "chat_output": output,
-            "working_dir": working_dir or "/home/appuser",
+            "working_dir": working_dir or _ISOLATED_HOME,
             "provider": "terminal"
         }
         
