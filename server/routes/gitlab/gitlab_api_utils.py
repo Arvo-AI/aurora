@@ -22,6 +22,12 @@ def get_gitlab_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     return get_credentials_from_db(user_id, "gitlab")
 
 
+def is_gitlab_connected(user_id: str) -> bool:
+    """Check if a user/org has valid GitLab credentials stored."""
+    creds = get_gitlab_credentials(user_id)
+    return bool(creds and creds.get("access_token"))
+
+
 def gitlab_api_request(
     method: str,
     endpoint: str,

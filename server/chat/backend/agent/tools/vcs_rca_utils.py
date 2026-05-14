@@ -40,8 +40,12 @@ def resolve_repository(
             parts = explicit_repo.split('/')
             if len(parts) == 2:
                 return explicit_repo, "explicit parameter"
-            logger.warning(f"Invalid repo format: {explicit_repo}")
+            logger.warning("Invalid GitHub repo format (expected owner/repo): %s", explicit_repo)
+            return None, f"invalid repo format: expected 'owner/repo', got '{explicit_repo}'"
         else:
+            # GitLab paths can be multi-segment (group/subgroup/project)
+            if not explicit_repo.strip() or explicit_repo.startswith("/") or explicit_repo.endswith("/"):
+                logger.warning("Suspicious %s repo path: %s", provider, explicit_repo)
             return explicit_repo, "explicit parameter"
 
     try:

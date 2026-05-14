@@ -49,6 +49,7 @@ _background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
 from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
 from .gitlab_tool import gitlab_tool, GitLabToolArgs
+from routes.gitlab.gitlab_api_utils import is_gitlab_connected
 from .cloud_exec_tool import cloud_exec
 
 from .zip_file_tool import analyze_zip_file
@@ -1295,7 +1296,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (cloudbees_rca, "cloudbees_rca"),
         (spinnaker_rca, "spinnaker_rca"),
         (github_apply_fix, "github_apply_fix"),
-        (gitlab_tool, "gitlab"),
         (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
@@ -1882,6 +1882,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QuerySentryArgs,
         ))
         logging.info(f"Added Sentry tool for user {user_id}")
+
+    # Add GitLab tool if connected
+    if user_id and is_gitlab_connected(user_id):
+        context_wrapped_gl = with_forced_context(gitlab_tool)
+        context_wrapped_gl.__name__ = "gitlab"
+        notification_wrapped_gl = with_completion_notification(context_wrapped_gl)
+        final_gl_func = wrap_func_with_capture(notification_wrapped_gl, "gitlab") if tool_capture else notification_wrapped_gl
+
+        tools.append(StructuredTool.from_function(
+            func=final_gl_func,
+            name="gitlab",
+            description=(
+                "Interact with GitLab repositories. Actions: list_projects, deployment_check, "
+                "commits, diff, merge_requests, suggest_fix, apply_fix, commit_terraform."
+            ),
+            args_schema=GitLabToolArgs,
+        ))
+        logging.info(f"Added GitLab tool for user {user_id}")
 
     # --- OpsGenie / JSM Operations tool ---
     if user_id and is_opsgenie_connected(user_id):

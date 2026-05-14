@@ -7,7 +7,10 @@ On connect, all accessible projects are auto-discovered and saved.
 """
 import json
 import logging
+import re
 import requests
+from typing import Optional
+from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db
@@ -21,9 +24,26 @@ logger = logging.getLogger(__name__)
 GITLAB_TIMEOUT = 20
 DEFAULT_GITLAB_URL = "https://gitlab.com"
 
+_LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
-def _validate_gitlab_token(base_url: str, token: str) -> dict | None:
-    """Validate a GitLab access token and return token metadata."""
+
+def _is_valid_gitlab_base_url(url: str) -> bool:
+    """Validate that a URL is a well-formed http(s) URL."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _validate_gitlab_token(base_url: str, token: str) -> tuple[Optional[dict], str]:
+    """
+    Validate a GitLab access token and return (token_metadata, source).
+
+    source is 'token_api' if /personal_access_tokens/self succeeded,
+    or 'user_api' if we fell back to /user (less reliable for scopes/name).
+    Returns (None, '') on failure.
+    """
     headers = {"PRIVATE-TOKEN": token}
     try:
         resp = requests.get(
@@ -32,7 +52,7 @@ def _validate_gitlab_token(base_url: str, token: str) -> dict | None:
             timeout=GITLAB_TIMEOUT,
         )
         if resp.status_code == 200:
-            return resp.json()
+            return resp.json(), "token_api"
 
         resp = requests.get(
             f"{base_url}/api/v4/user",
@@ -40,36 +60,40 @@ def _validate_gitlab_token(base_url: str, token: str) -> dict | None:
             timeout=GITLAB_TIMEOUT,
         )
         if resp.status_code == 200:
-            return resp.json()
-    except requests.RequestException as e:
-        logger.error(f"GitLab token validation failed: {e}")
-    return None
+            logger.warning("GitLab token validated via /user fallback — scopes/token name unavailable")
+            return resp.json(), "user_api"
+    except requests.RequestException:
+        logger.exception("GitLab token validation request failed")
+    return None, ""
 
 
-def _fetch_all_accessible_projects(base_url: str, token: str) -> list[dict]:
-    """Fetch all projects accessible by the token (paginated)."""
+def _fetch_all_accessible_projects(base_url: str, token: str) -> tuple[list[dict], Optional[str]]:
+    """
+    Fetch all projects accessible by the token using Link-header pagination.
+
+    Returns (projects, warning) where warning is set if pagination was truncated.
+    """
     headers = {"PRIVATE-TOKEN": token}
-    all_projects = []
-    page = 1
-    per_page = 100
+    all_projects: list[dict] = []
+    url: Optional[str] = f"{base_url}/api/v4/projects"
+    params = {
+        "membership": "true",
+        "order_by": "last_activity_at",
+        "sort": "desc",
+        "per_page": 100,
+        "simple": "true",
+    }
+    max_pages = 50
+    page_count = 0
+    warning: Optional[str] = None
 
-    while True:
+    while url:
         try:
-            resp = requests.get(
-                f"{base_url}/api/v4/projects",
-                headers=headers,
-                params={
-                    "membership": "true",
-                    "order_by": "last_activity_at",
-                    "sort": "desc",
-                    "per_page": per_page,
-                    "page": page,
-                    "simple": "true",
-                },
-                timeout=GITLAB_TIMEOUT,
-            )
+            resp = requests.get(url, headers=headers, params=params, timeout=GITLAB_TIMEOUT)
+            params = None  # Only use params on the first request; subsequent use Link URL
+
             if resp.status_code != 200:
-                logger.error(f"GitLab API error fetching projects: {resp.status_code}")
+                logger.error("GitLab API error fetching projects: %d", resp.status_code)
                 break
 
             projects = resp.json()
@@ -77,24 +101,36 @@ def _fetch_all_accessible_projects(base_url: str, token: str) -> list[dict]:
                 break
 
             all_projects.extend(projects)
-            if len(projects) < per_page:
+            page_count += 1
+
+            if page_count >= max_pages:
+                warning = "Pagination limit reached; some projects may not have been discovered."
+                logger.warning(warning)
                 break
-            page += 1
-            if page > 50:
-                logger.warning("Hit pagination safety limit for GitLab projects")
-                break
-        except requests.RequestException as e:
-            logger.error(f"Error fetching GitLab projects page {page}: {e}")
+
+            # Follow Link: <...>; rel="next" header
+            link_header = resp.headers.get("Link", "")
+            match = _LINK_NEXT_RE.search(link_header)
+            url = match.group(1) if match else None
+
+        except requests.RequestException:
+            logger.exception("Error fetching GitLab projects (page %d)", page_count + 1)
             break
 
-    return all_projects
+    return all_projects, warning
 
 
-def _auto_connect_projects(user_id: str, base_url: str, token: str) -> int:
-    """Fetch all accessible projects and save them to connected_repos."""
-    projects = _fetch_all_accessible_projects(base_url, token)
+def _auto_connect_projects(user_id: str, base_url: str, token: str) -> tuple[int, Optional[str]]:
+    """
+    Fetch all accessible projects and save them to connected_repos.
+
+    Returns (count, error_message). error_message is None on full success.
+    """
+    projects, pagination_warning = _fetch_all_accessible_projects(base_url, token)
     if not projects:
-        return 0
+        if pagination_warning:
+            return 0, pagination_warning
+        return 0, None
 
     org_id = None
     try:
@@ -104,10 +140,11 @@ def _auto_connect_projects(user_id: str, base_url: str, token: str) -> int:
                 row = cur.fetchone()
                 org_id = row[0] if row else None
     except Exception as e:
-        logger.warning(f"Could not fetch org_id for auto-connect: {e}")
+        logger.warning("Could not fetch org_id for auto-connect: %s", e)
 
     count = 0
-    connected_names = []
+    connected_names: list[str] = []
+    commit_succeeded = False
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -118,6 +155,7 @@ def _auto_connect_projects(user_id: str, base_url: str, token: str) -> int:
                     (user_id,),
                 )
 
+                staged_names: list[str] = []
                 for proj in projects:
                     full_name = proj.get("path_with_namespace", "")
                     if not full_name:
@@ -142,23 +180,27 @@ def _auto_connect_projects(user_id: str, base_url: str, token: str) -> int:
                             json.dumps(proj),
                         ),
                     )
-                    connected_names.append(full_name)
-                    count += 1
+                    staged_names.append(full_name)
 
                 conn.commit()
+                commit_succeeded = True
+                connected_names = staged_names
+                count = len(staged_names)
     except Exception as e:
-        logger.error(f"Error auto-connecting GitLab projects: {e}", exc_info=True)
+        logger.exception("Error auto-connecting GitLab projects")
+        return 0, f"Database error: {type(e).__name__}"
 
-    # Trigger metadata generation for each connected project
-    try:
-        from utils.repo_metadata import generate_repo_metadata
-        for name in connected_names:
-            generate_repo_metadata.delay(user_id, "gitlab", name)
-    except Exception as e:
-        logger.warning(f"Could not queue metadata generation: {e}")
+    # Trigger metadata generation only for successfully committed projects
+    if commit_succeeded and connected_names:
+        try:
+            from utils.repo_metadata import generate_repo_metadata
+            for name in connected_names:
+                generate_repo_metadata.delay(user_id, "gitlab", name)
+        except Exception as e:
+            logger.warning("Could not queue metadata generation: %s", e)
 
-    logger.info(f"Auto-connected {count} GitLab projects for user {user_id}")
-    return count
+    logger.info("Auto-connected %d GitLab projects for user %s", count, user_id)
+    return count, pagination_warning
 
 
 @gitlab_bp.route("/connect", methods=["POST"])
@@ -175,14 +217,22 @@ def gitlab_connect(user_id):
 
         if not access_token:
             return jsonify({"error": "access_token is required"}), 400
+        if not _is_valid_gitlab_base_url(base_url):
+            return jsonify({"error": "Invalid base_url; must be an http(s) URL"}), 400
 
-        token_info = _validate_gitlab_token(base_url, access_token)
+        token_info, validation_source = _validate_gitlab_token(base_url, access_token)
         if not token_info:
             return jsonify({"error": "Invalid GitLab access token or unreachable instance"}), 400
 
-        username = token_info.get("username") or token_info.get("name") or "gitlab-bot"
-        token_name = token_info.get("name", "")
-        scopes = token_info.get("scopes", [])
+        # When validated via /user fallback, fields like scopes/token_name are unavailable
+        if validation_source == "token_api":
+            username = token_info.get("username") or token_info.get("name") or "gitlab-bot"
+            token_name = token_info.get("name", "")
+            scopes = token_info.get("scopes", [])
+        else:
+            username = token_info.get("username") or token_info.get("name") or "gitlab-bot"
+            token_name = ""
+            scopes = []
 
         gitlab_token_data = {
             "access_token": access_token,
@@ -190,23 +240,28 @@ def gitlab_connect(user_id):
             "username": username,
             "token_name": token_name,
             "scopes": scopes,
+            "validation_source": validation_source,
         }
 
         store_tokens_in_db(user_id, gitlab_token_data, "gitlab")
-        logger.info(f"Stored GitLab credentials for user {user_id} (org-level, token_name={token_name})")
+        logger.info("Stored GitLab credentials for user %s (org-level)", user_id)
 
-        project_count = _auto_connect_projects(user_id, base_url, access_token)
+        project_count, connect_warning = _auto_connect_projects(user_id, base_url, access_token)
 
-        return jsonify({
+        response = {
             "success": True,
             "message": f"Connected to GitLab as {username} — {project_count} project(s) auto-connected",
             "username": username,
             "base_url": base_url,
             "projects_connected": project_count,
-        })
+        }
+        if connect_warning:
+            response["warnings"] = [connect_warning]
+
+        return jsonify(response)
 
     except Exception as e:
-        logger.error(f"Error connecting GitLab: {e}", exc_info=True)
+        logger.exception("Error connecting GitLab")
         return jsonify({"error": "Failed to connect GitLab"}), 500
 
 
@@ -225,7 +280,7 @@ def gitlab_status(user_id):
             })
         return jsonify({"connected": False})
     except Exception as e:
-        logger.error(f"Error checking GitLab status: {e}", exc_info=True)
+        logger.error("Error checking GitLab status: %s", e)
         return jsonify({"connected": False})
 
 
@@ -244,10 +299,10 @@ def gitlab_disconnect(user_id):
                 conn.commit()
 
         delete_user_secret(user_id, "gitlab")
-        logger.info(f"Disconnected GitLab for user {user_id}")
+        logger.info("Disconnected GitLab for user %s", user_id)
         return jsonify({"success": True, "message": "GitLab disconnected"})
     except Exception as e:
-        logger.error(f"Error disconnecting GitLab: {e}", exc_info=True)
+        logger.exception("Error disconnecting GitLab")
         return jsonify({"error": "Failed to disconnect GitLab"}), 500
 
 
@@ -283,5 +338,5 @@ def get_repo_selections(user_id):
         ]
         return jsonify({"repositories": repos})
     except Exception as e:
-        logger.error(f"Error getting GitLab repo selections: {e}", exc_info=True)
+        logger.exception("Error getting GitLab repo selections")
         return jsonify({"error": "Failed to get project selections"}), 500

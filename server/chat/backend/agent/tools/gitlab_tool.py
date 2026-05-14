@@ -22,7 +22,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, Field
 
-from routes.gitlab.gitlab_api_utils import gitlab_api_request, build_error_response, build_success_response
+from routes.gitlab.gitlab_api_utils import gitlab_api_request, build_error_response, build_success_response, get_gitlab_credentials, is_gitlab_connected
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from .vcs_rca_utils import resolve_repository, calculate_time_windows, get_connected_repos_for_provider, generate_correlation_hints
@@ -126,7 +126,7 @@ def _action_deployment_check(
                     if 0 <= (end_time - updated_time).total_seconds() <= 7200:
                         results["suspicious_pipelines"].append(info)
                 except (ValueError, TypeError):
-                    logger.debug("Skipping suspicious-time check for pipeline %s: invalid timestamp %s", info.get("id"), updated_str)
+                    pass  # Non-critical: skip time-correlation for malformed timestamps
 
     results["summary"] = {
         "total_pipelines": len(results["pipelines"]),
@@ -171,7 +171,7 @@ def _action_commits(
                 if 0 <= (end_time - commit_time).total_seconds() <= 7200:
                     results["suspicious_commits"].append(commit_info["sha"])
             except (ValueError, TypeError):
-                logger.debug("Skipping suspicious-time check for commit %s: invalid date %s", commit_info.get("sha", "?")[:7], commit_date_str)
+                pass  # Non-critical: skip time-correlation for malformed timestamps
 
     results["summary"] = {"total_commits": len(results["commits"]), "suspicious_commits": len(results["suspicious_commits"])}
     return results
@@ -252,7 +252,7 @@ def _action_merge_requests(
             if 0 <= (end_time - merged_time).total_seconds() <= 7200:
                 results["recently_merged"].append(mr_info["iid"])
         except (ValueError, TypeError):
-            logger.debug("Skipping suspicious-time check for MR !%s: invalid merged_at %s", mr_info.get("iid"), merged_at_str)
+            pass  # Non-critical: skip time-correlation for malformed timestamps
 
     results["summary"] = {"total_merged": len(results["merged_mrs"]), "recently_merged": len(results["recently_merged"])}
     return results
@@ -326,6 +326,13 @@ def _action_apply_fix(
     user_id: str, suggestion_id: Optional[int], target_branch: Optional[str],
     use_edited_content: bool = True,
 ) -> str:
+    """
+    Create a branch + MR for a fix suggestion.
+
+    Approval gate: This function is invoked from the UI 'Create PR' button
+    (server/routes/incidents_routes.py), which constitutes explicit user approval.
+    The agent SKILL.md instructs the agent not to call apply_fix autonomously.
+    """
     if not suggestion_id:
         return build_error_response("suggestion_id is required for apply_fix")
 
@@ -530,10 +537,13 @@ def gitlab_tool(
     **kwargs,
 ) -> str:
     """Unified GitLab tool — dispatches to the appropriate action."""
-    logger.info(f"gitlab_tool called: action={action}, repo={repo}, user_id={user_id}")
+    logger.info("gitlab_tool called: action=%s, repo=%s", action, repo)
 
     if not user_id:
         return json.dumps({"status": "error", "error": "User context not available."})
+
+    if not is_gitlab_connected(user_id):
+        return json.dumps({"status": "error", "error": "GitLab is not connected. Ask an admin to connect GitLab in Settings > Connectors."})
 
     # list_projects doesn't need repo resolution
     if action == "list_projects":
