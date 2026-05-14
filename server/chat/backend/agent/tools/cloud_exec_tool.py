@@ -248,7 +248,8 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 external_id=external_id,
                 workspace_id=ws["id"],
                 region=selected_region or "us-east-1",
-                session_policy=session_policy
+                session_policy=session_policy,
+                user_id=user_id,
             )
 
             aws_credentials = {
@@ -421,6 +422,7 @@ def setup_aws_environments_all_accounts(user_id: str):
                 workspace_id=ws["id"],
                 region=region,
                 session_policy=session_policy,
+                user_id=user_id,
             )
         except Exception as e:
             logger.error("Failed to assume role for account %s: %s", account_id, e)
