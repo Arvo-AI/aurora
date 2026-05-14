@@ -390,9 +390,17 @@ export default function GitHubProviderIntegration() {
       // Refresh installations + discovery list once the popup signals
       // success or closes. Wrapped so we never run the work twice when
       // both the postMessage and the popup-close detector fire.
+      // ``checkClosed`` is declared up front (mutable, null-safe) so
+      // ``cleanup`` can be referenced from the unmount path even if the
+      // setInterval line hasn't run yet — avoids a TDZ ReferenceError
+      // if the component unmounts mid-flow (codex caught this).
+      let checkClosed: ReturnType<typeof setInterval> | null = null;
       let finalized = false;
       const cleanup = () => {
-        clearInterval(checkClosed);
+        if (checkClosed !== null) {
+          clearInterval(checkClosed);
+          checkClosed = null;
+        }
         window.removeEventListener('message', onMessage);
       };
       const finalize = async () => {
@@ -416,7 +424,6 @@ export default function GitHubProviderIntegration() {
           // discovery is best-effort; silent on failure
         }
       };
-      popupCleanupsRef.current.push(cleanup);
 
       // Instant path: the success template posts a message right after
       // GitHub's redirect, so we can refresh before the popup actually
@@ -440,11 +447,12 @@ export default function GitHubProviderIntegration() {
       // Fallback: user closed the popup without completing, or the
       // success template's postMessage was blocked by an origin
       // mismatch. The poll keeps the UI honest in both cases.
-      const checkClosed = setInterval(() => {
+      checkClosed = setInterval(() => {
         if (popup.closed) {
           finalize();
         }
       }, 500);
+      popupCleanupsRef.current.push(cleanup);
     } catch (error: unknown) {
       const err = error as Error;
       toast({
@@ -527,9 +535,14 @@ export default function GitHubProviderIntegration() {
         return;
       }
 
+      // Same TDZ-safe layout as handleAppInstall — see comment there.
+      let checkClosed: ReturnType<typeof setInterval> | null = null;
       let finalized = false;
       const cleanup = () => {
-        clearInterval(checkClosed);
+        if (checkClosed !== null) {
+          clearInterval(checkClosed);
+          checkClosed = null;
+        }
         window.removeEventListener('message', onMessage);
       };
       const finalize = () => {
@@ -553,7 +566,7 @@ export default function GitHubProviderIntegration() {
         }
       };
       window.addEventListener('message', onMessage);
-      const checkClosed = setInterval(() => {
+      checkClosed = setInterval(() => {
         if (popup.closed) finalize();
       }, 500);
       popupCleanupsRef.current.push(cleanup);
