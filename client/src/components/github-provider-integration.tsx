@@ -12,6 +12,16 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
 import { GitHubAppService, type GitHubInstallation, type GitHubDiscoveredInstallation } from '@/lib/github-app';
 export type { GitHubInstallation, GitHubInstallationsResponse } from '@/lib/github-app';
@@ -110,8 +120,25 @@ export class GitHubIntegrationService {
     return data.oauth_url;
   }
 
-  static async disconnect(): Promise<void> {
-    await fetch('/api/proxy/github/disconnect', { method: 'POST' });
+  static async disconnect(opts: { alsoUninstall?: boolean } = {}): Promise<{
+    uninstalled_on_github: number;
+    uninstall_failures: number;
+  } | null> {
+    const response = await fetch('/api/proxy/github/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ also_uninstall: !!opts.alsoUninstall }),
+    });
+    if (!response.ok) return null;
+    try {
+      const data = await response.json();
+      return {
+        uninstalled_on_github: data.uninstalled_on_github ?? 0,
+        uninstall_failures: data.uninstall_failures ?? 0,
+      };
+    } catch {
+      return null;
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -186,6 +213,13 @@ export default function GitHubProviderIntegration() {
   // Pending popup-flow cleanups so unmounting the component doesn't
   // leak a window-level "message" listener or a closed-popup poller.
   const popupCleanupsRef = useRef<Array<() => void>>([]);
+
+  // Disconnect-confirm dialog: lets the user opt into ALSO uninstalling
+  // the GitHub App on github.com (otherwise we only soft-delete on the
+  // Aurora side and the App keeps receiving webhooks).
+  const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
+  const [alsoUninstallOnGitHub, setAlsoUninstallOnGitHub] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
@@ -586,13 +620,22 @@ export default function GitHubProviderIntegration() {
     }
   };
 
-  const handleDisconnect = async () => {
+  const openDisconnectDialog = () => {
+    // Reset the checkbox each time the dialog opens — opting into a
+    // destructive GitHub-side action should be a fresh decision per
+    // disconnect, not sticky from a prior session.
+    setAlsoUninstallOnGitHub(false);
+    setShowDisconnectDialog(true);
+  };
+
+  const handleDisconnect = async (alsoUninstall: boolean) => {
     if (!userId) return;
     const hadAppInstall = installations.length > 0;
     const primaryInstall = installations[0];
+    setIsDisconnecting(true);
     try {
       await GitHubIntegrationService.clearRepoSelections();
-      await GitHubIntegrationService.disconnect();
+      const result = await GitHubIntegrationService.disconnect({ alsoUninstall });
       setSavedRepos([]);
       setCheckedRepos(new Set());
       setAllRepos([]);
@@ -601,7 +644,24 @@ export default function GitHubProviderIntegration() {
       setInstallations([]);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      if (hadAppInstall && primaryInstall) {
+      setShowDisconnectDialog(false);
+
+      if (alsoUninstall && hadAppInstall) {
+        const uninstalled = result?.uninstalled_on_github ?? 0;
+        const failures = result?.uninstall_failures ?? 0;
+        if (failures > 0) {
+          toast({
+            title: "Disconnected, partial uninstall",
+            description: `Uninstalled ${uninstalled} on GitHub; ${failures} could not be removed. Visit GitHub settings to finish.`,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Disconnected and uninstalled",
+            description: `Removed Aurora and uninstalled the GitHub App from ${uninstalled} account${uninstalled === 1 ? '' : 's'}.`,
+          });
+        }
+      } else if (hadAppInstall && primaryInstall) {
         const manageUrl = installationManageUrl(primaryInstall);
         toast({
           title: "Disconnected from Aurora",
@@ -625,6 +685,8 @@ export default function GitHubProviderIntegration() {
         description: err.message || "Failed to disconnect GitHub. The connection may still be active on the server.",
         variant: "destructive",
       });
+    } finally {
+      setIsDisconnecting(false);
     }
   };
 
@@ -726,7 +788,7 @@ export default function GitHubProviderIntegration() {
               <Button variant="ghost" size="sm" className="px-3" onClick={(e) => { e.stopPropagation(); fetchAllRepos(); loadSavedRepos(); }} title="Refresh">
                 <RefreshCw className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" className="px-3 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleDisconnect(); }} title="Disconnect">
+              <Button variant="ghost" size="sm" className="px-3 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); openDisconnectDialog(); }} title="Disconnect">
                 <LogOut className="h-4 w-4" />
               </Button>
             </div>
@@ -1202,6 +1264,68 @@ export default function GitHubProviderIntegration() {
           )}
         </div>
       )}
+
+      <AlertDialog
+        open={showDisconnectDialog}
+        onOpenChange={(open) => {
+          if (isDisconnecting) return; // don't dismiss mid-request
+          setShowDisconnectDialog(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disconnect GitHub?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Removes your connected repositories and Aurora&apos;s link to your GitHub
+              {installations.length > 0 ? ' App installation' : ' account'}.
+              You can reconnect at any time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {installations.length > 0 && (
+            <label
+              className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-sm cursor-pointer hover:bg-muted/50"
+              data-testid="disconnect-also-uninstall-row"
+            >
+              <Checkbox
+                checked={alsoUninstallOnGitHub}
+                onCheckedChange={(checked) => setAlsoUninstallOnGitHub(checked === true)}
+                disabled={isDisconnecting}
+                className="mt-0.5"
+                data-testid="disconnect-also-uninstall-checkbox"
+              />
+              <span className="leading-snug">
+                <span className="font-medium text-foreground">Also uninstall the GitHub App</span>
+                <span className="block text-xs text-muted-foreground mt-0.5">
+                  Fully removes the App from
+                  {installations.length === 1
+                    ? <> <span className="font-medium">{installations[0].account_login}</span> on GitHub</>
+                    : <> all {installations.length} linked GitHub accounts</>}
+                  . If you skip this, the App stays installed and continues sending webhooks until you remove it from GitHub&apos;s settings.
+                </span>
+              </span>
+            </label>
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDisconnecting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault(); // keep the dialog open while we work
+                handleDisconnect(alsoUninstallOnGitHub);
+              }}
+              disabled={isDisconnecting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="disconnect-confirm"
+            >
+              {isDisconnecting ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+              {alsoUninstallOnGitHub && installations.length > 0
+                ? 'Disconnect & Uninstall'
+                : 'Disconnect'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

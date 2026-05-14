@@ -1031,7 +1031,7 @@ def github_status(user_id):
 @github_app_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
-    """Sever GitHub auth state for this user (Aurora side only).
+    """Sever GitHub auth state for this user (Aurora side only by default).
 
     SOFT-deletes ``user_github_installations`` rows by setting
     ``disconnected_at = NOW()`` so the row survives. This matters
@@ -1041,10 +1041,79 @@ def github_disconnect(user_id):
     would have nothing to relink to. Reconnect is just clearing
     ``disconnected_at`` (the install callback's UPSERT does this for us).
 
-    Also removes any stored OAuth token. Does NOT uninstall the App on
-    GitHub's side — the user must do that from their org settings if
-    they want to fully revoke access.
+    Also removes any stored OAuth token.
+
+    Optional ``{"also_uninstall": true}`` body opts into ALSO uninstalling
+    the App on GitHub's side via ``DELETE /app/installations/{id}`` —
+    surfaced as a checkbox in the disconnect dialog. Uninstall is
+    best-effort: a 404 means GitHub already lost the install (still
+    counts as success for our purposes), other failures are logged but
+    don't block the Aurora-side disconnect from completing.
     """
+    body = request.get_json(silent=True) or {}
+    also_uninstall = bool(body.get("also_uninstall"))
+
+    # Snapshot the linked installs BEFORE we soft-delete, so we still
+    # have IDs to call GitHub's uninstall on if requested.
+    linked_installs: list[int] = []
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT installation_id
+                         FROM user_github_installations
+                        WHERE user_id = %s
+                          AND disconnected_at IS NULL""",
+                    (user_id,),
+                )
+                linked_installs = [r[0] for r in cur.fetchall()]
+    except Exception as exc:
+        logger.warning(
+            "[GITHUB-DISCONNECT] failed to snapshot linked installs user=%s: %s",
+            user_id, exc,
+        )
+
+    uninstalled_on_github = 0
+    uninstall_failures = 0
+    if also_uninstall and linked_installs and flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        try:
+            app_jwt = mint_app_jwt()
+        except GitHubAppJWTError:
+            logger.warning(
+                "[GITHUB-DISCONNECT] App JWT mint failed; skipping GitHub-side uninstall"
+            )
+            app_jwt = None
+
+        if app_jwt:
+            headers = {
+                "Authorization": f"Bearer {app_jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            for iid in linked_installs:
+                try:
+                    resp = requests.delete(
+                        f"https://api.github.com/app/installations/{iid}",
+                        headers=headers,
+                        timeout=GITHUB_RECONCILE_TIMEOUT,
+                    )
+                except requests.RequestException as exc:
+                    uninstall_failures += 1
+                    logger.warning(
+                        "[GITHUB-DISCONNECT] uninstall request failed installation_id=%d: %s",
+                        iid, type(exc).__name__,
+                    )
+                    continue
+                # 204 = uninstalled; 404 = already gone (still success).
+                if resp.status_code in (204, 404):
+                    uninstalled_on_github += 1
+                else:
+                    uninstall_failures += 1
+                    logger.warning(
+                        "[GITHUB-DISCONNECT] uninstall returned status=%d installation_id=%d",
+                        resp.status_code, iid,
+                    )
+
     soft_deleted_installs = 0
     try:
         with db_pool.get_admin_connection() as conn:
@@ -1079,13 +1148,17 @@ def github_disconnect(user_id):
             )
 
     logger.info(
-        "[GITHUB-DISCONNECT] user=%s soft_deleted_installs=%d oauth_removed=%s",
+        "[GITHUB-DISCONNECT] user=%s soft_deleted_installs=%d oauth_removed=%s "
+        "also_uninstall=%s uninstalled_on_github=%d uninstall_failures=%d",
         user_id, soft_deleted_installs, oauth_removed,
+        also_uninstall, uninstalled_on_github, uninstall_failures,
     )
     return jsonify(
         {
             "success": True,
             "removed_installations": soft_deleted_installs,
+            "uninstalled_on_github": uninstalled_on_github,
+            "uninstall_failures": uninstall_failures,
             "oauth_token_removed": oauth_removed,
         }
     )
