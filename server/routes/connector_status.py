@@ -283,13 +283,21 @@ def _check_github(user_id: str) -> Dict[str, Any]:
         ``GITHUB_AUTH_MODE=oauth`` deployments and for hybrid users
         whose only credential is OAuth.
 
+    The App branch also requires the runtime gate
+    ``GITHUB_APP_ENABLED`` (set by boot-time env validation). If mode
+    says App but env is incomplete, every App-token route returns 503
+    — reporting "connected" off DB rows would lie about a connector
+    that can't actually do work.
+
     No live GitHub API call here — minting a token per status check
     dwarfs the value of a DB lookup that already reflects webhook
     updates and the per-user reconcile throttle in github_app.py.
     """
+    from flask import current_app
     from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
 
-    if is_app_enabled():
+    app_runtime_ready = bool(current_app.config.get("GITHUB_APP_ENABLED"))
+    if is_app_enabled() and app_runtime_ready:
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:

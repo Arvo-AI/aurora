@@ -668,34 +668,55 @@ def github_app_discover_installations(user_id):
         logger.exception("[GITHUB-APP-DISCOVER] JWT mint failed")
         return jsonify({"error": "GitHub App not configured"}), 503
 
-    try:
-        resp = requests.get(
-            "https://api.github.com/app/installations",
-            headers={
-                "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=GITHUB_TIMEOUT,
-        )
-    except requests.RequestException:
-        logger.exception("[GITHUB-APP-DISCOVER] GitHub API request failed")
-        return jsonify({"error": "Failed to reach GitHub"}), 502
+    # Paginate. Default page size is 30; on busy Apps, the user's own
+    # install can sit on page 2+ and never appear in the picker. Walk
+    # via Link rel=next until exhausted (capped to avoid runaway when
+    # the App somehow has thousands of installs).
+    headers = {
+        "Authorization": f"Bearer {app_jwt}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    next_url = "https://api.github.com/app/installations?per_page=100"
+    installs: list = []
+    pages_seen = 0
+    MAX_PAGES = 20  # 20 * 100 = 2000 installs is plenty for Aurora scale
+    while next_url and pages_seen < MAX_PAGES:
+        try:
+            resp = requests.get(next_url, headers=headers, timeout=GITHUB_TIMEOUT)
+        except requests.RequestException:
+            logger.exception("[GITHUB-APP-DISCOVER] GitHub API request failed")
+            return jsonify({"error": "Failed to reach GitHub"}), 502
 
-    if resp.status_code != 200:
-        logger.error(
-            "[GITHUB-APP-DISCOVER] GitHub returned status=%d", resp.status_code
-        )
-        return jsonify({"error": "Failed to list App installations"}), 502
+        if resp.status_code != 200:
+            logger.error(
+                "[GITHUB-APP-DISCOVER] GitHub returned status=%d", resp.status_code
+            )
+            return jsonify({"error": "Failed to list App installations"}), 502
 
-    try:
-        installs = resp.json()
-    except ValueError:
-        logger.error("[GITHUB-APP-DISCOVER] response not JSON")
-        return jsonify({"error": "Failed to parse GitHub response"}), 502
+        try:
+            page = resp.json()
+        except ValueError:
+            logger.error("[GITHUB-APP-DISCOVER] response not JSON")
+            return jsonify({"error": "Failed to parse GitHub response"}), 502
 
-    if not isinstance(installs, list):
-        installs = []
+        if not isinstance(page, list):
+            page = []
+        installs.extend(page)
+        pages_seen += 1
+
+        # Parse RFC 5988 Link header for the next page; absent header
+        # means we're done.
+        next_url = None
+        link_header = resp.headers.get("Link", "")
+        if link_header:
+            for part in link_header.split(","):
+                segment = part.strip()
+                if segment.endswith('rel="next"'):
+                    url_part = segment.split(";", 1)[0].strip()
+                    if url_part.startswith("<") and url_part.endswith(">"):
+                        next_url = url_part[1:-1]
+                    break
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -943,12 +964,20 @@ def github_status(user_id):
 
     Self-heals against silent uninstalls before reading from the DB so a
     revoked-on-GitHub install never registers as "connected" in the UI.
+
+    Treats the App branch as unavailable when the runtime gate
+    ``GITHUB_APP_ENABLED`` is False (mode says App but boot-time env
+    validation failed). Otherwise we'd report "connected" off stale
+    install rows while every App-token-using flow returns 503.
     """
-    if is_app_enabled():
+    app_runtime_ready = bool(flask.current_app.config.get("GITHUB_APP_ENABLED"))
+    app_branch_active = is_app_enabled() and app_runtime_ready
+
+    if app_branch_active:
         _reconcile_user_installations(user_id)
 
     app_username: str | None = None
-    if is_app_enabled():
+    if app_branch_active:
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
