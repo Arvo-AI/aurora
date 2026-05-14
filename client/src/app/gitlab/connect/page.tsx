@@ -114,7 +114,7 @@ export default function GitLabConnectPage() {
         variant="ghost"
         size="sm"
         className="mb-4"
-        onClick={() => router.push("/settings/connectors")}
+        onClick={() => router.push("/connectors")}
       >
         <ArrowLeft className="h-4 w-4 mr-2" />
         Back to Connectors
@@ -154,10 +154,16 @@ export default function GitLabConnectPage() {
                     placeholder="glpat-..."
                     className="mt-1"
                   />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Create a Group Access Token in GitLab (Settings &gt; Access Tokens) with <code>api</code> scope.
-                    Only projects accessible by this token will be connected.
-                  </p>
+                  <div className="mt-2 space-y-1.5 text-xs text-muted-foreground">
+                    <p>
+                      Create a Group Access Token in GitLab under <strong>Group &gt; Settings &gt; Access Tokens</strong>.
+                    </p>
+                    <p className="font-medium text-foreground/80">Recommended (full capabilities):</p>
+                    <p>Role: <code>Maintainer</code> · Scopes: <code>api</code> — allows RCA investigation, creating fix branches, pushing commits, and opening Merge Requests.</p>
+                    <p className="font-medium text-foreground/80">Minimum (read-only investigation):</p>
+                    <p>Role: <code>Reporter</code> · Scopes: <code>read_api</code> — allows viewing pipelines, commits, diffs, and merge requests. The agent will not be able to suggest or apply code fixes.</p>
+                    <p>Only projects within the group (and its subgroups) will be connected.</p>
+                  </div>
                 </div>
 
                 <Button onClick={handleConnect} disabled={isConnecting} className="w-full">
