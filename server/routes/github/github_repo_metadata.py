@@ -101,14 +101,28 @@ def _update_metadata(user_id: str, repo_full_name: str, summary: str, status: st
             from utils.auth.stateless_auth import set_rls_context
             if not set_rls_context(cur, conn, user_id, log_prefix="[GitHubMetadata]"):
                 return
-            cur.execute(
-                """UPDATE github_connected_repos
-                   SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
-                   WHERE user_id = %s
-                     AND repo_full_name = %s
-                     AND metadata_status IN ('pending', 'generating')""",
-                (summary, status, user_id, repo_full_name),
-            )
+            if summary is None:
+                # Status-only transition (e.g. setting 'generating' on
+                # regenerate, or 'error' on failure). Preserve the
+                # existing ``metadata_summary`` so a transient failure
+                # doesn't blank out a previously-good description.
+                cur.execute(
+                    """UPDATE github_connected_repos
+                       SET metadata_status = %s, updated_at = NOW()
+                       WHERE user_id = %s
+                         AND repo_full_name = %s
+                         AND metadata_status IN ('pending', 'generating')""",
+                    (status, user_id, repo_full_name),
+                )
+            else:
+                cur.execute(
+                    """UPDATE github_connected_repos
+                       SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
+                       WHERE user_id = %s
+                         AND repo_full_name = %s
+                         AND metadata_status IN ('pending', 'generating')""",
+                    (summary, status, user_id, repo_full_name),
+                )
             conn.commit()
 
 
