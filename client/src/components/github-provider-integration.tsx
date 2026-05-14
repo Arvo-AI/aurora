@@ -305,6 +305,7 @@ export default function GitHubProviderIntegration() {
     fetchInstallations();
     const handler = () => fetchInstallations();
     const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') fetchInstallations();
     };
@@ -395,7 +396,13 @@ export default function GitHubProviderIntegration() {
       // Instant path: the success template posts a message right after
       // GitHub's redirect, so we can refresh before the popup actually
       // closes and avoid the multi-second "Connecting..." stutter.
+      // Tightly scoped: the message MUST come from THIS popup window
+      // and from our own origin. Otherwise any tab/iframe could spoof
+      // a finalize, and concurrent install + OAuth popups would cross-
+      // talk and stop each other's pollers.
       const onMessage = (event: MessageEvent) => {
+        if (event.source !== popup) return;
+        if (event.origin !== window.location.origin) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
           finalize();
@@ -504,6 +511,11 @@ export default function GitHubProviderIntegration() {
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
       };
       const onMessage = (event: MessageEvent) => {
+        // Tightly scoped to this popup + our origin so concurrent
+        // install/OAuth flows don't cross-finalize each other and
+        // arbitrary tabs can't spoof the message.
+        if (event.source !== popup) return;
+        if (event.origin !== window.location.origin) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
           finalize();

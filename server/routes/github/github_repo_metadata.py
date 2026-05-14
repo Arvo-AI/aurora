@@ -57,6 +57,19 @@ def _fetch_top_level_listing(auth_headers: dict[str, Any], owner: str, repo: str
 
 
 def _update_metadata(user_id: str, repo_full_name: str, summary: str, status: str):
+    """Persist a generation-task metadata write with CAS protection.
+
+    Only updates when the row is still in a generation-owned state
+    (``pending`` or ``generating``). If the user manually edited the
+    description while the Celery task was running, the row will be
+    ``ready`` and the late-arriving generated summary must NOT clobber
+    it. The ``ready`` write at the end of a successful generation also
+    lands fine because it transitions ``generating -> ready``.
+
+    The /repo-selections/<repo>/metadata PUT route is the user-edit
+    path and writes unconditionally (no CAS) — by design, since the
+    user is the source of truth.
+    """
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
@@ -66,7 +79,9 @@ def _update_metadata(user_id: str, repo_full_name: str, summary: str, status: st
             cur.execute(
                 """UPDATE github_connected_repos
                    SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
-                   WHERE user_id = %s AND repo_full_name = %s""",
+                   WHERE user_id = %s
+                     AND repo_full_name = %s
+                     AND metadata_status IN ('pending', 'generating')""",
                 (summary, status, user_id, repo_full_name),
             )
             conn.commit()

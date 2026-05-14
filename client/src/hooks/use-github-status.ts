@@ -100,6 +100,10 @@ export function useGitHubStatus(userId: string | null) {
     // - the user returns to the tab (covers uninstall-on-GitHub-then-back)
     const handleProviderChange = () => { checkStatus(); };
     const handleAuthMessage = (event: MessageEvent) => {
+      // Same-origin only — refresh is harmless but spoofed messages
+      // from arbitrary tabs would still cause unnecessary backend
+      // chatter and look like user activity in our logs.
+      if (event.origin !== window.location.origin) return;
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') {
         checkStatus();

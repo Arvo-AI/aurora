@@ -132,46 +132,60 @@ def _render_error(reason: str) -> flask.Response:
     )
 
 
-# Per-user reconcile throttle. Status / installations endpoints are
-# called frequently from the UI (mount, focus, visibility, post-popup) —
-# without throttling each one would burn 1-N GitHub API calls. 30 s is
-# short enough that an uninstall-on-GitHub-then-back flow still feels
-# instant after the first hit (subsequent hits short-circuit), and long
-# enough to avoid secondary rate limits on busy connectors.
+# Per-user reconcile throttle + singleflight claim. Status /
+# installations endpoints are called frequently from the UI (mount,
+# focus, visibility, post-popup) and Flask runs handlers on multiple
+# threads (gunicorn ``--threads N``). Without protection, a burst of
+# concurrent requests would all blow past the throttle check at the
+# same instant and each fire 1-N blocking GitHub calls.
 #
-# Mutated from request threads (Flask defaults to threaded workers, and
-# gunicorn ``--threads N`` is common in production) so all access goes
-# through ``_reconcile_lock``. Without the lock, the eviction sweep can
-# raise ``RuntimeError: dictionary changed size during iteration`` when
-# another request writes the timestamp on the same tick.
+# Two pieces under the same lock:
+#   - ``_reconcile_last_run``: last successful reconcile timestamp.
+#     Skipping by TTL avoids hammering GitHub during a quiet hour.
+#   - ``_reconcile_in_flight``: the set of user_ids currently being
+#     reconciled. Claiming the user before doing GitHub work makes
+#     this a true singleflight: late-arriving threads short-circuit
+#     instead of duplicating in-progress work.
+#
+# Lock is held only across in-memory mutations — never during the
+# GitHub HTTP calls — so it can't deadlock or block other users.
 _RECONCILE_TTL_SEC = 30
 _RECONCILE_EVICT_AFTER_SEC = _RECONCILE_TTL_SEC * 10  # well past usefulness
 _reconcile_last_run: dict[str, float] = {}
+_reconcile_in_flight: set[str] = set()
 _reconcile_lock = threading.Lock()
 
 
-def _reconcile_should_skip(user_id: str, now: float) -> bool:
-    """Atomically check the throttle and evict stale entries.
+def _reconcile_try_claim(user_id: str, now: float) -> bool:
+    """Atomic throttle + singleflight claim.
 
-    Returns ``True`` when the caller should short-circuit because a
-    reconcile already ran for ``user_id`` within the TTL. Holds
-    ``_reconcile_lock`` for the snapshot+sweep so no other thread can
-    mutate the dict mid-iteration.
+    Returns ``True`` when this thread acquired the right to run a
+    reconcile for ``user_id``. The caller MUST then invoke
+    ``_reconcile_release`` (typically in a try/finally) so subsequent
+    threads can claim. Returns ``False`` when another thread is
+    already reconciling this user OR when the TTL hasn't elapsed.
     """
     cutoff = now - _RECONCILE_EVICT_AFTER_SEC
     with _reconcile_lock:
-        # Eviction sweep first — bounded O(N) over active users.
+        # Bounded O(N) sweep over active users.
         expired = [uid for uid, ts in _reconcile_last_run.items() if ts < cutoff]
         for uid in expired:
             _reconcile_last_run.pop(uid, None)
+        if user_id in _reconcile_in_flight:
+            return False
         last = _reconcile_last_run.get(user_id)
-    return last is not None and now - last < _RECONCILE_TTL_SEC
+        if last is not None and now - last < _RECONCILE_TTL_SEC:
+            return False
+        _reconcile_in_flight.add(user_id)
+    return True
 
 
-def _reconcile_mark_run(user_id: str, now: float) -> None:
-    """Stamp the throttle for ``user_id`` under the shared lock."""
+def _reconcile_release(user_id: str, now: float, mark_success: bool) -> None:
+    """Release the singleflight claim. Optionally stamp the TTL."""
     with _reconcile_lock:
-        _reconcile_last_run[user_id] = now
+        _reconcile_in_flight.discard(user_id)
+        if mark_success:
+            _reconcile_last_run[user_id] = now
 
 
 def _reconcile_user_installations(user_id: str) -> None:
@@ -199,105 +213,103 @@ def _reconcile_user_installations(user_id: str) -> None:
         return
 
     now = time.monotonic()
-    if _reconcile_should_skip(user_id, now):
+    if not _reconcile_try_claim(user_id, now):
         return
 
+    mark_success = False
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """SELECT installation_id
-                         FROM user_github_installations
-                        WHERE user_id = %s
-                          AND disconnected_at IS NULL""",
-                    (user_id,),
-                )
-                linked_ids = [r[0] for r in cur.fetchall()]
-    except Exception:
-        logger.exception(
-            "[GITHUB-APP-RECONCILE] DB read failed for user=%s", user_id,
-        )
-        return
-
-    if not linked_ids:
-        # Mark a successful pass so an empty user doesn't query the DB
-        # again until the TTL expires.
-        _reconcile_mark_run(user_id, now)
-        return
-
-    try:
-        app_jwt = mint_app_jwt()
-    except GitHubAppJWTError:
-        logger.warning(
-            "[GITHUB-APP-RECONCILE] JWT mint failed; skipping reconcile for user=%s",
-            user_id,
-        )
-        return
-
-    headers = {
-        "Authorization": f"Bearer {app_jwt}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    stale: list[int] = []
-    any_check_succeeded = False
-    for iid in linked_ids:
         try:
-            resp = requests.get(
-                f"https://api.github.com/app/installations/{iid}",
-                headers=headers,
-                timeout=GITHUB_TIMEOUT,
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT installation_id
+                             FROM user_github_installations
+                            WHERE user_id = %s
+                              AND disconnected_at IS NULL""",
+                        (user_id,),
+                    )
+                    linked_ids = [r[0] for r in cur.fetchall()]
+        except Exception:
+            logger.exception(
+                "[GITHUB-APP-RECONCILE] DB read failed for user=%s", user_id,
             )
-        except requests.RequestException:
-            # Transient — treat as inconclusive, never soft-delete.
-            continue
-        if resp.status_code == 404:
-            stale.append(iid)
-            any_check_succeeded = True
-        elif resp.status_code == 200:
-            any_check_succeeded = True
-        # Any other status (5xx, 401, secondary-rate-limit 403): be
-        # conservative and leave the row alone. The next reconcile pass
-        # will retry.
+            return
 
-    # Only stamp the throttle when at least one check came back
-    # authoritative — that way a fully-broken GitHub doesn't suppress the
-    # next attempt.
-    if any_check_succeeded:
-        _reconcile_mark_run(user_id, now)
+        if not linked_ids:
+            # Empty user — fast path. Mark a successful pass so we
+            # don't re-query the DB for the rest of the TTL window.
+            mark_success = True
+            return
 
-    if not stale:
-        return
+        try:
+            app_jwt = mint_app_jwt()
+        except GitHubAppJWTError:
+            logger.warning(
+                "[GITHUB-APP-RECONCILE] JWT mint failed; skipping reconcile for user=%s",
+                user_id,
+            )
+            return
 
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """UPDATE user_github_installations
-                          SET disconnected_at = NOW()
-                        WHERE user_id = %s
-                          AND installation_id = ANY(%s)
-                          AND disconnected_at IS NULL""",
-                    (user_id, stale),
+        headers = {
+            "Authorization": f"Bearer {app_jwt}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        stale: list[int] = []
+        for iid in linked_ids:
+            try:
+                resp = requests.get(
+                    f"https://api.github.com/app/installations/{iid}",
+                    headers=headers,
+                    timeout=GITHUB_TIMEOUT,
                 )
-                cur.execute(
-                    """UPDATE github_connected_repos
-                          SET installation_id = NULL,
-                              updated_at = NOW()
-                        WHERE user_id = %s
-                          AND installation_id = ANY(%s)""",
-                    (user_id, stale),
-                )
-                conn.commit()
-        logger.info(
-            "[GITHUB-APP-RECONCILE] soft-deleted %d stale install link(s) for user=%s",
-            len(stale), user_id,
-        )
-    except Exception:
-        logger.exception(
-            "[GITHUB-APP-RECONCILE] DB write failed for user=%s", user_id,
-        )
+            except requests.RequestException:
+                # Transient — treat as inconclusive, never soft-delete.
+                continue
+            if resp.status_code == 404:
+                stale.append(iid)
+                mark_success = True
+            elif resp.status_code == 200:
+                mark_success = True
+            # Any other status (5xx, 401, secondary-rate-limit 403): be
+            # conservative and leave the row alone. The next reconcile
+            # pass will retry; ``mark_success`` stays False so a fully
+            # broken GitHub doesn't suppress the next attempt.
+
+        if not stale:
+            return
+
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE user_github_installations
+                              SET disconnected_at = NOW()
+                            WHERE user_id = %s
+                              AND installation_id = ANY(%s)
+                              AND disconnected_at IS NULL""",
+                        (user_id, stale),
+                    )
+                    cur.execute(
+                        """UPDATE github_connected_repos
+                              SET installation_id = NULL,
+                                  updated_at = NOW()
+                            WHERE user_id = %s
+                              AND installation_id = ANY(%s)""",
+                        (user_id, stale),
+                    )
+                    conn.commit()
+            logger.info(
+                "[GITHUB-APP-RECONCILE] soft-deleted %d stale install link(s) for user=%s",
+                len(stale), user_id,
+            )
+        except Exception:
+            logger.exception(
+                "[GITHUB-APP-RECONCILE] DB write failed for user=%s", user_id,
+            )
+    finally:
+        _reconcile_release(user_id, now, mark_success)
 
 
 @github_app_bp.route("/app/install", methods=["GET", "OPTIONS"])

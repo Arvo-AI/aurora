@@ -226,13 +226,23 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
             )
             # Fall through to OAuth fallback below.
 
-    # Fallback: the repo row may have a NULL installation_id (legacy
-    # OAuth-era pick) even though the user has an active App install
-    # for the same account. Try an active install whose account_login
-    # matches the repo owner — but only that one. Picking *any* install
-    # would mint a token the App can't actually use against this repo,
-    # producing a 403/404 from GitHub and starving the OAuth fallback
-    # below in hybrid mode (regression caught by codex review).
+    # Fallback ordering matters in hybrid mode:
+    #
+    # When OAuth is available, prefer the user's OAuth token over an
+    # account-match guess. Even if the App is installed on the repo's
+    # owner, ``repository_selection='selected'`` Apps can omit specific
+    # repos — minting a token the App can't use yields 403/404 with no
+    # second chance. OAuth, by contrast, is scoped to the user's full
+    # repo list and will succeed if they have access at all. Codex's
+    # adversarial review caught both regressions.
+    #
+    # In App-only deployments OAuth isn't available; fall back to the
+    # account-match install as a best effort for legacy NULL-
+    # installation_id rows from the OAuth era.
+    oauth_result = _try_oauth_fallback(user_id)
+    if oauth_result is not None:
+        return oauth_result
+
     repo_owner = repo_full_name.split("/", 1)[0] if "/" in repo_full_name else None
     if repo_owner:
         fallback_install_id = _lookup_install_by_account(user_id, repo_owner)
@@ -245,11 +255,7 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
                     installation_id=fallback_install_id,
                 )
             except GitHubAppInstallationSuspended:
-                pass  # try OAuth
-
-    oauth_result = _try_oauth_fallback(user_id)
-    if oauth_result is not None:
-        return oauth_result
+                pass
 
     raise NoGitHubAuthError(
         f"No GitHub credential available for user={user_id} "
