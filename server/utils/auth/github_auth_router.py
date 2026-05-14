@@ -228,20 +228,24 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
 
     # Fallback: the repo row may have a NULL installation_id (legacy
     # OAuth-era pick) even though the user has an active App install
-    # for the same account. Try any active install for the user before
-    # giving up — App tokens are scoped to repos the App can already
-    # see, so this can't broaden access beyond what GitHub allows.
-    fallback_install_id = _lookup_any_active_installation(user_id)
-    if fallback_install_id is not None:
-        try:
-            token = get_installation_token(fallback_install_id)
-            return AuthResult(
-                method="app",
-                token=token,
-                installation_id=fallback_install_id,
-            )
-        except GitHubAppInstallationSuspended:
-            pass  # try OAuth
+    # for the same account. Try an active install whose account_login
+    # matches the repo owner — but only that one. Picking *any* install
+    # would mint a token the App can't actually use against this repo,
+    # producing a 403/404 from GitHub and starving the OAuth fallback
+    # below in hybrid mode (regression caught by codex review).
+    repo_owner = repo_full_name.split("/", 1)[0] if "/" in repo_full_name else None
+    if repo_owner:
+        fallback_install_id = _lookup_install_by_account(user_id, repo_owner)
+        if fallback_install_id is not None:
+            try:
+                token = get_installation_token(fallback_install_id)
+                return AuthResult(
+                    method="app",
+                    token=token,
+                    installation_id=fallback_install_id,
+                )
+            except GitHubAppInstallationSuspended:
+                pass  # try OAuth
 
     oauth_result = _try_oauth_fallback(user_id)
     if oauth_result is not None:
@@ -266,6 +270,35 @@ def make_auth_header(auth: AuthResult) -> dict[str, str]:
     this router.
     """
     return {"Authorization": f"token {auth.token}"}
+
+
+def _lookup_install_by_account(user_id: str, account_login: str) -> int | None:
+    """Return the user's active install whose ``account_login`` matches.
+
+    Case-insensitive match on ``github_installations.account_login`` so
+    the auth router can fall back to an App install only when the App
+    actually covers the repo's owner. Returns ``None`` when no such
+    install exists, sending the caller down the OAuth fallback path.
+    """
+
+    sql = """
+        SELECT u.installation_id
+        FROM user_github_installations u
+        JOIN github_installations i
+            ON i.installation_id = u.installation_id
+        WHERE u.user_id = %s
+          AND u.disconnected_at IS NULL
+          AND i.suspended_at IS NULL
+          AND LOWER(i.account_login) = LOWER(%s)
+        ORDER BY u.is_primary DESC, u.linked_at DESC
+        LIMIT 1
+    """
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, (user_id, account_login))
+            row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def _lookup_any_active_installation(user_id: str) -> int | None:

@@ -282,12 +282,19 @@ def _check_github(user_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # ``disconnected_at IS NULL`` is mandatory: disconnect
+                # (and the live-uninstall reconcile in github_app.py)
+                # soft-deletes the link by stamping that column. Without
+                # this filter, the connectors-page chip would still
+                # render "Connected" after a disconnect or an
+                # uninstall-on-GitHub.
                 cur.execute(
                     """SELECT 1
                          FROM user_github_installations ugi
                          JOIN github_installations gi
                               ON gi.installation_id = ugi.installation_id
                         WHERE ugi.user_id = %s
+                          AND ugi.disconnected_at IS NULL
                           AND gi.suspended_at IS NULL
                         LIMIT 1""",
                     (user_id,),
