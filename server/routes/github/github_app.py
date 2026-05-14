@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 
 import flask
@@ -137,23 +138,40 @@ def _render_error(reason: str) -> flask.Response:
 # short enough that an uninstall-on-GitHub-then-back flow still feels
 # instant after the first hit (subsequent hits short-circuit), and long
 # enough to avoid secondary rate limits on busy connectors.
+#
+# Mutated from request threads (Flask defaults to threaded workers, and
+# gunicorn ``--threads N`` is common in production) so all access goes
+# through ``_reconcile_lock``. Without the lock, the eviction sweep can
+# raise ``RuntimeError: dictionary changed size during iteration`` when
+# another request writes the timestamp on the same tick.
 _RECONCILE_TTL_SEC = 30
 _RECONCILE_EVICT_AFTER_SEC = _RECONCILE_TTL_SEC * 10  # well past usefulness
 _reconcile_last_run: dict[str, float] = {}
+_reconcile_lock = threading.Lock()
 
 
-def _reconcile_evict_stale(now: float) -> None:
-    """Drop throttle entries older than the eviction horizon.
+def _reconcile_should_skip(user_id: str, now: float) -> bool:
+    """Atomically check the throttle and evict stale entries.
 
-    O(N) sweep where N is the number of users seen in the last
-    ``_RECONCILE_EVICT_AFTER_SEC``. Called opportunistically from
-    ``_reconcile_user_installations`` so the dict can't grow without
-    bound on long-lived workers serving many users.
+    Returns ``True`` when the caller should short-circuit because a
+    reconcile already ran for ``user_id`` within the TTL. Holds
+    ``_reconcile_lock`` for the snapshot+sweep so no other thread can
+    mutate the dict mid-iteration.
     """
     cutoff = now - _RECONCILE_EVICT_AFTER_SEC
-    expired = [uid for uid, ts in _reconcile_last_run.items() if ts < cutoff]
-    for uid in expired:
-        _reconcile_last_run.pop(uid, None)
+    with _reconcile_lock:
+        # Eviction sweep first — bounded O(N) over active users.
+        expired = [uid for uid, ts in _reconcile_last_run.items() if ts < cutoff]
+        for uid in expired:
+            _reconcile_last_run.pop(uid, None)
+        last = _reconcile_last_run.get(user_id)
+    return last is not None and now - last < _RECONCILE_TTL_SEC
+
+
+def _reconcile_mark_run(user_id: str, now: float) -> None:
+    """Stamp the throttle for ``user_id`` under the shared lock."""
+    with _reconcile_lock:
+        _reconcile_last_run[user_id] = now
 
 
 def _reconcile_user_installations(user_id: str) -> None:
@@ -181,9 +199,7 @@ def _reconcile_user_installations(user_id: str) -> None:
         return
 
     now = time.monotonic()
-    _reconcile_evict_stale(now)
-    last = _reconcile_last_run.get(user_id)
-    if last is not None and now - last < _RECONCILE_TTL_SEC:
+    if _reconcile_should_skip(user_id, now):
         return
 
     try:
@@ -206,7 +222,7 @@ def _reconcile_user_installations(user_id: str) -> None:
     if not linked_ids:
         # Mark a successful pass so an empty user doesn't query the DB
         # again until the TTL expires.
-        _reconcile_last_run[user_id] = now
+        _reconcile_mark_run(user_id, now)
         return
 
     try:
@@ -249,7 +265,7 @@ def _reconcile_user_installations(user_id: str) -> None:
     # authoritative — that way a fully-broken GitHub doesn't suppress the
     # next attempt.
     if any_check_succeeded:
-        _reconcile_last_run[user_id] = now
+        _reconcile_mark_run(user_id, now)
 
     if not stale:
         return
