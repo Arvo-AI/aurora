@@ -167,6 +167,9 @@ def _get_http_client() -> httpx.AsyncClient:
         _http_client = httpx.AsyncClient(
             base_url=API_BASE,
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            # Outer safety net per request. Tighter per-call deadlines are enforced
+            # via `async with asyncio.timeout(N)` at call sites (15s polls, 60s RCA).
+            timeout=httpx.Timeout(60.0),
         )
     return _http_client
 
@@ -177,9 +180,12 @@ async def _api(
     *,
     params: Optional[Dict[str, Any]] = None,
     body: Optional[Dict[str, Any]] = None,
-    timeout: float = 30,
 ) -> Dict[str, Any]:
-    """Proxy a request to the Aurora Flask API with identity from the MCP token."""
+    """Proxy a request to the Aurora Flask API with identity from the MCP token.
+
+    Default request timeout is 30s (configured on the shared httpx client).
+    Callers that need a different deadline wrap with `async with asyncio.timeout(N)`.
+    """
     if not path.startswith("/"):
         raise ValueError(f"Path must be a relative path starting with /: {path}")
     token = _get_token()
@@ -189,7 +195,7 @@ async def _api(
         headers["X-Internal-Secret"] = _INTERNAL_SECRET
     client = _get_http_client()
     resp = await client.request(
-        method, path, params=params, json=body, headers=headers, timeout=timeout,
+        method, path, params=params, json=body, headers=headers,
     )
     try:
         resp.raise_for_status()

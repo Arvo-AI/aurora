@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 _POLL_TOTAL_SECONDS = 45.0
 _POLL_INTERVAL_INITIAL = 1.0
 _POLL_INTERVAL_MAX = 4.0
+_POLL_REQUEST_TIMEOUT = 15.0
 
 _TERMINAL_OK = frozenset({"complete", "completed"})
 _TERMINAL_ERR = frozenset({"error", "cancelled", "failed"})
@@ -36,9 +37,78 @@ _TERMINAL_ERR = frozenset({"error", "cancelled", "failed"})
 # (see DB). Accept "aurora" too in case the schema ever shifts.
 _ASSISTANT_SENDERS = frozenset({"bot", "aurora"})
 
+ApiCall = Callable[..., Awaitable[Dict[str, Any]]]
+
+
+def _validate_inputs(message: Any, session_id: Optional[str], mode: str, poll_only: bool) -> Optional[Dict[str, Any]]:
+    if mode not in ("chat", "rca"):
+        return {"error": "mode must be 'chat' or 'rca'"}
+    if poll_only and not session_id:
+        return {"error": "session_id is required when poll_only=True"}
+    if not poll_only and not isinstance(message, str):
+        return {"error": "message must be a string"}
+    return None
+
+
+async def _create_session(api_call: ApiCall) -> Optional[str]:
+    created = await api_call(
+        "POST", "/chat_api/sessions",
+        body={"title": "MCP chat", "ui_state": {"isMCP": True}},
+    )
+    return created.get("id") if isinstance(created, dict) else None
+
+
+async def _post_message(api_call: ApiCall, sid: str, message: str, mode: str) -> int:
+    posted = await api_call(
+        "POST", f"/chat_api/sessions/{sid}/messages",
+        body={"message": message, "mode": mode},
+    )
+    return int(posted.get("seq") or 0) if isinstance(posted, dict) else 0
+
+
+def _latest_assistant_text(msgs: List[Dict[str, Any]], fallback: Optional[str]) -> Optional[str]:
+    for m in reversed(msgs):
+        if m.get("sender") in _ASSISTANT_SENDERS:
+            return m.get("text") or fallback
+    return fallback
+
+
+def _terminal_result(
+    status: str, sid: Optional[str], page: Dict[str, Any], latest_partial: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    if status in _TERMINAL_OK:
+        return {
+            "session_id": sid,
+            "status": "complete",
+            "response": latest_partial or "",
+            "citations": page.get("citations", []),
+        }
+    if status in _TERMINAL_ERR:
+        return {
+            "session_id": sid,
+            "status": status,
+            "error": page.get("error") or "Chat session ended unsuccessfully",
+        }
+    return None
+
+
+async def _poll_once(
+    api_call: ApiCall, sid: str, last_seq: int
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]], str, int]:
+    async with asyncio.timeout(_POLL_REQUEST_TIMEOUT):
+        page = await api_call(
+            "GET", f"/chat_api/sessions/{sid}/messages",
+            params={"after": last_seq},
+        )
+    msgs: List[Dict[str, Any]] = page.get("messages") or []
+    status = page.get("status", "unknown")
+    if msgs:
+        last_seq = int(page.get("seq") or last_seq + len(msgs))
+    return page, msgs, status, last_seq
+
 
 async def chat_with_aurora(
-    api_call: Callable[..., Awaitable[Dict[str, Any]]],
+    api_call: ApiCall,
     *,
     message: str = "",
     session_id: Optional[str] = None,
@@ -56,70 +126,36 @@ async def chat_with_aurora(
             assistant messages. Use to resume a still-running session without
             sending a new turn.
     """
-    if mode not in ("chat", "rca"):
-        return {"error": "mode must be 'chat' or 'rca'"}
-    if poll_only and not session_id:
-        return {"error": "session_id is required when poll_only=True"}
-    if not poll_only and not isinstance(message, str):
-        return {"error": "message must be a string"}
+    err = _validate_inputs(message, session_id, mode, poll_only)
+    if err is not None:
+        return err
 
     sid = session_id
     last_seq = 0
 
     if not poll_only:
         if not sid:
-            created = await api_call(
-                "POST", "/chat_api/sessions",
-                body={"title": "MCP chat", "ui_state": {"isMCP": True}},
-                timeout=30,
-            )
-            sid = created.get("id")
+            sid = await _create_session(api_call)
             if not sid:
-                return {"error": "Failed to create chat session", "raw": created}
-
+                return {"error": "Failed to create chat session"}
         if message:
-            posted = await api_call(
-                "POST", f"/chat_api/sessions/{sid}/messages",
-                body={"message": message, "mode": mode}, timeout=30,
-            )
-            last_seq = int(posted.get("seq") or 0)
+            last_seq = await _post_message(api_call, sid, message, mode)
 
     elapsed = 0.0
     interval = _POLL_INTERVAL_INITIAL
     latest_partial: Optional[str] = None
 
     while elapsed < _POLL_TOTAL_SECONDS:
-        await asyncio.sleep(interval)
+        await asyncio.sleep(interval)  # NOSONAR S7484: cross-process HTTP poll, no in-process signal to wait on.
         elapsed += interval
         interval = min(interval * 2, _POLL_INTERVAL_MAX)
 
-        page = await api_call(
-            "GET", f"/chat_api/sessions/{sid}/messages",
-            params={"after": last_seq}, timeout=15,
-        )
-        msgs: List[Dict[str, Any]] = page.get("messages") or []
-        status = page.get("status", "unknown")
+        page, msgs, status, last_seq = await _poll_once(api_call, sid, last_seq)
+        latest_partial = _latest_assistant_text(msgs, latest_partial)
 
-        if msgs:
-            last_seq = int(page.get("seq") or last_seq + len(msgs))
-            for m in reversed(msgs):
-                if m.get("sender") in _ASSISTANT_SENDERS:
-                    latest_partial = m.get("text") or latest_partial
-                    break
-
-        if status in _TERMINAL_OK:
-            return {
-                "session_id": sid,
-                "status": "complete",
-                "response": latest_partial or "",
-                "citations": page.get("citations", []),
-            }
-        if status in _TERMINAL_ERR:
-            return {
-                "session_id": sid,
-                "status": status,
-                "error": page.get("error") or "Chat session ended unsuccessfully",
-            }
+        terminal = _terminal_result(status, sid, page, latest_partial)
+        if terminal is not None:
+            return terminal
 
     return {
         "session_id": sid,

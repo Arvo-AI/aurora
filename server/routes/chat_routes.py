@@ -579,8 +579,8 @@ def post_chat_message(user_id, session_id):
 
         return jsonify({'session_id': session_id, 'seq': user_seq, 'status': 'in_progress'}), 202
 
-    except Exception as e:
-        logging.error(f"Error posting chat message: {e}", exc_info=True)
+    except Exception:
+        logging.exception("Error posting chat message")
         return jsonify({'error': 'Failed to post chat message'}), 500
 
 
@@ -636,8 +636,8 @@ def get_chat_messages(user_id, session_id):
             'citations': citations,
         }), 200
 
-    except Exception as e:
-        logging.error(f"Error fetching chat messages: {e}", exc_info=True)
+    except Exception:
+        logging.exception("Error fetching chat messages")
         return jsonify({'error': 'Failed to fetch chat messages'}), 500
 
 

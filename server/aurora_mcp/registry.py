@@ -711,6 +711,32 @@ _ALL_SKILLS = frozenset(
 _ALL_CATEGORIES = frozenset(e.category.lower() for e in DISPATCH_ALLOWLIST)
 
 
+def _normalize_search_filters(
+    query: str, category: Optional[str], connector: Optional[str],
+) -> Tuple[str, str, str]:
+    q = query.strip().lower()
+    cat = (category or "").strip().lower()
+    conn = (connector or "").strip().lower()
+    if cat and cat not in _ALL_CATEGORIES and cat in _ALL_SKILLS:
+        conn = conn or cat
+        cat = ""
+    return q, cat, conn
+
+
+def _entry_matches_search(
+    entry: "DispatchEntry", q: str, cat: str, conn: str, user_id: Optional[str],
+) -> bool:
+    if cat and entry.category.lower() != cat:
+        return False
+    if conn and conn not in {s.lower() for s in entry.enabling_skills}:
+        return False
+    if q and q not in entry.name.lower() and q not in entry.description.lower():
+        return False
+    if user_id is not None and not dispatch_entry_visible(entry, user_id):
+        return False
+    return True
+
+
 def search_dispatch_entries(
     query: str = "",
     category: Optional[str] = None,
@@ -726,23 +752,10 @@ def search_dispatch_entries(
     category (a common LLM mistake), treat it as `connector` so the search
     still finds something.
     """
-    q = query.strip().lower()
-    cat = (category or "").strip().lower()
-    conn = (connector or "").strip().lower()
-
-    if cat and cat not in _ALL_CATEGORIES and cat in _ALL_SKILLS:
-        conn = conn or cat
-        cat = ""
-
+    q, cat, conn = _normalize_search_filters(query, category, connector)
     matches: List[DispatchEntry] = []
     for entry in DISPATCH_ALLOWLIST:
-        if cat and entry.category.lower() != cat:
-            continue
-        if conn and conn not in {s.lower() for s in entry.enabling_skills}:
-            continue
-        if q and q not in entry.name.lower() and q not in entry.description.lower():
-            continue
-        if user_id is not None and not dispatch_entry_visible(entry, user_id):
+        if not _entry_matches_search(entry, q, cat, conn, user_id):
             continue
         matches.append(entry)
         if len(matches) >= limit:

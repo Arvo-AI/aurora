@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Tuple
 
 
@@ -22,8 +23,9 @@ def make_captured_api_call() -> Tuple[Any, List[Tuple]]:
     """Return (api_call, captured) where api_call records every (method, path, params, body)."""
     captured: List[Tuple] = []
 
-    async def api_call(method, path, *, params=None, body=None, timeout=30):
+    async def api_call(method, path, *, params=None, body=None):
         captured.append((method, path, params, body))
+        await asyncio.sleep(0)
         return {"ok": True, "method": method, "path": path}
 
     return api_call, captured

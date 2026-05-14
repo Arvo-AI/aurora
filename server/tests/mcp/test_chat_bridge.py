@@ -22,8 +22,9 @@ def _make_api_call(script: List[Dict[str, Any]]):
     """Return an api_call that consumes responses from `script` in order."""
     calls: List[tuple] = []
 
-    async def _api(method, path, *, params=None, body=None, timeout=30):
+    async def _api(method, path, *, params=None, body=None):
         calls.append((method, path, params, body))
+        await asyncio.sleep(0)
         return script.pop(0) if script else {"error": "no more scripted responses"}
 
     return _api, calls
@@ -92,7 +93,9 @@ def test_chat_poll_only_resumes_without_posting():
 
 
 def test_poll_only_requires_session_id():
-    async def _api(*a, **k): return {}
+    async def _api(*a, **k):
+        await asyncio.sleep(0)
+        return {}
     result = asyncio.run(chat_bridge.chat_with_aurora(
         _api, poll_only=True,
     ))
@@ -100,7 +103,9 @@ def test_poll_only_requires_session_id():
 
 
 def test_chat_validates_mode():
-    async def _api(*a, **k): return {}
+    async def _api(*a, **k):
+        await asyncio.sleep(0)
+        return {}
     result = asyncio.run(chat_bridge.chat_with_aurora(
         _api, message="hi", mode="bogus",
     ))

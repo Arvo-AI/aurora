@@ -63,6 +63,184 @@ def _first_connected(skills: List[str], user_id: str) -> Optional[str]:
 _SPEC_BY_NAME: Dict[str, GatedToolSpec] = {s.name: s for s in TIER2_TOOLS}
 
 
+def _resolve_source(
+    tool_name: str, user_id: str, source: Optional[str]
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Return (chosen_source, error_payload). Exactly one is non-None."""
+    spec = _SPEC_BY_NAME[tool_name]
+    candidates: List[str] = [source] if source else list(spec.enabling_skills)
+    chosen = _first_connected(candidates, user_id)
+    if chosen is None:
+        return None, _not_connected_error(spec)
+    return chosen, None
+
+
+_ALERTS_PATH_BY_SOURCE: Dict[str, str] = {
+    "datadog": "/datadog/monitors",
+    "newrelic": "/newrelic/issues",
+    "dynatrace": "/dynatrace/alerts",
+    "opsgenie": "/opsgenie/events/ingested",
+    "incidentio": "/incidentio/alerts",
+    "splunk": "/splunk/alerts",
+}
+
+
+async def _do_query_logs(
+    api_call: ApiCall, user_id: str, query: str,
+    source: Optional[str], time_range_minutes: int, limit: int,
+) -> Dict[str, Any]:
+    chosen, err = _resolve_source("query_logs", user_id, source)
+    if err is not None:
+        return err
+    if chosen == "datadog":
+        from_iso, to_iso = _rfc3339_window(time_range_minutes)
+        body = {"query": query, "from": from_iso, "to": to_iso, "limit": limit}
+        return truncate_payload(
+            await api_call("POST", "/datadog/logs/search", body=body),
+            tool_name="query_logs",
+        )
+    if chosen == "splunk":
+        body = {
+            "query": query,
+            "earliestTime": f"-{int(time_range_minutes)}m",
+            "latestTime": "now",
+            "maxCount": limit,
+        }
+        return truncate_payload(
+            await api_call("POST", "/splunk/search", body=body),
+            tool_name="query_logs",
+        )
+    # Unreachable today — fires only if TIER2_TOOLS["query_logs"].enabling_skills
+    # is extended without a matching branch above. Raise to make the gap loud.
+    raise AssertionError(f"query_logs: no dispatch branch for source {chosen!r}")
+
+
+async def _do_query_metrics(
+    api_call: ApiCall, user_id: str, query: str, time_range_minutes: int,
+) -> Dict[str, Any]:
+    spec = _SPEC_BY_NAME["query_metrics"]
+    if not _check_skill_connected("datadog", user_id):
+        return _not_connected_error(spec)
+    from_ms, to_ms = _epoch_ms_window(time_range_minutes)
+    return truncate_payload(
+        await api_call(
+            "POST", "/datadog/metrics/query",
+            body={"query": query, "fromMs": from_ms, "toMs": to_ms},
+        ),
+        tool_name="query_metrics",
+    )
+
+
+async def _do_query_alerts(
+    api_call: ApiCall, user_id: str, source: Optional[str], limit: int,
+) -> Dict[str, Any]:
+    chosen, err = _resolve_source("query_alerts", user_id, source)
+    if err is not None:
+        return err
+    path = _ALERTS_PATH_BY_SOURCE.get(chosen or "")
+    if not path:
+        return {"error": "unsupported_source", "source": chosen}
+    return truncate_payload(
+        await api_call("GET", path, params={"limit": limit}),
+        tool_name="query_alerts",
+    )
+
+
+async def _do_query_jira(
+    api_call: ApiCall, user_id: str, action: str,
+    jql: Optional[str], issue_key: Optional[str], max_results: int,
+) -> Dict[str, Any]:
+    spec = _SPEC_BY_NAME["query_jira"]
+    if not _check_skill_connected("jira", user_id):
+        return _not_connected_error(spec)
+    if action == "search":
+        if not jql:
+            return {"error": "jql_required"}
+        return truncate_payload(
+            await api_call(
+                "POST", "/jira/search",
+                body={"jql": jql, "maxResults": max_results},
+            ),
+            tool_name="query_jira",
+        )
+    if action == "get_issue":
+        if not issue_key:
+            return {"error": "issue_key_required"}
+        return truncate_payload(
+            await api_call("GET", f"/jira/issue/{issue_key}"),
+            tool_name="query_jira",
+        )
+    return {"error": "invalid_action", "valid_actions": ["search", "get_issue"]}
+
+
+async def _do_query_notion(
+    api_call: ApiCall, user_id: str, action: str, db_id: Optional[str],
+) -> Dict[str, Any]:
+    spec = _SPEC_BY_NAME["query_notion"]
+    if not _check_skill_connected("notion", user_id):
+        return _not_connected_error(spec)
+    if action == "list_databases":
+        return truncate_payload(
+            await api_call("GET", "/notion/databases"),
+            tool_name="query_notion",
+        )
+    if action == "get_database":
+        if not db_id:
+            return {"error": "db_id_required"}
+        return truncate_payload(
+            await api_call("GET", f"/notion/databases/{db_id}"),
+            tool_name="query_notion",
+        )
+    return {
+        "error": "invalid_action",
+        "valid_actions": ["list_databases", "get_database"],
+    }
+
+
+async def _bitbucket_action(
+    api_call: ApiCall, action: str,
+    workspace: Optional[str], repo_slug: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Dispatch a single Bitbucket action. Returns None if action is unknown."""
+    if action == "list_workspaces":
+        return truncate_payload(
+            await api_call("GET", "/bitbucket/workspaces"),
+            tool_name="query_bitbucket",
+        )
+    if action == "list_repos":
+        if not workspace:
+            return {"error": "workspace_required"}
+        return truncate_payload(
+            await api_call("GET", f"/bitbucket/repos/{workspace}"),
+            tool_name="query_bitbucket",
+        )
+    if action in ("list_branches", "list_prs"):
+        if not workspace or not repo_slug:
+            return {"error": "workspace_and_repo_slug_required"}
+        sub = "branches" if action == "list_branches" else "pull-requests"
+        return truncate_payload(
+            await api_call("GET", f"/bitbucket/{sub}/{workspace}/{repo_slug}"),
+            tool_name="query_bitbucket",
+        )
+    return None
+
+
+async def _do_query_bitbucket(
+    api_call: ApiCall, user_id: str, action: str,
+    workspace: Optional[str], repo_slug: Optional[str],
+) -> Dict[str, Any]:
+    spec = _SPEC_BY_NAME["query_bitbucket"]
+    if not _check_skill_connected("bitbucket", user_id):
+        return _not_connected_error(spec)
+    result = await _bitbucket_action(api_call, action, workspace, repo_slug)
+    if result is not None:
+        return result
+    return {
+        "error": "invalid_action",
+        "valid_actions": ["list_workspaces", "list_repos", "list_branches", "list_prs"],
+    }
+
+
 def register_tier2_tools(
     mcp,
     api_call: ApiCall,
@@ -75,10 +253,6 @@ def register_tier2_tools(
         uid, _ = resolve_token(token)
         return uid
 
-    # ------------------------------------------------------------------
-    # query_logs — Datadog + Splunk only (no logs endpoint exists for
-    # newrelic/coroot/dynatrace).
-    # ------------------------------------------------------------------
     @mcp.tool()
     async def query_logs(
         query: str,
@@ -89,39 +263,10 @@ def register_tier2_tools(
         """Query logs. Pass `source` to pin a backend (datadog/splunk); omit to
         let Aurora pick the first connected one. Advanced — for investigations
         prefer chat_with_aurora."""
-        spec = _SPEC_BY_NAME["query_logs"]
-        user_id = _user_id()
-        candidates: List[str] = [source] if source else list(spec.enabling_skills)
-        chosen = _first_connected(candidates, user_id)
-        if chosen is None:
-            return _not_connected_error(spec)
+        return await _do_query_logs(
+            api_call, _user_id(), query, source, time_range_minutes, limit,
+        )
 
-        if chosen == "datadog":
-            from_iso, to_iso = _rfc3339_window(time_range_minutes)
-            body = {"query": query, "from": from_iso, "to": to_iso, "limit": limit}
-            return truncate_payload(
-                await api_call("POST", "/datadog/logs/search", body=body),
-                tool_name="query_logs",
-            )
-        if chosen == "splunk":
-            # Splunk relative-time syntax e.g. "-60m" — matches the route default.
-            body = {
-                "query": query,
-                "earliestTime": f"-{int(time_range_minutes)}m",
-                "latestTime": "now",
-                "maxCount": limit,
-            }
-            return truncate_payload(
-                await api_call("POST", "/splunk/search", body=body),
-                tool_name="query_logs",
-            )
-        # Unreachable today — fires only if TIER2_TOOLS['query_logs'].enabling_skills
-        # is extended without a matching branch above. Raise to make the gap loud.
-        raise AssertionError(f"query_logs: no dispatch branch for source {chosen!r}")
-
-    # ------------------------------------------------------------------
-    # query_metrics — Datadog only.
-    # ------------------------------------------------------------------
     @mcp.tool()
     async def query_metrics(
         query: str,
@@ -132,23 +277,8 @@ def register_tier2_tools(
         `query` must be a full Datadog query expression including the scope.
         Example: `system.cpu.user{*}` or `avg:trace.http.request.duration{env:prod}`.
         Bare metric names (`system.cpu.user`) will fail to parse."""
-        spec = _SPEC_BY_NAME["query_metrics"]
-        user_id = _user_id()
-        if not _check_skill_connected("datadog", user_id):
-            return _not_connected_error(spec)
-        from_ms, to_ms = _epoch_ms_window(time_range_minutes)
-        return truncate_payload(
-            await api_call(
-                "POST", "/datadog/metrics/query",
-                body={"query": query, "fromMs": from_ms, "toMs": to_ms},
-            ),
-            tool_name="query_metrics",
-        )
+        return await _do_query_metrics(api_call, _user_id(), query, time_range_minutes)
 
-    # ------------------------------------------------------------------
-    # query_alerts — multi-source. Each backend has a single "alerts" or
-    # "events/ingested" GET endpoint.
-    # ------------------------------------------------------------------
     @mcp.tool()
     async def query_alerts(
         source: Optional[str] = None,
@@ -156,33 +286,8 @@ def register_tier2_tools(
     ) -> Dict[str, Any]:
         """Read alerts from a connected alerting source. Pass `source` to pin
         one of: datadog, newrelic, dynatrace, opsgenie, incidentio, splunk."""
-        spec = _SPEC_BY_NAME["query_alerts"]
-        user_id = _user_id()
-        candidates: List[str] = [source] if source else list(spec.enabling_skills)
-        chosen = _first_connected(candidates, user_id)
-        if chosen is None:
-            return _not_connected_error(spec)
+        return await _do_query_alerts(api_call, _user_id(), source, limit)
 
-        path_by_source = {
-            "datadog": "/datadog/monitors",
-            "newrelic": "/newrelic/issues",
-            "dynatrace": "/dynatrace/alerts",
-            "opsgenie": "/opsgenie/events/ingested",
-            "incidentio": "/incidentio/alerts",
-            "splunk": "/splunk/alerts",
-        }
-        path = path_by_source.get(chosen)
-        if not path:
-            return {"error": "unsupported_source", "source": chosen}
-
-        return truncate_payload(
-            await api_call("GET", path, params={"limit": limit}),
-            tool_name="query_alerts",
-        )
-
-    # ------------------------------------------------------------------
-    # query_jira — search + get_issue.
-    # ------------------------------------------------------------------
     @mcp.tool()
     async def query_jira(
         action: str,
@@ -192,64 +297,18 @@ def register_tier2_tools(
     ) -> Dict[str, Any]:
         """Read Jira. `action` is one of: search, get_issue. Pass `jql` for
         search, `issue_key` for get_issue."""
-        spec = _SPEC_BY_NAME["query_jira"]
-        user_id = _user_id()
-        if not _check_skill_connected("jira", user_id):
-            return _not_connected_error(spec)
+        return await _do_query_jira(
+            api_call, _user_id(), action, jql, issue_key, max_results,
+        )
 
-        if action == "search":
-            if not jql:
-                return {"error": "jql_required"}
-            return truncate_payload(
-                await api_call(
-                    "POST", "/jira/search",
-                    body={"jql": jql, "maxResults": max_results},
-                ),
-                tool_name="query_jira",
-            )
-        if action == "get_issue":
-            if not issue_key:
-                return {"error": "issue_key_required"}
-            return truncate_payload(
-                await api_call("GET", f"/jira/issue/{issue_key}"),
-                tool_name="query_jira",
-            )
-        return {"error": "invalid_action", "valid_actions": ["search", "get_issue"]}
-
-    # ------------------------------------------------------------------
-    # query_notion — only /notion/databases endpoints exist.
-    # ------------------------------------------------------------------
     @mcp.tool()
     async def query_notion(
         action: str,
         db_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Read Notion. `action`: list_databases, get_database (requires db_id)."""
-        spec = _SPEC_BY_NAME["query_notion"]
-        user_id = _user_id()
-        if not _check_skill_connected("notion", user_id):
-            return _not_connected_error(spec)
+        return await _do_query_notion(api_call, _user_id(), action, db_id)
 
-        if action == "list_databases":
-            return truncate_payload(
-                await api_call("GET", "/notion/databases"),
-                tool_name="query_notion",
-            )
-        if action == "get_database":
-            if not db_id:
-                return {"error": "db_id_required"}
-            return truncate_payload(
-                await api_call("GET", f"/notion/databases/{db_id}"),
-                tool_name="query_notion",
-            )
-        return {
-            "error": "invalid_action",
-            "valid_actions": ["list_databases", "get_database"],
-        }
-
-    # ------------------------------------------------------------------
-    # query_bitbucket — workspace-scoped reads.
-    # ------------------------------------------------------------------
     @mcp.tool()
     async def query_bitbucket(
         action: str,
@@ -259,38 +318,6 @@ def register_tier2_tools(
         """Read Bitbucket. `action`: list_workspaces, list_repos, list_branches,
         list_prs. Pass `workspace` (the URL slug) for everything except
         list_workspaces. `list_branches`/`list_prs` also require `repo_slug`."""
-        spec = _SPEC_BY_NAME["query_bitbucket"]
-        user_id = _user_id()
-        if not _check_skill_connected("bitbucket", user_id):
-            return _not_connected_error(spec)
-
-        if action == "list_workspaces":
-            return truncate_payload(
-                await api_call("GET", "/bitbucket/workspaces"),
-                tool_name="query_bitbucket",
-            )
-        if action == "list_repos":
-            if not workspace:
-                return {"error": "workspace_required"}
-            return truncate_payload(
-                await api_call("GET", f"/bitbucket/repos/{workspace}"),
-                tool_name="query_bitbucket",
-            )
-        if action == "list_branches":
-            if not workspace or not repo_slug:
-                return {"error": "workspace_and_repo_slug_required"}
-            return truncate_payload(
-                await api_call("GET", f"/bitbucket/branches/{workspace}/{repo_slug}"),
-                tool_name="query_bitbucket",
-            )
-        if action == "list_prs":
-            if not workspace or not repo_slug:
-                return {"error": "workspace_and_repo_slug_required"}
-            return truncate_payload(
-                await api_call("GET", f"/bitbucket/pull-requests/{workspace}/{repo_slug}"),
-                tool_name="query_bitbucket",
-            )
-        return {
-            "error": "invalid_action",
-            "valid_actions": ["list_workspaces", "list_repos", "list_branches", "list_prs"],
-        }
+        return await _do_query_bitbucket(
+            api_call, _user_id(), action, workspace, repo_slug,
+        )
