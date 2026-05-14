@@ -45,14 +45,13 @@ def run_scheduled_actions():
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
-                all_users = cur.fetchall()
-
-                seen_orgs = set()
-                for user_id, org_id in all_users:
-                    if org_id in seen_orgs:
-                        continue
-                    seen_orgs.add(org_id)
+                cur.execute(
+                    "SELECT DISTINCT ON (org_id) id, org_id "
+                    "FROM users WHERE org_id IS NOT NULL "
+                    "ORDER BY org_id, id"
+                )
+                org_reps = cur.fetchall()
+                for user_id, _org_id in org_reps:
                     set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]")
                     cur.execute(_ACTIONS_QUERY)
                     rows.extend(cur.fetchall())
