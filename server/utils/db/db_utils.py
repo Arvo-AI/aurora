@@ -1345,6 +1345,29 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: ensure metadata_summary / metadata_status columns
+            # exist on github_connected_repos. The CREATE TABLE in this
+            # file already declares them so brand-new deploys are fine,
+            # but long-lived deployments whose table predates those
+            # columns would 500 on /github/repo-selections without this
+            # idempotent ADD COLUMN IF NOT EXISTS pair.
+            try:
+                cursor.execute(
+                    "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS metadata_summary TEXT;"
+                )
+                cursor.execute(
+                    "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS metadata_status VARCHAR(20) DEFAULT 'pending';"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured metadata_summary/metadata_status columns exist on github_connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding metadata columns to github_connected_repos: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add disconnected_at to user_github_installations so
             # Aurora-side disconnect can soft-delete the link instead of
             # dropping the row. Reconnects (which often don't re-fire GitHub's
