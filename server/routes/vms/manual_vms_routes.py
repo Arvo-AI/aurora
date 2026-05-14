@@ -37,7 +37,7 @@ def _validate_required(fields: Dict[str, Any]):
         raise ValueError(f"Missing required field(s): {', '.join(missing)}")
 
 
-def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
+def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
     (
         vm_id,
         name,
@@ -62,6 +62,7 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
         "createdAt": created_at.isoformat() if created_at else None,
         "updatedAt": updated_at.isoformat() if updated_at else None,
         "source": "manual",
+        "isShared": is_shared,
     }
 
 
@@ -69,20 +70,28 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
 @limiter.limit("30 per minute;200 per hour")
 @require_permission("vms", "read")
 def list_manual_vms(user_id):
+    from utils.db.org_scope import resolve_org, org_read_predicate
+    org_id = resolve_org(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")
             cur.execute(
-                """
-                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
+                f"""
+                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at, user_id
                 FROM user_manual_vms
-                WHERE user_id = %s
+                WHERE {predicate}
                 ORDER BY created_at DESC
                 """,
-                (user_id,),
+                pred_params,
             )
             rows = cur.fetchall()
-    return jsonify({"vms": [_serialize_vm_row(r) for r in rows]})
+    vms = []
+    for r in rows:
+        row_data = r[:10]
+        row_owner_id = r[10]
+        vms.append(_serialize_vm_row(row_data, is_shared=(row_owner_id != user_id)))
+    return jsonify({"vms": vms})
 
 
 @manual_vms_bp.route("/api/vms/manual", methods=["POST"])
@@ -219,6 +228,16 @@ def update_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:update]")
+            cur.execute(
+                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                (vm_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                return jsonify({"error": "Manual VM not found"}), 404
+            if existing[0] != user_id:
+                return jsonify({"error": "Cannot modify a shared VM"}), 403
+
             query = sql.SQL(
                 """
                 UPDATE user_manual_vms
@@ -244,6 +263,15 @@ def delete_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:delete]")
+            cur.execute(
+                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                (vm_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                return jsonify({"error": "Manual VM not found"}), 404
+            if existing[0] != user_id:
+                return jsonify({"error": "Cannot delete a shared VM"}), 403
             cur.execute(
                 "DELETE FROM user_manual_vms WHERE id = %s AND user_id = %s RETURNING id;",
                 (vm_id, user_id),
@@ -283,15 +311,17 @@ def check_manual_vm_connection(user_id):
                 set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-load]")
                 cur.execute(
                     """
-                    SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username
+                    SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, user_id
                     FROM user_manual_vms
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s
                     """,
-                    (vm_id, user_id),
+                    (vm_id,),
                 )
                 vm_row = cur.fetchone()
         if not vm_row:
             return jsonify({"error": "Manual VM not found"}), 404
+        if vm_row[5] != user_id:
+            return jsonify({"error": "Cannot run connection check on a shared VM"}), 403
 
         ip_address = ip_address or vm_row[0]
         port = port or vm_row[1]

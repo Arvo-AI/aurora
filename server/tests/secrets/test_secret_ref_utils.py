@@ -15,52 +15,76 @@ from utils.secrets import secret_ref_utils as sru
 from utils.secrets.secret_ref_utils import (
     SUPPORTED_SECRET_PROVIDERS,
     SecretRefManager,
-    _org_clause,
 )
+from utils.db.org_scope import org_read_predicate as _org_read_predicate, _validate_uuid
+
+_UID = "00000000-0000-0000-0000-000000000001"
+_OID = "00000000-0000-0000-0000-000000000007"
 
 
 # ---------------------------------------------------------------------------
-# _org_clause
+# _validate_uuid
 # ---------------------------------------------------------------------------
 
 
-class TestOrgClause:
-    """Pure SQL fragment builder concatenated into every credential WHERE clause."""
+class TestValidateUuid:
+    """UUID sanitization gate that every SQL parameter passes through."""
 
-    def test_none_org_returns_empty_fragment_and_empty_params(self):
-        assert _org_clause(None) == ("", ())
+    def test_valid_uuid_returned_unchanged(self):
+        assert _validate_uuid(_UID, "user_id") == _UID
 
-    def test_empty_string_org_returns_empty_fragment(self):
-        """Falsy values follow the same path as ``None``."""
-        assert _org_clause("") == ("", ())
+    def test_uppercase_uuid_normalised_to_lowercase(self):
+        """Returns canonical (lowercase) form, not the original casing."""
+        assert _validate_uuid(_UID.upper(), "user_id") == _UID
 
-    def test_concrete_org_returns_and_clause_and_param_tuple(self):
-        clause, params = _org_clause("org-7")
+    @pytest.mark.parametrize("bad", [
+        "",
+        "not-a-uuid",
+        "'; DROP TABLE user_tokens;--",
+        "../etc/passwd",
+        "00000000-0000-0000-0000-00000000000Z",
+    ])
+    def test_invalid_inputs_raise_value_error(self, bad):
+        with pytest.raises(ValueError):
+            _validate_uuid(bad, "user_id")
 
-        assert clause == "AND (org_id = %s OR org_id IS NULL)"
-        assert params == ("org-7",)
 
-    def test_clause_starts_with_and_so_it_appends_to_existing_where(self):
-        """Callers concatenate this onto a WHERE; missing AND is a SyntaxError."""
-        clause, _ = _org_clause("org-7")
-        assert clause.startswith("AND ")
+# ---------------------------------------------------------------------------
+# _org_read_predicate
+# ---------------------------------------------------------------------------
 
-    def test_clause_includes_org_id_is_null_for_legacy_rows(self):
-        """Pre-multi-tenancy rows have NULL org_id; they must remain visible."""
-        clause, _ = _org_clause("org-7")
-        assert "org_id IS NULL" in clause
+
+class TestOrgReadPredicate:
+    """SQL predicate builder for all credential queries — reads, writes, and deletes."""
+
+    def test_none_org_returns_user_id_only_predicate(self):
+        clause, params = _org_read_predicate(_UID, None)
+        assert clause == "user_id = %s"
+        assert params == (_UID,)
+
+    def test_concrete_org_returns_user_or_org_predicate(self):
+        clause, params = _org_read_predicate(_UID, _OID)
+        assert clause == "(user_id = %s OR org_id = %s)"
+        assert params == (_UID, _OID)
 
     def test_params_is_tuple_not_list(self):
-        _, params = _org_clause("org-7")
+        _, params = _org_read_predicate(_UID, _OID)
         assert isinstance(params, tuple)
 
-    def test_clause_uses_parameter_placeholder_not_inlined_value(self):
-        """SQL injection guard: org_id must go through %s, not f-string interpolation."""
-        clause, params = _org_clause("'; DROP TABLE user_tokens;--")
+    def test_clause_is_plain_string(self):
+        """Predicate is a plain SQL fragment — values go through %s params, not inline."""
+        clause, _ = _org_read_predicate(_UID, _OID)
+        assert isinstance(clause, str)
+        assert clause.count("%s") == 2
 
-        assert "%s" in clause
-        assert "DROP TABLE" not in clause
-        assert params == ("'; DROP TABLE user_tokens;--",)
+    def test_malicious_user_id_raises_before_sql(self):
+        """SQL injection attempt must be rejected at the UUID validation gate."""
+        with pytest.raises(ValueError):
+            _org_read_predicate("'; DROP TABLE user_tokens;--", _OID)
+
+    def test_malicious_org_id_raises_before_sql(self):
+        with pytest.raises(ValueError):
+            _org_read_predicate(_UID, "'; DROP TABLE orgs;--")
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +132,8 @@ def manager_with_mocked_db(monkeypatch):
 
     connect = MagicMock(return_value=conn)
     monkeypatch.setattr(sru, "connect_to_db_as_admin", connect)
-    monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value="org-7"))
-    monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value="org-7"))
+    monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=_OID))
+    monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=_OID))
 
     return SecretRefManager(), connect, cursor
 
@@ -121,13 +145,13 @@ class TestProviderLookupCaseInsensitive:
     def test_mixed_case_gcp_accepted(self, manager_with_mocked_db, spelling):
         manager, connect, _ = manager_with_mocked_db
 
-        assert manager.has_user_credentials("u-1", spelling) is True
+        assert manager.has_user_credentials(_UID, spelling) is True
         connect.assert_called_once()
 
     @pytest.mark.parametrize("spelling", ["aws", "AWS", "Aws", "aWs"])
     def test_mixed_case_aws_accepted(self, manager_with_mocked_db, spelling):
         manager, _, _ = manager_with_mocked_db
-        assert manager.has_user_credentials("u-1", spelling) is True
+        assert manager.has_user_credentials(_UID, spelling) is True
 
     @pytest.mark.parametrize(
         "compound",
@@ -138,7 +162,7 @@ class TestProviderLookupCaseInsensitive:
     ):
         """Only the prefix before the first ``_`` is checked against the set."""
         manager, _, _ = manager_with_mocked_db
-        assert manager.has_user_credentials("u-1", compound) is True
+        assert manager.has_user_credentials(_UID, compound) is True
 
     def test_get_user_token_data_also_canonicalizes_case(
         self, manager_with_mocked_db, monkeypatch,
@@ -150,7 +174,7 @@ class TestProviderLookupCaseInsensitive:
             manager, "get_secret", MagicMock(return_value='{"token": "t"}'),
         )
 
-        assert manager.get_user_token_data("u-1", "GCP") == {"token": "t"}
+        assert manager.get_user_token_data(_UID, "GCP") == {"token": "t"}
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +197,7 @@ class TestProviderParserRejectsMalformed:
             "set_rls_context",
             MagicMock(side_effect=AssertionError("set_rls_context must not run")),
         )
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=None))
         return connect
 
     @pytest.mark.parametrize(
@@ -196,7 +220,7 @@ class TestProviderParserRejectsMalformed:
     ):
         manager = SecretRefManager()
 
-        assert manager.has_user_credentials("u-1", bad_provider) is False
+        assert manager.has_user_credentials(_UID, bad_provider) is False
         db_explodes_if_called.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -214,23 +238,23 @@ class TestProviderParserRejectsMalformed:
     ):
         manager = SecretRefManager()
 
-        assert manager.get_user_token_data("u-1", bad_provider) is None
+        assert manager.get_user_token_data(_UID, bad_provider) is None
         db_explodes_if_called.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# _resolve_org returning None: _org_clause must be used (no NULL param bug)
+# resolve_org returning None: org_read_predicate must be used (no NULL param bug)
 # ---------------------------------------------------------------------------
 
 
 class TestHasUserCredentialsNullOrgPath:
-    """When _resolve_org returns None the SQL must not pass None as a %s param
+    """When resolve_org returns None the SQL must not pass None as a %s param
     for org_id — ``org_id = NULL`` is always false in PostgreSQL.  The fix is
-    to route through ``_org_clause`` which returns an empty fragment for None.
+    to route through ``org_read_predicate`` which falls back to user_id-only
+    matching when org_id is None.
     """
-
     def test_db_still_queried_when_org_is_none(self, monkeypatch):
-        """_resolve_org=None must not short-circuit; row found by user_id alone."""
+        """resolve_org=None must not short-circuit; row found by user_id alone."""
         cursor = MagicMock()
         cursor.fetchone.return_value = (1,)
         conn = MagicMock()
@@ -238,10 +262,10 @@ class TestHasUserCredentialsNullOrgPath:
 
         monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
         monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=None))
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=None))
 
         manager = SecretRefManager()
-        result = manager.has_user_credentials("u-1", "gcp")
+        result = manager.has_user_credentials(_UID, "gcp")
 
         assert result is True
         cursor.execute.assert_called()
@@ -255,10 +279,10 @@ class TestHasUserCredentialsNullOrgPath:
 
         monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
         monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=None))
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=None))
 
         manager = SecretRefManager()
-        manager.has_user_credentials("u-1", "gcp")
+        manager.has_user_credentials(_UID, "gcp")
 
         for call in cursor.execute.call_args_list:
             params = call.args[1] if len(call.args) > 1 else ()
@@ -284,8 +308,8 @@ class TestProviderCanonicalizedInSQL:
         conn = MagicMock()
         conn.cursor.return_value = cursor
         monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
-        monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value="org-7"))
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value="org-7"))
+        monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=_OID))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=_OID))
         return cursor
 
     @pytest.mark.parametrize("raw_provider", ["GCP", "Gcp", "gCp", "GcP"])
@@ -294,7 +318,7 @@ class TestProviderCanonicalizedInSQL:
     ):
         cursor = self._make_db(monkeypatch, (1,))
         manager = SecretRefManager()
-        manager.has_user_credentials("u-1", raw_provider)
+        manager.has_user_credentials(_UID, raw_provider)
 
         _, params = cursor.execute.call_args.args
         assert "gcp" in params, (
@@ -310,7 +334,7 @@ class TestProviderCanonicalizedInSQL:
     ):
         cursor = self._make_db(monkeypatch, None)
         manager = SecretRefManager()
-        manager.get_user_token_data("u-1", raw_provider)
+        manager.get_user_token_data(_UID, raw_provider)
 
         for call in cursor.execute.call_args_list:
             params = call.args[1] if len(call.args) > 1 else ()

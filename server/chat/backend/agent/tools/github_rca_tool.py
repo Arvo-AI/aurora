@@ -70,7 +70,7 @@ def _resolve_repository(
     explicit_repo: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], str]:
     """
-no put itr i    Resolve repository using priority order.
+    Resolve repository using priority order.
     Delegates to shared vcs_rca_utils with provider='github'.
 
     Returns: (owner, repo_name, source_description)

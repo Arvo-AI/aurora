@@ -16,6 +16,7 @@ from connectors.gcp_connector.auth.service_accounts import (
 )
 from connectors.gcp_connector.billing import has_active_billing
 from googleapiclient.discovery import build
+from utils.secrets.secret_ref_utils import get_token_owner_id
 
 gcp_projects_bp = Blueprint("gcp_projects", __name__)
 
@@ -195,12 +196,18 @@ def sa_project_access_get(user_id):
             result = _sa_mode_project_list(token_data, root_project)
             return jsonify({"projects": result, "root_project": root_project}), 200
 
+        # Resolve SA owner before refresh — after a refresh the token may be
+        # stored under user_id (creating a duplicate row), which would cause
+        # get_token_owner_id to return user_id (wrong SA hash) instead of the
+        # original connector owner's ID.
+        sa_owner_id = get_token_owner_id(user_id, "gcp")
+
         token_data, err = _refresh_and_reload_gcp_token(user_id)
         if err:
             return err
 
         credentials = get_credentials(token_data)
-        sa_email = get_aurora_service_account_email(user_id)
+        sa_email = get_aurora_service_account_email(sa_owner_id)
         result = _oauth_mode_project_list(credentials, sa_email, root_project)
         return jsonify({"projects": result, "root_project": root_project}), 200
 
@@ -237,12 +244,17 @@ def sa_project_access_post(user_id):
             if pid:
                 selections[pid] = enabled
 
+        # Resolve SA owner before refresh — refresh may create a token row
+        # under user_id (org-member), which would make get_token_owner_id
+        # return the wrong ID if called after.
+        sa_owner_id = get_token_owner_id(user_id, "gcp")
+
         token_data, err = _refresh_and_reload_gcp_token(user_id)
         if err:
             return err
 
         credentials = get_credentials(token_data)
-        sa_email = get_aurora_service_account_email(user_id)
+        sa_email = get_aurora_service_account_email(sa_owner_id)
         update_service_account_project_access(credentials, sa_email, selections)
 
         return jsonify({"success": True}), 200

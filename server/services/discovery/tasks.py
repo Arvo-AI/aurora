@@ -240,13 +240,8 @@ def run_user_discovery(self, user_id):
 
         if "gcp" in providers:
             # Fetch root project while we still have the cursor
-            cur.execute(
-                "SELECT preference_value FROM user_preferences "
-                "WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-                (user_id,)
-            )
-            root_row = cur.fetchone()
-            root_project = root_row[0] if root_row and root_row[0] else None
+            from utils.auth.stateless_auth import get_user_preference
+            root_project = get_user_preference(user_id, 'gcp_root_project')
 
         # Query active kubectl clusters for this user
         cur.execute("""
