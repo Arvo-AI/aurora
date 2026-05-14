@@ -251,7 +251,10 @@ def trigger_metadata_generation(user_id):
             generate_repo_metadata.delay(user_id, repo_full_name)
         except Exception as e:
             logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
-            _update_metadata_status(user_id, repo_full_name, "pending")
+            # Land on a terminal status so the UI surfaces the Retry
+            # button instead of spinning forever. ``pending`` would
+            # leave the row mid-flight with no worker to advance it.
+            _update_metadata_status(user_id, repo_full_name, "error")
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:
