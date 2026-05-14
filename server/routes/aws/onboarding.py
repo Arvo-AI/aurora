@@ -520,7 +520,7 @@ def delete_aws_account(user_id, workspace_id, account_id):
             return jsonify({"error": "Account not found or already disconnected"}), 404
 
     except Exception as e:
-        logger.error(
+        logger.exception(
             "Failed to delete AWS account %s for workspace %s: %s",
             sanitize(account_id),
             sanitize(workspace_id),
