@@ -17,9 +17,9 @@ def ensure_local_ssh_keys(user_id: str) -> bool:
         from utils.db.connection_pool import db_pool
         
         # Get user's SSH keys (org-aware: includes keys connected by any org member)
-        from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         ssh_keys = {}
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()

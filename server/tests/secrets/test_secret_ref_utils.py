@@ -15,9 +15,8 @@ from utils.secrets import secret_ref_utils as sru
 from utils.secrets.secret_ref_utils import (
     SUPPORTED_SECRET_PROVIDERS,
     SecretRefManager,
-    _org_read_predicate,
-    _validate_uuid,
 )
+from utils.db.org_scope import org_read_predicate as _org_read_predicate, _validate_uuid
 
 _UID = "00000000-0000-0000-0000-000000000001"
 _OID = "00000000-0000-0000-0000-000000000007"

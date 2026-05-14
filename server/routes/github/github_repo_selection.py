@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
-from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
+from utils.db.org_scope import resolve_org, org_read_predicate
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
@@ -33,8 +33,8 @@ def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
 def get_repo_selections(user_id):
     """Return all connected repos with metadata for this org."""
     try:
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:get_repo_selections]")
@@ -79,8 +79,8 @@ def save_repo_selections(user_id):
         if not isinstance(repositories, list):
             return jsonify({"error": "repositories array is required"}), 400
 
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -169,12 +169,14 @@ def save_repo_selections(user_id):
 @github_repo_selection_bp.route("/repo-selections", methods=["DELETE"])
 @require_permission("connectors", "write")
 def clear_repo_selections(user_id):
-    """Remove all connected repos for a user."""
+    """Remove all connected repos for the org."""
     try:
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
-                cur.execute("DELETE FROM github_connected_repos WHERE user_id = %s", (user_id,))
+                cur.execute(f"DELETE FROM github_connected_repos WHERE {predicate}", pred_params)
                 conn.commit()
         return jsonify({"message": "All repository selections cleared"})
     except Exception as e:
@@ -192,8 +194,8 @@ def update_repo_metadata(user_id, repo_full_name):
         if summary is None:
             return jsonify({"error": "metadata_summary is required"}), 400
 
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -229,8 +231,8 @@ def trigger_metadata_generation(user_id):
         if not repo_full_name:
             return jsonify({"error": "repo_full_name is required"}), 400
 
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:

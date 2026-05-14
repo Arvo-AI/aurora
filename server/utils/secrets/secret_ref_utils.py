@@ -7,12 +7,12 @@ Vault instead of storing actual token data in the database.
 
 import logging
 import json
-import uuid as _uuid
 from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import safe_provider
+from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
@@ -72,47 +72,10 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
 }
 
 
-def _resolve_org(user_id: str) -> Optional[str]:
-    """Best-effort org_id resolution for use in admin-connection queries."""
-    try:
-        from utils.auth.stateless_auth import resolve_org_id
-        return resolve_org_id(user_id)
-    except Exception:
-        return None
-
-
-def _validate_uuid(value: str, label: str) -> str:
-    """Validate that value is a well-formed UUID before use in SQL.
-
-    Returns the canonical string form of the UUID (always lowercase, standard
-    hyphenated format). This both validates the input and produces a value
-    derived from a uuid.UUID object rather than from the raw user input,
-    which breaks the taint chain for static analysis tools such as CodeQL.
-    Raises ValueError if the format is invalid.
-    """
-    try:
-        return str(_uuid.UUID(str(value)))
-    except (ValueError, AttributeError):
-        raise ValueError(f"Invalid {label} format") from None
-
-
-def _org_read_predicate(user_id: str, org_id: Optional[str]) -> Tuple[str, Tuple]:
-    """SQL predicate for all credential queries: match the requesting user OR
-    any row belonging to their org.  Every user belongs to an org and there is
-    exactly one credential row per provider per org, so this predicate is used
-    for reads, writes, updates, and deletes alike.
-
-    Both user_id and org_id are validated as UUIDs before being placed into
-    the query parameters, breaking the taint chain from user-supplied input.
-
-    Returns (sql_fragment, params) for use in a WHERE clause, e.g.:
-        ``f"... WHERE {predicate} AND provider = %s"``
-    """
-    safe_user_id = _validate_uuid(user_id, "user_id")
-    if org_id:
-        safe_org_id = _validate_uuid(org_id, "org_id")
-        return "(user_id = %s OR org_id = %s)", (safe_user_id, safe_org_id)
-    return "user_id = %s", (safe_user_id,)
+# Deprecated aliases kept for any external callers that still import the
+# private names.  Prefer importing from utils.db.org_scope directly.
+_resolve_org = resolve_org
+_org_read_predicate = org_read_predicate
 
 
 class SecretRefManager:
@@ -178,8 +141,8 @@ class SecretRefManager:
 
     def update_user_token_with_secret_ref(self, user_id: str, provider: str, secret_ref: str) -> bool:
         """Update a user's token record to point at a Vault secret reference."""
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -214,8 +177,8 @@ class SecretRefManager:
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return False
 
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -247,8 +210,8 @@ class SecretRefManager:
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return None
 
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
 
@@ -319,8 +282,8 @@ class SecretRefManager:
 
     def migrate_token_to_secret_ref(self, user_id: str, provider: str, secret_name_prefix: str = "aurora-dev") -> bool:
         """Migrate an existing token from token_data column to Vault."""
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -372,9 +335,9 @@ class SecretRefManager:
     # ------------------------------------------------------------------
 
     def _clear_secret_ref(self, user_id: str, provider: str) -> None:
-        """Set secret_ref to NULL for the org-visible row for provider (stale reference cleanup)."""
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        """Set secret_ref to NULL for the org's row for provider (stale reference cleanup)."""
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
@@ -407,8 +370,8 @@ class SecretRefManager:
         Deleting the shared row removes access for all org members, which is the
         correct outcome — the credential no longer exists for the org.
         """
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         delete_success = True
@@ -480,8 +443,8 @@ def get_token_owner_id(user_id: str, provider: str) -> str:
     Falls back to the requesting user_id if no row is found or the lookup fails.
     """
     provider_base = provider.lower().split('_')[0]
-    org_id = _resolve_org(user_id)
-    predicate, pred_params = _org_read_predicate(user_id, org_id)
+    org_id = resolve_org(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
     conn = None
     cursor = None
     try:

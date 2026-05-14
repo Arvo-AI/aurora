@@ -56,9 +56,9 @@ def _parse_suggestion_id(suggestion_id: str) -> Optional[int]:
 def _build_source_url(source_type: str, user_id: str) -> str:
     """Build platform URL from user's integration settings."""
     try:
-        from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
-        org_id = _resolve_org(user_id)
-        predicate, pred_params = _org_read_predicate(user_id, org_id)
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)

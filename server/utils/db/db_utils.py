@@ -313,7 +313,7 @@ def initialize_tables():
                         session_data JSONB,
                         last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         is_active BOOLEAN DEFAULT true,
-                        UNIQUE(user_id, provider)
+                        UNIQUE(org_id, provider)
                     );
                 """,
                 "github_connected_repos": """
@@ -1459,6 +1459,56 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding stateless columns to user_tokens: {e}")
+                conn.rollback()
+
+            # Migration: replace per-user unique constraint with per-org unique constraint on
+            # user_tokens so that an org shares one credential row per provider.
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        -- Deduplicate any existing rows with the same (org_id, provider) before
+                        -- adding the constraint. Keep the most recently updated row per pair and
+                        -- delete the rest. This handles prod data that violated the old invariant.
+                        DELETE FROM user_tokens
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY org_id, provider
+                                           ORDER BY COALESCE(last_activity, timestamp) DESC
+                                       ) AS rn
+                                FROM user_tokens
+                                WHERE org_id IS NOT NULL
+                            ) ranked
+                            WHERE rn > 1
+                        );
+
+                        -- Drop the old per-user constraint if it still exists
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_tokens_user_id_provider_key'
+                              AND conrelid = 'user_tokens'::regclass
+                        ) THEN
+                            ALTER TABLE user_tokens DROP CONSTRAINT user_tokens_user_id_provider_key;
+                        END IF;
+
+                        -- Add the new per-org constraint if it doesn't exist yet
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_tokens_org_id_provider_key'
+                              AND conrelid = 'user_tokens'::regclass
+                        ) THEN
+                            ALTER TABLE user_tokens ADD CONSTRAINT user_tokens_org_id_provider_key
+                                UNIQUE (org_id, provider);
+                        END IF;
+                    END
+                    $$;
+                """)
+                logging.info("Migrated user_tokens unique constraint to (org_id, provider).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error migrating user_tokens unique constraint: {e}")
                 conn.rollback()
 
             # Migration: Add ui_state column to chat_sessions if it doesn't exist

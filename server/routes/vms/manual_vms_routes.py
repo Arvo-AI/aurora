@@ -70,9 +70,9 @@ def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
 @limiter.limit("30 per minute;200 per hour")
 @require_permission("vms", "read")
 def list_manual_vms(user_id):
-    from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
-    org_id = _resolve_org(user_id)
-    predicate, pred_params = _org_read_predicate(user_id, org_id)
+    from utils.db.org_scope import resolve_org, org_read_predicate
+    org_id = resolve_org(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")

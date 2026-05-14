@@ -15,9 +15,9 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
 
     try:
         from utils.auth.stateless_auth import set_rls_context
-        from utils.secrets.secret_ref_utils import _resolve_org, _org_read_predicate
-        org_id = _resolve_org(user_id)
-        _, pred_params = _org_read_predicate(user_id, org_id)
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        _, pred_params = org_read_predicate(user_id, org_id)
         vm_predicate = "(mv.user_id = %s OR mv.org_id = %s)" if org_id else "mv.user_id = %s"
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
