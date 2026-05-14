@@ -100,10 +100,11 @@ export function useGitHubStatus(userId: string | null) {
     // - the user returns to the tab (covers uninstall-on-GitHub-then-back)
     const handleProviderChange = () => { checkStatus(); };
     const handleAuthMessage = (event: MessageEvent) => {
-      // Same-origin only — refresh is harmless but spoofed messages
-      // from arbitrary tabs would still cause unnecessary backend
-      // chatter and look like user activity in our logs.
-      if (event.origin !== window.location.origin) return;
+      // Payload is signal-only (no credentials); the worst a spoofed
+      // message can do is trigger a refresh of the user's own status,
+      // which is harmless. Skipping a strict origin allowlist here
+      // makes the instant-refresh path work in split frontend/backend
+      // host deployments where the popup origin differs.
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') {
         checkStatus();

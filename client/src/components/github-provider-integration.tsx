@@ -305,7 +305,8 @@ export default function GitHubProviderIntegration() {
     fetchInstallations();
     const handler = () => fetchInstallations();
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
+      // Signal-only payload — see use-github-status.ts for the
+      // rationale on skipping the origin allowlist here.
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') fetchInstallations();
     };
@@ -396,13 +397,15 @@ export default function GitHubProviderIntegration() {
       // Instant path: the success template posts a message right after
       // GitHub's redirect, so we can refresh before the popup actually
       // closes and avoid the multi-second "Connecting..." stutter.
-      // Tightly scoped: the message MUST come from THIS popup window
-      // and from our own origin. Otherwise any tab/iframe could spoof
-      // a finalize, and concurrent install + OAuth popups would cross-
-      // talk and stop each other's pollers.
+      // Scoped to THIS popup via `event.source === popup`. The `source`
+      // reference is unforgeable — only the actual popup window can
+      // match — so we don't need an origin allowlist here, which is
+      // important: the popup is served from the BACKEND origin (which
+      // can differ from the frontend origin in split-host deployments).
+      // Concurrent install + OAuth popups can't cross-finalize because
+      // each handler is bound to its own popup reference.
       const onMessage = (event: MessageEvent) => {
         if (event.source !== popup) return;
-        if (event.origin !== window.location.origin) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
           finalize();
@@ -511,11 +514,11 @@ export default function GitHubProviderIntegration() {
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
       };
       const onMessage = (event: MessageEvent) => {
-        // Tightly scoped to this popup + our origin so concurrent
-        // install/OAuth flows don't cross-finalize each other and
-        // arbitrary tabs can't spoof the message.
+        // Scoped via popup reference (unforgeable — same as
+        // handleAppInstall). Origin allowlist intentionally absent so
+        // split frontend/backend host deployments still get the
+        // instant-refresh path.
         if (event.source !== popup) return;
-        if (event.origin !== window.location.origin) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
           finalize();

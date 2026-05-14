@@ -64,7 +64,10 @@ export function useConnectorStatus(
       else if (connector.id === "onprem") checkVmConfigStatus();
     };
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
+      // Signal-only payload, no credentials — skipping origin allowlist
+      // so split frontend/backend host deployments still get the
+      // instant-refresh path. Worst case from spoofing is a no-op
+      // re-fetch of the user's own status.
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success' && connector.id === 'github') {
         check();

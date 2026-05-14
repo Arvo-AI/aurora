@@ -260,6 +260,7 @@ def _reconcile_user_installations(user_id: str) -> None:
         }
 
         stale: list[int] = []
+        gh_responsive = False
         for iid in linked_ids:
             try:
                 resp = requests.get(
@@ -272,15 +273,18 @@ def _reconcile_user_installations(user_id: str) -> None:
                 continue
             if resp.status_code == 404:
                 stale.append(iid)
-                mark_success = True
+                gh_responsive = True
             elif resp.status_code == 200:
-                mark_success = True
+                gh_responsive = True
             # Any other status (5xx, 401, secondary-rate-limit 403): be
             # conservative and leave the row alone. The next reconcile
             # pass will retry; ``mark_success`` stays False so a fully
             # broken GitHub doesn't suppress the next attempt.
 
         if not stale:
+            # Nothing to write — the GitHub side answered cleanly so
+            # we can stamp the throttle and move on.
+            mark_success = gh_responsive
             return
 
         try:
@@ -303,6 +307,11 @@ def _reconcile_user_installations(user_id: str) -> None:
                         (user_id, stale),
                     )
                     conn.commit()
+            # ONLY stamp the throttle after the soft-delete actually
+            # landed. If the DB write failed below, ``mark_success``
+            # stays False and the next status check retries instead of
+            # waiting out the TTL with stale "connected" UI state.
+            mark_success = True
             logger.info(
                 "[GITHUB-APP-RECONCILE] soft-deleted %d stale install link(s) for user=%s",
                 len(stale), user_id,
