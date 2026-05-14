@@ -58,11 +58,20 @@
         // already persisted server-side by the time this template
         // renders, so the opener only needs to be told to re-fetch.
         // Origin targeting: prefer the configured frontend origin; fall
-        // back to '*' only when the backend wasn't told its frontend
-        // origin (dev), and even then the payload contains no secret.
+        // back to '*' when the backend wasn't told its frontend origin
+        // (dev). Defensive against Jinja rendering Python None as the
+        // literal string "None" or other non-URL values.
         try {
             if (window.opener) {
-                var targetOrigin = '{{ frontend_url }}' || '*';
+                var configured = '{{ frontend_url|default("", true) }}';
+                var targetOrigin = '*';
+                if (configured && configured !== 'None') {
+                    try {
+                        targetOrigin = new URL(configured).origin;
+                    } catch (urlErr) {
+                        targetOrigin = '*';
+                    }
+                }
                 window.opener.postMessage(
                     { type: 'github_auth_success' },
                     targetOrigin

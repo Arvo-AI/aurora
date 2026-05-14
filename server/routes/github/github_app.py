@@ -62,7 +62,10 @@ logger = logging.getLogger(__name__)
 
 github_app_bp = Blueprint("github_app", __name__)
 
-FRONTEND_URL = os.getenv("FRONTEND_URL")
+# Default to "" (not None) so Jinja never renders the string "None" into
+# the success template's postMessage targetOrigin — that would throw a
+# DOMException and silently break the instant-refresh path.
+FRONTEND_URL = os.getenv("FRONTEND_URL") or ""
 GITHUB_TIMEOUT = 20
 
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
