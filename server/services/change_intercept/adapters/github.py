@@ -169,6 +169,68 @@ def _coerce_str(value: Any) -> str:
     return ""
 
 
+def _parent_comment_is_aurora(
+    *,
+    payload: dict[str, Any],
+    in_reply_to_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    our_bot: str,
+) -> bool:
+    """True iff the comment ``in_reply_to_id`` was authored by Aurora.
+
+    Tries three signals in order of cheapness:
+      1. ``payload.comment.in_reply_to.user.login`` — GitHub embeds
+         the parent in some webhook versions; if present, settle here.
+      2. Local DB lookup against
+         ``change_investigations.inline_comment_ids`` for the matching
+         PR. This is the cheapest cross-machine source of truth.
+      3. Fall back to ``False`` (drop the reply) — a missed positive
+         is far less costly than spoofed re-review traffic.
+
+    Never raises; DB failure / missing config logs and returns False.
+    """
+    if not our_bot:
+        return False
+
+    embedded_login = _safe_get(
+        payload, "comment", "in_reply_to", "user", "login"
+    )
+    if isinstance(embedded_login, str) and embedded_login.lower() == our_bot.lower():
+        return True
+
+    try:
+        from utils.db.connection_pool import db_pool
+
+        dedup_key = f"github:{repo_full_name}:{pr_number}"
+        target = str(in_reply_to_id)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                # No RLS context — we're checking a global property
+                # (was this comment ID written to our DB), and the
+                # join is bounded by the dedup_key so cross-org leakage
+                # is impossible.
+                cur.execute(
+                    """SELECT 1
+                         FROM change_investigations ci
+                         JOIN change_events ce ON ce.id = ci.change_event_id
+                        WHERE ce.dedup_key = %s
+                          AND ci.inline_comment_ids IS NOT NULL
+                          AND ci.inline_comment_ids ? %s
+                        LIMIT 1""",
+                    (dedup_key, target),
+                )
+                return cur.fetchone() is not None
+    except Exception as exc:
+        logger.warning(
+            "github_adapter_event=parent_lookup_failed in_reply_to=%s "
+            "error_class=%s",
+            in_reply_to_id,
+            type(exc).__name__,
+        )
+        return False
+
+
 def _safe_get(payload: dict[str, Any], *keys: Any) -> Any:
     """Walk a nested dict / list; return ``None`` on any missing step.
 
@@ -217,7 +279,17 @@ class GitHubFetchError(Exception):
     The dispatcher converts this to a Celery retry — the snapshot is
     required before we can persist the ``change_events`` row, so a
     transient GitHub failure should not silently drop the webhook.
+
+    Carries ``status_code`` when the failure originated from a non-2xx
+    HTTP response so callers can discriminate benign 4xx (404 review
+    already dismissed, 422 PR closed) from genuine outages (5xx, 401
+    auth failure). ``None`` for transport-level failures (DNS,
+    connection refused, timeout).
     """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _auth_headers(installation_id: int, accept: str) -> dict[str, str]:
@@ -276,7 +348,8 @@ def _get(
     if response.status_code >= 300:
         raise GitHubFetchError(
             f"GitHub GET returned non-2xx for url={url} "
-            f"(status={response.status_code}): {_redact(response.text or '')[:200]}"
+            f"(status={response.status_code}): {_redact(response.text or '')[:200]}",
+            status_code=response.status_code,
         )
     return response
 
@@ -322,7 +395,8 @@ def _post(
     if response.status_code >= 300:
         raise GitHubFetchError(
             f"GitHub POST returned non-2xx for url={url} "
-            f"(status={response.status_code}): {_redact(response.text or '')[:300]}"
+            f"(status={response.status_code}): {_redact(response.text or '')[:300]}",
+            status_code=response.status_code,
         )
     return response
 
@@ -368,7 +442,8 @@ def _put(
     if response.status_code not in ok_statuses:
         raise GitHubFetchError(
             f"GitHub PUT returned unexpected status for url={url} "
-            f"(status={response.status_code}): {_redact(response.text or '')[:300]}"
+            f"(status={response.status_code}): {_redact(response.text or '')[:300]}",
+            status_code=response.status_code,
         )
     return response
 
@@ -691,20 +766,34 @@ class GitHubChangeAdapter:
 
         in_reply_to = _safe_get(payload, "comment", "in_reply_to_id")
 
-        # 3a. Threaded reply on an inline / review comment — always
-        #     treat as a match (the dispatcher confirms by joining on
-        #     ``change_investigations.inline_comment_ids``).
+        # 3a. Threaded reply on an inline / review comment. The parent
+        #     comment MUST be authored by Aurora — otherwise any
+        #     human↔human review thread would trigger us. We verify
+        #     two ways: (a) check the payload's nested
+        #     ``in_reply_to.user.login`` if GitHub embedded the parent,
+        #     and (b) consult the local change_investigations index for
+        #     the inline-comment-id (cheap DB lookup, no extra REST
+        #     round-trip). Either match suffices; both missing → drop.
         if event_type == "pull_request_review_comment" and isinstance(
             in_reply_to, int
         ):
-            return ReplyMatch(
-                repo=repo_full_name,
-                parent_pr_external_id=str(pr_number),
-                comment_id=str(comment_id),
-                comment_body=body,
-                replier=sender_login or "unknown",
-                match_kind="threaded",
-            )
+            if _parent_comment_is_aurora(
+                payload=payload,
+                in_reply_to_id=in_reply_to,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                our_bot=our_bot,
+            ):
+                return ReplyMatch(
+                    repo=repo_full_name,
+                    parent_pr_external_id=str(pr_number),
+                    comment_id=str(comment_id),
+                    comment_body=body,
+                    replier=sender_login or "unknown",
+                    match_kind="threaded",
+                )
+            # Threaded reply but not on one of our comments → drop.
+            return None
 
         # 3b. @-mention of the App's slug in the comment body.
         # The trailing negative lookahead rejects ``@aurora-testing-tool``
@@ -1176,15 +1265,27 @@ class GitHubChangeAdapter:
                 pr_number,
             )
         except GitHubFetchError as exc:
-            # 404 / 422 happen when the prior review is already dismissed,
-            # was deleted, or the PR was closed. None are recoverable by
-            # retry and none should block the new review.
-            logger.info(
-                "github_adapter_event=dismiss_prior status=ignored "
-                "review_id=%s reason=%s",
+            # Discriminate by status: 404/422 are benign (review already
+            # dismissed / PR closed / merged). 5xx + 401/403 are real
+            # outages — surface them so the caller can decide whether
+            # to skip the new post (avoid stacking review_request states)
+            # rather than silently steamrolling.
+            if exc.status_code in (404, 422):
+                logger.info(
+                    "github_adapter_event=dismiss_prior status=ignored_benign "
+                    "review_id=%s http_status=%s",
+                    prior_verdict.verdict_id,
+                    exc.status_code,
+                )
+                return
+            logger.warning(
+                "github_adapter_event=dismiss_prior status=upstream_error "
+                "review_id=%s http_status=%s reason=%s",
                 prior_verdict.verdict_id,
+                exc.status_code,
                 type(exc).__name__,
             )
+            raise
 
 
 # ─── Helpers private to the live-posting path ───────────────────────

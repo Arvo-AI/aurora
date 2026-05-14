@@ -201,7 +201,10 @@ DROP_REASONS = (
     "missing_path",
     "missing_line",
     "unanchored_line",
-    "no_citation_no_diff_anchor",
+    # Phase 1a renamed from no_citation_no_diff_anchor: tool-call lists
+    # alone are not sufficient citation in single-call mode, only the
+    # mechanical [diff] anchor is.
+    "no_diff_anchor",
     "duplicate",
 )
 
@@ -365,6 +368,14 @@ def _validate_finding(
         else:
             return DroppedFinding(reason="unanchored_line", raw=raw)
 
+    # end_line must also fall inside a hunk we touched — otherwise
+    # GitHub's Reviews API will 422 the whole review POST. Drop the
+    # range silently and revert to a single-line finding when the
+    # claimed end is bogus; the finding still surfaces but doesn't
+    # poison the batch.
+    if end_line is not None and not diff_index.is_in_hunk(file_path, end_line):
+        end_line = None
+
     title = _coerce_str(raw.get("title")) or "Risk noted"
     rationale = _coerce_str(raw.get("rationale")) or ""
 
@@ -373,11 +384,14 @@ def _validate_finding(
         cited_tool_calls = []
     cited_tool_calls = [c for c in cited_tool_calls if isinstance(c, dict)]
 
-    if not cited_tool_calls and "[diff]" not in rationale.lower():
-        # The Phase 1a contract requires ≥1 citation OR an explicit
-        # ``[diff]`` mechanical-anchor in the rationale. Without either,
-        # the finding is hand-wavy — drop.
-        return DroppedFinding(reason="no_citation_no_diff_anchor", raw=raw)
+    # Phase 1a is single-call (no agentic toolset), so any LLM-supplied
+    # ``cited_tool_calls`` are fabricated by definition. Require the
+    # mechanical ``[diff]`` anchor in EVERY finding's rationale —
+    # tool-call lists alone are insufficient. The cited_tool_calls
+    # field is still persisted for forward-compat with Part 2.5's
+    # toolset variant, but it can't bypass the diff-anchor gate.
+    if "[diff]" not in rationale.lower():
+        return DroppedFinding(reason="no_diff_anchor", raw=raw)
 
     return ValidatedFinding(
         severity=severity,

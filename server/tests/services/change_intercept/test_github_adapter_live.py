@@ -282,12 +282,31 @@ def test_dismiss_prior_calls_dismissals_endpoint(
 def test_dismiss_prior_silently_ignores_already_dismissed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """422 / 404 are benign — the prior review is already dismissed
+    or the PR was merged. Either case must not raise."""
+
     def boom(*_a: Any, **_kw: Any) -> Any:
-        raise GitHubFetchError("status=422 review already dismissed")
+        raise GitHubFetchError(
+            "status=422 review already dismissed", status_code=422
+        )
 
     monkeypatch.setattr(adapter_module, "_put", boom)
-    # MUST NOT raise — the followup investigation continues past this.
     GitHubChangeAdapter().dismiss_prior(_event(), PostedVerdict(verdict_id="555"))
+
+
+def test_dismiss_prior_propagates_real_outages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """5xx / auth / network failures MUST propagate so the live-posting
+    path doesn't stack a new REQUEST_CHANGES on top of a stale one
+    when GitHub is genuinely down."""
+
+    def boom(*_a: Any, **_kw: Any) -> Any:
+        raise GitHubFetchError("status=503 upstream", status_code=503)
+
+    monkeypatch.setattr(adapter_module, "_put", boom)
+    with pytest.raises(GitHubFetchError):
+        GitHubChangeAdapter().dismiss_prior(_event(), PostedVerdict(verdict_id="555"))
 
 
 def test_dismiss_prior_noops_on_missing_install() -> None:

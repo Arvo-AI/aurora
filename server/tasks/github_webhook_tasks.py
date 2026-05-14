@@ -197,6 +197,23 @@ def _lookup_parent_event_id(
     return row[0] if row else None
 
 
+# Hard cap on the unified-diff bytes we persist to change_events.diff.
+# Without a cap, a 100MB monorepo refactor would blow Postgres TOAST
+# limits + downstream parser memory. The investigator's prompt builder
+# truncates separately at ~80K chars; this cap protects the persistence
+# tier independently. Diffs over the cap are stored truncated with a
+# trailing marker so the investigator sees they were clipped.
+_PERSIST_DIFF_CHAR_CAP = 1_000_000
+
+
+def _truncate_diff_for_persist(diff: str) -> str:
+    if not diff or len(diff) <= _PERSIST_DIFF_CHAR_CAP:
+        return diff or ""
+    return diff[:_PERSIST_DIFF_CHAR_CAP] + (
+        f"\n... [persistence-truncated at {_PERSIST_DIFF_CHAR_CAP} chars]\n"
+    )
+
+
 def _persist_change_event(
     event: Any,  # NormalizedChangeEvent — typed loosely to avoid an import cycle
     snapshot: Any,  # ChangeSnapshot
@@ -292,7 +309,7 @@ def _persist_change_event(
                             event.actor,
                             event.target_env,
                             snapshot.body or None,
-                            snapshot.diff or None,
+                            _truncate_diff_for_persist(snapshot.diff or "") or None,
                             json.dumps(snapshot.files or []),
                             json.dumps(snapshot.commits or []),
                             event.follow_up_comment,
@@ -327,10 +344,10 @@ def _persist_change_event(
                     )
                     return None
     except Exception as exc:
-        # Never crash the webhook dispatcher on a change-intercept persistence
-        # failure — the existing RCA-correlation log already happened, the
-        # webhook delivery has been acknowledged at the HTTP layer, and the
-        # next GitHub retry (if any) will re-trigger the same insert.
+        # Transient: re-raise so the dispatcher marks the delivery
+        # 'failed' and GitHub's redelivery re-runs the path. Without
+        # this, a DB blip during persistence would permanently lose
+        # the event for that PR.
         logger.warning(
             "change_intercept_event=persist_failed delivery_id=%s kind=%s "
             "error_class=%s",
@@ -338,7 +355,9 @@ def _persist_change_event(
             getattr(event, "kind", "unknown"),
             type(exc).__name__,
         )
-        return None
+        raise _TransientIngestError(
+            f"persist_failed: {type(exc).__name__}"
+        ) from exc
 
 
 # PR actions that justify spending an LLM call. ``synchronize`` is
@@ -405,6 +424,22 @@ def _enqueue_investigation(
         )
 
 
+class _TransientIngestError(Exception):
+    """Raised inside _ingest_change_intercept_event when a failure mode
+    is recoverable by retry (DB blip, transient GitHub 5xx, etc.).
+
+    The dispatcher catches this and re-raises so Celery's retry policy
+    applies and ``webhook_deliveries.status`` flips to 'failed', which
+    causes the next GitHub retry of the same X-GitHub-Delivery to
+    re-dispatch. Without this, transient errors during persistence
+    would silently drop the event and the PR would never be reviewed.
+
+    DETERMINISTIC failures (no linked orgs, parse returned None,
+    unknown vendor) do NOT raise — those would never succeed on retry,
+    so the dispatcher acknowledges and moves on.
+    """
+
+
 def _ingest_change_intercept_event(
     event_type: str,
     payload: dict[str, Any],
@@ -417,9 +452,12 @@ def _ingest_change_intercept_event(
         2. Adapter fetches the snapshot (diff + files + commits + body).
         3. We INSERT a ``change_events`` row under RLS context.
 
-    Failures at any step log and move on — Part 1 has no customer-
-    visible side effects, so a transient adapter failure is recovered
-    on the next GitHub retry rather than blocking the dispatcher.
+    Discriminates failure modes:
+      - Deterministic / non-recoverable (no linked orgs, parse=None,
+        unknown vendor) → log + return; webhook acknowledged.
+      - Transient (snapshot fetch, DB, enqueue failures) → raise
+        :class:`_TransientIngestError` so the dispatcher marks the
+        delivery 'failed' and GitHub's redelivery re-runs the path.
 
     Args:
         event_type: ``pull_request`` / ``issue_comment`` /

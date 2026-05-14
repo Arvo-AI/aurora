@@ -156,6 +156,12 @@ def _list_repo_prs(
         "direction": "desc",
         "per_page": 100,
     }
+    # When state='closed' we want MERGED PRs only — abandoned/closed-
+    # unmerged PRs would skew calibration toward changes that never
+    # shipped. The List Pulls API returns closed+merged together;
+    # filter ``merged_at != null`` on our side.
+    only_merged = state == "closed"
+
     while url and len(out) < limit:
         response = requests.get(
             url,
@@ -164,8 +170,15 @@ def _list_repo_prs(
             timeout=_TIMEOUT,
         )
         response.raise_for_status()
-        body = response.json()
-        out.extend(body)
+        page = response.json()
+        for pr in page:
+            if not isinstance(pr, dict):
+                continue
+            if only_merged and not pr.get("merged_at"):
+                continue
+            out.append(pr)
+            if len(out) >= limit:
+                break
         if len(out) >= limit:
             break
         url = _next_link(response.headers.get("Link", ""))

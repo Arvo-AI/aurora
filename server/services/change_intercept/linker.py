@@ -158,38 +158,60 @@ def _extract_pr_references(incident: dict[str, Any]) -> list[dict[str, str]]:
 def _scan_recent_incidents(lookback_hours: int) -> list[dict[str, Any]]:
     """Return incident rows joined with their postmortem ``content``.
 
-    Runs cross-org (no RLS set) using the admin connection — the
-    nightly linker is a system-level job and needs to see incidents
-    across every customer. Each row also carries ``org_id`` so the
-    per-org INSERT below can apply RLS correctly.
+    ``incidents`` and ``postmortems`` are RLS-protected with FORCE ROW
+    LEVEL SECURITY, so an admin-connection cross-org SELECT without
+    setting ``myapp.current_org_id`` would silently return zero rows.
+    We iterate over the distinct org_ids first (via the non-RLS
+    ``users`` table) and, for each org, set RLS context and scan that
+    org's incidents.
     """
     from utils.db.connection_pool import db_pool
 
+    out: list[dict[str, Any]] = []
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            # ``users`` is intentionally NOT RLS-protected; this gives
+            # us the full enumeration the linker needs.
             cur.execute(
-                """SELECT i.id, i.org_id, i.alert_title, i.alert_service,
-                          i.alert_environment, i.aurora_summary,
-                          p.content
-                     FROM incidents i
-                     LEFT JOIN postmortems p ON p.incident_id = i.id
-                    WHERE i.started_at >= NOW() - (%s::int * INTERVAL '1 hour')
-                      AND i.org_id IS NOT NULL""",
-                (lookback_hours,),
+                "SELECT DISTINCT org_id FROM users "
+                "WHERE org_id IS NOT NULL AND org_id <> ''"
             )
-            rows = cur.fetchall()
-    return [
-        {
-            "id": row[0],
-            "org_id": row[1],
-            "alert_title": row[2],
-            "alert_service": row[3],
-            "alert_environment": row[4],
-            "aurora_summary": row[5],
-            "postmortem_content": row[6],
-        }
-        for row in rows
-    ]
+            org_ids = [row[0] for row in cur.fetchall() if row[0]]
+
+            for org_id in org_ids:
+                # Set per-org RLS context. We don't have a real user
+                # here (linker is a system-level job), so we use a
+                # synthetic "__linker__<org>" id paired with the org;
+                # the policy only checks org_id.
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+                cur.execute(
+                    "SET myapp.current_user_id = %s;",
+                    (f"__linker__{org_id}",),
+                )
+                cur.execute(
+                    """SELECT i.id, i.org_id, i.alert_title, i.alert_service,
+                              i.alert_environment, i.aurora_summary,
+                              p.content
+                         FROM incidents i
+                         LEFT JOIN postmortems p ON p.incident_id = i.id
+                        WHERE i.started_at >= NOW() - (%s::int * INTERVAL '1 hour')
+                          AND i.org_id IS NOT NULL""",
+                    (lookback_hours,),
+                )
+                for row in cur.fetchall():
+                    out.append(
+                        {
+                            "id": row[0],
+                            "org_id": row[1],
+                            "alert_title": row[2],
+                            "alert_service": row[3],
+                            "alert_environment": row[4],
+                            "aurora_summary": row[5],
+                            "postmortem_content": row[6],
+                        }
+                    )
+            cur.execute("RESET myapp.current_org_id; RESET myapp.current_user_id;")
+    return out
 
 
 def _link_one_reference(

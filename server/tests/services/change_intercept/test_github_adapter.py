@@ -199,16 +199,49 @@ def test_parse_issue_comment_at_mention_makes_followup(monkeypatch: pytest.Monke
     assert ev.external_id == "comment:1234"
 
 
-def test_parse_threaded_review_comment_makes_followup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parse_threaded_review_comment_requires_aurora_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Threaded replies only count when the parent comment was authored
+    by Aurora. The embedded ``in_reply_to.user.login`` short-circuits
+    the DB lookup."""
     monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "aurora-test")
     payload = _comment_payload(
         event_type="pull_request_review_comment",
         body="no I disagree",
         in_reply_to_id=999,
     )
+    payload["comment"]["in_reply_to"] = {"user": {"login": "aurora-test[bot]"}}
     ev = _adapter().parse("pull_request_review_comment", payload, org_id="org-1")
     assert ev is not None and ev.kind == "code_change_followup"
     assert ev.commit_sha == "feedbeef"
+
+
+def test_parse_threaded_reply_to_non_aurora_comment_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Human↔human review thread (no Aurora-authored parent) MUST NOT
+    trigger a followup investigation. Fixes the thread-reply spoofing
+    vector found by adversarial review."""
+    monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "aurora-test")
+    payload = _comment_payload(
+        event_type="pull_request_review_comment",
+        body="agreed, that's not right",
+        in_reply_to_id=999,
+    )
+    # Parent comment is from another human reviewer, not Aurora.
+    payload["comment"]["in_reply_to"] = {"user": {"login": "human-reviewer"}}
+    # DB-lookup fallback ALSO finds no matching inline_comment_id; we
+    # simulate that by patching the helper to return False directly.
+    from services.change_intercept.adapters import github as adapter_module
+
+    monkeypatch.setattr(
+        adapter_module, "_parent_comment_is_aurora", lambda **_: False
+    )
+    assert (
+        _adapter().parse("pull_request_review_comment", payload, org_id="org-1")
+        is None
+    )
 
 
 def test_parse_comment_from_own_bot_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -260,13 +293,16 @@ def test_is_reply_classifies_re_review_command(monkeypatch: pytest.MonkeyPatch) 
     assert m is not None and m.match_kind == "re_review"
 
 
-def test_is_reply_classifies_threaded_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_is_reply_classifies_threaded_reply_when_parent_is_aurora(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "aurora-test")
     payload = _comment_payload(
         event_type="pull_request_review_comment",
         body="that's not quite right",
         in_reply_to_id=999,
     )
+    payload["comment"]["in_reply_to"] = {"user": {"login": "aurora-test[bot]"}}
     m = _adapter().is_reply_to_us("pull_request_review_comment", payload)
     assert m is not None and m.match_kind == "threaded"
 

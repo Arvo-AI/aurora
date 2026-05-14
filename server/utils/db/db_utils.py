@@ -1262,9 +1262,21 @@ def initialize_tables():
                         follow_up_comment TEXT,
                         parent_event_id UUID REFERENCES change_events(id) ON DELETE SET NULL,
                         payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE (org_id, vendor, external_id, commit_sha, kind)
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
+
+                    -- Dedupe is split by kind because commit_sha is NULL for
+                    -- followup events; a single column-tuple UNIQUE would
+                    -- treat NULLs as distinct and let webhook retries duplicate
+                    -- rows. Partial indexes give us NULL-safe idempotency.
+                    CREATE UNIQUE INDEX IF NOT EXISTS
+                        idx_change_events_code_change_unique
+                        ON change_events (org_id, vendor, external_id, commit_sha)
+                        WHERE kind = 'code_change';
+                    CREATE UNIQUE INDEX IF NOT EXISTS
+                        idx_change_events_followup_unique
+                        ON change_events (org_id, vendor, external_id)
+                        WHERE kind = 'code_change_followup';
 
                     CREATE INDEX IF NOT EXISTS idx_change_events_org_received
                         ON change_events(org_id, received_at DESC);
@@ -1494,6 +1506,38 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding change_intercept_dry_run column to github_installations: {e}"
+                )
+                conn.rollback()
+
+            # Migration: drop the legacy single-tuple UNIQUE on change_events
+            # (commit_sha is NULL for code_change_followup rows, and Postgres
+            # treats NULLs as distinct in unique constraints, so retries can
+            # duplicate followup rows). Replaced by two partial unique
+            # indexes scoped per ``kind`` — see the CREATE block above.
+            try:
+                cursor.execute(
+                    "ALTER TABLE change_events "
+                    "DROP CONSTRAINT IF EXISTS change_events_org_id_vendor_external_id_commit_sha_kind_key;"
+                )
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "idx_change_events_code_change_unique "
+                    "ON change_events (org_id, vendor, external_id, commit_sha) "
+                    "WHERE kind = 'code_change';"
+                )
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "idx_change_events_followup_unique "
+                    "ON change_events (org_id, vendor, external_id) "
+                    "WHERE kind = 'code_change_followup';"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured partial-unique indexes on change_events for NULL-safe followup dedup."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error migrating change_events dedup constraint: {e}"
                 )
                 conn.rollback()
 

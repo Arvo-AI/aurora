@@ -215,6 +215,22 @@ def launch_investigation(
 
         rendered = render_review(validation)
 
+        # ─── 5b. Resolve dry_run BEFORE persistence so the column ────
+        # matches the actual posting outcome. Doing this here instead
+        # of after _persist_investigation prevents the bug where a
+        # live-posted investigation would still record dry_run=TRUE
+        # and skew calibration analytics.
+        from services.change_intercept.install_config import is_dry_run as _is_dry_run
+
+        resolved_installation_id = _resolve_installation_id(
+            event_row, user_id_for_rls
+        )
+        will_dry_run = (
+            True
+            if resolved_installation_id is None
+            else _is_dry_run(resolved_installation_id)
+        )
+
         # ─── 6. Persist change_investigations row ────────────────
         investigation_id = _persist_investigation(
             event_row=event_row,
@@ -222,6 +238,7 @@ def launch_investigation(
             inv_result=inv_result,
             user_id_for_rls=user_id_for_rls,
             parent_investigation_id=prior_investigation_id,
+            dry_run=will_dry_run,
         )
 
         # ─── 7. Optionally post the live review (Part 3) ─────────
@@ -232,6 +249,8 @@ def launch_investigation(
             prior_investigation_id=prior_investigation_id,
             investigation_id=investigation_id,
             user_id_for_rls=user_id_for_rls,
+            dry_run=will_dry_run,
+            installation_id=resolved_installation_id,
         )
 
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -393,13 +412,17 @@ def _count_followup_investigations(
                 row = cur.fetchone()
                 return int(row[0]) if row else 0
     except Exception as exc:
+        # Fail-closed: a DB blip during the count must NOT silently
+        # disable the guard. Returning the cap is treated by the
+        # caller as "skip investigation"; safer than letting an
+        # uncapped engineer-reply stream burn LLM tokens.
         logger.warning(
-            "change_intercept_event=thrash_count_failed dedup_key=%s "
+            "change_intercept_event=thrash_count_failed_fail_closed dedup_key=%s "
             "error_class=%s",
             dedup_key,
             type(exc).__name__,
         )
-        return 0
+        return MAX_FOLLOWUPS_PER_CHANGE
 
 
 def _persist_investigation(
@@ -409,9 +432,14 @@ def _persist_investigation(
     inv_result: Any,  # InvestigatorResult
     user_id_for_rls: str,
     parent_investigation_id: str | None,
+    dry_run: bool = True,
 ) -> str:
     """INSERT a ``change_investigations`` row under RLS context.
 
+    The ``dry_run`` argument must reflect the live-posting decision
+    made for THIS investigation — pass ``True`` when no review will
+    actually post to GitHub, ``False`` when it will. Defaults to
+    ``True`` (safe default) for callers that haven't been updated.
     Returns the new row's UUID as a string.
     """
     from utils.auth.stateless_auth import set_rls_context
@@ -456,7 +484,7 @@ def _persist_investigation(
                        tool_call_count, duration_ms, llm_model, dry_run
                    ) VALUES (
                        %s, %s, %s, %s, %s, %s, %s,
-                       %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, TRUE
+                       %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s
                    ) RETURNING id""",
                 (
                     event_row["id"],
@@ -472,6 +500,7 @@ def _persist_investigation(
                     int(inv_result.tool_call_count or 0),
                     int(inv_result.duration_ms or 0),
                     inv_result.llm_model,
+                    bool(dry_run),
                 ),
             )
             new_id = cur.fetchone()[0]
@@ -552,37 +581,45 @@ def _maybe_post_live_review(
     prior_investigation_id: str | None,
     investigation_id: str,
     user_id_for_rls: str,
+    dry_run: bool,
+    installation_id: int | None,
 ) -> dict[str, Any]:
     """Post the rendered review to the vendor when the install allows.
 
     Decision tree:
 
-        1. Look up the install's ``change_intercept_dry_run`` flag.
-           ``True`` (default) → return without posting; the dry-run
-           row already exists.
-        2. ``False`` AND this is a followup → dismiss the prior
-           verdict first, then post the new one.
-        3. ``False`` AND this is an initial event → just post.
-        4. Persist the returned ``verdict_id`` + ``inline_comment_ids``
-           on ``change_investigations``.
+        1. ``dry_run=True`` (the install is in calibration mode) →
+           return without posting; the dry-run row already exists.
+        2. ``dry_run=False`` AND this is a followup → take a per-PR
+           Postgres advisory lock, dismiss the prior verdict, then
+           post the new one. The advisory lock serialises concurrent
+           followups so we don't end up with two active reviews.
+        3. ``dry_run=False`` AND this is an initial event → still
+           take the advisory lock (defence in depth against rapid-fire
+           opened/reopened events) and post.
+        4. UPDATE the change_investigations row with the returned
+           ``verdict_id`` + ``inline_comment_ids``. If the DB UPDATE
+           fails AFTER GitHub returned a 2xx, we have a posted review
+           with no DB record — a partial-success state. The recovery
+           path attempts to immediately dismiss the just-posted review
+           and logs loudly with the verdict_id so an operator can
+           clean up.
 
     Returns a small dict the caller embeds in its status log:
         ``{"dry_run": bool, "posted": bool, "verdict_id": str | None}``.
 
-    All adapter calls go through a single try/except — a posting
-    failure is non-fatal: the investigation row is already persisted
-    with ``dry_run=TRUE`` semantics, so we log the failure and move on
-    rather than retrying the whole Celery task and risking a duplicate
-    investigation row on retry.
+    The dismiss_prior call DOES propagate genuine outages (5xx /
+    auth errors / network failures via GitHubFetchError without 404
+    or 422). When the dismiss step fails for that reason we skip the
+    new post — it's safer to leave a stale review than to stack two
+    blocking reviews onto a PR.
     """
-    from services.change_intercept.install_config import is_dry_run
-
-    installation_id = _resolve_installation_id(event_row, user_id_for_rls)
-    if installation_id is None:
+    if installation_id is None or dry_run:
         return {"dry_run": True, "posted": False, "verdict_id": None}
 
-    if is_dry_run(installation_id):
-        return {"dry_run": True, "posted": False, "verdict_id": None}
+    org_id = event_row["org_id"]
+    dedup_key = event_row.get("dedup_key") or ""
+    lock_token = _advisory_lock_token(org_id, dedup_key)
 
     try:
         from services.change_intercept.adapters.registry import get_adapter
@@ -590,45 +627,104 @@ def _maybe_post_live_review(
         adapter = get_adapter(event_row.get("vendor") or "github")
         normalized_event = _rebuild_normalized_event(event_row, installation_id)
 
-        # Dismiss the prior verdict before posting the new one. For
-        # initial code_change events there is no prior; for followups
-        # we look up the most recent posted investigation for the same
-        # PR and dismiss its review id (if any).
-        prior_posted = _load_prior_posted_verdict(
-            org_id=event_row["org_id"],
-            dedup_key=event_row.get("dedup_key") or "",
-            current_investigation_id=investigation_id,
-            user_id_for_rls=user_id_for_rls,
-        )
-        if prior_posted is not None:
-            from services.change_intercept.adapters.base import PostedVerdict
-
-            adapter.dismiss_prior(
-                normalized_event,
-                PostedVerdict(
-                    verdict_id=prior_posted["verdict_id"],
-                    inline_comment_ids=prior_posted.get("inline_comment_ids") or [],
-                ),
+        with _per_pr_advisory_lock(lock_token):
+            # Dismiss the prior verdict before posting the new one.
+            # If the dismiss fails with a non-benign HTTP status we
+            # bail rather than stacking blocking reviews.
+            prior_posted = _load_prior_posted_verdict(
+                org_id=org_id,
+                dedup_key=dedup_key,
+                current_investigation_id=investigation_id,
+                user_id_for_rls=user_id_for_rls,
             )
+            if prior_posted is not None:
+                from services.change_intercept.adapters.base import PostedVerdict
 
-        # Build the investigation payload the adapter expects. The
-        # adapter is vendor-neutral so it accepts the already-rendered
-        # body / comments + the commit_sha to anchor the review.
-        investigation_payload = {
-            "verdict_event": rendered.verdict_event,
-            "body": rendered.body,
-            "inline_comments": rendered.inline_comments,
-            "commit_sha": event_row.get("commit_sha"),
-        }
-        posted = adapter.post_verdict(normalized_event, investigation_payload)
+                try:
+                    adapter.dismiss_prior(
+                        normalized_event,
+                        PostedVerdict(
+                            verdict_id=prior_posted["verdict_id"],
+                            inline_comment_ids=prior_posted.get(
+                                "inline_comment_ids"
+                            )
+                            or [],
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "change_intercept_event=dismiss_prior_failed_skipping_post "
+                        "investigation_id=%s prior_review_id=%s error_class=%s",
+                        investigation_id,
+                        prior_posted.get("verdict_id"),
+                        type(exc).__name__,
+                    )
+                    return {
+                        "dry_run": False,
+                        "posted": False,
+                        "verdict_id": None,
+                    }
 
-        _persist_posted_verdict_ids(
-            investigation_id=investigation_id,
-            posted_verdict_id=posted.verdict_id,
-            inline_comment_ids=posted.inline_comment_ids,
-            org_id=event_row["org_id"],
-            user_id_for_rls=user_id_for_rls,
-        )
+            investigation_payload = {
+                "verdict_event": rendered.verdict_event,
+                "body": rendered.body,
+                "inline_comments": rendered.inline_comments,
+                "commit_sha": event_row.get("commit_sha"),
+            }
+            posted = adapter.post_verdict(normalized_event, investigation_payload)
+
+            # CRITICAL: the review is now live on GitHub. We MUST persist
+            # its ids or future dismiss_prior calls can't find it. Retry
+            # the UPDATE a few times before giving up. On final failure,
+            # attempt to immediately dismiss the just-posted review and
+            # surface the verdict_id loudly so an operator can clean up.
+            updated = _persist_posted_verdict_ids_with_retry(
+                investigation_id=investigation_id,
+                posted_verdict_id=posted.verdict_id,
+                inline_comment_ids=posted.inline_comment_ids,
+                org_id=event_row["org_id"],
+                user_id_for_rls=user_id_for_rls,
+            )
+            if not updated:
+                from services.change_intercept.adapters.base import PostedVerdict
+
+                logger.error(
+                    "change_intercept_event=live_review_orphan investigation_id=%s "
+                    "review_id=%s repo=%s — DB UPDATE failed after successful "
+                    "GitHub post; attempting compensating dismiss",
+                    investigation_id,
+                    posted.verdict_id,
+                    event_row.get("repo"),
+                )
+                try:
+                    adapter.dismiss_prior(
+                        normalized_event,
+                        PostedVerdict(
+                            verdict_id=posted.verdict_id,
+                            inline_comment_ids=list(
+                                posted.inline_comment_ids
+                            ),
+                        ),
+                    )
+                    return {
+                        "dry_run": False,
+                        "posted": False,
+                        "verdict_id": None,
+                    }
+                except Exception as cleanup_exc:
+                    logger.error(
+                        "change_intercept_event=live_review_orphan_cleanup_failed "
+                        "investigation_id=%s review_id=%s error_class=%s — "
+                        "MANUAL CLEANUP REQUIRED",
+                        investigation_id,
+                        posted.verdict_id,
+                        type(cleanup_exc).__name__,
+                    )
+                    return {
+                        "dry_run": False,
+                        "posted": True,
+                        "verdict_id": posted.verdict_id,
+                    }
 
         logger.info(
             "change_intercept_event=live_review_posted investigation_id=%s "
@@ -650,6 +746,113 @@ def _maybe_post_live_review(
             type(exc).__name__,
         )
         return {"dry_run": False, "posted": False, "verdict_id": None}
+
+
+# ─── Per-PR advisory lock helpers ───────────────────────────────────
+
+
+_ADVISORY_LOCK_NAMESPACE: int = 0x_CHA9E_C5  # arbitrary namespace tag
+
+
+def _advisory_lock_token(org_id: str, dedup_key: str) -> int:
+    """Return a deterministic 64-bit advisory-lock token for the PR.
+
+    Postgres advisory locks take a bigint. We hash ``(org_id, dedup_key)``
+    into a 63-bit positive int (sign-bit clear to avoid negative ids on
+    drivers that don't tolerate them). A stable hash means concurrent
+    workers see the same lock for the same PR.
+    """
+    import hashlib
+
+    digest = hashlib.blake2b(
+        f"{org_id}\x00{dedup_key}".encode("utf-8"), digest_size=8
+    ).digest()
+    token = int.from_bytes(digest, "big") & 0x7FFFFFFFFFFFFFFF
+    return token or 1  # avoid zero (some drivers treat as "no lock")
+
+
+class _per_pr_advisory_lock:
+    """Context manager that takes + releases a per-PR pg_advisory_lock.
+
+    The lock is session-scoped; the connection is opened on enter and
+    closed on exit, releasing the lock automatically. We use the
+    blocking ``pg_advisory_lock`` (not the _try variant) because
+    waiters are bounded by the LLM call duration of the current
+    holder — typically seconds. The Celery task soft-time-limit caps
+    a worst case.
+    """
+
+    def __init__(self, token: int) -> None:
+        self._token = token
+        self._conn: Any = None
+
+    def __enter__(self) -> "_per_pr_advisory_lock":
+        from utils.db.connection_pool import db_pool
+
+        self._conn_cm = db_pool.get_admin_connection()
+        self._conn = self._conn_cm.__enter__()
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s);", (self._token,))
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if self._conn is not None:
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s);", (self._token,))
+        finally:
+            if self._conn is not None:
+                self._conn_cm.__exit__(exc_type, exc, tb)
+                self._conn = None
+
+
+def _persist_posted_verdict_ids_with_retry(
+    *,
+    investigation_id: str,
+    posted_verdict_id: str,
+    inline_comment_ids: list[str],
+    org_id: str,
+    user_id_for_rls: str,
+    attempts: int = 3,
+) -> bool:
+    """Attempt the verdict-id UPDATE up to ``attempts`` times.
+
+    Returns ``True`` on success, ``False`` if every attempt failed.
+    Used by the live-posting path to recover from transient DB blips
+    after the review has already been posted to GitHub.
+    """
+    import time as _time
+
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            _persist_posted_verdict_ids(
+                investigation_id=investigation_id,
+                posted_verdict_id=posted_verdict_id,
+                inline_comment_ids=inline_comment_ids,
+                org_id=org_id,
+                user_id_for_rls=user_id_for_rls,
+            )
+            return True
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "change_intercept_event=persist_posted_retry attempt=%d "
+                "investigation_id=%s error_class=%s",
+                attempt + 1,
+                investigation_id,
+                type(exc).__name__,
+            )
+            _time.sleep(0.5 * (attempt + 1))
+    if last_exc is not None:
+        logger.error(
+            "change_intercept_event=persist_posted_exhausted investigation_id=%s "
+            "review_id=%s error_class=%s",
+            investigation_id,
+            posted_verdict_id,
+            type(last_exc).__name__,
+        )
+    return False
 
 
 def _resolve_installation_id(

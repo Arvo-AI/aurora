@@ -225,10 +225,14 @@ def test_hand_wavy_rationale_drops_finding() -> None:
         findings=[_good_finding(rationale="i feel this could be unsafe")]
     )
     r = validate(raw, _DIFF_FOO_PY)
-    assert any(d.reason == "no_citation_no_diff_anchor" for d in r.dropped)
+    assert any(d.reason == "no_diff_anchor" for d in r.dropped)
 
 
-def test_finding_with_tool_call_passes_citation_check() -> None:
+def test_fake_tool_call_alone_is_insufficient_in_single_call_mode() -> None:
+    """Phase 1a is single-call (no agentic toolset); any tool-call list
+    the LLM produces is fabricated by definition. Mechanical [diff]
+    anchor is required for EVERY finding — the cited_tool_calls field
+    is persisted for forward-compat but never bypasses the gate."""
     raw = _raw_output(
         findings=[
             _good_finding(
@@ -240,7 +244,29 @@ def test_finding_with_tool_call_passes_citation_check() -> None:
         ]
     )
     r = validate(raw, _DIFF_FOO_PY)
+    assert r.findings == []
+    assert any(d.reason == "no_diff_anchor" for d in r.dropped)
+
+
+def test_finding_with_diff_anchor_and_tool_calls_passes() -> None:
+    """When the rationale carries the [diff] mechanical anchor, the
+    finding survives; cited_tool_calls is preserved on the row but
+    doesn't change the validation outcome."""
+    raw = _raw_output(
+        findings=[
+            _good_finding(
+                rationale="requests.get on line 11 has no timeout [diff]",
+                cited_tool_calls=[
+                    {"tool": "incident_feedback", "call_id": "x", "summary": "..."}
+                ],
+            )
+        ]
+    )
+    r = validate(raw, _DIFF_FOO_PY)
     assert len(r.findings) == 1
+    assert r.findings[0].cited_tool_calls == [
+        {"tool": "incident_feedback", "call_id": "x", "summary": "..."}
+    ]
 
 
 # ─── Dedup ──────────────────────────────────────────────────────────
