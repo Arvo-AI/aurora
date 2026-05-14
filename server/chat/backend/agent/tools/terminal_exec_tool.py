@@ -10,7 +10,10 @@ import re
 import shlex
 from typing import Optional, Dict
 from utils.terminal.terminal_run import terminal_run
-from .cloud_exec_tool import cloud_exec, _ISOLATED_HOME
+from . import cloud_exec_tool
+
+cloud_exec = cloud_exec_tool.cloud_exec
+_ISOLATED_HOME = getattr(cloud_exec_tool, "_ISOLATED_HOME", os.path.expanduser("~"))
 from .iac_tool import run_iac_tool
 
 logger = logging.getLogger(__name__)
