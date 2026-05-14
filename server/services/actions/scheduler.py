@@ -4,8 +4,23 @@ from datetime import datetime, timezone
 
 from celery_config import celery_app
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
+
+_ACTIONS_QUERY = """
+    SELECT a.id, a.org_id, a.created_by,
+           (a.trigger_config->>'interval_seconds')::int AS interval_seconds,
+           MAX(r.started_at) AS last_run_at
+    FROM actions a
+    LEFT JOIN action_runs r ON r.action_id = a.id
+    WHERE a.trigger_type = 'on_schedule' AND a.enabled = true
+      AND NOT EXISTS (
+        SELECT 1 FROM action_runs ar
+        WHERE ar.action_id = a.id AND ar.status IN ('pending', 'running')
+      )
+    GROUP BY a.id
+"""
 
 
 def _is_due(interval_seconds, last_run_at, now):
@@ -21,24 +36,26 @@ def _is_due(interval_seconds, last_run_at, now):
 
 @celery_app.task(name="services.actions.scheduler.run_scheduled_actions")
 def run_scheduled_actions():
-    """Check all on_schedule actions and dispatch any that are due."""
+    """Check all on_schedule actions and dispatch any that are due.
+
+    The actions and action_runs tables are RLS-protected, so we iterate
+    per-org to satisfy row-level security policies.
+    """
+    rows = []
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT a.id, a.org_id, a.created_by,
-                           (a.trigger_config->>'interval_seconds')::int AS interval_seconds,
-                           MAX(r.started_at) AS last_run_at
-                    FROM actions a
-                    LEFT JOIN action_runs r ON r.action_id = a.id
-                    WHERE a.trigger_type = 'on_schedule' AND a.enabled = true
-                      AND NOT EXISTS (
-                        SELECT 1 FROM action_runs ar
-                        WHERE ar.action_id = a.id AND ar.status IN ('pending', 'running')
-                      )
-                    GROUP BY a.id
-                """)
-                rows = cur.fetchall()
+                cur.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+                all_users = cur.fetchall()
+
+                seen_orgs = set()
+                for user_id, org_id in all_users:
+                    if org_id in seen_orgs:
+                        continue
+                    seen_orgs.add(org_id)
+                    set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]")
+                    cur.execute(_ACTIONS_QUERY)
+                    rows.extend(cur.fetchall())
     except Exception:
         logger.exception("[ActionScheduler] Failed to query scheduled actions")
         return

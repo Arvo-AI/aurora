@@ -168,12 +168,13 @@ def update_workspace_aws_role(
         raise
 
 
-def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
+def get_workspace_by_id(workspace_id: str, user_id: str = None) -> Optional[Dict[str, Any]]:
     """
     Get workspace by ID.
     
     Args:
         workspace_id: Workspace identifier
+        user_id: User identifier (required in background/Celery context for RLS)
         
     Returns:
         Workspace dictionary or None if not found
@@ -184,6 +185,10 @@ def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+
+            if user_id:
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cursor, conn, user_id, log_prefix="[Workspace:getById]")
             
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
@@ -237,6 +242,9 @@ def get_user_workspaces(user_id: str) -> list:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cursor, conn, user_id, log_prefix="[Workspace:list]")
             
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
