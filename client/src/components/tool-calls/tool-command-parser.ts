@@ -350,6 +350,41 @@ export function parseGitHubRcaCommand(toolInput: string): string {
   }
 }
 
+export function parseGitLabToolCommand(toolInput: string): string {
+  try {
+    const parsableCommand = toolInput.replace(/'/g, '"')
+    const parsed = JSON.parse(parsableCommand)
+    const args = parsed?.kwargs || parsed || {}
+    const action = args.action || "investigate"
+    const repo = args.repo || ""
+
+    switch(action) {
+      case "list_projects":
+        return "GitLab: List connected projects"
+      case "deployment_check":
+        return `GitLab: Check pipelines${repo ? ` in ${repo}` : ""}`
+      case "commits":
+        return `GitLab: List recent commits${repo ? ` in ${repo}` : ""}`
+      case "diff": {
+        const sha = args.commit_sha ? ` (${args.commit_sha.substring(0, 7)})` : ""
+        return `GitLab: Get commit diff${sha}${repo ? ` in ${repo}` : ""}`
+      }
+      case "merge_requests":
+        return `GitLab: List merged MRs${repo ? ` in ${repo}` : ""}`
+      case "suggest_fix":
+        return `GitLab: Suggest fix${args.file_path ? ` for ${args.file_path.split('/').pop()}` : ""}`
+      case "apply_fix":
+        return `GitLab: Apply fix${args.suggestion_id ? ` #${args.suggestion_id}` : ""}`
+      case "commit_terraform":
+        return `GitLab: Push Terraform${repo ? ` to ${repo}` : ""}`
+      default:
+        return `GitLab: ${action.replace(/_/g, " ")}`
+    }
+  } catch {
+    return "GitLab Tool"
+  }
+}
+
 function parseCIRcaCommand(toolInput: string, label: string): string {
   try {
     let parsed: Record<string, unknown> | null = null
