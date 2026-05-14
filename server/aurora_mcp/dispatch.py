@@ -9,13 +9,11 @@ allowlist and therefore unreachable from MCP.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .registry import (
-    DISPATCH_ALLOWLIST,
     dispatch_entry_visible,
     find_dispatch_entry,
     search_dispatch_entries,

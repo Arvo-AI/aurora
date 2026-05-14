@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
 def _est_tokens(s: str) -> int:

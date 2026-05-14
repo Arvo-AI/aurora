@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 from typing import List
 
-import pytest
-
 from aurora_mcp import registry, tools_gated
 
 from .conftest import FakeMCP, make_captured_api_call
