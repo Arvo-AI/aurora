@@ -138,7 +138,22 @@ def _render_error(reason: str) -> flask.Response:
 # instant after the first hit (subsequent hits short-circuit), and long
 # enough to avoid secondary rate limits on busy connectors.
 _RECONCILE_TTL_SEC = 30
+_RECONCILE_EVICT_AFTER_SEC = _RECONCILE_TTL_SEC * 10  # well past usefulness
 _reconcile_last_run: dict[str, float] = {}
+
+
+def _reconcile_evict_stale(now: float) -> None:
+    """Drop throttle entries older than the eviction horizon.
+
+    O(N) sweep where N is the number of users seen in the last
+    ``_RECONCILE_EVICT_AFTER_SEC``. Called opportunistically from
+    ``_reconcile_user_installations`` so the dict can't grow without
+    bound on long-lived workers serving many users.
+    """
+    cutoff = now - _RECONCILE_EVICT_AFTER_SEC
+    expired = [uid for uid, ts in _reconcile_last_run.items() if ts < cutoff]
+    for uid in expired:
+        _reconcile_last_run.pop(uid, None)
 
 
 def _reconcile_user_installations(user_id: str) -> None:
@@ -166,6 +181,7 @@ def _reconcile_user_installations(user_id: str) -> None:
         return
 
     now = time.monotonic()
+    _reconcile_evict_stale(now)
     last = _reconcile_last_run.get(user_id)
     if last is not None and now - last < _RECONCILE_TTL_SEC:
         return
