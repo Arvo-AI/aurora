@@ -249,6 +249,11 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
         if fallback_install_id is not None:
             try:
                 token = get_installation_token(fallback_install_id)
+                # Auto-heal: backfill installation_id on the repo row so
+                # subsequent calls land in the fast path above instead
+                # of repeating the account-match lookup. Best-effort —
+                # the auth resolution stands either way.
+                _backfill_repo_installation(user_id, repo_full_name, fallback_install_id)
                 return AuthResult(
                     method="app",
                     token=token,
@@ -261,6 +266,39 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
         f"No GitHub credential available for user={user_id} "
         f"repo={repo_full_name}"
     )
+
+
+def _backfill_repo_installation(
+    user_id: str, repo_full_name: str, installation_id: int
+) -> None:
+    """Best-effort write of ``installation_id`` onto a repo row.
+
+    Called after the auth router resolved an install via account-match
+    fallback for a row that had ``installation_id IS NULL``. Subsequent
+    calls then find the link directly via
+    :func:`_lookup_repo_installation` and skip this fallback path.
+
+    Failure is non-fatal: the caller already has a working AuthResult.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE github_connected_repos
+                          SET installation_id = %s,
+                              updated_at = NOW()
+                        WHERE user_id = %s
+                          AND repo_full_name = %s
+                          AND installation_id IS NULL""",
+                    (installation_id, user_id, repo_full_name),
+                )
+                conn.commit()
+    except Exception:
+        logger.warning(
+            "[GITHUB-AUTH-ROUTER] backfill of installation_id failed for "
+            "user=%s — auth resolution still succeeded",
+            user_id,
+        )
 
 
 def make_auth_header(auth: AuthResult) -> dict[str, str]:
