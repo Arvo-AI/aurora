@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 import flask
 import requests
@@ -130,6 +131,16 @@ def _render_error(reason: str) -> flask.Response:
     )
 
 
+# Per-user reconcile throttle. Status / installations endpoints are
+# called frequently from the UI (mount, focus, visibility, post-popup) —
+# without throttling each one would burn 1-N GitHub API calls. 30 s is
+# short enough that an uninstall-on-GitHub-then-back flow still feels
+# instant after the first hit (subsequent hits short-circuit), and long
+# enough to avoid secondary rate limits on busy connectors.
+_RECONCILE_TTL_SEC = 30
+_reconcile_last_run: dict[str, float] = {}
+
+
 def _reconcile_user_installations(user_id: str) -> None:
     """Soft-delete linked installs that GitHub no longer knows about.
 
@@ -139,15 +150,24 @@ def _reconcile_user_installations(user_id: str) -> None:
     Aurora's DB pointing at an installation that no longer exists. Without
     this reconciliation, the connector card would still render "Connected".
 
-    One App-JWT-authenticated call to ``GET /app/installations`` returns
-    every install GitHub knows about for this App; we filter to the user's
-    linked rows and soft-delete any that are missing. ``CASCADE`` on
-    ``user_github_installations`` is handled implicitly by the next time
-    GitHub fires ``installation.deleted`` (or by the dev manually
-    re-running this) — here we only flip ``disconnected_at`` so the user
-    can re-claim if they reinstall.
+    Verifies each linked installation individually with
+    ``GET /app/installations/{id}`` (one call per linked install, typically
+    1-3 per user). A 404 means GitHub no longer knows about the
+    installation — soft-delete via ``disconnected_at = NOW()`` so the user
+    can re-claim on reinstall. Any other status (network error, 5xx, rate
+    limit) leaves the row alone so a transient blip never shows a real
+    connection as disconnected.
+
+    Per-user TTL throttle prevents hammering GitHub when the UI fires a
+    burst of status checks (focus + visibility + mount can all land
+    within milliseconds).
     """
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return
+
+    now = time.monotonic()
+    last = _reconcile_last_run.get(user_id)
+    if last is not None and now - last < _RECONCILE_TTL_SEC:
         return
 
     try:
@@ -160,7 +180,7 @@ def _reconcile_user_installations(user_id: str) -> None:
                           AND disconnected_at IS NULL""",
                     (user_id,),
                 )
-                linked_ids = {r[0] for r in cur.fetchall()}
+                linked_ids = [r[0] for r in cur.fetchall()]
     except Exception:
         logger.exception(
             "[GITHUB-APP-RECONCILE] DB read failed for user=%s", user_id,
@@ -168,6 +188,9 @@ def _reconcile_user_installations(user_id: str) -> None:
         return
 
     if not linked_ids:
+        # Mark a successful pass so an empty user doesn't query the DB
+        # again until the TTL expires.
+        _reconcile_last_run[user_id] = now
         return
 
     try:
@@ -179,44 +202,39 @@ def _reconcile_user_installations(user_id: str) -> None:
         )
         return
 
-    try:
-        resp = requests.get(
-            "https://api.github.com/app/installations",
-            headers={
-                "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=GITHUB_TIMEOUT,
-            params={"per_page": 100},
-        )
-    except requests.RequestException:
-        logger.warning(
-            "[GITHUB-APP-RECONCILE] GitHub request failed; skipping for user=%s",
-            user_id,
-        )
-        return
-
-    if resp.status_code != 200:
-        logger.warning(
-            "[GITHUB-APP-RECONCILE] GitHub returned status=%d; skipping for user=%s",
-            resp.status_code, user_id,
-        )
-        return
-
-    try:
-        installs = resp.json()
-    except ValueError:
-        return
-    if not isinstance(installs, list):
-        return
-
-    live_ids = {
-        inst.get("id") for inst in installs
-        if isinstance(inst, dict) and isinstance(inst.get("id"), int)
+    headers = {
+        "Authorization": f"Bearer {app_jwt}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    stale = [iid for iid in linked_ids if iid not in live_ids]
+    stale: list[int] = []
+    any_check_succeeded = False
+    for iid in linked_ids:
+        try:
+            resp = requests.get(
+                f"https://api.github.com/app/installations/{iid}",
+                headers=headers,
+                timeout=GITHUB_TIMEOUT,
+            )
+        except requests.RequestException:
+            # Transient — treat as inconclusive, never soft-delete.
+            continue
+        if resp.status_code == 404:
+            stale.append(iid)
+            any_check_succeeded = True
+        elif resp.status_code == 200:
+            any_check_succeeded = True
+        # Any other status (5xx, 401, secondary-rate-limit 403): be
+        # conservative and leave the row alone. The next reconcile pass
+        # will retry.
+
+    # Only stamp the throttle when at least one check came back
+    # authoritative — that way a fully-broken GitHub doesn't suppress the
+    # next attempt.
+    if any_check_succeeded:
+        _reconcile_last_run[user_id] = now
+
     if not stale:
         return
 
@@ -229,7 +247,7 @@ def _reconcile_user_installations(user_id: str) -> None:
                         WHERE user_id = %s
                           AND installation_id = ANY(%s)
                           AND disconnected_at IS NULL""",
-                    (user_id, list(stale)),
+                    (user_id, stale),
                 )
                 cur.execute(
                     """UPDATE github_connected_repos
@@ -237,7 +255,7 @@ def _reconcile_user_installations(user_id: str) -> None:
                               updated_at = NOW()
                         WHERE user_id = %s
                           AND installation_id = ANY(%s)""",
-                    (user_id, list(stale)),
+                    (user_id, stale),
                 )
                 conn.commit()
         logger.info(
