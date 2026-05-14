@@ -183,6 +183,9 @@ export default function GitHubProviderIntegration() {
   const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
   // Background poll until metadata generation finishes for newly added repos
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Pending popup-flow cleanups so unmounting the component doesn't
+  // leak a window-level "message" listener or a closed-popup poller.
+  const popupCleanupsRef = useRef<Array<() => void>>([]);
 
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
@@ -261,8 +264,16 @@ export default function GitHubProviderIntegration() {
     const hasPending = repos.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
     if (!hasPending || !userId) return;
     pollingRef.current = setInterval(async () => {
+      // Use raw fetch here (not GitHubIntegrationService.fetchRepoSelections,
+      // which swallows errors as []). Without that distinction, a single
+      // backend hiccup would look like "no rows pending" and the interval
+      // would clear forever — leaving the row stuck on "Generating..."
+      // until the next manual reload.
       try {
-        const updated = await GitHubIntegrationService.fetchRepoSelections();
+        const response = await fetch('/api/proxy/github/repo-selections');
+        if (!response.ok) return; // transient; keep polling
+        const data = await response.json();
+        const updated: ConnectedRepo[] = data.repositories || [];
         setSavedRepos(updated);
         const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
         if (!stillPending && pollingRef.current) {
@@ -288,6 +299,13 @@ export default function GitHubProviderIntegration() {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    // Tear down any in-flight popup pollers / message listeners so an
+    // unmount mid-install doesn't leak window-level handlers (which
+    // would later fire setState on an unmounted component).
+    for (const cleanup of popupCleanupsRef.current) {
+      try { cleanup(); } catch { /* swallow — cleanup must not throw */ }
+    }
+    popupCleanupsRef.current = [];
   }, []);
 
   // Load saved repos when authenticated (fast DB query only)
@@ -373,11 +391,16 @@ export default function GitHubProviderIntegration() {
       // success or closes. Wrapped so we never run the work twice when
       // both the postMessage and the popup-close detector fire.
       let finalized = false;
+      const cleanup = () => {
+        clearInterval(checkClosed);
+        window.removeEventListener('message', onMessage);
+      };
       const finalize = async () => {
         if (finalized) return;
         finalized = true;
-        clearInterval(checkClosed);
-        window.removeEventListener('message', onMessage);
+        cleanup();
+        // Drop ourselves from the unmount cleanup list — we already ran.
+        popupCleanupsRef.current = popupCleanupsRef.current.filter(c => c !== cleanup);
         setIsLoading(false);
         githubStatus.refresh();
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -393,6 +416,7 @@ export default function GitHubProviderIntegration() {
           // discovery is best-effort; silent on failure
         }
       };
+      popupCleanupsRef.current.push(cleanup);
 
       // Instant path: the success template posts a message right after
       // GitHub's redirect, so we can refresh before the popup actually
@@ -504,11 +528,15 @@ export default function GitHubProviderIntegration() {
       }
 
       let finalized = false;
+      const cleanup = () => {
+        clearInterval(checkClosed);
+        window.removeEventListener('message', onMessage);
+      };
       const finalize = () => {
         if (finalized) return;
         finalized = true;
-        clearInterval(checkClosed);
-        window.removeEventListener('message', onMessage);
+        cleanup();
+        popupCleanupsRef.current = popupCleanupsRef.current.filter(c => c !== cleanup);
         setIsLoading(false);
         githubStatus.refresh();
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -528,6 +556,7 @@ export default function GitHubProviderIntegration() {
       const checkClosed = setInterval(() => {
         if (popup.closed) finalize();
       }, 500);
+      popupCleanupsRef.current.push(cleanup);
     } catch (error: unknown) {
       const err = error as Error & { errorCode?: string };
       const title = err.errorCode === 'GITHUB_NOT_CONFIGURED'
