@@ -308,6 +308,13 @@ def tailscale_disconnect(user_id):
         finally:
             conn.close()
 
+        # Delete discovered infrastructure nodes from Memgraph
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, "tailscale")
+        except Exception as e:
+            logger.warning("Failed to delete Memgraph nodes for user=%s provider=tailscale: %s", user_id, e)
+
         logger.info(f"Tailscale disconnected for user {user_id}")
 
         return jsonify({

@@ -289,7 +289,14 @@ def scaleway_disconnect(user_id):
         # Delete stored credentials
         delete_user_secret(user_id, "scaleway")
         set_connection_status(user_id, "scaleway", access_key, "disconnected")
-        
+
+        # Delete discovered infrastructure nodes from Memgraph
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, "scaleway")
+        except Exception as e:
+            logger.warning("Failed to delete Memgraph nodes for user=%s provider=scaleway: %s", user_id, e)
+
         logger.info(f"Scaleway disconnected for user {user_id}")
         
         return jsonify({

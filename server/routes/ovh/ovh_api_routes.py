@@ -840,6 +840,13 @@ def ovh_disconnect(user_id):
         if account_id:
             set_connection_status(user_id, 'ovh', account_id, 'not_connected')
 
+        # Delete discovered infrastructure nodes from Memgraph
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, "ovh")
+        except Exception as e:
+            logger.warning("Failed to delete Memgraph nodes for user=%s provider=ovh: %s", user_id, e)
+
         logger.info(f"Successfully disconnected OVH account for user: {user_id}")
         return jsonify({
             "status": "disconnected",

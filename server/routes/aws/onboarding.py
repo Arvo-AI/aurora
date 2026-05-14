@@ -345,6 +345,13 @@ def workspace_cleanup(user_id, workspace_id):
             "You can now restart the onboarding flow from scratch."
         )
 
+        # Delete discovered infrastructure nodes from Memgraph
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, "aws")
+        except Exception as e:
+            logger.warning("Failed to delete Memgraph nodes for user=%s provider=aws: %s", user_id, e)
+
         return jsonify({"success": True, "message": message})
 
     except Exception as e:
@@ -492,6 +499,13 @@ def delete_aws_account(user_id, workspace_id, account_id):
         from utils.db.connection_utils import delete_connection_secret
         success = delete_connection_secret(user_id, "aws", account_id)
         if success:
+            # Delete discovered infrastructure nodes scoped to this account only.
+            # Nodes for other AWS accounts still connected to this user are preserved.
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_aws_account(user_id, account_id)
+            except Exception as e:
+                logger.warning("Failed to delete Memgraph nodes for user=%s aws account=%s: %s", user_id, account_id, e)
             return jsonify({"success": True, "message": f"Account {account_id} disconnected."})
         else:
             return jsonify({"error": "Account not found or already disconnected"}), 404

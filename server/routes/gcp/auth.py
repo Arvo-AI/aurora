@@ -221,7 +221,14 @@ def force_disconnect_gcp(user_id):
             logging.info(f"Cleared secret cache for user {user_id}")
         except Exception as e:
             logging.warning(f"Failed to clear secret cache: {e}")
-    
+
+    # Delete discovered infrastructure nodes from Memgraph
+    try:
+        from services.graph.memgraph_client import get_memgraph_client
+        get_memgraph_client().delete_services_for_provider(user_id, "gcp")
+    except Exception as e:
+        logging.warning(f"Failed to delete Memgraph nodes for user={user_id} provider=gcp: {e}")
+
     logging.info(f"Successfully force disconnected GCP for user {user_id}")
     return jsonify({"success": True, "message": "GCP disconnected successfully"}), 200
 

@@ -153,7 +153,14 @@ def disconnect_cluster(user_id, cluster_id):
         finally:
             conn.close()
         logger.info(f"Disconnected kubectl cluster {sanitize(cluster_id)} (revoked token) for user {sanitize(user_id)}")
-        
+
+        # Delete discovered infrastructure nodes from Memgraph for this cluster only
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_cluster(user_id, cluster_name)
+        except Exception as e:
+            logger.warning("Failed to delete Memgraph nodes for user=%s cluster=%s: %s", user_id, cluster_name, e)
+
         # Return command to delete agent from cluster (Helm deployment)
         delete_command = "helm uninstall aurora-kubectl-agent -n <your-namespace>"
         
