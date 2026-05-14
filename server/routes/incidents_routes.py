@@ -1610,8 +1610,8 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                     repo_name = row[0]
                     cursor.execute(
                         """SELECT provider FROM connected_repos
-                           WHERE repo_full_name = %s AND user_id = %s LIMIT 1""",
-                        (repo_name, user_id),
+                           WHERE repo_full_name = %s LIMIT 1""",
+                        (repo_name,),
                     )
                     provider_row = cursor.fetchone()
                     if provider_row:
@@ -1623,6 +1623,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 action="apply_fix",
                 suggestion_id=suggestion_id_int,
                 target_branch=target_branch,
+                use_edited_content=use_edited_content,
                 user_id=user_id,
             )
         else:

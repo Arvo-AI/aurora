@@ -62,9 +62,17 @@ Shows file-level additions/deletions. Prioritize config/infra files.
 `gitlab(action='merge_requests', repo='namespace/project', incident_time='<ISO8601>')`
 Finds MRs merged in the time window; recently merged MRs are flagged.
 
-**Step 6 — Suggest fix:**
+### Post-RCA Remediation (after user approval)
+
+These actions are NOT part of the RCA investigation. Only use after presenting findings and receiving user approval.
+
+**Suggest fix:**
 `gitlab(action='suggest_fix', file_path=..., suggested_content=..., fix_description=..., root_cause_summary=...)`
 Suggests a fix stored for user review. User can approve, then use `action='apply_fix'`.
+
+**Apply fix (requires user approval):**
+`gitlab(action='apply_fix', suggestion_id=<id>)`
+Creates a branch and Merge Request with the approved fix.
 
 ### Important Rules
 - Pass `incident_time` on every RCA call for automatic time correlation.

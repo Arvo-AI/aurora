@@ -159,8 +159,6 @@ export async function DELETE(
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting GitLab:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect GitLab' },
           { status: response.status }

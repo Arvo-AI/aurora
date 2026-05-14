@@ -235,10 +235,10 @@ def trigger_metadata_generation(user_id):
 
         from routes.github.github_repo_metadata import generate_repo_metadata
         try:
-            generate_repo_metadata.delay(owner_id, repo_full_name)
+            generate_repo_metadata.delay(user_id, repo_full_name)
         except Exception as e:
             logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
-            _update_metadata_status(owner_id, repo_full_name, "pending")
+            _update_metadata_status(user_id, repo_full_name, "pending")
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:

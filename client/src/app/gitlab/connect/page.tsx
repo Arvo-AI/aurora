@@ -23,7 +23,7 @@ interface ConnectedProject {
 export default function GitLabConnectPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const { isConnected, username, baseUrl, refresh } = useGitLabStatus(null);
+  const { baseUrl, refresh } = useGitLabStatus(null);
 
   const [tokenInput, setTokenInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("https://gitlab.com");
@@ -136,7 +136,7 @@ export default function GitLabConnectPage() {
             <div className="space-y-4">
               <div className="space-y-3">
                 <div>
-                  <label className="text-sm font-medium">GitLab Instance URL</label>
+                  <label htmlFor="gitlab-base-url" className="text-sm font-medium">GitLab Instance URL</label>
                   <Input
                     value={baseUrlInput}
                     onChange={(e) => setBaseUrlInput(e.target.value)}
@@ -146,8 +146,9 @@ export default function GitLabConnectPage() {
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium">Group Access Token</label>
+                  <label htmlFor="gitlab-token" className="text-sm font-medium">Group Access Token</label>
                   <Input
+                    id="gitlab-token"
                     type="password"
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}

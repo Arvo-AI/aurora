@@ -96,8 +96,9 @@ def _fetch_gitlab_listing(base_url: str, token: str, project_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _get_credentials(user_id: str, provider: str) -> Optional[dict]:
-    from utils.auth.stateless_auth import get_credentials_from_db
-    return get_credentials_from_db(user_id, provider)
+    from utils.auth.token_management import get_token_data
+    result = get_token_data(user_id, provider)
+    return result if result else None
 
 
 def _update_metadata(user_id: str, provider: str, repo_full_name: str, summary: Optional[str], status: str):

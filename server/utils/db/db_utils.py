@@ -1385,6 +1385,23 @@ def initialize_tables():
                 logging.warning(f"Error adding merged_into_incident_id column to incidents: {e}")
                 conn.rollback()
 
+            # Migration: Rename github_connected_repos → connected_repos BEFORE table creation
+            # (must run first so CREATE TABLE IF NOT EXISTS doesn't create an empty duplicate)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'github_connected_repos')
+                           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'connected_repos') THEN
+                            ALTER TABLE github_connected_repos RENAME TO connected_repos;
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
+                conn.rollback()
+
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
@@ -2770,21 +2787,6 @@ def initialize_tables():
                     logging.info(f"De-duplicated {cursor.rowcount} organization name(s).")
             except Exception as e:
                 logging.warning(f"Error de-duplicating organization names: {e}")
-                conn.rollback()
-
-            # Migration: Rename github_connected_repos → connected_repos (now multi-provider).
-            try:
-                cursor.execute("""
-                    DO $$
-                    BEGIN
-                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'github_connected_repos')
-                           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'connected_repos') THEN
-                            ALTER TABLE github_connected_repos RENAME TO connected_repos;
-                        END IF;
-                    END $$;
-                """)
-            except Exception as e:
-                logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
                 conn.rollback()
 
             conn.commit()

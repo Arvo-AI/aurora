@@ -66,7 +66,7 @@ def gitlab_api_request(
 
         if resp.status_code >= 400:
             error_msg = resp.text[:500]
-            logger.error(f"GitLab API error {resp.status_code} for {method} {endpoint}: {error_msg}")
+            logger.error("GitLab API error %d for %s %s: %s", resp.status_code, method, endpoint, error_msg)
             return {"error": f"GitLab API error ({resp.status_code}): {error_msg}"}
 
         if resp.status_code == 204:
@@ -74,8 +74,8 @@ def gitlab_api_request(
 
         return resp.json()
     except requests.RequestException as e:
-        logger.error(f"GitLab request failed for {method} {endpoint}: {e}")
-        return {"error": f"GitLab request failed: {str(e)}"}
+        logger.error("GitLab request failed for %s %s: %s", method, endpoint, type(e).__name__)
+        return {"error": f"GitLab request failed: {type(e).__name__}"}
 
 
 def build_error_response(error: str, **kwargs) -> str:

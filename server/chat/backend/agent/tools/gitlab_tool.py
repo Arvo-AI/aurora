@@ -17,7 +17,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List, Literal
+from typing import Dict, Any, Optional, Tuple, Literal
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field
@@ -126,7 +126,7 @@ def _action_deployment_check(
                     if 0 <= (end_time - updated_time).total_seconds() <= 7200:
                         results["suspicious_pipelines"].append(info)
                 except (ValueError, TypeError):
-                    pass
+                    logger.debug("Skipping suspicious-time check for pipeline %s: invalid timestamp %s", info.get("id"), updated_str)
 
     results["summary"] = {
         "total_pipelines": len(results["pipelines"]),
@@ -171,7 +171,7 @@ def _action_commits(
                 if 0 <= (end_time - commit_time).total_seconds() <= 7200:
                     results["suspicious_commits"].append(commit_info["sha"])
             except (ValueError, TypeError):
-                pass
+                logger.debug("Skipping suspicious-time check for commit %s: invalid date %s", commit_info.get("sha", "?")[:7], commit_date_str)
 
     results["summary"] = {"total_commits": len(results["commits"]), "suspicious_commits": len(results["suspicious_commits"])}
     return results
@@ -252,7 +252,7 @@ def _action_merge_requests(
             if 0 <= (end_time - merged_time).total_seconds() <= 7200:
                 results["recently_merged"].append(mr_info["iid"])
         except (ValueError, TypeError):
-            pass
+            logger.debug("Skipping suspicious-time check for MR !%s: invalid merged_at %s", mr_info.get("iid"), merged_at_str)
 
     results["summary"] = {"total_merged": len(results["merged_mrs"]), "recently_merged": len(results["recently_merged"])}
     return results
@@ -324,6 +324,7 @@ def _action_suggest_fix(
 
 def _action_apply_fix(
     user_id: str, suggestion_id: Optional[int], target_branch: Optional[str],
+    use_edited_content: bool = True,
 ) -> str:
     if not suggestion_id:
         return build_error_response("suggestion_id is required for apply_fix")
@@ -359,7 +360,7 @@ def _action_apply_fix(
     if suggestion.get("pr_url"):
         return build_error_response("MR already created for this suggestion", mr_url=suggestion["pr_url"])
 
-    content = suggestion.get("user_edited_content") or suggestion.get("suggested_content")
+    content = (suggestion.get("user_edited_content") or suggestion.get("suggested_content")) if use_edited_content else suggestion.get("suggested_content")
     if not content:
         return build_error_response("No content available for this fix")
 
@@ -368,7 +369,13 @@ def _action_apply_fix(
         return build_error_response("No project path in suggestion")
 
     encoded_project = quote(project_path, safe="")
-    base_branch = target_branch or "main"
+
+    # Resolve default branch from project metadata when not explicitly provided
+    if not target_branch:
+        project_meta = gitlab_api_request("GET", f"/projects/{encoded_project}", user_id)
+        base_branch = project_meta.get("default_branch", "main") if isinstance(project_meta, dict) and "error" not in project_meta else "main"
+    else:
+        base_branch = target_branch
     file_path = suggestion.get("file_path", "")
     commit_msg = suggestion.get("commit_message") or f"fix: {suggestion.get('title', 'Aurora fix')}"
 
@@ -463,16 +470,28 @@ def _action_commit_terraform(
             return json.dumps({"status": "error", "error": "No Terraform files found to commit"})
 
         terraform_files = []
+        encoded_project = quote(repo, safe="")
+
+        # Resolve target branch (fetch project default if not specified)
+        if not branch:
+            project_meta = gitlab_api_request("GET", f"/projects/{encoded_project}", user_id)
+            target_branch_resolved = project_meta.get("default_branch", "main") if isinstance(project_meta, dict) and "error" not in project_meta else "main"
+        else:
+            target_branch_resolved = branch
+
         for tf_file in Path(terraform_dir).glob("*.tf"):
-            with open(tf_file, 'r') as f:
-                terraform_files.append({"action": "create", "file_path": f"terraform/{tf_file.name}", "content": f.read()})
+            file_path = f"terraform/{tf_file.name}"
+            # Check if file exists to determine create vs update
+            file_check = gitlab_api_request("GET", f"/projects/{encoded_project}/repository/files/{quote(file_path, safe='')}", user_id, params={"ref": target_branch_resolved})
+            action = "update" if isinstance(file_check, dict) and "error" not in file_check else "create"
+            with open(tf_file) as f:
+                terraform_files.append({"action": action, "file_path": file_path, "content": f.read()})
 
         if not terraform_files:
             return json.dumps({"status": "error", "error": "No .tf files found in terraform directory"})
 
-        encoded_project = quote(repo, safe="")
         resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/commits", user_id,
-                                  json_body={"branch": branch or "main", "commit_message": commit_message, "actions": terraform_files})
+                                  json_body={"branch": target_branch_resolved, "commit_message": commit_message, "actions": terraform_files})
         if isinstance(resp, dict) and "error" in resp:
             return json.dumps({"status": "error", "error": f"GitLab commit failed: {resp['error']}"})
 
@@ -527,7 +546,8 @@ def gitlab_tool(
             file_path, suggested_content, fix_description, root_cause_summary, commit_message,
         )
     if action == "apply_fix":
-        return _action_apply_fix(user_id, suggestion_id, target_branch)
+        use_edited = kwargs.get("use_edited_content", True)
+        return _action_apply_fix(user_id, suggestion_id, target_branch, use_edited_content=use_edited)
     if action == "commit_terraform":
         return _action_commit_terraform(user_id, repo, branch, commit_message, session_id)
 

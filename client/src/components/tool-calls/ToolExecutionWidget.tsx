@@ -141,7 +141,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   // GitLab tool parsing
   else if (tool.tool_name === "gitlab" || tool.tool_name === "gitlab_tool") {
     const gitlabInput = normalizedInput || (typeof tool.input === "string" ? tool.input : "") || (typeof tool.command === "string" && tool.command.trim().startsWith("{") ? tool.command : "")
-    command = parseGitLabToolCommand(gitlabInput)
+    if (gitlabInput.trim().startsWith("{")) {
+      command = parseGitLabToolCommand(gitlabInput)
+    }
   }
   // Jenkins RCA tool parsing
   else if (tool.tool_name === "jenkins_rca" && typeof command === "string" && command.trim().startsWith("{")) {
