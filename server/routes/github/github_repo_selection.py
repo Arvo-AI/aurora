@@ -151,6 +151,12 @@ def save_repo_selections(user_id):
                         ),
                     )
                     if full_name not in existing:
+                        # Track in `existing` too so a duplicate
+                        # ``full_name`` later in the same payload doesn't
+                        # cause us to enqueue the metadata task twice
+                        # for one repo. UPSERT collapses the rows on the
+                        # SQL side; this collapses the Celery work too.
+                        existing.add(full_name)
                         newly_added.append(full_name)
 
                 if not incoming:
