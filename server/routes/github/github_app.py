@@ -868,11 +868,19 @@ def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorat
     the mode server-side is mandatory because ``NEXT_PUBLIC_*`` vars
     cannot be trusted for security-relevant rendering and Aurora's
     client/backend boundary forbids client-derived identity.
+
+    ``app_enabled`` reflects BOTH the configured mode AND whether the
+    runtime actually validated the App env (``GITHUB_APP_ENABLED`` flag
+    set by the boot-time validator). If mode is ``app``/``hybrid`` but
+    required env is missing, every App route returns 503; reporting
+    ``app_enabled=true`` here would render an Install CTA that
+    immediately falls into a broken flow.
     """
+    app_runtime_ready = bool(flask.current_app.config.get("GITHUB_APP_ENABLED"))
     return jsonify(
         {
             "mode": get_auth_mode(),
-            "app_enabled": is_app_enabled(),
+            "app_enabled": is_app_enabled() and app_runtime_ready,
             "oauth_enabled": is_oauth_enabled(),
             "oauth_configured": oauth_credentials_configured(),
         }

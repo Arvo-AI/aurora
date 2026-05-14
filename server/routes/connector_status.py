@@ -271,39 +271,55 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_github(user_id: str) -> Dict[str, Any]:
-    """Mirrors /github/status — App-only.
+    """Mirrors /github/status — App-aware AND OAuth-aware (hybrid mode).
 
-    "Connected" means the user has at least one non-suspended GitHub App
-    installation linked. Same query as ``routes/github/github_app.py::github_status``.
-    No live GitHub API call here — that would require minting an
-    installation token per status check, which dwarfs the value over a
-    DB lookup that already reflects ``installation`` webhook updates.
+    Connected when EITHER:
+      * a non-suspended GitHub App installation is linked
+        (``user_github_installations.disconnected_at IS NULL`` —
+        without that filter the chip would survive disconnect and
+        the live-uninstall reconcile in github_app.py), OR
+      * (when OAuth is enabled for this deployment) the user has a
+        stored OAuth access token. The OAuth branch is essential for
+        ``GITHUB_AUTH_MODE=oauth`` deployments and for hybrid users
+        whose only credential is OAuth.
+
+    No live GitHub API call here — minting a token per status check
+    dwarfs the value of a DB lookup that already reflects webhook
+    updates and the per-user reconcile throttle in github_app.py.
     """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                # ``disconnected_at IS NULL`` is mandatory: disconnect
-                # (and the live-uninstall reconcile in github_app.py)
-                # soft-deletes the link by stamping that column. Without
-                # this filter, the connectors-page chip would still
-                # render "Connected" after a disconnect or an
-                # uninstall-on-GitHub.
-                cur.execute(
-                    """SELECT 1
-                         FROM user_github_installations ugi
-                         JOIN github_installations gi
-                              ON gi.installation_id = ugi.installation_id
-                        WHERE ugi.user_id = %s
-                          AND ugi.disconnected_at IS NULL
-                          AND gi.suspended_at IS NULL
-                        LIMIT 1""",
-                    (user_id,),
-                )
-                row = cur.fetchone()
-        return {"connected": bool(row)}
-    except Exception as exc:
-        logger.debug("[STATUS] github App check failed: %s", exc)
-        return {"connected": False}
+    from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
+
+    if is_app_enabled():
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT 1
+                             FROM user_github_installations ugi
+                             JOIN github_installations gi
+                                  ON gi.installation_id = ugi.installation_id
+                            WHERE ugi.user_id = %s
+                              AND ugi.disconnected_at IS NULL
+                              AND gi.suspended_at IS NULL
+                            LIMIT 1""",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+            if row:
+                return {"connected": True}
+        except Exception as exc:
+            logger.debug("[STATUS] github App check failed: %s", exc)
+
+    if is_oauth_enabled():
+        try:
+            from utils.auth.stateless_auth import get_credentials_from_db
+            creds = get_credentials_from_db(user_id, "github")
+            if creds and creds.get("access_token"):
+                return {"connected": True}
+        except Exception as exc:
+            logger.debug("[STATUS] github OAuth check failed: %s", exc)
+
+    return {"connected": False}
 
 
 def _check_bitbucket(creds: Dict[str, Any]) -> Dict[str, Any]:
