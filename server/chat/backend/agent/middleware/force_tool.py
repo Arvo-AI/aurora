@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest
 
 
+# (module_substring, class_name, llm_type_substring, provider_key)
+# OpenRouter uses ChatOpenAI with a custom base URL — the "openai" match
+# is intentional: OpenRouter's API is OpenAI-shaped so tool_choice format
+# is identical.
 _PROVIDER_SIGNATURES: list[tuple[str, str, str, str]] = [
     ("langchain_anthropic", "chatanthropic", "anthropic", "anthropic"),
+    ("langchain_google_vertexai", "chatvertexai", "vertexai", "vertex"),
     ("langchain_google", "chatgooglegenerativeai", "google", "google"),
     ("langchain_openai", "chatopenai", "openai", "openai"),
 ]
@@ -32,11 +38,16 @@ class ForceToolChoice(AgentMiddleware):
 
     @staticmethod
     def _infer_provider(model: Any) -> str | None:
+        """Best-effort provider detection from a LangChain model instance.
+
+        This is a fallback — agent.py always passes provider= explicitly.
+        When the explicit provider is set, this method is never called.
+        """
         seen: set[int] = set()
-        candidates = [model]
+        candidates: deque[Any] = deque([model])
 
         while candidates:
-            candidate = candidates.pop(0)
+            candidate = candidates.popleft()
             if candidate is None or id(candidate) in seen:
                 continue
             seen.add(id(candidate))
