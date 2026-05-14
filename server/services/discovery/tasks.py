@@ -331,7 +331,7 @@ def mark_stale_services(self):
                 if deleted > 0:
                     logger.info(f"[Discovery Task] Deleted {deleted} stale services (>30d) for user {user_id}")
             except Exception as e:
-                logger.error(f"[Discovery Task] Stale deletion failed for user {user_id}: {e}")
+                logger.exception(f"[Discovery Task] Stale deletion failed for user {user_id}: {e}")
 
         logger.info(f"[Discovery Task] Stale detection complete: {total_marked} marked, {total_deleted} deleted")
         return {"status": "completed", "total_marked": total_marked, "total_deleted": total_deleted}

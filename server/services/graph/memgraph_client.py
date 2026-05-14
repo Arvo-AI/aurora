@@ -789,7 +789,7 @@ class MemgraphClient:
         deleted = sum(r["deleted"] for r in results) if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d Service nodes for user=%s provider=%s",
-            deleted, user_id, provider,
+            deleted, sanitize(user_id), sanitize(provider),
         )
         return deleted
 
@@ -809,7 +809,7 @@ class MemgraphClient:
         deleted = sum(r["deleted"] for r in results) if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d Service nodes for user=%s cluster=%s",
-            deleted, user_id, cluster_name,
+            deleted, sanitize(user_id), sanitize(cluster_name),
         )
         return deleted
 
@@ -829,7 +829,7 @@ class MemgraphClient:
         deleted = sum(r["deleted"] for r in results) if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d Service nodes for user=%s aws_account=%s",
-            deleted, user_id, aws_account_id,
+            deleted, sanitize(user_id), sanitize(aws_account_id),
         )
         return deleted
 
@@ -862,7 +862,7 @@ class MemgraphClient:
         deleted = sum(r["deleted"] for r in results) if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d stale Service nodes (>%dd) for user=%s",
-            deleted, stale_days, user_id,
+            deleted, stale_days, sanitize(user_id),
         )
         return deleted
 

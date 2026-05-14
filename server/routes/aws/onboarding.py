@@ -350,7 +350,11 @@ def workspace_cleanup(user_id, workspace_id):
             from services.graph.memgraph_client import get_memgraph_client
             get_memgraph_client().delete_services_for_provider(user_id, "aws")
         except Exception as e:
-            logger.warning("Failed to delete Memgraph nodes for user=%s provider=aws: %s", user_id, e)
+            logger.warning(
+                "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
+                sanitize(user_id),
+                sanitize(str(e)),
+            )
 
         return jsonify({"success": True, "message": message})
 
@@ -505,13 +509,23 @@ def delete_aws_account(user_id, workspace_id, account_id):
                 from services.graph.memgraph_client import get_memgraph_client
                 get_memgraph_client().delete_services_for_aws_account(user_id, account_id)
             except Exception as e:
-                logger.warning("Failed to delete Memgraph nodes for user=%s aws account=%s: %s", user_id, account_id, e)
+                logger.warning(
+                    "Failed to delete Memgraph nodes for user=%s aws account=%s: %s",
+                    sanitize(user_id),
+                    sanitize(account_id),
+                    sanitize(str(e)),
+                )
             return jsonify({"success": True, "message": f"Account {account_id} disconnected."})
         else:
             return jsonify({"error": "Account not found or already disconnected"}), 404
 
     except Exception as e:
-        logger.error("Failed to delete AWS account %s for workspace %s: %s", account_id, workspace_id, e)
+        logger.error(
+            "Failed to delete AWS account %s for workspace %s: %s",
+            sanitize(account_id),
+            sanitize(workspace_id),
+            sanitize(str(e)),
+        )
         return jsonify({"error": "Internal server error"}), 500
 
 
