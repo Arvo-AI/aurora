@@ -15,13 +15,18 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 RESPONSE_HARD_CHAR_CAP = 60_000
 
 
-def truncate_payload(payload: Any, *, tool_name: str = "mcp") -> Any:
-    """Hard cap a tool response to RESPONSE_HARD_CHAR_CAP chars when serialized.
+def truncate_payload(payload: Any, *, tool_name: str = "mcp") -> Dict[str, Any]:
+    """Cap a tool response and guarantee a dict return shape.
 
-    If the payload is small enough, returns it unchanged. Otherwise returns a
-    dict shaped { "truncated": true, "tool": ..., "summary": "<head bytes>",
-    "original_size": N } so the caller knows the response was clipped.
+    MCP tools are declared with a `Dict[str, Any]` return type. FastMCP
+    validates that contract — if a backend route returns a bare JSON array
+    (e.g. /datadog/monitors), Pydantic raises "Input should be a valid
+    dictionary" and the tool call fails. Wrap any non-dict payload in
+    `{"items": payload}` so the contract always holds.
     """
+    if not isinstance(payload, dict):
+        payload = {"items": payload}
+
     try:
         encoded = json.dumps(payload, default=str)
     except (TypeError, ValueError):

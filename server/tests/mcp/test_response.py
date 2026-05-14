@@ -55,3 +55,19 @@ def test_wrap_listing_shape():
         assert out["items"] == [1, 2]
         assert out["next_cursor"] == "2"
         assert out["total"] == 3
+
+
+def test_list_payload_is_coerced_to_dict():
+    """Real bug surfaced by live testing: when a backend route returns a JSON
+    array (e.g. /datadog/monitors) FastMCP's `Dict[str, Any]` return-type
+    validation rejects it. truncate_payload must wrap non-dicts in
+    `{"items": ...}` so every MCP tool's contract is honored."""
+    out = response.truncate_payload([{"a": 1}, {"a": 2}])
+    assert isinstance(out, dict)
+    assert out["items"] == [{"a": 1}, {"a": 2}]
+
+
+def test_scalar_payload_is_coerced_to_dict():
+    out = response.truncate_payload(42)
+    assert isinstance(out, dict)
+    assert out["items"] == 42

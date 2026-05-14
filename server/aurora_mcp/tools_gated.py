@@ -18,7 +18,8 @@ for those are reachable through `chat_with_aurora` instead.
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from .registry import GatedToolSpec, TIER2_TOOLS, _check_skill_connected
 from .response import truncate_payload
@@ -26,6 +27,19 @@ from .response import truncate_payload
 logger = logging.getLogger(__name__)
 
 ApiCall = Callable[..., Awaitable[Dict[str, Any]]]
+
+
+def _rfc3339_window(time_range_minutes: int) -> Tuple[str, str]:
+    """Return (from_rfc3339, to_rfc3339) — Datadog logs API shape."""
+    now = datetime.now(timezone.utc)
+    return (now - timedelta(minutes=time_range_minutes)).isoformat(), now.isoformat()
+
+
+def _epoch_ms_window(time_range_minutes: int) -> Tuple[int, int]:
+    """Return (from_ms, to_ms) — Datadog metrics API shape."""
+    to_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    from_ms = to_ms - time_range_minutes * 60 * 1000
+    return from_ms, to_ms
 
 
 def _not_connected_error(spec: GatedToolSpec) -> Dict[str, Any]:
@@ -83,13 +97,20 @@ def register_tier2_tools(
             return _not_connected_error(spec)
 
         if chosen == "datadog":
-            body = {"query": query, "time_range_minutes": time_range_minutes, "limit": limit}
+            from_iso, to_iso = _rfc3339_window(time_range_minutes)
+            body = {"query": query, "from": from_iso, "to": to_iso, "limit": limit}
             return truncate_payload(
                 await api_call("POST", "/datadog/logs/search", body=body),
                 tool_name="query_logs",
             )
         if chosen == "splunk":
-            body = {"query": query, "max_count": limit}
+            # Splunk relative-time syntax e.g. "-60m" — matches the route default.
+            body = {
+                "query": query,
+                "earliestTime": f"-{int(time_range_minutes)}m",
+                "latestTime": "now",
+                "maxCount": limit,
+            }
             return truncate_payload(
                 await api_call("POST", "/splunk/search", body=body),
                 tool_name="query_logs",
@@ -106,15 +127,20 @@ def register_tier2_tools(
         query: str,
         time_range_minutes: int = 60,
     ) -> Dict[str, Any]:
-        """Query metrics. Currently routes to Datadog's metrics query API."""
+        """Query metrics. Currently routes to Datadog's metrics query API.
+
+        `query` must be a full Datadog query expression including the scope.
+        Example: `system.cpu.user{*}` or `avg:trace.http.request.duration{env:prod}`.
+        Bare metric names (`system.cpu.user`) will fail to parse."""
         spec = _SPEC_BY_NAME["query_metrics"]
         user_id = _user_id()
         if not _check_skill_connected("datadog", user_id):
             return _not_connected_error(spec)
+        from_ms, to_ms = _epoch_ms_window(time_range_minutes)
         return truncate_payload(
             await api_call(
                 "POST", "/datadog/metrics/query",
-                body={"query": query, "time_range_minutes": time_range_minutes},
+                body={"query": query, "fromMs": from_ms, "toMs": to_ms},
             ),
             tool_name="query_metrics",
         )

@@ -705,6 +705,12 @@ def find_dispatch_entry(name: str) -> Optional[DispatchEntry]:
     return None
 
 
+_ALL_SKILLS = frozenset(
+    s.lower() for e in DISPATCH_ALLOWLIST for s in e.enabling_skills
+)
+_ALL_CATEGORIES = frozenset(e.category.lower() for e in DISPATCH_ALLOWLIST)
+
+
 def search_dispatch_entries(
     query: str = "",
     category: Optional[str] = None,
@@ -715,11 +721,19 @@ def search_dispatch_entries(
     """Return up to `limit` matching entries.
 
     If `user_id` is provided, results are filtered to entries the user can
-    actually call (enabling skills connected).
+    actually call (enabling skills connected). If the caller passes a value
+    in `category` that turns out to match an enabling skill instead of a
+    category (a common LLM mistake), treat it as `connector` so the search
+    still finds something.
     """
     q = query.strip().lower()
     cat = (category or "").strip().lower()
     conn = (connector or "").strip().lower()
+
+    if cat and cat not in _ALL_CATEGORIES and cat in _ALL_SKILLS:
+        conn = conn or cat
+        cat = ""
+
     matches: List[DispatchEntry] = []
     for entry in DISPATCH_ALLOWLIST:
         if cat and entry.category.lower() != cat:

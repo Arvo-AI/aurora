@@ -32,6 +32,10 @@ _POLL_INTERVAL_MAX = 4.0
 _TERMINAL_OK = frozenset({"complete", "completed"})
 _TERMINAL_ERR = frozenset({"error", "cancelled", "failed"})
 
+# Canonical assistant-message sender tag in chat_sessions.messages is "bot"
+# (see DB). Accept "aurora" too in case the schema ever shifts.
+_ASSISTANT_SENDERS = frozenset({"bot", "aurora"})
+
 
 async def chat_with_aurora(
     api_call: Callable[..., Awaitable[Dict[str, Any]]],
@@ -99,7 +103,7 @@ async def chat_with_aurora(
         if msgs:
             last_seq = int(page.get("seq") or last_seq + len(msgs))
             for m in reversed(msgs):
-                if m.get("sender") == "aurora":
+                if m.get("sender") in _ASSISTANT_SENDERS:
                     latest_partial = m.get("text") or latest_partial
                     break
 

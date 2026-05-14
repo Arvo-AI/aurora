@@ -66,9 +66,24 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
 
     @mcp.tool()
     async def get_incident(incident_id: str) -> Dict[str, Any]:
-        """Get full incident details: summary, suggestions, citations, alerts."""
+        """Get full incident details: summary, suggestions, citations, alerts.
+
+        Strips the large `streamingThoughts` log (agent intermediate reasoning,
+        ~44k chars for a typical incident) and slims `chatSessions` to id/title/
+        status — those are useful in the Aurora UI but cost too much over MCP.
+        Pull the full body via the Aurora UI or a direct API call if needed."""
+        raw = await api_call("GET", f"/api/incidents/{incident_id}")
+        incident = raw.get("incident") if isinstance(raw, dict) and "incident" in raw else raw
+        if isinstance(incident, dict):
+            incident = {k: v for k, v in incident.items() if k != "streamingThoughts"}
+            sessions = incident.get("chatSessions")
+            if isinstance(sessions, list):
+                incident["chatSessions"] = [
+                    {k: s.get(k) for k in ("id", "title", "status") if k in s}
+                    for s in sessions if isinstance(s, dict)
+                ]
         return truncate_payload(
-            await api_call("GET", f"/api/incidents/{incident_id}"),
+            {"incident": incident} if isinstance(raw, dict) and "incident" in raw else incident,
             tool_name="get_incident",
         )
 
