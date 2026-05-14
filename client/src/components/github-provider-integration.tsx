@@ -1,14 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
-import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Search, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
+import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
 import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
@@ -53,6 +54,8 @@ export interface ConnectedRepo {
   repo_id: number;
   default_branch: string;
   is_private: boolean;
+  metadata_summary: string | null;
+  metadata_status: string;
   repo_data: Repository | null;
   created_at: string | null;
 }
@@ -140,6 +143,23 @@ export class GitHubIntegrationService {
     await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
   }
 
+  static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
+    const response = await fetch(`/api/proxy/github/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metadata_summary: summary }),
+    });
+    if (!response.ok) throw new Error('Failed to update metadata');
+  }
+
+  static async generateRepoMetadata(repoFullName: string): Promise<void> {
+    const response = await fetch('/api/proxy/github/repo-metadata/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_full_name: repoFullName }),
+    });
+    if (!response.ok) throw new Error('Failed to trigger metadata generation');
+  }
 }
 
 export default function GitHubProviderIntegration() {
@@ -159,6 +179,10 @@ export default function GitHubProviderIntegration() {
 
   // Saved repos
   const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
+  // Per-repo description draft while user is editing inline
+  const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
+  // Background poll until metadata generation finishes for newly added repos
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
@@ -229,14 +253,42 @@ export default function GitHubProviderIntegration() {
     finally { setIsLoadingInstallations(false); }
   }, [userId, authConfig.app_enabled]);
 
+  const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    const hasPending = repos.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
+    if (!hasPending || !userId) return;
+    pollingRef.current = setInterval(async () => {
+      try {
+        const updated = await GitHubIntegrationService.fetchRepoSelections();
+        setSavedRepos(updated);
+        const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
+        if (!stillPending && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch { /* keep polling; transient failure */ }
+    }, 3000);
+  }, [userId]);
+
   const loadSavedRepos = useCallback(async () => {
     if (!userId) return;
     try {
       const repos = await GitHubIntegrationService.fetchRepoSelections();
       setSavedRepos(repos);
       setCheckedRepos(new Set(repos.map(r => r.repo_full_name)));
+      startMetadataPolling(repos);
     } catch { setSavedRepos([]); }
-  }, [userId]);
+  }, [userId, startMetadataPolling]);
+
+  useEffect(() => () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
 
   // Load saved repos when authenticated (fast DB query only)
   useEffect(() => {
@@ -244,14 +296,31 @@ export default function GitHubProviderIntegration() {
     loadSavedRepos();
   }, [githubStatus.isAuthenticated, userId, loadSavedRepos]);
 
-  // Fetch GitHub App installations on mount; refresh when other parts of the
-  // page emit `providerStateChanged` (e.g. after the install popup closes).
+  // Fetch GitHub App installations on mount; refresh on:
+  //   - any provider state change announcement
+  //   - the install/OAuth popup posting a github_auth_success
+  //   - the user returning to the tab (covers uninstall-on-GitHub-then-back)
   useEffect(() => {
     if (!userId) return;
     fetchInstallations();
     const handler = () => fetchInstallations();
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string } | null;
+      if (data && data.type === 'github_auth_success') fetchInstallations();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchInstallations();
+    };
     window.addEventListener('providerStateChanged', handler);
-    return () => window.removeEventListener('providerStateChanged', handler);
+    window.addEventListener('message', onMessage);
+    window.addEventListener('focus', handler);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('providerStateChanged', handler);
+      window.removeEventListener('message', onMessage);
+      window.removeEventListener('focus', handler);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [userId, fetchInstallations]);
 
   // Lazy-load full repo list only when user expands the picker
@@ -298,33 +367,50 @@ export default function GitHubProviderIntegration() {
         return;
       }
 
+      // Refresh installations + discovery list once the popup signals
+      // success or closes. Wrapped so we never run the work twice when
+      // both the postMessage and the popup-close detector fire.
+      let finalized = false;
+      const finalize = async () => {
+        if (finalized) return;
+        finalized = true;
+        clearInterval(checkClosed);
+        window.removeEventListener('message', onMessage);
+        setIsLoading(false);
+        githubStatus.refresh();
+        window.dispatchEvent(new CustomEvent('providerStateChanged'));
+        try {
+          const linked = await GitHubAppService.listInstallations();
+          if (!linked.installations || linked.installations.length === 0) {
+            const discovered = await GitHubAppService.discoverInstallations();
+            setDiscoveredInstallations(discovered.installations || []);
+          } else {
+            setDiscoveredInstallations([]);
+          }
+        } catch {
+          // discovery is best-effort; silent on failure
+        }
+      };
+
+      // Instant path: the success template posts a message right after
+      // GitHub's redirect, so we can refresh before the popup actually
+      // closes and avoid the multi-second "Connecting..." stutter.
+      const onMessage = (event: MessageEvent) => {
+        const data = event.data as { type?: string } | null;
+        if (data && data.type === 'github_auth_success') {
+          finalize();
+        }
+      };
+      window.addEventListener('message', onMessage);
+
+      // Fallback: user closed the popup without completing, or the
+      // success template's postMessage was blocked by an origin
+      // mismatch. The poll keeps the UI honest in both cases.
       const checkClosed = setInterval(() => {
         if (popup.closed) {
-          clearInterval(checkClosed);
-          setIsLoading(false);
-          setTimeout(async () => {
-            githubStatus.refresh();
-            window.dispatchEvent(new CustomEvent('providerStateChanged'));
-            // Pull the user's linked installations one more time. If
-            // GitHub didn't fire the install callback (because the App
-            // was already installed and the user just visited the
-            // configure page), Aurora has nothing linked yet — discover
-            // the existing GitHub-side installs and offer them as a
-            // claim picker.
-            try {
-              const linked = await GitHubAppService.listInstallations();
-              if (!linked.installations || linked.installations.length === 0) {
-                const discovered = await GitHubAppService.discoverInstallations();
-                setDiscoveredInstallations(discovered.installations || []);
-              } else {
-                setDiscoveredInstallations([]);
-              }
-            } catch {
-              // discovery is best-effort; silent on failure
-            }
-          }, 1000);
+          finalize();
         }
-      }, 1000);
+      }, 500);
     } catch (error: unknown) {
       const err = error as Error;
       toast({
@@ -333,6 +419,40 @@ export default function GitHubProviderIntegration() {
         variant: "destructive",
       });
       setIsLoading(false);
+    }
+  };
+
+  const handleMetadataSave = async (repoFullName: string) => {
+    if (!userId) return;
+    const summary = editingMetadata[repoFullName];
+    if (summary === undefined) return;
+    try {
+      await GitHubIntegrationService.updateRepoMetadata(repoFullName, summary);
+      setSavedRepos(prev => prev.map(r =>
+        r.repo_full_name === repoFullName ? { ...r, metadata_summary: summary, metadata_status: 'ready' } : r
+      ));
+      setEditingMetadata(prev => {
+        const next = { ...prev };
+        delete next[repoFullName];
+        return next;
+      });
+      toast({ title: "Description updated" });
+    } catch {
+      toast({ title: "Error", description: "Failed to update description", variant: "destructive" });
+    }
+  };
+
+  const handleRegenerate = async (repoFullName: string) => {
+    if (!userId) return;
+    try {
+      await GitHubIntegrationService.generateRepoMetadata(repoFullName);
+      const updated = savedRepos.map(r =>
+        r.repo_full_name === repoFullName ? { ...r, metadata_status: 'generating' } : r
+      );
+      setSavedRepos(updated);
+      startMetadataPolling(updated);
+    } catch {
+      toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
     }
   };
 
@@ -372,16 +492,27 @@ export default function GitHubProviderIntegration() {
         setIsLoading(false);
         return;
       }
-      const checkClosed = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(checkClosed);
-          setIsLoading(false);
-          setTimeout(() => {
-            githubStatus.refresh();
-            window.dispatchEvent(new CustomEvent('providerStateChanged'));
-          }, 1000);
+
+      let finalized = false;
+      const finalize = () => {
+        if (finalized) return;
+        finalized = true;
+        clearInterval(checkClosed);
+        window.removeEventListener('message', onMessage);
+        setIsLoading(false);
+        githubStatus.refresh();
+        window.dispatchEvent(new CustomEvent('providerStateChanged'));
+      };
+      const onMessage = (event: MessageEvent) => {
+        const data = event.data as { type?: string } | null;
+        if (data && data.type === 'github_auth_success') {
+          finalize();
         }
-      }, 1000);
+      };
+      window.addEventListener('message', onMessage);
+      const checkClosed = setInterval(() => {
+        if (popup.closed) finalize();
+      }, 500);
     } catch (error: unknown) {
       const err = error as Error & { errorCode?: string };
       const title = err.errorCode === 'GITHUB_NOT_CONFIGURED'
@@ -743,18 +874,116 @@ export default function GitHubProviderIntegration() {
             </div>
           )}
 
-          {/* Connected repos */}
+          {/* Connected repos with metadata */}
           {savedRepos.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm font-medium text-muted-foreground">Connected Repositories</p>
-              {savedRepos.map(repo => (
-                <div key={repo.repo_full_name} className="p-2 rounded-md border border-border">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{repo.repo_full_name}</span>
-                    {repo.is_private && <Badge variant="secondary" className="text-xs">Private</Badge>}
+              {savedRepos.map(repo => {
+                const isEditing = editingMetadata[repo.repo_full_name] !== undefined;
+                const isReady = repo.metadata_status === 'ready';
+                const isPending = repo.metadata_status === 'pending' || repo.metadata_status === 'generating';
+                const isError = repo.metadata_status === 'error';
+                return (
+                  <div key={repo.repo_full_name} className="p-2 rounded-md border border-border space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-medium truncate">{repo.repo_full_name}</span>
+                        {repo.is_private && <Badge variant="secondary" className="text-xs">Private</Badge>}
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {isReady && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0"
+                              onClick={() => {
+                                setEditingMetadata(prev => {
+                                  if (isEditing) {
+                                    const next = { ...prev };
+                                    delete next[repo.repo_full_name];
+                                    return next;
+                                  }
+                                  return { ...prev, [repo.repo_full_name]: repo.metadata_summary || '' };
+                                });
+                              }}
+                              title={isEditing ? 'Cancel edit' : 'Edit description'}
+                              data-testid={`repo-edit-${repo.repo_full_name}`}
+                            >
+                              {isEditing ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0"
+                              onClick={() => handleRegenerate(repo.repo_full_name)}
+                              title="Regenerate description"
+                              data-testid={`repo-regenerate-${repo.repo_full_name}`}
+                            >
+                              <RotateCw className="h-3 w-3" />
+                            </Button>
+                          </>
+                        )}
+                        {isError && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => handleRegenerate(repo.repo_full_name)}
+                            data-testid={`repo-retry-${repo.repo_full_name}`}
+                          >
+                            Retry
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {isPending && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Generating description...
+                      </div>
+                    )}
+                    {isError && (
+                      <p className="text-xs text-red-500">Failed to generate description</p>
+                    )}
+                    {isReady && isEditing && (
+                      <div className="space-y-1">
+                        <Textarea
+                          value={editingMetadata[repo.repo_full_name]}
+                          onChange={e => setEditingMetadata(prev => ({ ...prev, [repo.repo_full_name]: e.target.value }))}
+                          className="text-xs min-h-[60px]"
+                          rows={2}
+                        />
+                        <div className="flex gap-1 justify-end">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => setEditingMetadata(prev => {
+                              const next = { ...prev };
+                              delete next[repo.repo_full_name];
+                              return next;
+                            })}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => handleMetadataSave(repo.repo_full_name)}
+                          >
+                            Save
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {isReady && !isEditing && repo.metadata_summary && (
+                      <p className="text-xs text-muted-foreground">{repo.metadata_summary.replace(/\*\*/g, '')}</p>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

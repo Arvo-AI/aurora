@@ -93,10 +93,32 @@ export function useGitHubStatus(userId: string | null) {
   useEffect(() => { checkStatus(); }, [checkStatus]);
 
   useEffect(() => {
+    if (!userId) return;
+    // Refresh when:
+    // - any other component announces a provider state change
+    // - the install/OAuth popup posts a github_auth_success message
+    // - the user returns to the tab (covers uninstall-on-GitHub-then-back)
     const handleProviderChange = () => { checkStatus(); };
+    const handleAuthMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string } | null;
+      if (data && data.type === 'github_auth_success') {
+        checkStatus();
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') checkStatus();
+    };
     window.addEventListener('providerStateChanged', handleProviderChange);
-    return () => { window.removeEventListener('providerStateChanged', handleProviderChange); };
-  }, [checkStatus]);
+    window.addEventListener('message', handleAuthMessage);
+    window.addEventListener('focus', checkStatus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('providerStateChanged', handleProviderChange);
+      window.removeEventListener('message', handleAuthMessage);
+      window.removeEventListener('focus', checkStatus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [userId, checkStatus]);
 
   return { ...status, refresh: checkStatus };
 }

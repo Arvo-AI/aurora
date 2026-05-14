@@ -130,6 +130,126 @@ def _render_error(reason: str) -> flask.Response:
     )
 
 
+def _reconcile_user_installations(user_id: str) -> None:
+    """Soft-delete linked installs that GitHub no longer knows about.
+
+    Webhook-driven cleanup of ``installation.deleted`` requires the webhook
+    to actually reach Aurora. In dev — and any deployment where the public
+    webhook URL is misconfigured — uninstalling the App on GitHub leaves
+    Aurora's DB pointing at an installation that no longer exists. Without
+    this reconciliation, the connector card would still render "Connected".
+
+    One App-JWT-authenticated call to ``GET /app/installations`` returns
+    every install GitHub knows about for this App; we filter to the user's
+    linked rows and soft-delete any that are missing. ``CASCADE`` on
+    ``user_github_installations`` is handled implicitly by the next time
+    GitHub fires ``installation.deleted`` (or by the dev manually
+    re-running this) — here we only flip ``disconnected_at`` so the user
+    can re-claim if they reinstall.
+    """
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT installation_id
+                         FROM user_github_installations
+                        WHERE user_id = %s
+                          AND disconnected_at IS NULL""",
+                    (user_id,),
+                )
+                linked_ids = {r[0] for r in cur.fetchall()}
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-RECONCILE] DB read failed for user=%s", user_id,
+        )
+        return
+
+    if not linked_ids:
+        return
+
+    try:
+        app_jwt = mint_app_jwt()
+    except GitHubAppJWTError:
+        logger.warning(
+            "[GITHUB-APP-RECONCILE] JWT mint failed; skipping reconcile for user=%s",
+            user_id,
+        )
+        return
+
+    try:
+        resp = requests.get(
+            "https://api.github.com/app/installations",
+            headers={
+                "Authorization": f"Bearer {app_jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=GITHUB_TIMEOUT,
+            params={"per_page": 100},
+        )
+    except requests.RequestException:
+        logger.warning(
+            "[GITHUB-APP-RECONCILE] GitHub request failed; skipping for user=%s",
+            user_id,
+        )
+        return
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[GITHUB-APP-RECONCILE] GitHub returned status=%d; skipping for user=%s",
+            resp.status_code, user_id,
+        )
+        return
+
+    try:
+        installs = resp.json()
+    except ValueError:
+        return
+    if not isinstance(installs, list):
+        return
+
+    live_ids = {
+        inst.get("id") for inst in installs
+        if isinstance(inst, dict) and isinstance(inst.get("id"), int)
+    }
+
+    stale = [iid for iid in linked_ids if iid not in live_ids]
+    if not stale:
+        return
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE user_github_installations
+                          SET disconnected_at = NOW()
+                        WHERE user_id = %s
+                          AND installation_id = ANY(%s)
+                          AND disconnected_at IS NULL""",
+                    (user_id, list(stale)),
+                )
+                cur.execute(
+                    """UPDATE github_connected_repos
+                          SET installation_id = NULL,
+                              updated_at = NOW()
+                        WHERE user_id = %s
+                          AND installation_id = ANY(%s)""",
+                    (user_id, list(stale)),
+                )
+                conn.commit()
+        logger.info(
+            "[GITHUB-APP-RECONCILE] soft-deleted %d stale install link(s) for user=%s",
+            len(stale), user_id,
+        )
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-RECONCILE] DB write failed for user=%s", user_id,
+        )
+
+
 @github_app_bp.route("/app/install", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "write")
 def github_app_install_url(user_id):
@@ -372,7 +492,17 @@ def github_app_install_callback():
 @github_app_bp.route("/app/installations", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def github_app_list_installations(user_id):
-    """List GitHub App installations linked to the requesting user."""
+    """List GitHub App installations linked to the requesting user.
+
+    Self-heals against silent uninstalls: in dev (and any environment where
+    the ``installation.deleted`` webhook isn't reaching us), the user can
+    uninstall the App on GitHub and the DB still shows it linked. Before
+    returning, ask GitHub which installation_ids are still live for this
+    App and soft-delete any of OUR linked rows that GitHub no longer
+    knows about. One App-JWT API call regardless of linked count.
+    """
+    _reconcile_user_installations(user_id)
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -708,7 +838,13 @@ def github_status(user_id):
     GitHub App installation linked OR (when OAuth is enabled) a stored
     user OAuth token. App identity wins when both are present, since the
     installation token has scoped permissions and survives user departure.
+
+    Self-heals against silent uninstalls before reading from the DB so a
+    revoked-on-GitHub install never registers as "connected" in the UI.
     """
+    if is_app_enabled():
+        _reconcile_user_installations(user_id)
+
     app_username: str | None = None
     if is_app_enabled():
         try:

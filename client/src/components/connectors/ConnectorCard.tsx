@@ -518,18 +518,16 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
           }
           setShowGitHubDialog(open);
           if (!open) {
-            setTimeout(() => {
-              checkGitHubStatus();
-              githubStatus.refresh();
-            }, 500);
+            // Refresh immediately — the lingering setTimeout was the
+            // source of the "stays Connecting for a beat" flash.
+            checkGitHubStatus();
+            githubStatus.refresh();
           }
         }}
         onBitbucketDialogChange={(open) => {
           setShowBitbucketDialog(open);
           if (!open) {
-            setTimeout(() => {
-              bitbucketStatus.refresh();
-            }, 500);
+            bitbucketStatus.refresh();
           }
         }}
         onGcpDialogChange={setShowGcpDialog}

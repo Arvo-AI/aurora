@@ -52,21 +52,30 @@
     </div>
 
     <script>
-        console.log('GitHub authentication successful. Sending token to parent window.');
-        // Send message to parent window
-        window.opener.postMessage(
-            {
-                type: 'github_auth_success',
-                token: '{{ token }}',
-                username: '{{ github_username }}'
-            },
-            '{{ frontend_url }}'
-        );
-        
-        // Close this window after a short delay
-        setTimeout(function() {
-            window.close();
-        }, 2000);
+        // Notify the opener immediately so the connector UI can refresh
+        // without waiting for popup-close polling. Payload carries no
+        // credentials — the access token / installation linkage is
+        // already persisted server-side by the time this template
+        // renders, so the opener only needs to be told to re-fetch.
+        // Origin targeting: prefer the configured frontend origin; fall
+        // back to '*' only when the backend wasn't told its frontend
+        // origin (dev), and even then the payload contains no secret.
+        try {
+            if (window.opener) {
+                var targetOrigin = '{{ frontend_url }}' || '*';
+                window.opener.postMessage(
+                    { type: 'github_auth_success' },
+                    targetOrigin
+                );
+            }
+        } catch (e) {
+            // postMessage can throw if the opener was already navigated
+            // away; not fatal — the opener also polls popup.closed.
+        }
+
+        // Close almost immediately. The success card is shown long enough
+        // to acknowledge but not long enough to feel janky on the opener.
+        setTimeout(function() { window.close(); }, 250);
     </script>
 </body>
 </html> 
