@@ -67,6 +67,12 @@ github_app_bp = Blueprint("github_app", __name__)
 # DOMException and silently break the instant-refresh path.
 FRONTEND_URL = os.getenv("FRONTEND_URL") or ""
 GITHUB_TIMEOUT = 20
+# Tighter timeout for reconcile: this runs on the hot /github/status
+# path and the user is waiting on the response. With the default 20 s,
+# an unreachable GitHub could block status for ``N * 20 s`` per linked
+# install. 3 s is well past p99 of a healthy ``api.github.com`` call
+# while still catching real outages quickly.
+GITHUB_RECONCILE_TIMEOUT = 3
 
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
 # allow 30 minutes to absorb account-creation, 2FA, OAuth-grant, popup-block
@@ -261,16 +267,22 @@ def _reconcile_user_installations(user_id: str) -> None:
 
         stale: list[int] = []
         gh_responsive = False
+        gh_unreachable = False
         for iid in linked_ids:
             try:
                 resp = requests.get(
                     f"https://api.github.com/app/installations/{iid}",
                     headers=headers,
-                    timeout=GITHUB_TIMEOUT,
+                    timeout=GITHUB_RECONCILE_TIMEOUT,
                 )
             except requests.RequestException:
-                # Transient — treat as inconclusive, never soft-delete.
-                continue
+                # GitHub appears unreachable. No point trying the rest
+                # of this user's installs; bail and let the throttle
+                # carry the next ~30 s of status checks. Without this,
+                # a network outage would block status endpoints for
+                # ``N * timeout`` per request.
+                gh_unreachable = True
+                break
             if resp.status_code == 404:
                 stale.append(iid)
                 gh_responsive = True
@@ -280,6 +292,14 @@ def _reconcile_user_installations(user_id: str) -> None:
             # conservative and leave the row alone. The next reconcile
             # pass will retry; ``mark_success`` stays False so a fully
             # broken GitHub doesn't suppress the next attempt.
+
+        # When GitHub was unreachable the entire pass we still stamp
+        # the throttle so the next request doesn't burn another timeout
+        # on the same outage. The TTL is short enough (30 s) that
+        # recovery is detected quickly.
+        if gh_unreachable and not gh_responsive:
+            mark_success = True
+            return
 
         if not stale:
             # Nothing to write — the GitHub side answered cleanly so
