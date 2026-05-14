@@ -52,7 +52,8 @@ def run_scheduled_actions():
                 )
                 org_reps = cur.fetchall()
                 for user_id, _org_id in org_reps:
-                    set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]")
+                    if not set_rls_context(cur, conn, user_id, log_prefix="[ActionScheduler]"):
+                        continue
                     cur.execute(_ACTIONS_QUERY)
                     rows.extend(cur.fetchall())
     except Exception:
