@@ -58,22 +58,37 @@
     </div>
 
     <script>
-        console.log('GitHub authentication error: {{ error }}');
-        // Send error message to parent window
-        if (window.opener) {
-            window.opener.postMessage(
-                {
-                    type: 'github_auth_error',
-                    error: '{{ error }}'
-                },
-                '{{ frontend_url }}'
-            );
+        // Notify the opener that auth failed. Origin targeting is the
+        // same defensive pattern as the success template — without it,
+        // an unset/invalid FRONTEND_URL would throw inside postMessage
+        // and abort the script BEFORE setTimeout(window.close, 5000)
+        // runs, leaving the popup stuck open.
+        try {
+            if (window.opener) {
+                var configured = '{{ frontend_url|default("", true) }}';
+                var targetOrigin = '*';
+                if (configured && configured !== 'None') {
+                    try {
+                        targetOrigin = new URL(configured).origin;
+                    } catch (urlErr) {
+                        targetOrigin = '*';
+                    }
+                }
+                window.opener.postMessage(
+                    {
+                        type: 'github_auth_error',
+                        error: '{{ error }}'
+                    },
+                    targetOrigin
+                );
+            }
+        } catch (e) {
+            // postMessage can throw if the opener navigated away; not
+            // fatal — fall through to the close timer below.
         }
-        
-        // Close this window after a short delay
-        setTimeout(function() {
-            window.close();
-        }, 5000);
+
+        // Close after a short delay so the user can read the message.
+        setTimeout(function() { window.close(); }, 5000);
     </script>
 </body>
 </html> 
