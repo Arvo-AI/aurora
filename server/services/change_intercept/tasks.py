@@ -154,6 +154,49 @@ def launch_investigation(
     )
 
     try:
+        # ─── 0. Per-event try-lock to dedup parallel runs ─────────
+        # A Celery retry can race with a manual re-enqueue (or two
+        # webhook deliveries within the dedup window) for the SAME
+        # change_event_id. Without serialization both workers would
+        # call the LLM, INSERT two change_investigations rows, and
+        # post two reviews. pg_try_advisory_lock returns FALSE if the
+        # lock is already held; the second worker just exits cleanly.
+        event_lock_token = _event_lock_token(change_event_id)
+        with _try_advisory_lock(event_lock_token) as got_lock:
+            if not got_lock:
+                logger.info(
+                    "change_intercept_event=launch_investigation status=already_in_flight "
+                    "change_event_id=%s",
+                    change_event_id,
+                )
+                return {"status": "already_in_flight"}
+            return _launch_investigation_inner(
+                change_event_id=change_event_id,
+                user_id_for_rls=user_id_for_rls,
+                start=start,
+            )
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.exception(
+            "change_intercept_event=launch_investigation status=failed "
+            "change_event_id=%s duration_ms=%d error_class=%s msg=%s",
+            change_event_id,
+            duration_ms,
+            type(exc).__name__,
+            redact_token(str(exc)),
+        )
+        raise self.retry(exc=exc)
+
+
+def _launch_investigation_inner(
+    *,
+    change_event_id: str,
+    user_id_for_rls: str,
+    start: float,
+) -> dict[str, Any]:
+    """The actual work, separated from the outer try-lock so the lock
+    context manager owns the retry/cleanup semantics."""
+    try:
         # ─── 1. Load the change_events row ───────────────────────
         event_row = _load_change_event(change_event_id, user_id_for_rls)
         if event_row is None:
@@ -282,19 +325,74 @@ def launch_investigation(
             "review_event": rendered.verdict_event,
             "posted_verdict_id": live_review["verdict_id"],
         }
-    except Exception as exc:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        logger.exception(
-            "change_intercept_event=launch_investigation status=failed "
-            "change_event_id=%s duration_ms=%d error_class=%s msg=%s",
-            change_event_id,
-            duration_ms,
-            type(exc).__name__,
-            redact_token(str(exc)),
-        )
-        # Standard Celery retry — investigation failures usually mean
-        # a transient downstream issue (LLM provider blip, DB stall).
-        raise self.retry(exc=exc)
+    except Exception:
+        # Re-raise to the outer ``launch_investigation`` which holds
+        # ``self`` for Celery retry. Logging is done in the outer
+        # except handler so we don't double-log on the way up.
+        raise
+
+
+# ─── Per-event try-lock helpers ─────────────────────────────────────
+
+
+def _event_lock_token(change_event_id: str) -> int:
+    """Stable 63-bit advisory-lock token derived from change_event_id."""
+    import hashlib
+
+    digest = hashlib.blake2b(
+        f"event:{change_event_id}".encode("utf-8"), digest_size=8
+    ).digest()
+    token = int.from_bytes(digest, "big") & 0x7FFFFFFFFFFFFFFF
+    return token or 1
+
+
+class _try_advisory_lock:
+    """Context manager wrapping ``pg_try_advisory_lock``.
+
+    Yields ``True`` on entry when the lock was acquired, ``False`` when
+    another worker already holds it. Always releases on exit (and
+    always returns the connection to the pool). Used by
+    ``launch_investigation`` to dedup parallel runs for the same
+    change_event_id without blocking the second worker.
+    """
+
+    def __init__(self, token: int) -> None:
+        self._token = token
+        self._conn: Any = None
+        self._conn_cm: Any = None
+        self._got: bool = False
+
+    def __enter__(self) -> bool:
+        from utils.db.connection_pool import db_pool
+
+        self._conn_cm = db_pool.get_admin_connection()
+        self._conn = self._conn_cm.__enter__()
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s);", (self._token,)
+                )
+                self._got = bool(cur.fetchone()[0])
+        except BaseException:
+            try:
+                self._conn_cm.__exit__(None, None, None)
+            finally:
+                self._conn = None
+            raise
+        return self._got
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if self._got and self._conn is not None:
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s);", (self._token,)
+                    )
+        finally:
+            if self._conn_cm is not None:
+                self._conn_cm.__exit__(exc_type, exc, tb)
+                self._conn = None
+                self._conn_cm = None
 
 
 # ─── DB I/O ──────────────────────────────────────────────────────────
@@ -791,8 +889,18 @@ class _per_pr_advisory_lock:
 
         self._conn_cm = db_pool.get_admin_connection()
         self._conn = self._conn_cm.__enter__()
-        with self._conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(%s);", (self._token,))
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(%s);", (self._token,))
+        except BaseException:
+            # The lock acquisition raised; __exit__ won't be called by
+            # the runtime since __enter__ didn't complete. Release the
+            # connection back to the pool so we don't leak.
+            try:
+                self._conn_cm.__exit__(None, None, None)
+            finally:
+                self._conn = None
+            raise
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

@@ -178,39 +178,61 @@ def _scan_recent_incidents(lookback_hours: int) -> list[dict[str, Any]]:
             )
             org_ids = [row[0] for row in cur.fetchall() if row[0]]
 
-            for org_id in org_ids:
-                # Set per-org RLS context. We don't have a real user
-                # here (linker is a system-level job), so we use a
-                # synthetic "__linker__<org>" id paired with the org;
-                # the policy only checks org_id.
-                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-                cur.execute(
-                    "SET myapp.current_user_id = %s;",
-                    (f"__linker__{org_id}",),
-                )
-                cur.execute(
-                    """SELECT i.id, i.org_id, i.alert_title, i.alert_service,
-                              i.alert_environment, i.aurora_summary,
-                              p.content
-                         FROM incidents i
-                         LEFT JOIN postmortems p ON p.incident_id = i.id
-                        WHERE i.started_at >= NOW() - (%s::int * INTERVAL '1 hour')
-                          AND i.org_id IS NOT NULL""",
-                    (lookback_hours,),
-                )
-                for row in cur.fetchall():
-                    out.append(
-                        {
-                            "id": row[0],
-                            "org_id": row[1],
-                            "alert_title": row[2],
-                            "alert_service": row[3],
-                            "alert_environment": row[4],
-                            "aurora_summary": row[5],
-                            "postmortem_content": row[6],
-                        }
+            try:
+                for org_id in org_ids:
+                    # Per-org RLS context. Wrap the per-org scan in its
+                    # own try/except so a single bad org doesn't break
+                    # the entire nightly run.
+                    try:
+                        cur.execute(
+                            "SET myapp.current_org_id = %s;", (org_id,)
+                        )
+                        cur.execute(
+                            "SET myapp.current_user_id = %s;",
+                            (f"__linker__{org_id}",),
+                        )
+                        cur.execute(
+                            """SELECT i.id, i.org_id, i.alert_title, i.alert_service,
+                                      i.alert_environment, i.aurora_summary,
+                                      p.content
+                                 FROM incidents i
+                                 LEFT JOIN postmortems p ON p.incident_id = i.id
+                                WHERE i.started_at >= NOW() - (%s::int * INTERVAL '1 hour')
+                                  AND i.org_id IS NOT NULL""",
+                            (lookback_hours,),
+                        )
+                        for row in cur.fetchall():
+                            out.append(
+                                {
+                                    "id": row[0],
+                                    "org_id": row[1],
+                                    "alert_title": row[2],
+                                    "alert_service": row[3],
+                                    "alert_environment": row[4],
+                                    "aurora_summary": row[5],
+                                    "postmortem_content": row[6],
+                                }
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "change_intercept_linker=org_scan_failed org_id=%s "
+                            "error_class=%s",
+                            org_id,
+                            type(exc).__name__,
+                        )
+                        continue
+            finally:
+                # ALWAYS reset RLS context — otherwise the connection
+                # returns to the pool with the last org's vars set,
+                # which would silently poison the next checkout.
+                try:
+                    cur.execute(
+                        "RESET myapp.current_org_id; RESET myapp.current_user_id;"
                     )
-            cur.execute("RESET myapp.current_org_id; RESET myapp.current_user_id;")
+                except Exception:
+                    # If even the RESET fails the connection is in a
+                    # bad state; the pool will detect that on next use.
+                    pass
     return out
 
 
@@ -226,38 +248,49 @@ def _link_one_reference(
     from utils.auth.stateless_auth import get_org_id_for_user  # noqa: F401 — reserved
     from utils.db.connection_pool import db_pool
 
+    rows_inserted = 0
+    outcome = "no_match"
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
-            # The linker runs cross-org so it sets RLS vars directly
-            # rather than going through a user lookup — the org comes
-            # from the incident row, and there's no requesting user.
-            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            cur.execute("SET myapp.current_user_id = %s;", (f"__linker__{org_id}",))
+            try:
+                cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+                cur.execute(
+                    "SET myapp.current_user_id = %s;",
+                    (f"__linker__{org_id}",),
+                )
 
-            # Find the most recent investigation for this PR.
-            cur.execute(
-                """SELECT ci.id FROM change_investigations ci
-                     JOIN change_events ce ON ce.id = ci.change_event_id
-                    WHERE ce.org_id = %s AND ce.dedup_key = %s
-                 ORDER BY ci.investigated_at DESC
-                    LIMIT 1""",
-                (org_id, dedup_key),
-            )
-            row = cur.fetchone()
-            if row is None:
-                cur.execute("RESET myapp.current_org_id; RESET myapp.current_user_id;")
-                return "no_match"
+                cur.execute(
+                    """SELECT ci.id FROM change_investigations ci
+                         JOIN change_events ce ON ce.id = ci.change_event_id
+                        WHERE ce.org_id = %s AND ce.dedup_key = %s
+                     ORDER BY ci.investigated_at DESC
+                        LIMIT 1""",
+                    (org_id, dedup_key),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return "no_match"
 
-            change_investigation_id = row[0]
-            cur.execute(
-                """INSERT INTO risk_outcomes (
-                       change_investigation_id, org_id, caused_incident_id,
-                       feedback_source
-                   ) VALUES (%s, %s, %s, 'nightly_linker')
-                   ON CONFLICT (change_investigation_id) DO NOTHING""",
-                (change_investigation_id, org_id, incident_id),
-            )
-            rows_inserted = cur.rowcount
-            cur.execute("RESET myapp.current_org_id; RESET myapp.current_user_id;")
-            conn.commit()
-    return "linked" if rows_inserted == 1 else "already_linked"
+                change_investigation_id = row[0]
+                cur.execute(
+                    """INSERT INTO risk_outcomes (
+                           change_investigation_id, org_id, caused_incident_id,
+                           feedback_source
+                       ) VALUES (%s, %s, %s, 'nightly_linker')
+                       ON CONFLICT (change_investigation_id) DO NOTHING""",
+                    (change_investigation_id, org_id, incident_id),
+                )
+                rows_inserted = cur.rowcount
+                conn.commit()
+                outcome = "linked" if rows_inserted == 1 else "already_linked"
+            finally:
+                # Always reset RLS context so the pooled connection
+                # comes back to a clean state, even if any of the
+                # writes above raised mid-flight.
+                try:
+                    cur.execute(
+                        "RESET myapp.current_org_id; RESET myapp.current_user_id;"
+                    )
+                except Exception:
+                    pass
+    return outcome
