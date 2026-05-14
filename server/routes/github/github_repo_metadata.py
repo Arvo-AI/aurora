@@ -10,11 +10,36 @@ the row (no retry — re-auth is a user action, not a transient failure).
 """
 import base64
 import logging
-from typing import Any
+from typing import Any, List, Union
 import requests
 from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
+    """Extract text from a LangChain AIMessage content payload.
+
+    Some providers (Gemini thinking models, Claude with reasoning) return
+    content as a list of typed blocks instead of a flat string. Mirrors
+    the helper in chat/background/postmortem_generator.py so this task
+    doesn't crash with AttributeError when the LLM returns a list.
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") in ("thinking", "reasoning"):
+                    continue
+                text = part.get("text", "")
+                if text:
+                    text_parts.append(str(text))
+            elif isinstance(part, str):
+                text_parts.append(part)
+        return "".join(text_parts).strip()
+    return str(content).strip()
 
 METADATA_PROMPT = (
     "Write a 2-3 sentence summary of this GitHub repository. "
@@ -151,7 +176,9 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             request_type="github_repo_metadata",
         )
 
-        summary = response.content.strip() if response.content else "No summary generated"
+        summary = _extract_text_from_response(response.content) if response.content else "No summary generated"
+        if not summary:
+            summary = "No summary generated"
         _update_metadata(user_id, repo_full_name, summary, "ready")
         logger.info(f"Metadata generated for {repo_full_name} via {auth.method}")
 
