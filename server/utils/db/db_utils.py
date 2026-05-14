@@ -313,7 +313,7 @@ def initialize_tables():
                         session_data JSONB,
                         last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         is_active BOOLEAN DEFAULT true,
-                        UNIQUE(org_id, provider)
+                        UNIQUE NULLS NOT DISTINCT (org_id, provider)
                     );
                 """,
                 "github_connected_repos": """
@@ -1464,12 +1464,51 @@ def initialize_tables():
             # Migration: replace per-user unique constraint with per-org unique constraint on
             # user_tokens so that an org shares one credential row per provider.
             try:
+                # Step 1: collect secret_refs of rows that will be removed by deduplication
+                # so their Vault entries can be cleaned up before the rows are deleted.
+                orphaned_refs = []
+                try:
+                    cursor.execute("""
+                        SELECT secret_ref FROM user_tokens
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY org_id, provider
+                                           ORDER BY COALESCE(last_activity, timestamp) DESC
+                                       ) AS rn
+                                FROM user_tokens
+                            ) ranked
+                            WHERE rn > 1
+                        ) AND secret_ref IS NOT NULL
+                    """)
+                    orphaned_refs = [row[0] for row in cursor.fetchall() if row[0]]
+                except Exception as e:
+                    logging.warning(f"Could not collect orphaned secret_refs before dedup: {e}")
+
+                # Step 2: delete orphaned Vault secrets before removing DB rows
+                if orphaned_refs:
+                    try:
+                        from utils.secrets.secret_ref_utils import SecretRefManager
+                        sm = SecretRefManager()
+                        for ref in orphaned_refs:
+                            try:
+                                sm.delete_secret(ref)
+                            except Exception as ref_err:
+                                logging.warning(f"Failed to delete orphaned Vault secret: {ref_err}")
+                        logging.info(
+                            "Cleaned up %d orphaned Vault secret(s) before deduplication.",
+                            len(orphaned_refs),
+                        )
+                    except Exception as e:
+                        logging.warning(f"Could not clean up orphaned Vault secrets: {e}")
+
+                # Step 3: dedup rows and swap the unique constraint.
+                # NULLS NOT DISTINCT (PG ≥ 15) makes (NULL, provider) a unique key, so
+                # the dedup runs over ALL rows — not only those with a non-NULL org_id.
                 cursor.execute("""
                     DO $$
                     BEGIN
-                        -- Deduplicate any existing rows with the same (org_id, provider) before
-                        -- adding the constraint. Keep the most recently updated row per pair and
-                        -- delete the rest. This handles prod data that violated the old invariant.
                         DELETE FROM user_tokens
                         WHERE id IN (
                             SELECT id FROM (
@@ -1479,7 +1518,6 @@ def initialize_tables():
                                            ORDER BY COALESCE(last_activity, timestamp) DESC
                                        ) AS rn
                                 FROM user_tokens
-                                WHERE org_id IS NOT NULL
                             ) ranked
                             WHERE rn > 1
                         );
@@ -1493,14 +1531,15 @@ def initialize_tables():
                             ALTER TABLE user_tokens DROP CONSTRAINT user_tokens_user_id_provider_key;
                         END IF;
 
-                        -- Add the new per-org constraint if it doesn't exist yet
+                        -- Add the new per-org constraint if it doesn't exist yet.
+                        -- NULLS NOT DISTINCT ensures (NULL, provider) is also unique.
                         IF NOT EXISTS (
                             SELECT 1 FROM pg_constraint
                             WHERE conname = 'user_tokens_org_id_provider_key'
                               AND conrelid = 'user_tokens'::regclass
                         ) THEN
                             ALTER TABLE user_tokens ADD CONSTRAINT user_tokens_org_id_provider_key
-                                UNIQUE (org_id, provider);
+                                UNIQUE NULLS NOT DISTINCT (org_id, provider);
                         END IF;
                     END
                     $$;

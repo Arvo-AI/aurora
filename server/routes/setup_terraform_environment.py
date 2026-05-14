@@ -270,7 +270,7 @@ def setup_ovh_terraform_environment_isolated(user_id: str):
             logger.error("OVH token data missing access_token")
             return False, None, None
 
-        # Get user's OVH root project (service_name in OVH API terms), org-aware
+        # Get user's OVH root project (service_name in OVH API terms)
         from utils.auth.stateless_auth import get_user_preference
         project_id = get_user_preference(user_id, 'ovh_root_project')
 
@@ -348,7 +348,7 @@ def setup_scaleway_terraform_environment_isolated(user_id: str):
                     organization_id = row[1]  # subscription_id = organization_id
                     project_id = row[2]  # subscription_name = default_project_id
                 
-                # Get user's Scaleway root project preference if set, org-aware
+                # Get user's Scaleway root project preference if set
                 from utils.auth.stateless_auth import get_user_preference
                 scaleway_pref = get_user_preference(user_id, 'scaleway_root_project')
                 if scaleway_pref:

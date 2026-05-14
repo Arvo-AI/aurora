@@ -72,12 +72,6 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
 }
 
 
-# Deprecated aliases kept for any external callers that still import the
-# private names.  Prefer importing from utils.db.org_scope directly.
-_resolve_org = resolve_org
-_org_read_predicate = org_read_predicate
-
-
 class SecretRefManager:
     """Manager for handling secret references in the database.
 

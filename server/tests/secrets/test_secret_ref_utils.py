@@ -133,7 +133,7 @@ def manager_with_mocked_db(monkeypatch):
     connect = MagicMock(return_value=conn)
     monkeypatch.setattr(sru, "connect_to_db_as_admin", connect)
     monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=_OID))
-    monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=_OID))
+    monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=_OID))
 
     return SecretRefManager(), connect, cursor
 
@@ -197,7 +197,7 @@ class TestProviderParserRejectsMalformed:
             "set_rls_context",
             MagicMock(side_effect=AssertionError("set_rls_context must not run")),
         )
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=None))
         return connect
 
     @pytest.mark.parametrize(
@@ -243,18 +243,18 @@ class TestProviderParserRejectsMalformed:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_org returning None: _org_clause must be used (no NULL param bug)
+# resolve_org returning None: org_read_predicate must be used (no NULL param bug)
 # ---------------------------------------------------------------------------
 
 
 class TestHasUserCredentialsNullOrgPath:
-    """When _resolve_org returns None the SQL must not pass None as a %s param
+    """When resolve_org returns None the SQL must not pass None as a %s param
     for org_id — ``org_id = NULL`` is always false in PostgreSQL.  The fix is
-    to route through ``_org_read_predicate`` which falls back to user_id-only
+    to route through ``org_read_predicate`` which falls back to user_id-only
     matching when org_id is None.
     """
     def test_db_still_queried_when_org_is_none(self, monkeypatch):
-        """_resolve_org=None must not short-circuit; row found by user_id alone."""
+        """resolve_org=None must not short-circuit; row found by user_id alone."""
         cursor = MagicMock()
         cursor.fetchone.return_value = (1,)
         conn = MagicMock()
@@ -262,7 +262,7 @@ class TestHasUserCredentialsNullOrgPath:
 
         monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
         monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=None))
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=None))
 
         manager = SecretRefManager()
         result = manager.has_user_credentials(_UID, "gcp")
@@ -279,7 +279,7 @@ class TestHasUserCredentialsNullOrgPath:
 
         monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
         monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=None))
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=None))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=None))
 
         manager = SecretRefManager()
         manager.has_user_credentials(_UID, "gcp")
@@ -309,7 +309,7 @@ class TestProviderCanonicalizedInSQL:
         conn.cursor.return_value = cursor
         monkeypatch.setattr(sru, "connect_to_db_as_admin", MagicMock(return_value=conn))
         monkeypatch.setattr(sru, "set_rls_context", MagicMock(return_value=_OID))
-        monkeypatch.setattr(sru, "_resolve_org", MagicMock(return_value=_OID))
+        monkeypatch.setattr(sru, "resolve_org", MagicMock(return_value=_OID))
         return cursor
 
     @pytest.mark.parametrize("raw_provider", ["GCP", "Gcp", "gCp", "GcP"])

@@ -239,7 +239,7 @@ def run_user_discovery(self, user_id):
         providers = {name: {} for name in provider_names}
 
         if "gcp" in providers:
-            # Fetch root project, respecting org-shared preferences
+            # Fetch root project while we still have the cursor
             from utils.auth.stateless_auth import get_user_preference
             root_project = get_user_preference(user_id, 'gcp_root_project')
 

@@ -17,7 +17,7 @@ grafana_bp = Blueprint("grafana", __name__)
 
 
 def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
-    """Check if a user_tokens row exists for Grafana visible to user_id (including org-shared).
+    """Check if a user_tokens row exists for Grafana (regardless of is_active).
 
     Returns (row_exists, is_active).
     """
@@ -42,7 +42,7 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
 
 
 def _set_grafana_active(user_id: str, active: bool) -> bool:
-    """Flip is_active on the existing Grafana user_tokens row (org-scoped)."""
+    """Flip is_active on the existing Grafana user_tokens row."""
     try:
         from utils.db.org_scope import resolve_org, org_read_predicate
         org_id = resolve_org(user_id)
