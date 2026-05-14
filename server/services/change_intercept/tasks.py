@@ -849,7 +849,7 @@ def _maybe_post_live_review(
 # ─── Per-PR advisory lock helpers ───────────────────────────────────
 
 
-_ADVISORY_LOCK_NAMESPACE: int = 0x_CHA9E_C5  # arbitrary namespace tag
+_ADVISORY_LOCK_NAMESPACE: int = 0xCFA9EC5  # arbitrary namespace tag ("change-intercept")
 
 
 def _advisory_lock_token(org_id: str, dedup_key: str) -> int:
