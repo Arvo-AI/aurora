@@ -659,12 +659,9 @@ def _resolve_installation_id(
     on ``user_github_installations`` when the change_events row doesn't
     carry one (older rows from before installation_id became standard)."""
     direct = event_row.get("installation_id")
-    if isinstance(direct, int):
-        return direct
-    if not direct:
-        # Some psycopg2 versions return numeric IDs as Decimal — coerce.
+    if direct is not None:
         try:
-            return int(event_row.get("installation_id"))  # type: ignore[arg-type]
+            return int(direct)
         except (TypeError, ValueError):
             pass
 

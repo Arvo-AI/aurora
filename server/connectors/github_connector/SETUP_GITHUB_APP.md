@@ -372,6 +372,99 @@ docker exec aurora-postgres-1 psql -U aurora -d aurora_db \
 
 ---
 
+## Phase 1a operations: dry-run → live promotion
+
+Every new install starts in **calibration mode** (`change_intercept_dry_run = TRUE`). The investigation pipeline runs end-to-end and persists `change_investigations` rows, but `post_verdict` is never called — customers see no Aurora reviews on their PRs. This is intentional: a noisy or over-firing investigator would damage trust on the first PR, so we want the operator to inspect the distribution before going live.
+
+### 1. Backfill historical PRs
+
+After the install is created and the App's webhooks start delivering, the operator runs the calibration backfill:
+
+```bash
+# Inside the aurora-server container or any environment with the
+# .env loaded + Vault unsealed:
+python server/scripts/change_intercept_backfill.py \
+  --installation-id <BIGINT from github_installations> \
+  --user-id <any active user from the target org> \
+  --limit 100
+```
+
+This walks the installation's connected repos, lists the most recent 100 merged PRs each, and enqueues `launch_investigation` against synthetic `change_events` rows. The script is **idempotent** — re-running against the same PR set lands on the `change_events` UNIQUE constraint and dedups. Pass `--force` to wipe and re-investigate (useful after a prompt iteration).
+
+Optional flags:
+
+- `--repo owner/repo` — limit to a single repository.
+- `--state {open,closed,all}` — defaults to `closed` (shipped changes). Use `all` for a broader sample.
+- `--dry-list` — print the PR list without writing or enqueueing.
+
+### 2. Inspect the dry-run distribution
+
+The investigations land in `change_investigations` with `dry_run = TRUE`. Three SQL queries cover the signal an operator needs:
+
+```sql
+-- Verdict breakdown. Healthy: most rows = 'approve'.
+SELECT verdict, COUNT(*)
+  FROM change_investigations
+ WHERE dry_run = TRUE AND org_id = '<target-org>'
+ GROUP BY verdict;
+
+-- Severity / confidence histogram. HIGH+HIGH is what would post inline.
+-- Healthy: HIGH+HIGH is a small fraction of total findings.
+SELECT severity, confidence, COUNT(*)
+  FROM change_investigations,
+       jsonb_to_recordset(findings)
+         AS f(severity text, confidence text)
+ WHERE dry_run = TRUE AND org_id = '<target-org>'
+ GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- Drop reasons. Pure-LLM hallucination indicators.
+SELECT df->>'reason' AS reason, COUNT(*)
+  FROM change_investigations,
+       jsonb_array_elements(dropped_findings) AS df
+ WHERE dry_run = TRUE AND org_id = '<target-org>'
+ GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Calibration gate: if `request_changes` is < 20% of investigations AND `unanchored_line` / `no_citation_no_diff_anchor` drop reasons are < 10% of total findings, the install is ready to flip.
+
+### 3. Flip the install to live mode
+
+The operator runs a one-line Python command (no HTTP endpoint exists by design — this is an out-of-band action):
+
+```bash
+python -c "
+from services.change_intercept.install_config import set_dry_run
+ok = set_dry_run(<installation_id>, dry_run=False)
+print('updated:', ok)
+"
+```
+
+From this point forward, every PR webhook from this installation triggers a real GitHub Review submission. The next `pull_request.opened` will land as an `APPROVE` or `REQUEST_CHANGES` review visible in the PR sidebar.
+
+### 4. Revert if needed
+
+If post-go-live monitoring shows over-firing (e.g. >40% `REQUEST_CHANGES` rate, or angry-customer signals), revert immediately:
+
+```bash
+python -c "
+from services.change_intercept.install_config import set_dry_run
+set_dry_run(<installation_id>, dry_run=True)
+"
+```
+
+Existing reviews are NOT auto-dismissed — they remain visible on the PRs they targeted. Use `git log` to identify the offending prompt change and roll it back; the next push to those PRs will trigger a fresh (dry-run-only) investigation under the reverted prompt.
+
+### 5. Operational guards (automatic)
+
+These run without operator intervention:
+
+- **Thrash guard**: after 5 followup investigations on the same PR (engineer replies / @-mentions), Aurora stops engaging until a new commit lands. Prevents dispute spirals.
+- **Re-investigation policy**: only `opened` / `reopened` / `ready_for_review` / engineer-reply events trigger an investigation. Synchronise (push) events are persisted for audit but do NOT re-investigate — GitHub auto-marks Aurora's prior inline comments as outdated when their lines change.
+- **Per-install dismissal on followup**: when an engineer reply fires a new investigation, the prior review is dismissed via the Reviews API before the new one is posted, so each PR carries exactly one Aurora verdict at any time.
+- **Nightly linker**: every 24h, the `link_risk_outcomes` Celery task scans recent incidents for GitHub PR URL references and populates `risk_outcomes` so the feedback loop on Aurora's accuracy starts accruing data automatically.
+
+---
+
 ## See also
 
 - [README.md](./README.md) — Connector overview
