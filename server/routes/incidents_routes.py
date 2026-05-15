@@ -1596,7 +1596,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
 
     try:
         # Determine which provider owns this suggestion's repository
-        provider = "github"  # default fallback
+        provider = None
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
@@ -1617,6 +1617,9 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                     if provider_row:
                         provider = provider_row[0]
 
+        if not provider:
+            return jsonify({"error": "Cannot determine VCS provider for this suggestion — repository not found in connected repos"}), 400
+
         if provider == "gitlab":
             from chat.backend.agent.tools.gitlab_tool import gitlab_tool
             result_json = gitlab_tool(
@@ -1626,7 +1629,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 use_edited_content=use_edited_content,
                 user_id=user_id,
             )
-        else:
+        elif provider == "github":
             from chat.backend.agent.tools.github_apply_fix_tool import github_apply_fix
             result_json = github_apply_fix(
                 suggestion_id=suggestion_id_int,
@@ -1634,6 +1637,8 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 target_branch=target_branch,
                 user_id=user_id,
             )
+        else:
+            return jsonify({"error": f"Unsupported VCS provider: {provider}"}), 400
         result = json.loads(result_json)
 
         if result.get("success"):

@@ -1402,6 +1402,42 @@ def initialize_tables():
                 logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
                 conn.rollback()
 
+            # Migration: bring renamed table to provider-aware schema
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        -- Add provider column if missing (old github_connected_repos didn't have it)
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'connected_repos' AND column_name = 'provider'
+                        ) THEN
+                            ALTER TABLE connected_repos
+                                ADD COLUMN provider VARCHAR(20) NOT NULL DEFAULT 'github';
+                        END IF;
+
+                        -- Drop old unique constraint (user_id, repo_full_name) and create new one
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'connected_repos_user_id_provider_repo_full_name_key'
+                        ) THEN
+                            -- Drop any legacy unique constraint on (user_id, repo_full_name)
+                            BEGIN
+                                ALTER TABLE connected_repos
+                                    DROP CONSTRAINT IF EXISTS github_connected_repos_user_id_repo_full_name_key;
+                            EXCEPTION WHEN undefined_object THEN NULL;
+                            END;
+                            ALTER TABLE connected_repos
+                                ADD CONSTRAINT connected_repos_user_id_provider_repo_full_name_key
+                                UNIQUE (user_id, provider, repo_full_name);
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error completing connected_repos schema migration: {e}")
+                conn.rollback()
+
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)

@@ -10,7 +10,7 @@ import logging
 import requests
 from typing import Optional, Dict, Any
 
-from utils.auth.stateless_auth import get_credentials_from_db
+from utils.auth.token_management import get_token_data
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ GITLAB_TIMEOUT = 30
 
 def get_gitlab_credentials(user_id: str) -> Optional[Dict[str, Any]]:
     """Get org-level GitLab credentials."""
-    return get_credentials_from_db(user_id, "gitlab")
+    return get_token_data(user_id, "gitlab")
 
 
 def is_gitlab_connected(user_id: str) -> bool:

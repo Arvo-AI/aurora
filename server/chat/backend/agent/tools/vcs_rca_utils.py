@@ -53,8 +53,8 @@ def resolve_repository(
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix=f"[{provider.title()}RCA:resolve]")
                 cur.execute(
-                    "SELECT repo_full_name FROM connected_repos WHERE user_id = %s AND provider = %s",
-                    (user_id, provider),
+                    "SELECT repo_full_name FROM connected_repos WHERE provider = %s",
+                    (provider,),
                 )
                 rows = cur.fetchall()
 
@@ -158,9 +158,9 @@ def get_connected_repos_for_provider(user_id: str, provider: str) -> str:
                 cur.execute(
                     """SELECT repo_full_name, default_branch, is_private, metadata_summary, metadata_status
                        FROM connected_repos
-                       WHERE user_id = %s AND provider = %s
+                       WHERE provider = %s
                        ORDER BY repo_full_name""",
-                    (user_id, provider),
+                    (provider,),
                 )
                 rows = cur.fetchall()
 

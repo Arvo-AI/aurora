@@ -285,8 +285,8 @@ def gitlab_status(user_id):
                 "token_name": creds.get("token_name", ""),
             })
         return jsonify({"connected": False})
-    except Exception as e:
-        logger.error("Error checking GitLab status: %s", e)
+    except Exception:
+        logger.exception("Error checking GitLab status")
         return jsonify({"connected": False})
 
 

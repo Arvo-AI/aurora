@@ -403,6 +403,11 @@ def _action_apply_fix(
                                      json_body={"branch": branch_name, "commit_message": commit_msg,
                                                 "actions": [{"action": action_type, "file_path": file_path, "content": content}]})
     if isinstance(commit_resp, dict) and "error" in commit_resp:
+        # Best-effort cleanup of orphaned branch
+        try:
+            gitlab_api_request("DELETE", f"/projects/{encoded_project}/repository/branches/{quote(branch_name, safe='')}", user_id)
+        except Exception:
+            pass  # Don't mask the original commit error
         return build_error_response(f"Failed to commit fix: {commit_resp['error']}", branch_created=branch_name)
 
     mr_title = suggestion.get("title", "Aurora Fix")
@@ -429,7 +434,12 @@ def _action_apply_fix(
             )
             conn.commit()
     except Exception as e:
-        logger.warning(f"Failed to update suggestion with MR info: {e}")
+        logger.warning("Failed to update suggestion with MR info: %s", e)
+        return build_success_response(
+            message="Merge Request created but DB sync failed — duplicate MR guard may not work on retry",
+            mrUrl=mr_url, mrIid=mr_iid, branch=branch_name,
+            project=project_path, filePath=file_path, db_synced=False,
+        )
 
     return build_success_response(message="Merge Request created", mrUrl=mr_url, mrIid=mr_iid,
                                   branch=branch_name, project=project_path, filePath=file_path)
@@ -497,19 +507,37 @@ def _action_commit_terraform(
         if not terraform_files:
             return json.dumps({"status": "error", "error": "No .tf files found in terraform directory"})
 
+        # Create a feature branch for the Terraform commit (never push directly to default)
+        iac_branch = f"iac/aurora-{session_id or 'manual'}-{int(time.time())}"
+        branch_resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/branches", user_id,
+                                         json_body={"branch": iac_branch, "ref": target_branch_resolved})
+        if isinstance(branch_resp, dict) and "error" in branch_resp:
+            return json.dumps({"status": "error", "error": f"Failed to create branch: {branch_resp['error']}"})
+
         resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/commits", user_id,
-                                  json_body={"branch": target_branch_resolved, "commit_message": commit_message, "actions": terraform_files})
+                                  json_body={"branch": iac_branch, "commit_message": commit_message, "actions": terraform_files})
         if isinstance(resp, dict) and "error" in resp:
+            try:
+                gitlab_api_request("DELETE", f"/projects/{encoded_project}/repository/branches/{quote(iac_branch, safe='')}", user_id)
+            except Exception:
+                pass
             return json.dumps({"status": "error", "error": f"GitLab commit failed: {resp['error']}"})
+
+        # Open a Merge Request for review
+        mr_resp = gitlab_api_request("POST", f"/projects/{encoded_project}/merge_requests", user_id,
+                                     json_body={"source_branch": iac_branch, "target_branch": target_branch_resolved,
+                                                "title": f"IaC: {commit_message}", "description": f"Aurora-generated Terraform commit with {len(terraform_files)} file(s)."})
+        mr_url = mr_resp.get("web_url", "") if isinstance(mr_resp, dict) and "error" not in mr_resp else ""
 
         return json.dumps({
             "status": "success",
-            "message": f"Committed {len(terraform_files)} Terraform files to {repo}/{branch or 'main'}",
+            "message": f"Committed {len(terraform_files)} Terraform files and opened MR to {repo}/{target_branch_resolved}",
             "commit_sha": resp.get("id", ""), "commit_url": resp.get("web_url", ""),
+            "mr_url": mr_url, "branch": iac_branch,
             "files_committed": [f["file_path"] for f in terraform_files],
         })
     except Exception as e:
-        logger.error(f"Error in commit_terraform: {e}", exc_info=True)
+        logger.error("Error in commit_terraform: %s", e, exc_info=True)
         return json.dumps({"status": "error", "error": f"GitLab commit failed: {str(e)}"})
 
 
