@@ -22,7 +22,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, Field
 
-from routes.gitlab.gitlab_api_utils import gitlab_api_request, build_error_response, build_success_response, get_gitlab_credentials, is_gitlab_connected
+from routes.gitlab.gitlab_api_utils import gitlab_api_request, build_error_response, build_success_response, is_gitlab_connected
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from .vcs_rca_utils import resolve_repository, calculate_time_windows, get_connected_repos_for_provider, generate_correlation_hints
