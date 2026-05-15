@@ -58,11 +58,6 @@
     </div>
 
     <script>
-        // Notify the opener that auth failed. Origin targeting is the
-        // same defensive pattern as the success template — without it,
-        // an unset/invalid FRONTEND_URL would throw inside postMessage
-        // and abort the script BEFORE setTimeout(window.close, 5000)
-        // runs, leaving the popup stuck open.
         try {
             if (window.opener) {
                 var configured = '{{ frontend_url|default("", true) }}';
@@ -82,12 +77,7 @@
                     targetOrigin
                 );
             }
-        } catch (e) {
-            // postMessage can throw if the opener navigated away; not
-            // fatal — fall through to the close timer below.
-        }
-
-        // Close after a short delay so the user can read the message.
+        } catch (e) { /* opener navigated away */ }
         setTimeout(function() { window.close(); }, 5000);
     </script>
 </body>

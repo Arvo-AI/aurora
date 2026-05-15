@@ -1345,12 +1345,6 @@ def initialize_tables():
                 )
                 conn.rollback()
 
-            # Migration: ensure metadata_summary / metadata_status columns
-            # exist on github_connected_repos. The CREATE TABLE in this
-            # file already declares them so brand-new deploys are fine,
-            # but long-lived deployments whose table predates those
-            # columns would 500 on /github/repo-selections without this
-            # idempotent ADD COLUMN IF NOT EXISTS pair.
             try:
                 cursor.execute(
                     "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS metadata_summary TEXT;"

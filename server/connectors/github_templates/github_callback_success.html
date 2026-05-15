@@ -52,15 +52,6 @@
     </div>
 
     <script>
-        // Notify the opener immediately so the connector UI can refresh
-        // without waiting for popup-close polling. Payload carries no
-        // credentials — the access token / installation linkage is
-        // already persisted server-side by the time this template
-        // renders, so the opener only needs to be told to re-fetch.
-        // Origin targeting: prefer the configured frontend origin; fall
-        // back to '*' when the backend wasn't told its frontend origin
-        // (dev). Defensive against Jinja rendering Python None as the
-        // literal string "None" or other non-URL values.
         try {
             if (window.opener) {
                 var configured = '{{ frontend_url|default("", true) }}';
@@ -77,13 +68,7 @@
                     targetOrigin
                 );
             }
-        } catch (e) {
-            // postMessage can throw if the opener was already navigated
-            // away; not fatal — the opener also polls popup.closed.
-        }
-
-        // Close almost immediately. The success card is shown long enough
-        // to acknowledge but not long enough to feel janky on the opener.
+        } catch (e) { /* opener navigated away */ }
         setTimeout(function() { window.close(); }, 250);
     </script>
 </body>

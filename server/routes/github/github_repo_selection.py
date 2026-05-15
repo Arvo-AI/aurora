@@ -151,11 +151,6 @@ def save_repo_selections(user_id):
                         ),
                     )
                     if full_name not in existing:
-                        # Track in `existing` too so a duplicate
-                        # ``full_name`` later in the same payload doesn't
-                        # cause us to enqueue the metadata task twice
-                        # for one repo. UPSERT collapses the rows on the
-                        # SQL side; this collapses the Celery work too.
                         existing.add(full_name)
                         newly_added.append(full_name)
 
@@ -257,9 +252,6 @@ def trigger_metadata_generation(user_id):
             generate_repo_metadata.delay(user_id, repo_full_name)
         except Exception as e:
             logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
-            # Land on a terminal status so the UI surfaces the Retry
-            # button instead of spinning forever. ``pending`` would
-            # leave the row mid-flight with no worker to advance it.
             _update_metadata_status(user_id, repo_full_name, "error")
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})

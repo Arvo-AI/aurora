@@ -226,19 +226,6 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
             )
             # Fall through to OAuth fallback below.
 
-    # Fallback ordering matters in hybrid mode:
-    #
-    # When OAuth is available, prefer the user's OAuth token over an
-    # account-match guess. Even if the App is installed on the repo's
-    # owner, ``repository_selection='selected'`` Apps can omit specific
-    # repos — minting a token the App can't use yields 403/404 with no
-    # second chance. OAuth, by contrast, is scoped to the user's full
-    # repo list and will succeed if they have access at all. Codex's
-    # adversarial review caught both regressions.
-    #
-    # In App-only deployments OAuth isn't available; fall back to the
-    # account-match install as a best effort for legacy NULL-
-    # installation_id rows from the OAuth era.
     oauth_result = _try_oauth_fallback(user_id)
     if oauth_result is not None:
         return oauth_result
@@ -249,10 +236,6 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
         if fallback_install_id is not None:
             try:
                 token = get_installation_token(fallback_install_id)
-                # Auto-heal: backfill installation_id on the repo row so
-                # subsequent calls land in the fast path above instead
-                # of repeating the account-match lookup. Best-effort —
-                # the auth resolution stands either way.
                 _backfill_repo_installation(user_id, repo_full_name, fallback_install_id)
                 return AuthResult(
                     method="app",
@@ -271,15 +254,7 @@ def get_auth_for_user_repo(user_id: str, repo_full_name: str) -> AuthResult:
 def _backfill_repo_installation(
     user_id: str, repo_full_name: str, installation_id: int
 ) -> None:
-    """Best-effort write of ``installation_id`` onto a repo row.
-
-    Called after the auth router resolved an install via account-match
-    fallback for a row that had ``installation_id IS NULL``. Subsequent
-    calls then find the link directly via
-    :func:`_lookup_repo_installation` and skip this fallback path.
-
-    Failure is non-fatal: the caller already has a working AuthResult.
-    """
+    """Best-effort write of ``installation_id`` onto a repo row after fallback resolution."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -295,8 +270,7 @@ def _backfill_repo_installation(
                 conn.commit()
     except Exception:
         logger.warning(
-            "[GITHUB-AUTH-ROUTER] backfill of installation_id failed for "
-            "user=%s — auth resolution still succeeded",
+            "[GITHUB-AUTH-ROUTER] backfill of installation_id failed for user=%s",
             user_id,
         )
 
@@ -317,13 +291,7 @@ def make_auth_header(auth: AuthResult) -> dict[str, str]:
 
 
 def _lookup_install_by_account(user_id: str, account_login: str) -> int | None:
-    """Return the user's active install whose ``account_login`` matches.
-
-    Case-insensitive match on ``github_installations.account_login`` so
-    the auth router can fall back to an App install only when the App
-    actually covers the repo's owner. Returns ``None`` when no such
-    install exists, sending the caller down the OAuth fallback path.
-    """
+    """Return the user's active install whose ``account_login`` matches (case-insensitive)."""
 
     sql = """
         SELECT u.installation_id

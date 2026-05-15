@@ -62,16 +62,8 @@ logger = logging.getLogger(__name__)
 
 github_app_bp = Blueprint("github_app", __name__)
 
-# Default to "" (not None) so Jinja never renders the string "None" into
-# the success template's postMessage targetOrigin — that would throw a
-# DOMException and silently break the instant-refresh path.
 FRONTEND_URL = os.getenv("FRONTEND_URL") or ""
 GITHUB_TIMEOUT = 20
-# Tighter timeout for reconcile: this runs on the hot /github/status
-# path and the user is waiting on the response. With the default 20 s,
-# an unreachable GitHub could block status for ``N * 20 s`` per linked
-# install. 3 s is well past p99 of a healthy ``api.github.com`` call
-# while still catching real outages quickly.
 GITHUB_RECONCILE_TIMEOUT = 3
 
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
@@ -141,23 +133,6 @@ def _render_error(reason: str) -> flask.Response:
     )
 
 
-# Per-user reconcile throttle + singleflight claim. Status /
-# installations endpoints are called frequently from the UI (mount,
-# focus, visibility, post-popup) and Flask runs handlers on multiple
-# threads (gunicorn ``--threads N``). Without protection, a burst of
-# concurrent requests would all blow past the throttle check at the
-# same instant and each fire 1-N blocking GitHub calls.
-#
-# Two pieces under the same lock:
-#   - ``_reconcile_last_run``: last successful reconcile timestamp.
-#     Skipping by TTL avoids hammering GitHub during a quiet hour.
-#   - ``_reconcile_in_flight``: the set of user_ids currently being
-#     reconciled. Claiming the user before doing GitHub work makes
-#     this a true singleflight: late-arriving threads short-circuit
-#     instead of duplicating in-progress work.
-#
-# Lock is held only across in-memory mutations — never during the
-# GitHub HTTP calls — so it can't deadlock or block other users.
 _RECONCILE_TTL_SEC = 30
 _RECONCILE_EVICT_AFTER_SEC = _RECONCILE_TTL_SEC * 10  # well past usefulness
 _reconcile_last_run: dict[str, float] = {}
@@ -166,17 +141,9 @@ _reconcile_lock = threading.Lock()
 
 
 def _reconcile_try_claim(user_id: str, now: float) -> bool:
-    """Atomic throttle + singleflight claim.
-
-    Returns ``True`` when this thread acquired the right to run a
-    reconcile for ``user_id``. The caller MUST then invoke
-    ``_reconcile_release`` (typically in a try/finally) so subsequent
-    threads can claim. Returns ``False`` when another thread is
-    already reconciling this user OR when the TTL hasn't elapsed.
-    """
+    """Atomic throttle + singleflight claim. Caller must pair with `_reconcile_release`."""
     cutoff = now - _RECONCILE_EVICT_AFTER_SEC
     with _reconcile_lock:
-        # Bounded O(N) sweep over active users.
         expired = [uid for uid, ts in _reconcile_last_run.items() if ts < cutoff]
         for uid in expired:
             _reconcile_last_run.pop(uid, None)
@@ -190,7 +157,7 @@ def _reconcile_try_claim(user_id: str, now: float) -> bool:
 
 
 def _reconcile_release(user_id: str, now: float, mark_success: bool) -> None:
-    """Release the singleflight claim. Optionally stamp the TTL."""
+    """Release the singleflight claim; stamp TTL when the run was authoritative."""
     with _reconcile_lock:
         _reconcile_in_flight.discard(user_id)
         if mark_success:
@@ -198,26 +165,7 @@ def _reconcile_release(user_id: str, now: float, mark_success: bool) -> None:
 
 
 def _reconcile_user_installations(user_id: str) -> None:
-    """Soft-delete linked installs that GitHub no longer knows about.
-
-    Webhook-driven cleanup of ``installation.deleted`` requires the webhook
-    to actually reach Aurora. In dev — and any deployment where the public
-    webhook URL is misconfigured — uninstalling the App on GitHub leaves
-    Aurora's DB pointing at an installation that no longer exists. Without
-    this reconciliation, the connector card would still render "Connected".
-
-    Verifies each linked installation individually with
-    ``GET /app/installations/{id}`` (one call per linked install, typically
-    1-3 per user). A 404 means GitHub no longer knows about the
-    installation — soft-delete via ``disconnected_at = NOW()`` so the user
-    can re-claim on reinstall. Any other status (network error, 5xx, rate
-    limit) leaves the row alone so a transient blip never shows a real
-    connection as disconnected.
-
-    Per-user TTL throttle prevents hammering GitHub when the UI fires a
-    burst of status checks (focus + visibility + mount can all land
-    within milliseconds).
-    """
+    """Soft-delete linked installs that GitHub no longer knows about (per-user TTL throttled)."""
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return
 
@@ -245,8 +193,6 @@ def _reconcile_user_installations(user_id: str) -> None:
             return
 
         if not linked_ids:
-            # Empty user — fast path. Mark a successful pass so we
-            # don't re-query the DB for the rest of the TTL window.
             mark_success = True
             return
 
@@ -276,11 +222,6 @@ def _reconcile_user_installations(user_id: str) -> None:
                     timeout=GITHUB_RECONCILE_TIMEOUT,
                 )
             except requests.RequestException:
-                # GitHub appears unreachable. No point trying the rest
-                # of this user's installs; bail and let the throttle
-                # carry the next ~30 s of status checks. Without this,
-                # a network outage would block status endpoints for
-                # ``N * timeout`` per request.
                 gh_unreachable = True
                 break
             if resp.status_code == 404:
@@ -288,22 +229,12 @@ def _reconcile_user_installations(user_id: str) -> None:
                 gh_responsive = True
             elif resp.status_code == 200:
                 gh_responsive = True
-            # Any other status (5xx, 401, secondary-rate-limit 403): be
-            # conservative and leave the row alone. The next reconcile
-            # pass will retry; ``mark_success`` stays False so a fully
-            # broken GitHub doesn't suppress the next attempt.
 
-        # When GitHub was unreachable the entire pass we still stamp
-        # the throttle so the next request doesn't burn another timeout
-        # on the same outage. The TTL is short enough (30 s) that
-        # recovery is detected quickly.
         if gh_unreachable and not gh_responsive:
             mark_success = True
             return
 
         if not stale:
-            # Nothing to write — the GitHub side answered cleanly so
-            # we can stamp the throttle and move on.
             mark_success = gh_responsive
             return
 
@@ -327,10 +258,6 @@ def _reconcile_user_installations(user_id: str) -> None:
                         (user_id, stale),
                     )
                     conn.commit()
-            # ONLY stamp the throttle after the soft-delete actually
-            # landed. If the DB write failed below, ``mark_success``
-            # stays False and the next status check retries instead of
-            # waiting out the TTL with stale "connected" UI state.
             mark_success = True
             logger.info(
                 "[GITHUB-APP-RECONCILE] soft-deleted %d stale install link(s) for user=%s",
@@ -586,15 +513,7 @@ def github_app_install_callback():
 @github_app_bp.route("/app/installations", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def github_app_list_installations(user_id):
-    """List GitHub App installations linked to the requesting user.
-
-    Self-heals against silent uninstalls: in dev (and any environment where
-    the ``installation.deleted`` webhook isn't reaching us), the user can
-    uninstall the App on GitHub and the DB still shows it linked. Before
-    returning, ask GitHub which installation_ids are still live for this
-    App and soft-delete any of OUR linked rows that GitHub no longer
-    knows about. One App-JWT API call regardless of linked count.
-    """
+    """List GitHub App installations linked to the requesting user (with reconcile)."""
     _reconcile_user_installations(user_id)
 
     try:
@@ -668,10 +587,6 @@ def github_app_discover_installations(user_id):
         logger.exception("[GITHUB-APP-DISCOVER] JWT mint failed")
         return jsonify({"error": "GitHub App not configured"}), 503
 
-    # Paginate. Default page size is 30; on busy Apps, the user's own
-    # install can sit on page 2+ and never appear in the picker. Walk
-    # via Link rel=next until exhausted (capped to avoid runaway when
-    # the App somehow has thousands of installs).
     headers = {
         "Authorization": f"Bearer {app_jwt}",
         "Accept": "application/vnd.github+json",
@@ -705,8 +620,6 @@ def github_app_discover_installations(user_id):
         installs.extend(page)
         pages_seen += 1
 
-        # Parse RFC 5988 Link header for the next page; absent header
-        # means we're done.
         next_url = None
         link_header = resp.headers.get("Link", "")
         if link_header:
@@ -926,21 +839,7 @@ def github_app_unlink_installation(user_id, installation_id):
 @github_app_bp.route("/auth-config", methods=["GET"])
 @require_permission("connectors", "read")
 def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorator
-    """Return the deployment's GitHub auth configuration.
-
-    The frontend calls this once on dialog mount to decide which CTAs to
-    render (Install GitHub App, Connect via OAuth, or both). Returning
-    the mode server-side is mandatory because ``NEXT_PUBLIC_*`` vars
-    cannot be trusted for security-relevant rendering and Aurora's
-    client/backend boundary forbids client-derived identity.
-
-    ``app_enabled`` reflects BOTH the configured mode AND whether the
-    runtime actually validated the App env (``GITHUB_APP_ENABLED`` flag
-    set by the boot-time validator). If mode is ``app``/``hybrid`` but
-    required env is missing, every App route returns 503; reporting
-    ``app_enabled=true`` here would render an Install CTA that
-    immediately falls into a broken flow.
-    """
+    """Return the deployment's GitHub auth configuration."""
     app_runtime_ready = bool(flask.current_app.config.get("GITHUB_APP_ENABLED"))
     return jsonify(
         {
@@ -955,21 +854,7 @@ def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorat
 @github_app_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def github_status(user_id):
-    """Connection status for the GitHub connector.
-
-    Hybrid-aware: a user is "connected" if they have either a non-suspended
-    GitHub App installation linked OR (when OAuth is enabled) a stored
-    user OAuth token. App identity wins when both are present, since the
-    installation token has scoped permissions and survives user departure.
-
-    Self-heals against silent uninstalls before reading from the DB so a
-    revoked-on-GitHub install never registers as "connected" in the UI.
-
-    Treats the App branch as unavailable when the runtime gate
-    ``GITHUB_APP_ENABLED`` is False (mode says App but boot-time env
-    validation failed). Otherwise we'd report "connected" off stale
-    install rows while every App-token-using flow returns 503.
-    """
+    """Connection status for the GitHub connector (hybrid-aware, with reconcile)."""
     app_runtime_ready = bool(flask.current_app.config.get("GITHUB_APP_ENABLED"))
     app_branch_active = is_app_enabled() and app_runtime_ready
 
@@ -1031,30 +916,10 @@ def github_status(user_id):
 @github_app_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
-    """Sever GitHub auth state for this user (Aurora side only by default).
-
-    SOFT-deletes ``user_github_installations`` rows by setting
-    ``disconnected_at = NOW()`` so the row survives. This matters
-    because GitHub's install-flow callback typically does NOT re-fire
-    when the App is already installed — without a soft-delete, a user
-    who clicks Aurora's Disconnect and then Install GitHub App again
-    would have nothing to relink to. Reconnect is just clearing
-    ``disconnected_at`` (the install callback's UPSERT does this for us).
-
-    Also removes any stored OAuth token.
-
-    Optional ``{"also_uninstall": true}`` body opts into ALSO uninstalling
-    the App on GitHub's side via ``DELETE /app/installations/{id}`` —
-    surfaced as a checkbox in the disconnect dialog. Uninstall is
-    best-effort: a 404 means GitHub already lost the install (still
-    counts as success for our purposes), other failures are logged but
-    don't block the Aurora-side disconnect from completing.
-    """
+    """Sever GitHub auth state. Optional `{"also_uninstall": true}` deletes the install on GitHub too."""
     body = request.get_json(silent=True) or {}
     also_uninstall = bool(body.get("also_uninstall"))
 
-    # Snapshot the linked installs BEFORE we soft-delete, so we still
-    # have IDs to call GitHub's uninstall on if requested.
     linked_installs: list[int] = []
     try:
         with db_pool.get_admin_connection() as conn:
@@ -1104,7 +969,6 @@ def github_disconnect(user_id):
                         iid, type(exc).__name__,
                     )
                     continue
-                # 204 = uninstalled; 404 = already gone (still success).
                 if resp.status_code in (204, 404):
                     uninstalled_on_github += 1
                 else:

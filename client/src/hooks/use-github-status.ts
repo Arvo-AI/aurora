@@ -94,17 +94,8 @@ export function useGitHubStatus(userId: string | null) {
 
   useEffect(() => {
     if (!userId) return;
-    // Refresh when:
-    // - any other component announces a provider state change
-    // - the install/OAuth popup posts a github_auth_success message
-    // - the user returns to the tab (covers uninstall-on-GitHub-then-back)
     const handleProviderChange = () => { checkStatus(); };
     const handleAuthMessage = (event: MessageEvent) => {
-      // Payload is signal-only (no credentials); the worst a spoofed
-      // message can do is trigger a refresh of the user's own status,
-      // which is harmless. Skipping a strict origin allowlist here
-      // makes the instant-refresh path work in split frontend/backend
-      // host deployments where the popup origin differs.
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') {
         checkStatus();
