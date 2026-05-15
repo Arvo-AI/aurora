@@ -257,8 +257,18 @@ def _handle_installation_event(
         return
 
     if action == "deleted":
+        from utils.auth.stateless_auth import set_rls_context
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT user_id
+                         FROM user_github_installations
+                        WHERE installation_id = %s""",
+                    (installation_id,),
+                )
+                linked_users = [row[0] for row in cur.fetchall() if row[0]]
+
                 # Drop the parent row first. ``user_github_installations``
                 # has ``ON DELETE CASCADE`` so the user-link rows go with
                 # it. ``github_connected_repos.installation_id`` is a plain
@@ -270,14 +280,35 @@ def _handle_installation_event(
                     (installation_id,),
                 )
                 rows_deleted = cur.rowcount
+
+                connected_repos_unbound = 0
+                for linked_user_id in linked_users:
+                    if not set_rls_context(
+                        cur,
+                        conn,
+                        linked_user_id,
+                        log_prefix="[gh_webhook:installation:deleted]",
+                    ):
+                        logger.warning(
+                            "gh_webhook_handler=installation action=deleted "
+                            "installation_id=%s user=%s status=skipped_no_org_context",
+                            installation_id,
+                            linked_user_id,
+                        )
+                        continue
+                    cur.execute(
+                        """UPDATE github_connected_repos
+                              SET installation_id = NULL,
+                                  updated_at = NOW()
+                            WHERE installation_id = %s
+                              AND user_id = %s""",
+                        (installation_id, linked_user_id),
+                    )
+                    connected_repos_unbound += cur.rowcount
+
                 cur.execute(
-                    """UPDATE github_connected_repos
-                          SET installation_id = NULL,
-                              updated_at = NOW()
-                        WHERE installation_id = %s""",
-                    (installation_id,),
+                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                 )
-                connected_repos_unbound = cur.rowcount
                 cur.execute(
                     """UPDATE webhook_deliveries
                        SET status = 'processed', processed_at = NOW()

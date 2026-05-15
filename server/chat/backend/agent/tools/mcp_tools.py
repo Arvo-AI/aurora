@@ -1044,7 +1044,22 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
             #     available_servers.append("azure")
             if credentials.get("github", {}).get("access_token"):
                 available_servers.append("github")
-        
+
+        if "github" not in available_servers:
+            try:
+                from utils.auth.github_auth_router import (
+                    NoGitHubAuthError,
+                    get_any_auth_for_user,
+                )
+                get_any_auth_for_user(user_id)
+                available_servers.append("github")
+            except NoGitHubAuthError:
+                pass
+            except Exception as exc:
+                logging.warning(
+                    "GitHub App auth probe failed for user %s: %s", user_id, exc
+                )
+
         if not available_servers:
             logging.info(f"No cloud credentials found for user {user_id}, no MCP servers to load")
         

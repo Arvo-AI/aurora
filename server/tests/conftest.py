@@ -26,9 +26,12 @@ except ImportError:  # pragma: no cover — host envs without cryptography
     rsa = None  # type: ignore[assignment]
     _cryptography_available = False
 
+import importlib.util as _importlib_util
+
 # Compatibility shim for pre-existing tests/services/correlation/ tests that
 # import Aurora services whose third-party deps may be absent on host envs.
-# No-op when the real modules are installed (e.g. inside aurora-server).
+# Only install the MagicMock when the real package isn't on the import path —
+# sys.modules.setdefault would mask a real-but-not-yet-imported package.
 for _stub_pkg in (
     "neo4j",
     "casbin",
@@ -43,7 +46,10 @@ for _stub_pkg in (
     "langchain",
     "langgraph",
 ):
-    sys.modules.setdefault(_stub_pkg, MagicMock())
+    if _stub_pkg in sys.modules:
+        continue
+    if _importlib_util.find_spec(_stub_pkg) is None:
+        sys.modules[_stub_pkg] = MagicMock()
 
 try:
     import psycopg2 as _psycopg2

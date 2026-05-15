@@ -55,18 +55,20 @@
         try {
             if (window.opener) {
                 var configured = '{{ frontend_url|default("", true) }}';
-                var targetOrigin = '*';
+                var targetOrigin = '';
                 if (configured && configured !== 'None') {
                     try {
                         targetOrigin = new URL(configured).origin;
                     } catch (urlErr) {
-                        targetOrigin = '*';
+                        targetOrigin = '';
                     }
                 }
-                window.opener.postMessage(
-                    { type: 'github_auth_success' },
-                    targetOrigin
-                );
+                if (targetOrigin) {
+                    window.opener.postMessage(
+                        { type: 'github_auth_success' },
+                        targetOrigin
+                    );
+                }
             }
         } catch (e) { /* opener navigated away */ }
         setTimeout(function() { window.close(); }, 250);

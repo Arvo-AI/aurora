@@ -66,6 +66,18 @@ FRONTEND_URL = os.getenv("FRONTEND_URL") or ""
 GITHUB_TIMEOUT = 20
 GITHUB_RECONCILE_TIMEOUT = 3
 
+
+def _is_single_tenant() -> bool:
+    """Return True when this Aurora deployment is single-tenant.
+
+    Multi-tenant operators MUST set ``AURORA_SINGLE_TENANT=false`` so that
+    cross-tenant install discovery/claim is refused. Default is True to
+    match the long-standing self-hosted Aurora deployment shape.
+    """
+    return os.getenv("AURORA_SINGLE_TENANT", "true").strip().lower() not in (
+        "false", "0", "no", "off"
+    )
+
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
 # allow 30 minutes to absorb account-creation, 2FA, OAuth-grant, popup-block
 # detours. After expiry the user must re-initiate the install.
@@ -581,6 +593,12 @@ def github_app_discover_installations(user_id):
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return jsonify({"error": "GitHub App not configured"}), 503
 
+    if not _is_single_tenant():
+        return jsonify({
+            "error": "install discovery is disabled in multi-tenant deployments",
+            "code": "MULTI_TENANT_DISCOVERY_DISABLED",
+        }), 403
+
     try:
         app_jwt = mint_app_jwt()
     except GitHubAppJWTError:
@@ -679,12 +697,18 @@ def github_app_claim_installation(user_id, installation_id):
     INSERTing so a guess at a random installation_id can't succeed.
 
     Single-tenant deployments are safe by construction (one Aurora user
-    == one operator). Multi-tenant deployments accept that the user
-    asserts ownership; the audit log line below makes the claim
-    traceable.
+    == one operator). Multi-tenant deployments must set
+    ``AURORA_SINGLE_TENANT=false`` to refuse claim entirely until a
+    proper proof-of-control exchange is wired in.
     """
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return jsonify({"error": "GitHub App not configured"}), 503
+
+    if not _is_single_tenant():
+        return jsonify({
+            "error": "install claim is disabled in multi-tenant deployments",
+            "code": "MULTI_TENANT_CLAIM_DISABLED",
+        }), 403
 
     try:
         app_jwt = mint_app_jwt()
@@ -1012,9 +1036,9 @@ def github_disconnect(user_id):
             )
 
     logger.info(
-        "[GITHUB-DISCONNECT] user=%s soft_deleted_installs=%d oauth_removed=%s "
+        "[GITHUB-DISCONNECT] user=%s soft_deleted_installs=%d "
         "also_uninstall=%s uninstalled_on_github=%d uninstall_failures=%d",
-        user_id, soft_deleted_installs, oauth_removed,
+        user_id, soft_deleted_installs,
         also_uninstall, uninstalled_on_github, uninstall_failures,
     )
     return jsonify(

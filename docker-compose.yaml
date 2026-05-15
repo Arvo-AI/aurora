@@ -67,16 +67,14 @@ x-common-env: &common-env
 
   # GitHub auth — every Aurora service that talks to GitHub (server,
   # celery_worker, chatbot) needs the auth mode + App credentials to mint
-  # installation tokens. Webhook secret is server-only and lives on the
-  # aurora-server entry below.
+  # installation tokens. Webhook secret + OAuth client credentials are
+  # server-only and live on the aurora-server entry below.
   GITHUB_AUTH_MODE: ${GITHUB_AUTH_MODE:-app}
   GITHUB_APP_ID: ${GITHUB_APP_ID}
   GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
   NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
   GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
-  GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
-  GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
@@ -218,10 +216,13 @@ services:
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
 
-      # GitHub App webhook secret — server-only (HMAC validation lives in
-      # the route handler; chatbot/celery_worker handle already-verified
-      # deliveries). Other GitHub vars come from x-common-env.
+      # GitHub App webhook secret + OAuth client credentials — server-only
+      # (HMAC validation and OAuth /login,/callback handlers live in route
+      # handlers on this service; chatbot/celery_worker handle already-
+      # verified deliveries). Other GitHub vars come from x-common-env.
       GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET}
+      GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
+      GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
 
       # Bitbucket OAuth
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}

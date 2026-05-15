@@ -210,7 +210,7 @@ except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
 
 try:
-    from tasks import github_webhook_tasks  # noqa: F401
+    import tasks.github_webhook_tasks  # noqa: F401
     logging.info("GitHub webhook dispatcher task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")

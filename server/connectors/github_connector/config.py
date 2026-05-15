@@ -139,7 +139,9 @@ def load_github_app_config() -> GitHubAppConfig:
 
     if not ok:
         logger.info(
-            "[GITHUB-APP-CONFIG] disabled (missing env vars); falling back to OAuth-only mode"
+            "[GITHUB-APP-CONFIG] disabled (missing env vars); GitHub App install "
+            "flow unavailable. OAuth-only paths still work when GH_OAUTH_CLIENT_* "
+            "is configured and GITHUB_AUTH_MODE permits it."
         )
     else:
         logger.info(

@@ -131,22 +131,20 @@ export class GitHubIntegrationService {
   static async disconnect(opts: { alsoUninstall?: boolean } = {}): Promise<{
     uninstalled_on_github: number;
     uninstall_failures: number;
-  } | null> {
+  }> {
     const response = await fetch('/api/proxy/github/disconnect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ also_uninstall: !!opts.alsoUninstall }),
     });
-    if (!response.ok) return null;
-    try {
-      const data = await response.json();
-      return {
-        uninstalled_on_github: data.uninstalled_on_github ?? 0,
-        uninstall_failures: data.uninstall_failures ?? 0,
-      };
-    } catch {
-      return null;
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || 'Failed to disconnect GitHub');
     }
+    return {
+      uninstalled_on_github: data?.uninstalled_on_github ?? 0,
+      uninstall_failures: data?.uninstall_failures ?? 0,
+    };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,7 +173,10 @@ export class GitHubIntegrationService {
   }
 
   static async clearRepoSelections(): Promise<void> {
-    await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
+    const response = await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error('Failed to clear repository selections');
+    }
   }
 
   static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
@@ -414,7 +415,11 @@ export default function GitHubProviderIntegration() {
     setIsSaving(true);
     try {
       const selected = allRepos.filter(r => checkedRepos.has(r.full_name));
-      await GitHubIntegrationService.saveRepoSelections(selected);
+      if (selected.length === 0) {
+        await GitHubIntegrationService.clearRepoSelections();
+      } else {
+        await GitHubIntegrationService.saveRepoSelections(selected);
+      }
       toast({ title: "Repositories saved", description: `${selected.length} repositories connected.` });
       setGithubConnectedOptimistically(selected.length > 0);
       githubStatus.refresh();
@@ -595,13 +600,15 @@ export default function GitHubProviderIntegration() {
         window.removeEventListener('message', onMessage);
         document.removeEventListener('visibilitychange', onVisibility);
       };
-      const finalize = () => {
+      const finalize = (markConnected = false) => {
         if (finalized) return;
         finalized = true;
         cleanup();
         popupCleanupsRef.current = popupCleanupsRef.current.filter(c => c !== cleanup);
         setIsConnectingOAuth(false);
-        setGithubConnectedOptimistically(true);
+        if (markConnected) {
+          setGithubConnectedOptimistically(true);
+        }
         githubStatus.refresh();
         window.dispatchEvent(new CustomEvent('providerStateChanged'));
       };
@@ -609,7 +616,7 @@ export default function GitHubProviderIntegration() {
         if (event.source !== popup) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
-          finalize();
+          finalize(true);
         }
       };
       const onVisibility = () => {
@@ -647,11 +654,11 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     const hadAppInstall = installations.length > 0;
     const primaryInstall = installations[0];
-    expectedDisconnectRef.current = true;
     setIsDisconnecting(true);
     try {
       await GitHubIntegrationService.clearRepoSelections();
       const result = await GitHubIntegrationService.disconnect({ alsoUninstall });
+      expectedDisconnectRef.current = true;
       setSavedRepos([]);
       setSavedReposLoaded(false);
       setCheckedRepos(new Set());
@@ -711,10 +718,10 @@ export default function GitHubProviderIntegration() {
   const handleUnlinkInstallation = async (installationId: number) => {
     if (!userId) return;
     try {
+      await GitHubAppService.unlinkInstallation(installationId);
       if (installations.length <= 1) {
         expectedDisconnectRef.current = true;
       }
-      await GitHubAppService.unlinkInstallation(installationId);
       toast({ title: "Installation unlinked", description: "GitHub App installation removed from Aurora" });
       if (installations.length <= 1) {
         setGithubConnectedOptimistically(false);
@@ -1283,7 +1290,7 @@ export default function GitHubProviderIntegration() {
               {allRepos.length > 0 && (
                 <Button
                   onClick={handleSaveSelections}
-                  disabled={isSaving || checkedRepos.size === 0 || !hasUnsavedChanges}
+                  disabled={isSaving || !hasUnsavedChanges}
                   size="sm"
                   className="w-full"
                 >

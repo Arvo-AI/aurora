@@ -27,7 +27,7 @@ def get_connected_repos(**kwargs) -> str:
         return json.dumps({"error": "No user context available"})
 
     try:
-        auth = get_any_auth_for_user(user_id)
+        get_any_auth_for_user(user_id)
     except NoGitHubAuthError:
         return json.dumps({
             "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
@@ -43,10 +43,15 @@ def get_connected_repos(**kwargs) -> str:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[GithubRepos:list]")
                 cur.execute(
-                    """SELECT repo_full_name, default_branch, is_private, metadata_summary, metadata_status
-                       FROM github_connected_repos
-                       WHERE user_id = %s
-                       ORDER BY repo_full_name""",
+                    """SELECT r.repo_full_name, r.default_branch, r.is_private,
+                              r.metadata_summary, r.metadata_status, r.installation_id,
+                              (i.installation_id IS NOT NULL
+                                  AND i.suspended_at IS NULL) AS has_active_installation
+                       FROM github_connected_repos r
+                       LEFT JOIN github_installations i
+                              ON i.installation_id = r.installation_id
+                       WHERE r.user_id = %s
+                       ORDER BY r.repo_full_name""",
                     (user_id,),
                 )
                 rows = cur.fetchall()
@@ -54,8 +59,6 @@ def get_connected_repos(**kwargs) -> str:
         if not rows:
             return json.dumps({
                 "repos": [],
-                "auth_method": auth.method,
-                "installation_id": auth.installation_id,
                 "message": "No GitHub repos connected. Ask the user to connect repos in Settings > Connectors > GitHub.",
             })
 
@@ -65,14 +68,12 @@ def get_connected_repos(**kwargs) -> str:
                 "branch": r[1] or "main",
                 "private": r[2],
                 "description": r[3] or ("(description generating...)" if r[4] != 'ready' else "(no description)"),
+                "installation_id": r[5],
+                "auth_method": "app" if (r[5] is not None and r[6]) else "oauth",
             }
             for r in rows
         ]
-        return json.dumps({
-            "repos": repos,
-            "auth_method": auth.method,
-            "installation_id": auth.installation_id,
-        })
+        return json.dumps({"repos": repos})
     except Exception as e:
         logger.error(f"Error fetching connected repos: {e}", exc_info=True)
         return json.dumps({"error": f"Failed to fetch connected repos: {e}"})

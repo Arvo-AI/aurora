@@ -258,6 +258,10 @@ def _backfill_repo_installation(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                if not set_rls_context(
+                    cur, conn, user_id, log_prefix="[GITHUB-AUTH-ROUTER]"
+                ):
+                    return
                 cur.execute(
                     """UPDATE github_connected_repos
                           SET installation_id = %s,
@@ -271,7 +275,7 @@ def _backfill_repo_installation(
     except Exception:
         logger.warning(
             "[GITHUB-AUTH-ROUTER] backfill of installation_id failed for user=%s",
-            user_id,
+            sanitize(user_id).replace("\r", "_").replace("\n", "_"),
         )
 
 
@@ -430,7 +434,7 @@ def is_github_connected(user_id: str) -> bool:
     if is_oauth_enabled():
         try:
             creds = get_credentials_from_db(user_id, "github")
-            if creds and (creds.get("access_token") or creds.get("username")):
+            if creds and creds.get("access_token"):
                 return True
         except Exception:
             logger.warning(

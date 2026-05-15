@@ -361,6 +361,10 @@ def initialize_tables():
                         is_primary BOOLEAN NOT NULL DEFAULT FALSE,
                         UNIQUE(user_id, installation_id)
                     );
+
+                    CREATE INDEX IF NOT EXISTS idx_user_github_installations_installation_id
+                    ON user_github_installations(installation_id)
+                    WHERE disconnected_at IS NULL;
                 """,
                 "webhook_deliveries": """
                     CREATE TABLE IF NOT EXISTS webhook_deliveries (

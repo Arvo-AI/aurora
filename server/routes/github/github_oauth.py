@@ -31,6 +31,7 @@ from utils.auth.github_auth_mode import (
     oauth_credentials_configured,
 )
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +239,9 @@ def github_callback():
             "github",
         )
     except Exception:
+        safe_user = sanitize(aurora_user_id).replace("\r", "_").replace("\n", "_")
         logger.exception(
-            "[GITHUB-OAUTH] failed to persist token for user=%s", aurora_user_id
+            "[GITHUB-OAUTH] failed to persist token for user=%s", safe_user
         )
         return flask.render_template(
             "github_callback_error.html",
@@ -252,9 +254,10 @@ def github_callback():
 
         clear_credentials_cache(aurora_user_id)
     except Exception as cache_err:
+        safe_user = sanitize(aurora_user_id).replace("\r", "_").replace("\n", "_")
         logger.warning(
             "[GITHUB-OAUTH] failed to clear MCP cache for user=%s: %s",
-            aurora_user_id,
+            safe_user,
             cache_err,
         )
 
