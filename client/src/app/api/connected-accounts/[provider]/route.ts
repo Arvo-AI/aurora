@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
+import { forwardRequest } from '@/lib/backend-proxy'
 
 // Backend base URL
 const API_BASE_URL = process.env.BACKEND_URL
@@ -153,20 +154,7 @@ export async function DELETE(
 
     // Special handling for GitLab
     if (provider === 'gitlab') {
-      const response = await fetch(`${API_BASE_URL}/gitlab/disconnect`, {
-        method: 'POST',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        return NextResponse.json(
-          { error: 'Failed to disconnect GitLab' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+      return forwardRequest(request, 'POST', '/gitlab/disconnect', 'gitlab-disconnect')
     }
 
     // Special handling for Grafana

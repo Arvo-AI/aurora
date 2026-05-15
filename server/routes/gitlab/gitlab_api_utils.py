@@ -71,9 +71,8 @@ def gitlab_api_request(
         )
 
         if resp.status_code >= 400:
-            error_msg = resp.text[:500]
-            logger.error("GitLab API error %d for %s %s: %s", resp.status_code, method, endpoint, error_msg)
-            return {"error": f"GitLab API error ({resp.status_code}): {error_msg}"}
+            logger.error("GitLab API error %d for %s %s", resp.status_code, method, endpoint)
+            return {"error": f"GitLab API error ({resp.status_code})"}
 
         if resp.status_code == 204:
             return {"success": True}

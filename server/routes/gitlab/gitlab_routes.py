@@ -7,7 +7,6 @@ On connect, all accessible projects are auto-discovered and saved.
 """
 import json
 import logging
-import re
 import requests
 from typing import Optional
 from urllib.parse import urlparse
@@ -24,7 +23,15 @@ logger = logging.getLogger(__name__)
 GITLAB_TIMEOUT = 20
 DEFAULT_GITLAB_URL = "https://gitlab.com"
 
-_LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
+def _parse_next_link(link_header: str) -> str | None:
+    """Extract the next URL from a Link header without regex (avoids ReDoS)."""
+    for part in link_header.split(","):
+        if 'rel="next"' in part:
+            start = part.find("<")
+            end = part.find(">", start)
+            if start != -1 and end != -1:
+                return part[start + 1:end]
+    return None
 
 
 def _is_valid_gitlab_base_url(url: str) -> bool:
@@ -110,8 +117,7 @@ def _fetch_all_accessible_projects(base_url: str, token: str) -> tuple[list[dict
 
             # Follow Link: <...>; rel="next" header
             link_header = resp.headers.get("Link", "")
-            match = _LINK_NEXT_RE.search(link_header)
-            url = match.group(1) if match else None
+            url = _parse_next_link(link_header)
 
         except requests.RequestException:
             logger.exception("Error fetching GitLab projects (page %d)", page_count + 1)
