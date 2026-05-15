@@ -84,6 +84,16 @@ _ALERTS_PATH_BY_SOURCE: Dict[str, str] = {
     "splunk": "/splunk/alerts",
 }
 
+# Fail fast at import if someone extends query_alerts' enabling_skills without
+# adding the matching dispatch path here — otherwise the runtime fallback
+# would silently surface an unsupported_source error.
+assert set(_ALERTS_PATH_BY_SOURCE) >= set(
+    _SPEC_BY_NAME["query_alerts"].enabling_skills
+), (
+    "query_alerts enabling_skills not fully covered by _ALERTS_PATH_BY_SOURCE: "
+    f"missing {set(_SPEC_BY_NAME['query_alerts'].enabling_skills) - set(_ALERTS_PATH_BY_SOURCE)}"
+)
+
 
 async def _do_query_logs(
     api_call: ApiCall, user_id: str, query: str,

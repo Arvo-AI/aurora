@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from .registry import (
     dispatch_entry_visible,
@@ -25,6 +26,12 @@ logger = logging.getLogger(__name__)
 ApiCall = Callable[..., Awaitable[Dict[str, Any]]]
 
 _PATH_ARG_RE = re.compile(r"\{([a-zA-Z_]\w*)\}")
+
+# Caps on search_tools input. Allowlist itself is small (~50 entries) so a
+# huge limit is bounded in practice, but clamping rejects negative values
+# (which would silently return [] from search_dispatch_entries) and prevents
+# a hostile client from passing huge numbers that affect future scaling.
+_MAX_SEARCH_LIMIT = 50
 
 
 def _arg_schema(entry) -> List[Dict[str, Any]]:
@@ -55,7 +62,7 @@ def _build_path(entry, args: Dict[str, Any]) -> Tuple[Optional[str], Optional[Di
         value = args.pop(path_arg, None)
         if value is None:
             return None, {"error": "missing_path_arg", "arg": path_arg, "tool": entry.name}
-        path = path.replace("{" + path_arg + "}", str(value))
+        path = path.replace("{" + path_arg + "}", quote(str(value), safe=""))
     leftover = _PATH_ARG_RE.findall(path)
     if leftover:
         return None, {"error": "unresolved_path_args", "args": leftover, "tool": entry.name}
@@ -93,6 +100,12 @@ async def _do_search_tools(
     connector: Optional[str],
     limit: int,
 ) -> Dict[str, Any]:
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, _MAX_SEARCH_LIMIT))
+
     # Single pass: pull all matches (no visibility filter), tag each with
     # callable_now in one walk. Visible entries appear first so the LLM
     # sees them; non-visible ones are kept for discoverability ("here's

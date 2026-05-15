@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 ApiCall = Callable[..., Awaitable[Dict[str, Any]]]
 
+_INTERNAL_ERROR: Dict[str, Any] = {
+    "error": "internal_server_error",
+    "message": "An internal error occurred",
+}
+
 
 async def _do_catalog_connectors(api_call: ApiCall) -> Dict[str, Any]:
     try:
@@ -19,8 +24,9 @@ async def _do_catalog_connectors(api_call: ApiCall) -> Dict[str, Any]:
             await api_call("GET", "/api/connectors/status"),
             tool_name="catalog/connectors",
         )
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        logger.exception("catalog/connectors failed")
+        return dict(_INTERNAL_ERROR)
 
 
 def _shape_skill_entry(skill_id: str, meta: Any, connected: bool) -> Dict[str, Any]:
@@ -43,8 +49,9 @@ async def _do_catalog_skills(user_id: str) -> Dict[str, Any]:
             meta = reg.get_skill_metadata(skill_id)
             out.append(_shape_skill_entry(skill_id, meta, connected))
         return truncate_payload({"skills": out}, tool_name="catalog/skills")
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        logger.exception("catalog/skills failed")
+        return dict(_INTERNAL_ERROR)
 
 
 def _slim_incident_row(i: Dict[str, Any]) -> Dict[str, Any]:
@@ -66,8 +73,9 @@ async def _do_incidents_recent(api_call: ApiCall) -> Dict[str, Any]:
             items = []
         slim = [_slim_incident_row(i) for i in items if isinstance(i, dict)]
         return truncate_payload({"incidents": slim}, tool_name="incidents/recent")
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        logger.exception("incidents/recent failed")
+        return dict(_INTERNAL_ERROR)
 
 
 async def _do_runbooks_index(api_call: ApiCall) -> Dict[str, Any]:
@@ -91,8 +99,9 @@ async def _do_runbooks_index(api_call: ApiCall) -> Dict[str, Any]:
 async def _do_health(api_call: ApiCall) -> Dict[str, Any]:
     try:
         return await api_call("GET", "/health/")
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        logger.exception("health check failed")
+        return dict(_INTERNAL_ERROR)
 
 
 def register_resources(

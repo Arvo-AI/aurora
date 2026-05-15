@@ -58,12 +58,27 @@ async def _create_session(api_call: ApiCall) -> Optional[str]:
     return created.get("id") if isinstance(created, dict) else None
 
 
-async def _post_message(api_call: ApiCall, sid: str, message: str, mode: str) -> int:
+async def _post_message(api_call: ApiCall, sid: str, message: str, mode: str) -> Optional[int]:
+    """Post a message; return the user-message seq, or None if the response
+    lacks a usable seq.
+
+    Returning None (not 0) on failure matters because seq=0 would cause the
+    subsequent poll to treat every prior message as "new" and surface a stale
+    assistant reply from before this turn.
+    """
     posted = await api_call(
         "POST", f"/chat_api/sessions/{sid}/messages",
         body={"message": message, "mode": mode},
     )
-    return int(posted.get("seq") or 0) if isinstance(posted, dict) else 0
+    if not isinstance(posted, dict):
+        return None
+    seq = posted.get("seq")
+    if isinstance(seq, int) and seq >= 0:
+        return seq
+    try:
+        return int(seq) if seq is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _latest_assistant_text(msgs: List[Dict[str, Any]], fallback: Optional[str]) -> Optional[str]:
@@ -139,7 +154,10 @@ async def chat_with_aurora(
             if not sid:
                 return {"error": "Failed to create chat session"}
         if message:
-            last_seq = await _post_message(api_call, sid, message, mode)
+            posted_seq = await _post_message(api_call, sid, message, mode)
+            if posted_seq is None:
+                return {"error": "Failed to post chat message", "session_id": sid}
+            last_seq = posted_seq
 
     elapsed = 0.0
     interval = _POLL_INTERVAL_INITIAL

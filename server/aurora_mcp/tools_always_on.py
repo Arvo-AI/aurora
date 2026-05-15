@@ -24,6 +24,12 @@ ApiCall = Callable[..., Awaitable[Dict[str, Any]]]
 _ASK_POLL_TIMEOUT = 15.0
 _RCA_TRIGGER_TIMEOUT = 60.0
 
+# Terminal states mirror chat_bridge._TERMINAL_*. Use an explicit allowlist so
+# unknown/new statuses (e.g. "active") don't get treated as terminal by a
+# denylist check.
+_TERMINAL_OK = frozenset({"complete", "completed"})
+_TERMINAL_ERR = frozenset({"error", "cancelled", "failed"})
+
 
 def _slim_incident(incident: Any) -> Any:
     if not isinstance(incident, dict):
@@ -72,7 +78,8 @@ async def _do_ask_incident(api_call: ApiCall, incident_id: str, question: str) -
         await asyncio.sleep(2)
         async with asyncio.timeout(_ASK_POLL_TIMEOUT):
             session = await api_call("GET", f"/chat_api/sessions/{session_id}")
-        if session.get("status") not in ("processing", "pending", "in_progress"):
+        status = session.get("status")
+        if status in _TERMINAL_OK or status in _TERMINAL_ERR:
             return truncate_payload(session, tool_name="ask_incident")
 
     return {
@@ -131,7 +138,10 @@ async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict
 
     sources: List[Dict[str, Any]] = []
     if isinstance(kb_res, Exception):
-        sources.append({"source": "knowledge_base", "error": str(kb_res)})
+        logger.exception(
+            "search_runbooks: knowledge_base call failed", exc_info=kb_res,
+        )
+        sources.append({"source": "knowledge_base", "error": "search_failed"})
     else:
         sources.append({"source": "knowledge_base", "results": kb_res})
     # SharePoint silently skipped on error — likely not connected; callers
