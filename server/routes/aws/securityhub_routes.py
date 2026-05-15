@@ -62,7 +62,7 @@ def _validate_api_key(org_id: str, api_key: str) -> bool:
                     return False
                 return hmac.compare_digest(expected_key, api_key)
     except Exception as exc:
-        logger.error("[SECURITY_HUB] Failed to validate API key: %s", exc)
+        logger.exception("[SECURITY_HUB] Failed to validate API key: %s", exc)
         return False
 
 @securityhub_bp.route("/webhook/<org_id>", methods=["POST", "OPTIONS"])
@@ -95,7 +95,7 @@ def webhook(org_id: str):
     source = payload.get("source")
     if source != "aws.securityhub":
         EVENTBRIDGE_EVENTS_FAILED.labels(reason="invalid_source").inc()
-        logger.warning(f"[SECURITY_HUB] Invalid source {source} for org {org_id}")
+        logger.warning(f"[SECURITY_HUB] Invalid source provided for org {org_id}")
         return jsonify({"error": "Invalid event source. Must be aws.securityhub"}), 400
 
     EVENTBRIDGE_EVENTS_RECEIVED.inc()
@@ -105,7 +105,7 @@ def webhook(org_id: str):
         # Enqueue background task to process and parse the findings
         process_securityhub_finding.delay(payload, org_id)
     except Exception as e:
-        logger.error(f"[SECURITY_HUB] Enqueue failure for org {org_id}, payload {payload}: {e}")
+        logger.exception(f"[SECURITY_HUB] Enqueue failure for org {org_id}")
         EVENTBRIDGE_EVENTS_FAILED.labels(reason="enqueue_failure").inc()
         return jsonify({"error": "Failed to enqueue processing task"}), 500
 
@@ -157,5 +157,5 @@ def get_findings(user_id):
         return jsonify({"findings": formatted_findings}), 200
         
     except Exception as exc:
-        logger.error("[SECURITY_HUB] Failed to fetch findings: %s", exc, exc_info=True)
+        logger.exception("[SECURITY_HUB] Failed to fetch findings: %s", exc)
         return jsonify({"error": "Failed to fetch security hub findings"}), 500

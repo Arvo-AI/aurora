@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useQuery, jsonFetcher } from '@/lib/query';
-import { ShieldAlert, AlertTriangle, AlertCircle, Info, CheckCircle2, ChevronRight, ChevronDown, Clock, Activity, Zap } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, ChevronDown, Clock, Activity, Zap } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { StatCard, StatCardSkeleton, ChartSkeleton, EmptyState, ChartPanel } from '@/app/monitor/components/charts';
 
@@ -60,7 +60,7 @@ export default function SecurityHubTab({ }: { period?: string }) {
       
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         {isLoading ? (
-          Array.from({ length: 3 }).map((_, i) => <StatCardSkeleton key={i} />)
+          [1, 2, 3].map((id) => <StatCardSkeleton key={id} />)
         ) : findings && (
           <>
             <StatCard label="Total Findings" value={findings.length.toString()} icon={Activity} />
