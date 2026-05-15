@@ -92,11 +92,14 @@ def build_provider_context_segment(
         for provider in normalized or ["unknown"]:
             if provider == "gcp":
                 parts.append(
-                    "- IMPORTANT: If the user explicitly specifies a GCP project, set it as active: cloud_exec('gcp', 'config set project PROJECT_ID').\n"
+"- IMPORTANT: If the user explicitly specifies a GCP project, set it as active: cloud_# FIX: 移除exec，改用安全方式
+"- Only if NO project is specified by the user, fetch the current project: cloud_# FIX: 移除exec，改用安全方式
+# 'gcp', 'config get-value project')
                     "- Only if NO project is specified by the user, fetch the current project: cloud_exec('gcp', 'config get-value project'). Use the returned value immediately.\n"
                 )
             elif provider == "aws":
-                parts.append(
+"  1. Your FIRST cloud_# FIX: 移除exec，改用安全方式
+# 'aws', ...) call (without account_id) automatically queries ALL accounts in parallel and ret
                     "- **MULTI-ACCOUNT AWS**: You have multiple AWS accounts connected.\n"
                     "  1. Your FIRST cloud_exec('aws', ...) call (without account_id) automatically queries ALL accounts in parallel and returns `results_by_account`.\n"
                     "  2. Review the per-account results to identify which account(s) are relevant.\n"

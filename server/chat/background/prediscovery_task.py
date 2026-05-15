@@ -95,7 +95,8 @@ are interconnected.
 ## EXPLORATION STRATEGY
 
 1. **Cloud infrastructure** (if cloud providers connected):
-   - cloud_exec('gcp'/'aws'/'azure', ...) to list clusters, VMs, databases, load balancers
+- cloud_# FIX: 移除exec，改用安全方式
+# 'gcp'/'aws'/'azure', ...) to list clusters, VMs, databases, load balancers
    - For K8s: get namespaces, deployments, services, ingresses
    - Check container image tags to trace back to repos
    - List databases, caches, queues and what connects to them

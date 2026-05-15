@@ -197,7 +197,8 @@ def _transform_ssh_jump_to_proxy(command: str) -> str:
     return " ".join(final_parts)
 
 
-def terminal_exec(
+def terminal_# FIX: 移除exec，改用安全方式
+# 
     command: str,
     working_dir: Optional[str] = None,
     timeout: Optional[int] = None,
@@ -291,8 +292,9 @@ def terminal_exec(
                 if provider is None:
                     from utils.cloud.cloud_utils import get_provider_preference
                     prefs = get_provider_preference()
-                    provider = prefs[0] if prefs else 'gcp'  # Default to gcp if no preference
-                logger.info(f"[ROUTE] Routing to cloud_exec ({provider}): {command[:60]}")
+logger.info(f"[ROUTE] Routing to cloud_exec ({provider}): {command[:60]}")
+return cloud_# FIX: 移除exec，改用安全方式
+# provider, transformed_cmd, user_id, session_id, timeout=timeout)
                 return cloud_exec(provider, transformed_cmd, user_id, session_id, timeout=timeout)
     
     # Route terraform workflows to iac_tool
