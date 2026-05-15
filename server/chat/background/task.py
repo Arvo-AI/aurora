@@ -991,7 +991,7 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
                 # Find where the Jira-specific messages start by looking for the
                 # follow-up prompt. Everything before it is re-injected context
                 # that duplicates the investigation.
-                jira_start_idx = 0
+                jira_start_idx = -1
                 if followup_prompt_prefix:
                     for i, msg in enumerate(followup):
                         text = msg.get('text') or msg.get('content') or ''
@@ -999,7 +999,11 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
                             jira_start_idx = i
                             break
 
-                jira_only = followup[jira_start_idx:] if jira_start_idx > 0 else followup
+                # If we can't find the follow-up user message, Phase 2 produced
+                # no new messages (e.g. guardrail blocked it). Returning the
+                # entire `followup` here would duplicate the investigation,
+                # since `investigation_messages` already contains those rows.
+                jira_only = followup[jira_start_idx:] if jira_start_idx >= 0 else []
                 merged = investigation_messages + jira_only
                 cursor.execute(
                     "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
