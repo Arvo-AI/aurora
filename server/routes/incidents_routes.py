@@ -1983,13 +1983,17 @@ def trigger_rca_from_chat(user_id):
         }), 400
 
     from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
-    raw = _agent_trigger_rca(
-        issue_description=issue_description,
-        title=title,
-        service=service,
-        severity=severity,
-        user_id=user_id,
-    )
+    try:
+        raw = _agent_trigger_rca(
+            issue_description=issue_description,
+            title=title,
+            service=service,
+            severity=severity,
+            user_id=user_id,
+        )
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool raised")
+        return jsonify({"error": "RCA dispatch failed"}), 500
 
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw

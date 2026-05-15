@@ -566,16 +566,35 @@ def post_chat_message(user_id, session_id):
         # `rca` and `chat` both map to ask-mode for the background agent task;
         # only `agent` mode enables execution. `ask` is read-only by design.
         task_mode = 'agent' if mode == 'agent' else 'ask'
-        run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=message,
-            trigger_metadata={'source': 'chat_messages_route', 'mode': mode},
-            provider_preference=None,
-            incident_id=None,
-            send_notifications=False,
-            mode=task_mode,
-        )
+        try:
+            run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=message,
+                trigger_metadata={'source': 'chat_messages_route', 'mode': mode},
+                provider_preference=None,
+                incident_id=None,
+                send_notifications=False,
+                mode=task_mode,
+            )
+        except Exception:
+            # Broker unreachable — the user message is already committed and
+            # the session is marked in_progress. Flip it back so it doesn't
+            # appear stuck forever; the persisted message stays for context.
+            logging.exception("Failed to enqueue run_background_chat for session %s", session_id)
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                        cursor.execute(
+                            "UPDATE chat_sessions SET status = 'error', updated_at = NOW() "
+                            "WHERE id = %s AND org_id = %s AND user_id = %s",
+                            (session_id, org_id, user_id),
+                        )
+                    conn.commit()
+            except Exception:
+                logging.exception("Failed to mark session %s as error after enqueue failure", session_id)
+            return jsonify({'error': 'Failed to dispatch chat task'}), 500
 
         return jsonify({'session_id': session_id, 'seq': user_seq, 'status': 'in_progress'}), 202
 
@@ -597,6 +616,8 @@ def get_chat_messages(user_id, session_id):
         after = int(request.args.get('after', 0))
     except (TypeError, ValueError):
         after = 0
+    # Negative `after` would slice from the tail and surface unrelated history.
+    after = max(0, after)
 
     try:
         with db_pool.get_admin_connection() as conn:
