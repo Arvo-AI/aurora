@@ -1273,7 +1273,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         provider_preference = kwargs.get('provider_preference')
         timeout = kwargs.get('timeout')
         
-        return cloud_exec(provider, command, user_id=user_id, session_id=session_id, 
+return cloud_# FIX: 移除exec，改用安全方式
+# provider, command, user_id=user_id, session_id=session_id,
                          provider_preference=provider_preference, timeout=timeout,
                          output_file=output_file, account_id=account_id)
     

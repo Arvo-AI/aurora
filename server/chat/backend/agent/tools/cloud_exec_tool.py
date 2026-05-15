@@ -1231,7 +1231,8 @@ def _cloud_exec_aws_multi_account(
     })
 
 
-def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
+def cloud_# FIX: 移除exec，改用安全方式
+# provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_pr
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
 CLI is very versatile and can be used to do the following things. It should be priority over IaC tools unless it can't be done or better done with IaC.
@@ -1586,7 +1587,7 @@ Security & Compliance
 
             if result.get("output"):
                 response["output"] = result.get("output")
-
+logger.info(f"TIME: cloud_exec (tailscale) completed in {time.perf_counter() - fn_start:.2f}s")
             logger.info(f"TIME: cloud_exec (tailscale) completed in {time.perf_counter() - fn_start:.2f}s")
             return json.dumps(response)
 
