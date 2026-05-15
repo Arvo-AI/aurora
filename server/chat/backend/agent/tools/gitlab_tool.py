@@ -520,7 +520,12 @@ def _action_commit_terraform(
             try:
                 gitlab_api_request("DELETE", f"/projects/{encoded_project}/repository/branches/{quote(iac_branch, safe='')}", user_id)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to delete temporary IaC branch after commit failure (project=%s, branch=%s)",
+                    encoded_project,
+                    iac_branch,
+                    exc_info=True,
+                )
             return json.dumps({"status": "error", "error": f"GitLab commit failed: {resp['error']}"})
 
         # Open a Merge Request for review
