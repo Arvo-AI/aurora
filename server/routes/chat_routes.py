@@ -643,9 +643,11 @@ def get_chat_messages(user_id, session_id):
         new_msgs = messages[after:] if after < total else []
 
         # Pull citations from the latest assistant message (if any).
+        # Canonical sender for assistant rows in chat_sessions.messages is
+        # 'bot'; 'aurora' is accepted for legacy/MCP-bridge symmetry.
         citations = []
         for m in reversed(messages):
-            if m.get('sender') == 'aurora' and m.get('citations'):
+            if m.get('sender') in ('bot', 'aurora') and m.get('citations'):
                 citations = m['citations']
                 break
 

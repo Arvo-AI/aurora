@@ -45,8 +45,11 @@ def _validate_inputs(message: Any, session_id: Optional[str], mode: str, poll_on
         return {"error": "mode must be 'chat' or 'rca'"}
     if poll_only and not session_id:
         return {"error": "session_id is required when poll_only=True"}
-    if not poll_only and not isinstance(message, str):
-        return {"error": "message must be a string"}
+    if not poll_only:
+        if not isinstance(message, str):
+            return {"error": "message must be a string"}
+        if not message.strip():
+            return {"error": "message must be a non-empty string"}
     return None
 
 

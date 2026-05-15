@@ -62,6 +62,31 @@ def _first_connected(skills: List[str], user_id: str) -> Optional[str]:
 
 _SPEC_BY_NAME: Dict[str, GatedToolSpec] = {s.name: s for s in TIER2_TOOLS}
 
+# Defensive bounds on LLM-supplied numeric args. Tier-2 calls go through to
+# Datadog/Splunk/Jira so a hostile or sloppy caller could otherwise pass
+# negative values (Datadog returns 400, Splunk computes -X earliest = future)
+# or huge ones (forcing upstream paginate-and-return-everything semantics).
+_MIN_TIME_RANGE_MINUTES = 1
+_MAX_TIME_RANGE_MINUTES = 1440  # 24h — matches the longest window any caller asks for
+_MIN_LIMIT = 1
+_MAX_LIMIT = 500
+
+
+def _clamp_minutes(value: Any) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = 60
+    return max(_MIN_TIME_RANGE_MINUTES, min(v, _MAX_TIME_RANGE_MINUTES))
+
+
+def _clamp_limit(value: Any) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = 50
+    return max(_MIN_LIMIT, min(v, _MAX_LIMIT))
+
 
 def _resolve_source(
     tool_name: str, user_id: str, source: Optional[str]
@@ -102,9 +127,11 @@ async def _do_query_logs(
     chosen, err = _resolve_source("query_logs", user_id, source)
     if err is not None:
         return err
+    clamped_minutes = _clamp_minutes(time_range_minutes)
+    clamped_limit = _clamp_limit(limit)
     if chosen == "datadog":
-        from_iso, to_iso = _rfc3339_window(time_range_minutes)
-        body = {"query": query, "from": from_iso, "to": to_iso, "limit": limit}
+        from_iso, to_iso = _rfc3339_window(clamped_minutes)
+        body = {"query": query, "from": from_iso, "to": to_iso, "limit": clamped_limit}
         return truncate_payload(
             await api_call("POST", "/datadog/logs/search", body=body),
             tool_name="query_logs",
@@ -112,9 +139,9 @@ async def _do_query_logs(
     if chosen == "splunk":
         body = {
             "query": query,
-            "earliestTime": f"-{int(time_range_minutes)}m",
+            "earliestTime": f"-{clamped_minutes}m",
             "latestTime": "now",
-            "maxCount": limit,
+            "maxCount": clamped_limit,
         }
         return truncate_payload(
             await api_call("POST", "/splunk/search", body=body),
@@ -131,7 +158,7 @@ async def _do_query_metrics(
     spec = _SPEC_BY_NAME["query_metrics"]
     if not _check_skill_connected("datadog", user_id):
         return _not_connected_error(spec)
-    from_ms, to_ms = _epoch_ms_window(time_range_minutes)
+    from_ms, to_ms = _epoch_ms_window(_clamp_minutes(time_range_minutes))
     return truncate_payload(
         await api_call(
             "POST", "/datadog/metrics/query",
@@ -151,7 +178,7 @@ async def _do_query_alerts(
     if not path:
         return {"error": "unsupported_source", "source": chosen}
     return truncate_payload(
-        await api_call("GET", path, params={"limit": limit}),
+        await api_call("GET", path, params={"limit": _clamp_limit(limit)}),
         tool_name="query_alerts",
     )
 
@@ -169,7 +196,7 @@ async def _do_query_jira(
         return truncate_payload(
             await api_call(
                 "POST", "/jira/search",
-                body={"jql": jql, "maxResults": max_results},
+                body={"jql": jql, "maxResults": _clamp_limit(max_results)},
             ),
             tool_name="query_jira",
         )

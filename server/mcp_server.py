@@ -221,10 +221,17 @@ async def _api(
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         try:
-            detail = exc.response.json()
+            detail: Any = exc.response.json()
         except (ValueError, httpx.ResponseNotRead):
-            detail = {"error": exc.response.text[:500]}
-        raise ValueError(f"Aurora API returned {code}: {detail}") from exc
+            detail = exc.response.text[:500]
+        # Full upstream body stays in the server log; the proxy error
+        # surfaced to the MCP client carries only the status code so
+        # accidental leakage from any upstream route can't escape here.
+        logger.warning(
+            "Aurora API %s %s returned %s: %s",
+            method, path, code, detail,
+        )
+        raise ValueError(f"Aurora API returned status {code}") from exc
     return resp.json()
 
 
