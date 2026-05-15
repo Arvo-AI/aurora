@@ -85,12 +85,29 @@ async def _do_ask_incident(api_call: ApiCall, incident_id: str, question: str) -
     }
 
 
-async def _do_trigger_rca(api_call: ApiCall, incident_id: str) -> Dict[str, Any]:
+async def _do_regenerate_rca(api_call: ApiCall, incident_id: str) -> Dict[str, Any]:
     async with asyncio.timeout(_RCA_TRIGGER_TIMEOUT):
         result = await api_call(
             "POST",
             f"/api/incidents/{incident_id}/postmortem/regenerate",
         )
+    return truncate_payload(result, tool_name="regenerate_rca")
+
+
+async def _do_trigger_rca(
+    api_call: ApiCall,
+    issue_description: str,
+    title: str,
+    service: str,
+    severity: str,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"issue_description": issue_description, "severity": severity}
+    if title:
+        body["title"] = title
+    if service:
+        body["service"] = service
+    async with asyncio.timeout(_RCA_TRIGGER_TIMEOUT):
+        result = await api_call("POST", "/api/incidents/trigger-rca", body=body)
     return truncate_payload(result, tool_name="trigger_rca")
 
 
@@ -202,13 +219,46 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         return await _do_ask_incident(api_call, incident_id, question)
 
     @mcp.tool()
-    async def trigger_rca(incident_id: str) -> Dict[str, Any]:
-        """Re-trigger Aurora's RCA/postmortem pipeline for an incident. Aurora
-        will re-run the investigation and rewrite the postmortem with refreshed
-        citations. Backed by the postmortem regenerate route — Aurora's RCA
-        pipeline writes its output into the postmortem, so regenerating the
-        postmortem effectively re-runs the RCA."""
-        return await _do_trigger_rca(api_call, incident_id)
+    async def regenerate_rca(incident_id: str) -> Dict[str, Any]:
+        """Re-run RCA for an EXISTING incident. Re-investigates and rewrites
+        the postmortem with refreshed citations. Use this when an incident
+        already exists (e.g. surfaced via list_incidents) and you want a
+        fresh pass. To start an RCA from a free-text description with no
+        existing incident, use `trigger_rca` instead."""
+        return await _do_regenerate_rca(api_call, incident_id)
+
+    @mcp.tool()
+    async def trigger_rca(
+        issue_description: str,
+        title: str = "",
+        service: str = "",
+        severity: str = "medium",
+    ) -> Dict[str, Any]:
+        """Start a NEW RCA from a free-text problem description. Creates an
+        incident record and dispatches Aurora's full background investigation
+        across all connected integrations — the same pipeline used by the
+        UI's RCA button and by webhook-triggered alerts. Returns the new
+        `incident_id` and a `rca_session_id` to track progress.
+
+        Use this when the user describes an issue and there is no existing
+        Aurora incident for it yet. If an incident already exists, prefer
+        `regenerate_rca(incident_id)` instead.
+
+        Args:
+          issue_description: REQUIRED. What the user is seeing — symptoms,
+            timing, affected surface. The agent will use this as the seed.
+          title: Optional short title, e.g. "API latency spike". If empty,
+            one is derived from `issue_description`.
+          service: Optional affected service name if identifiable.
+          severity: One of "critical", "high", "medium" (default), "low".
+        """
+        return await _do_trigger_rca(
+            api_call,
+            issue_description=issue_description,
+            title=title,
+            service=service,
+            severity=severity,
+        )
 
     @mcp.tool()
     async def knowledge_base_search(query: str, limit: int = 5) -> Dict[str, Any]:

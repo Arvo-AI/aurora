@@ -39,7 +39,7 @@ def register_prompts(mcp) -> None:
             "4. Check recent deploys via call_tool('github_list_branches', ...) "
             "or query_bitbucket\n"
             "5. Decide: real incident or known noise? Recommend next step "
-            "(page on-call, snooze, or trigger_rca)"
+            "(page on-call, snooze, or trigger_rca(issue_description=…))"
         )
 
     @mcp.prompt()
