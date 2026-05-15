@@ -118,24 +118,15 @@ def initialize_tables():
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()  # No RLS needed — schema migration/DDL
 
-            # Try to acquire advisory lock (non-blocking)
+            # Try to acquire advisory lock (non-blocking).
+            # If another gunicorn worker is already running init, just skip —
+            # all DDL is idempotent (IF NOT EXISTS / IF EXISTS).
             cursor.execute("SELECT pg_try_advisory_lock(1234567890);")
             lock_acquired = cursor.fetchone()[0]
-            
+
             if not lock_acquired:
-                # Lock is held - likely by a dead process. Force release stale locks.
-                logging.warning("Advisory lock held by another process, clearing stale locks...")
-                cursor.execute("""
-                    SELECT pg_terminate_backend(pid) 
-                    FROM pg_locks 
-                    WHERE locktype = 'advisory' AND objid = 1234567890 AND pid != pg_backend_pid();
-                """)
-                conn.commit()
-                
-                # Now acquire the lock properly
-                cursor.execute("SELECT pg_advisory_lock(1234567890);")
-                lock_acquired = True
-                logging.info("Advisory lock acquired after clearing stale locks")
+                logging.info("Advisory lock held by another worker, skipping init (already in progress).")
+                return
 
             # Define table creation scripts.
             create_tables = {
