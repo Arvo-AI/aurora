@@ -63,8 +63,18 @@ export function useConnectorStatus(
       else if (connector.id === "pagerduty") checkPagerDutyStatus();
       else if (connector.id === "onprem") checkVmConfigStatus();
     };
+    const allowedOrigins = new Set<string>();
+    allowedOrigins.add(window.location.origin);
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+    if (backendUrl) {
+      try {
+        allowedOrigins.add(new URL(backendUrl).origin);
+      } catch {
+        /* ignore malformed env */
+      }
+    }
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
+      if (!allowedOrigins.has(event.origin)) return;
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success' && connector.id === 'github') {
         check();

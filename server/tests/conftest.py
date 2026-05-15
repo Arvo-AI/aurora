@@ -96,7 +96,13 @@ def app_config() -> Any:
             webhook_url="https://example.test/github/webhook",
             setup_url="https://example.test/github/app/install/callback",
         )
-    return SimpleNamespace(app_id=1, client_id="Iv1.test")
+    return SimpleNamespace(
+        app_id=1,
+        client_id="Iv1.test",
+        enabled=True,
+        webhook_url="https://example.test/github/webhook",
+        setup_url="https://example.test/github/app/install/callback",
+    )
 
 
 @pytest.fixture(scope="function")
@@ -146,13 +152,18 @@ def _try_postgres_connection() -> Any:
         return None
 
     try:
-        return _psycopg2.connect(
-            host=host,
-            port=int(port),
-            dbname=os.getenv("POSTGRES_DB", "aurora_db"),
-            user=os.getenv("POSTGRES_USER", "aurora"),
-            password=os.getenv("POSTGRES_PASSWORD", ""),
-        )
+        params: dict[str, Any] = {
+            "host": host,
+            "port": int(port),
+            "dbname": os.getenv("POSTGRES_DB", "aurora_db"),
+            "user": os.getenv("POSTGRES_USER", "aurora"),
+            "password": os.getenv("POSTGRES_PASSWORD", ""),
+            "sslmode": os.getenv("POSTGRES_SSLMODE", "prefer"),
+        }
+        sslrootcert = os.getenv("POSTGRES_SSLROOTCERT")
+        if sslrootcert:
+            params["sslrootcert"] = sslrootcert
+        return _psycopg2.connect(**params)
     except Exception:
         return None
 

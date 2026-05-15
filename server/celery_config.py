@@ -1,4 +1,5 @@
 from celery import Celery
+import importlib
 import os
 import logging
 from dotenv import load_dotenv
@@ -210,7 +211,7 @@ except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
 
 try:
-    import tasks.github_webhook_tasks  # noqa: F401
+    importlib.import_module("tasks.github_webhook_tasks")
     logging.info("GitHub webhook dispatcher task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")

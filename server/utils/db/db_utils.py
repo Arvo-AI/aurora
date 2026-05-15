@@ -1339,13 +1339,37 @@ def initialize_tables():
                 cursor.execute(
                     "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
                 )
+                cursor.execute(
+                    """UPDATE github_connected_repos r
+                          SET installation_id = NULL
+                        WHERE installation_id IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM github_installations i
+                               WHERE i.installation_id = r.installation_id
+                          );"""
+                )
+                cursor.execute(
+                    """DO $$
+                       BEGIN
+                           IF NOT EXISTS (
+                               SELECT 1 FROM pg_constraint
+                                WHERE conname = 'github_connected_repos_installation_id_fkey'
+                           ) THEN
+                               ALTER TABLE github_connected_repos
+                                   ADD CONSTRAINT github_connected_repos_installation_id_fkey
+                                   FOREIGN KEY (installation_id)
+                                   REFERENCES github_installations(installation_id)
+                                   ON DELETE SET NULL;
+                           END IF;
+                       END $$;"""
+                )
                 conn.commit()
                 logging.info(
-                    "Ensured installation_id column exists on github_connected_repos table."
+                    "Ensured installation_id column + FK exist on github_connected_repos table."
                 )
             except Exception as e:
                 logging.warning(
-                    f"Error adding installation_id column to github_connected_repos: {e}"
+                    f"Error adding installation_id column/FK to github_connected_repos: {e}"
                 )
                 conn.rollback()
 

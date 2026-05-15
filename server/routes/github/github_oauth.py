@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 import flask
 import requests
 from flask import Blueprint, jsonify, request
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from utils.auth.github_auth_mode import (
     is_oauth_enabled,
@@ -39,6 +40,30 @@ github_oauth_bp = Blueprint("github_oauth", __name__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")
 GITHUB_TIMEOUT = 20
+_OAUTH_STATE_SALT = "aurora.github.oauth.state.v1"
+_OAUTH_STATE_TTL_SEC = 10 * 60
+
+
+def _state_serializer() -> URLSafeTimedSerializer:
+    secret = os.getenv("FLASK_SECRET_KEY") or flask.current_app.secret_key
+    if not secret:
+        raise RuntimeError("FLASK_SECRET_KEY is required to sign OAuth state")
+    return URLSafeTimedSerializer(secret, salt=_OAUTH_STATE_SALT)
+
+
+def _sign_state(user_id: str) -> str:
+    return _state_serializer().dumps({"user_id": user_id})
+
+
+def _verify_state(state: str) -> str | None:
+    try:
+        payload = _state_serializer().loads(state, max_age=_OAUTH_STATE_TTL_SEC)
+    except (BadSignature, SignatureExpired):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    user_id = payload.get("user_id")
+    return user_id if isinstance(user_id, str) and user_id else None
 
 
 def _oauth_disabled_response():
@@ -96,11 +121,25 @@ def github_login(user_id):
         else f"{request.host_url.rstrip('/')}/github/callback"
     )
 
+    try:
+        signed_state = _sign_state(user_id)
+    except RuntimeError:
+        logger.error("[GITHUB-OAUTH] FLASK_SECRET_KEY missing; cannot sign state")
+        return (
+            jsonify(
+                {
+                    "error": "Server is not configured to sign OAuth state",
+                    "error_code": "GITHUB_OAUTH_STATE_UNCONFIGURED",
+                }
+            ),
+            500,
+        )
+
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "scope": "repo,user",
-        "state": user_id,
+        "state": signed_state,
     }
     oauth_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
 
@@ -216,12 +255,21 @@ def github_callback():
     github_username = user_data.get("login")
     github_user_id = user_data.get("id")
 
-    aurora_user_id = request.args.get("state")
-    if not aurora_user_id:
-        logger.error("[GITHUB-OAUTH] callback missing state (Aurora user id)")
+    raw_state = request.args.get("state")
+    if not raw_state:
+        logger.error("[GITHUB-OAUTH] callback missing state")
         return flask.render_template(
             "github_callback_error.html",
             error="Missing state parameter",
+            frontend_url=FRONTEND_URL,
+        )
+
+    aurora_user_id = _verify_state(raw_state)
+    if not aurora_user_id:
+        logger.error("[GITHUB-OAUTH] callback state failed signature/expiry check")
+        return flask.render_template(
+            "github_callback_error.html",
+            error="Invalid or expired state parameter",
             frontend_url=FRONTEND_URL,
         )
 

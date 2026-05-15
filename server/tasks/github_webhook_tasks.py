@@ -980,9 +980,12 @@ def dispatch_github_webhook(
             type(exc).__name__,
             redact_token(str(exc)),
         )
-        _update_delivery_status(
-            delivery_id,
-            status="failed",
-            error=type(exc).__name__,
-        )
+        retries = getattr(self.request, "retries", 0) or 0
+        max_retries = getattr(self, "max_retries", 0) or 0
+        if retries >= max_retries:
+            _update_delivery_status(
+                delivery_id,
+                status="failed",
+                error=type(exc).__name__,
+            )
         raise self.retry(exc=exc)

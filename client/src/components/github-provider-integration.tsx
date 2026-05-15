@@ -384,7 +384,18 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     fetchInstallations();
     const handler = () => fetchInstallations();
+    const allowedOrigins = new Set<string>();
+    allowedOrigins.add(window.location.origin);
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+    if (backendUrl) {
+      try {
+        allowedOrigins.add(new URL(backendUrl).origin);
+      } catch {
+        /* ignore malformed env */
+      }
+    }
     const onMessage = (event: MessageEvent) => {
+      if (!allowedOrigins.has(event.origin)) return;
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') fetchInstallations();
     };

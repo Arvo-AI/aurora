@@ -11,6 +11,8 @@ from utils.auth.github_auth_router import (
     NoGitHubAuthError,
     get_any_auth_for_user,
 )
+from utils.auth.github_auth_mode import is_oauth_enabled
+from utils.auth.stateless_auth import get_credentials_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,16 @@ logger = logging.getLogger(__name__)
 class GetConnectedReposArgs(BaseModel):
     """No required args -- reads from user context."""
     pass
+
+
+def _user_has_oauth(user_id: str) -> bool:
+    if not is_oauth_enabled():
+        return False
+    try:
+        creds = get_credentials_from_db(user_id, "github")
+    except Exception:
+        return False
+    return bool(creds and creds.get("access_token"))
 
 
 def get_connected_repos(**kwargs) -> str:
@@ -35,6 +47,8 @@ def get_connected_repos(**kwargs) -> str:
     except Exception as e:
         logger.exception("Error resolving GitHub auth for user %s", user_id)
         return json.dumps({"error": f"Failed to resolve GitHub auth: {e}"})
+
+    user_has_oauth = _user_has_oauth(user_id)
 
     try:
         from utils.db.connection_pool import db_pool
@@ -56,23 +70,29 @@ def get_connected_repos(**kwargs) -> str:
                 )
                 rows = cur.fetchall()
 
-        if not rows:
-            return json.dumps({
-                "repos": [],
-                "message": "No GitHub repos connected. Ask the user to connect repos in Settings > Connectors > GitHub.",
-            })
-
-        repos = [
-            {
+        repos = []
+        for r in rows:
+            installation_id, has_active = r[5], r[6]
+            if installation_id is not None and has_active:
+                auth_method = "app"
+            elif user_has_oauth:
+                auth_method = "oauth"
+            else:
+                continue
+            repos.append({
                 "repo": r[0],
                 "branch": r[1] or "main",
                 "private": r[2],
                 "description": r[3] or ("(description generating...)" if r[4] != 'ready' else "(no description)"),
-                "installation_id": r[5],
-                "auth_method": "app" if (r[5] is not None and r[6]) else "oauth",
-            }
-            for r in rows
-        ]
+                "installation_id": installation_id if auth_method == "app" else None,
+                "auth_method": auth_method,
+            })
+
+        if not repos:
+            return json.dumps({
+                "repos": [],
+                "message": "No GitHub repos connected with usable auth. Ask the user to install the GitHub App on the relevant repos.",
+            })
         return json.dumps({"repos": repos})
     except Exception as e:
         logger.error(f"Error fetching connected repos: {e}", exc_info=True)

@@ -906,9 +906,9 @@ def github_status(user_id):
                     if row:
                         app_username = row[0]
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "[GITHUB-STATUS] DB read failed user=%s: %s",
-                user_id, exc, exc_info=True,
+                user_id, exc,
             )
             return jsonify({"connected": False, "error": "Failed to check status"}), 500
 
@@ -919,9 +919,9 @@ def github_status(user_id):
         try:
             creds = get_credentials_from_db(user_id, "github")
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "[GITHUB-STATUS] OAuth credential read failed user=%s: %s",
-                user_id, exc, exc_info=True,
+                user_id, exc,
             )
             return jsonify({"connected": False, "error": "Failed to check status"}), 500
 
