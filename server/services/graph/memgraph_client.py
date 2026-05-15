@@ -781,12 +781,11 @@ class MemgraphClient:
         """
         query = """
         MATCH (s:Service {user_id: $user_id, provider: $provider})
-        WITH s, count(s) AS deleted
         DETACH DELETE s
-        RETURN deleted;
+        RETURN count(s) AS deleted;
         """
         results = self._execute(query, {"user_id": user_id, "provider": provider})
-        deleted = sum(r["deleted"] for r in results) if results else 0
+        deleted = results[0]["deleted"] if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d Service nodes for user=%s provider=%s",
             deleted, sanitize(user_id), sanitize(provider),
@@ -801,12 +800,11 @@ class MemgraphClient:
         """
         query = """
         MATCH (s:Service {user_id: $user_id, provider: "kubectl", cluster_name: $cluster_name})
-        WITH s, count(s) AS deleted
         DETACH DELETE s
-        RETURN deleted;
+        RETURN count(s) AS deleted;
         """
         results = self._execute(query, {"user_id": user_id, "cluster_name": cluster_name})
-        deleted = sum(r["deleted"] for r in results) if results else 0
+        deleted = results[0]["deleted"] if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d Service nodes for user=%s cluster=%s",
             deleted, sanitize(user_id), sanitize(cluster_name),
@@ -821,12 +819,11 @@ class MemgraphClient:
         """
         query = """
         MATCH (s:Service {user_id: $user_id, provider: "aws", aws_account_id: $aws_account_id})
-        WITH s, count(s) AS deleted
         DETACH DELETE s
-        RETURN deleted;
+        RETURN count(s) AS deleted;
         """
         results = self._execute(query, {"user_id": user_id, "aws_account_id": aws_account_id})
-        deleted = sum(r["deleted"] for r in results) if results else 0
+        deleted = results[0]["deleted"] if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d Service nodes for user=%s aws_account=%s",
             deleted, sanitize(user_id), sanitize(aws_account_id),
@@ -854,12 +851,11 @@ class MemgraphClient:
         query = """
         MATCH (s:Service {user_id: $user_id, stale: true})
         WHERE s.updated_at < localDateTime() - duration({days: $days})
-        WITH s, count(s) AS deleted
         DETACH DELETE s
-        RETURN deleted;
+        RETURN count(s) AS deleted;
         """
         results = self._execute(query, {"user_id": user_id, "days": stale_days})
-        deleted = sum(r["deleted"] for r in results) if results else 0
+        deleted = results[0]["deleted"] if results else 0
         logger.info(
             "[MemgraphClient] Deleted %d stale Service nodes (>%dd) for user=%s",
             deleted, stale_days, sanitize(user_id),

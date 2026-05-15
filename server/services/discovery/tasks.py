@@ -33,9 +33,9 @@ def _query_connected_providers(cur, user_id=None, conn=None):
                 WHERE (user_id = %s OR org_id = %s) AND status = 'active' AND provider IN %s
                 UNION
                 SELECT provider FROM user_tokens
-                WHERE user_id = %s AND is_active = true AND provider IN %s
+                WHERE (user_id = %s OR org_id = %s) AND is_active = true AND provider IN %s
             ) AS connected
-        """, (user_id, org_id, SUPPORTED_PROVIDERS, user_id, SUPPORTED_PROVIDERS))
+        """, (user_id, org_id, SUPPORTED_PROVIDERS, user_id, org_id, SUPPORTED_PROVIDERS))
         return [row[0] for row in cur.fetchall()]
     else:
         # No RLS needed — cross-org loop sets RLS per user
@@ -55,9 +55,9 @@ def _query_connected_providers(cur, user_id=None, conn=None):
                     WHERE (user_id = %s OR org_id = %s) AND status = 'active' AND provider IN %s
                     UNION
                     SELECT provider FROM user_tokens
-                    WHERE user_id = %s AND is_active = true AND provider IN %s
+                    WHERE (user_id = %s OR org_id = %s) AND is_active = true AND provider IN %s
                 ) AS connected
-            """, (uid, org_id, SUPPORTED_PROVIDERS, uid, SUPPORTED_PROVIDERS))
+            """, (uid, org_id, SUPPORTED_PROVIDERS, uid, org_id, SUPPORTED_PROVIDERS))
             for row in cur.fetchall():
                 results.append((uid, row[0]))
         return results

@@ -348,7 +348,10 @@ def workspace_cleanup(user_id, workspace_id):
         # Delete discovered infrastructure nodes from Memgraph
         try:
             from services.graph.memgraph_client import get_memgraph_client
-            get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            if account_id:
+                get_memgraph_client().delete_services_for_aws_account(user_id, account_id)
+            else:
+                get_memgraph_client().delete_services_for_provider(user_id, "aws")
         except Exception as e:
             logger.warning(
                 "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
