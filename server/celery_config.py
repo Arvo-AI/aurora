@@ -64,7 +64,7 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_time_limit=(60*60*3),  # 3 hour timeout
-    worker_max_tasks_per_child=1,  # Restart worker after each task
+    worker_max_tasks_per_child=50,  # Restart worker periodically to reclaim memory
     worker_prefetch_multiplier=1,  # Process one task at a time
     broker_connection_retry_on_startup=True,  # Explicitly enable for Celery 6.0+
     result_expires=3600,  # Expire task results after 1 hour (backend= is set above)

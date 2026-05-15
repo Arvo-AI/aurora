@@ -513,16 +513,17 @@ def get_connected_providers(user_id: str) -> List[str]:
     org_id = resolve_org_id(user_id)
     connected_providers = []
     
+    conn = None
     try:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         set_rls_context(cursor, conn, user_id, log_prefix="[ConnectedProviders]")
-        
+
         # Check user_tokens table (OAuth/secret-based providers)
         cursor.execute(
             """
             SELECT DISTINCT provider
-            FROM user_tokens 
+            FROM user_tokens
             WHERE (user_id = %s OR org_id = %s)
               AND secret_ref IS NOT NULL AND is_active = TRUE
             """,
@@ -530,7 +531,7 @@ def get_connected_providers(user_id: str) -> List[str]:
         )
         token_providers = [row[0] for row in cursor.fetchall()]
         connected_providers.extend(token_providers)
-        
+
         # Check user_connections table (role-based connections like AWS)
         cursor.execute(
             """
@@ -542,18 +543,23 @@ def get_connected_providers(user_id: str) -> List[str]:
         )
         connection_providers = [row[0] for row in cursor.fetchall()]
         connected_providers.extend(connection_providers)
-        
+
         cursor.close()
-        conn.close()
-        
+
         # Remove duplicates and return sorted list
         unique_providers = sorted(list(set(connected_providers)))
         logger.debug(f"Found connected providers for user {user_id}: {unique_providers}")
         return unique_providers
-        
+
     except Exception as e:
         logger.error(f"Error getting connected providers for user {user_id}: {e}")
         return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_user_email(user_id: str) -> Optional[str]:

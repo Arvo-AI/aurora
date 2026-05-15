@@ -45,9 +45,11 @@ class DatabaseConnectionPool:
             if pg_sslrootcert:
                 self.db_params['sslrootcert'] = pg_sslrootcert
 
-        # Connection pool configuration
-        self.min_connections = 1
-        self.max_connections = 50
+        # Connection pool configuration — keep max low so 5 services
+        # (server, chatbot, celery_worker, celery_beat, mcp) don't exceed
+        # PostgreSQL's default max_connections (100).
+        self.min_connections = int(os.getenv('DB_POOL_MIN', '1'))
+        self.max_connections = int(os.getenv('DB_POOL_MAX', '10'))
 
         # Single connection pool
         self._pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
