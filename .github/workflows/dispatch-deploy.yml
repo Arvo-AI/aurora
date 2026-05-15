@@ -1,0 +1,124 @@
+name: Dispatch Deploy
+
+on:
+  workflow_run:
+    workflows: ["Publish Docker Images"]
+    types: [completed]
+
+jobs:
+  dispatch-staging:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Compute image tag
+        id: tag
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          SHORT_SHA=$(echo "$HEAD_SHA" | cut -c1-7)
+          echo "image_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Image tag: sha-$SHORT_SHA"
+
+      - name: Verify images exist in GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          for i in $(seq 1 12); do
+            if gh api "orgs/Arvo-AI/packages/container/aurora-server/versions" --jq ".[].metadata.container.tags[]" 2>/dev/null | grep -qF "$IMAGE_TAG" && \
+               gh api "orgs/Arvo-AI/packages/container/aurora-frontend/versions" --jq ".[].metadata.container.tags[]" 2>/dev/null | grep -qF "$IMAGE_TAG"; then
+              echo "Both images verified with tag $IMAGE_TAG"
+              exit 0
+            fi
+            echo "Waiting for images to propagate (attempt $i/12)..."
+            sleep 5
+          done
+          echo "::error::Images with tag $IMAGE_TAG not found after 60s"
+          exit 1
+
+      - name: Dispatch to staging
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh api repos/Arvo-AI/aurora-saas-prod/dispatches \
+              -f event_type=deploy-staging \
+              -f "client_payload[image_tag]=$IMAGE_TAG" \
+              -f "client_payload[source_sha]=$HEAD_SHA" \
+              -f "client_payload[source_ref]=$HEAD_BRANCH"; then
+              echo "Dispatch succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::All dispatch attempts failed"
+          exit 1
+
+  dispatch-prod:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Extract version and tag
+        id: version
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          VERSION="${HEAD_BRANCH#v}"
+          SHORT_SHA=$(echo "$HEAD_SHA" | cut -c1-7)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "image_tag=sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION, Image tag: sha-$SHORT_SHA"
+
+      - name: Verify images exist in GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
+        run: |
+          for i in $(seq 1 12); do
+            if gh api "orgs/Arvo-AI/packages/container/aurora-server/versions" --jq ".[].metadata.container.tags[]" 2>/dev/null | grep -qF "$IMAGE_TAG" && \
+               gh api "orgs/Arvo-AI/packages/container/aurora-frontend/versions" --jq ".[].metadata.container.tags[]" 2>/dev/null | grep -qF "$IMAGE_TAG"; then
+              echo "Both images verified with tag $IMAGE_TAG"
+              exit 0
+            fi
+            echo "Waiting for images to propagate (attempt $i/12)..."
+            sleep 5
+          done
+          echo "::error::Images with tag $IMAGE_TAG not found after 60s"
+          exit 1
+
+      - name: Dispatch to production
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh api repos/Arvo-AI/aurora-saas-prod/dispatches \
+              -f event_type=deploy-prod \
+              -f "client_payload[image_tag]=$IMAGE_TAG" \
+              -f "client_payload[version]=$VERSION" \
+              -f "client_payload[source_sha]=$HEAD_SHA"; then
+              echo "Dispatch succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::All dispatch attempts failed"
+          exit 1
