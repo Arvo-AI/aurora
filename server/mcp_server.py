@@ -224,7 +224,7 @@ async def _api(
             detail = exc.response.json()
         except (ValueError, httpx.ResponseNotRead):
             detail = {"error": exc.response.text[:500]}
-        raise ValueError(f"Aurora API returned {code}: {detail}")
+        raise ValueError(f"Aurora API returned {code}: {detail}") from exc
     return resp.json()
 
 
@@ -269,8 +269,16 @@ register_prompts(mcp)
 # Per-request tool-list filtering — hides Tier-2 tools the user can't use.
 #
 # In stateless_http=True FastMCP can't push notifications/tools/list_changed,
-# but we can still override list_tools to filter on every request. The bearer
-# token is set by BearerTokenMiddleware before list_tools fires.
+# but we can still re-register the lowlevel ListToolsRequest handler to filter
+# on every request. The bearer token is set by BearerTokenMiddleware before
+# list_tools fires.
+#
+# Reassigning `mcp.list_tools` is NOT enough: FastMCP's _setup_handlers() runs
+# in __init__ and captures the bound method at registration time via
+# `self._mcp_server.list_tools()(self.list_tools)`. The dispatcher invokes
+# the captured method, not whatever later replaces the attribute. We re-call
+# that decorator here so request_handlers[ListToolsRequest] points at the
+# filtered version.
 # ---------------------------------------------------------------------------
 
 from aurora_mcp.registry import (  # noqa: E402
@@ -279,9 +287,10 @@ from aurora_mcp.registry import (  # noqa: E402
 )
 
 _GATED_NAMES = {spec.name: spec for spec in TIER2_TOOLS}
-_original_list_tools = mcp.list_tools  # bound method
+_original_list_tools = mcp.list_tools  # bound method captured before re-register
 
 
+@mcp._mcp_server.list_tools()
 async def _filtered_list_tools():  # type: ignore[no-redef]
     all_tools = await _original_list_tools()
     # If the token isn't set yet (e.g. a probe before identifier injection),
@@ -305,9 +314,6 @@ async def _filtered_list_tools():  # type: ignore[no-redef]
         if gated_tool_visible(spec, user_id):
             filtered.append(t)
     return filtered
-
-
-mcp.list_tools = _filtered_list_tools  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
