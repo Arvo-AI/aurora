@@ -144,12 +144,34 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         sources. Prefer this over calling individual tools unless the user explicitly
         asks for raw data from a specific source.
 
+        SESSION THREADING — READ THIS BEFORE CALLING:
+        Aurora chats are session-scoped. Every call returns a `session_id` in the
+        result. For ANY follow-up turn in the same conversation (clarifications,
+        next steps, "and also…", "what about X?", re-asking after a partial
+        answer, polling, etc.) you MUST pass that `session_id` back. Omit it
+        ONLY when the user clearly starts an unrelated new topic. When in
+        doubt, reuse the last `session_id` — Aurora has its own memory and
+        will branch naturally; starting a fresh session loses all prior
+        context, tools, citations, and is almost always the wrong default.
+
+        Concretely:
+          • First turn:  chat_with_aurora(message="…")  → note result.session_id
+          • Follow-up:   chat_with_aurora(message="…", session_id="<that id>")
+          • Status was "in_progress": chat_with_aurora(session_id="<that id>", poll_only=True)
+
         Args:
           message: User question. Ignored when poll_only=True.
-          session_id: Continue an existing chat. Omit on the first call.
+          session_id: The `session_id` from the previous chat_with_aurora result.
+            REQUIRED on every follow-up turn in the same conversation. Omit
+            only to deliberately start a new, unrelated chat.
           mode: "chat" (default) or "rca" for the deeper RCA pipeline.
-          poll_only: True to resume polling a still-running session without sending
-            a new turn. Requires session_id.
+          poll_only: True to resume polling a still-running session without
+            sending a new turn. Requires session_id.
+
+        Returns: dict with `session_id` (always — keep this for the next call),
+          `status` ("complete" | "in_progress" | "error" | "cancelled" | "failed"),
+          and either `response` + `citations` (complete), `partial` + `hint`
+          (in_progress), or `error` (terminal failure).
         """
         result = await _chat_with_aurora(
             api_call, message=message, session_id=session_id,

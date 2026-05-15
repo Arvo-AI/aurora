@@ -71,6 +71,34 @@ def _save_ui_message(session_id: str, user_id: str, ui_messages: List[Dict[str, 
         result = cursor.fetchone()
         if result and result[0]:
             existing_messages = result[0] if isinstance(result[0], list) else []
+
+            # Dedupe: the REST POST /chat_api/sessions/<id>/messages route
+            # already appends the user message before dispatching the workflow,
+            # so by the time we run we'd be appending an exact duplicate. Skip
+            # if the last persisted message is the same user text. Mirrors the
+            # end-of-turn dedupe at workflow.py `_append_new_turn_ui_messages`.
+            new_msg = ui_messages[0]
+            if (
+                existing_messages
+                and new_msg.get('sender') == 'user'
+                and existing_messages[-1].get('sender') == 'user'
+                and (existing_messages[-1].get('text') or '') == (new_msg.get('text') or '')
+            ):
+                # Backfill message_number on the route's insert if missing,
+                # so the UI's numbering stays contiguous.
+                if not existing_messages[-1].get('message_number'):
+                    existing_messages[-1]['message_number'] = len(existing_messages)
+                    cursor.execute(
+                        "UPDATE chat_sessions SET messages = %s, updated_at = %s "
+                        "WHERE id = %s AND user_id = %s",
+                        (json.dumps(existing_messages), datetime.now(), session_id, user_id),
+                    )
+                    conn.commit()
+                cursor.close()
+                conn.close()
+                logger.info(f"Skipped duplicate user message in session {session_id} (already persisted by REST route)")
+                return True
+
             # Append new message with proper numbering
             ui_messages[0]['message_number'] = len(existing_messages) + 1
             existing_messages.extend(ui_messages)

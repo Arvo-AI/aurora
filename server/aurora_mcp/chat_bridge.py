@@ -163,6 +163,8 @@ async def chat_with_aurora(
         "partial": latest_partial or "",
         "hint": (
             "Aurora is still working. Call chat_with_aurora again with "
-            "session_id and poll_only=True to continue polling."
+            f"session_id='{sid}' and poll_only=True to continue polling. "
+            "Reuse this same session_id for any follow-up turn — do not "
+            "start a new session."
         ),
     }
