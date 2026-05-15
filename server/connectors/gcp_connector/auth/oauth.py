@@ -21,31 +21,9 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-
-def _read_env(name: str) -> str | None:
-    """Read ``name`` from env, stripping surrounding quotes + whitespace.
-
-    Some operator .env files wrap OAuth credentials in literal double or
-    single quotes (e.g. ``CLIENT_ID="..."``). Most env loaders strip
-    those, but not all paths do — Compose v1, raw ``export``, and
-    interactive shells can preserve them. A quoted client_id breaks
-    Google's authorize endpoint with ``Missing required parameter:
-    client_id`` because the URL ends up containing literal quotes.
-    Strip them defensively so the build doesn't depend on which loader
-    happened to read the file.
-    """
-    value = os.getenv(name)
-    if value is None:
-        return None
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-        value = value[1:-1]
-    return value or None
-
-
 # OAuth Configuration
-CLIENT_ID = _read_env("CLIENT_ID")
-CLIENT_SECRET = _read_env("CLIENT_SECRET")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
 backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
 if not backend_url:

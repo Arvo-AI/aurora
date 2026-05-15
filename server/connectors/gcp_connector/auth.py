@@ -15,26 +15,8 @@ logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 # Silence any remaining ResourceWarning traces (typically dangling SSL sockets)
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
-def _read_env(name: str) -> str | None:
-    """Read ``name`` from env, stripping surrounding quotes + whitespace.
-
-    Some operator .env files wrap OAuth credentials in literal quotes
-    (e.g. ``CLIENT_ID="..."``). Most loaders strip them, but Compose v1,
-    raw ``export``, and some interactive shells preserve them, breaking
-    Google's authorize endpoint with ``Missing required parameter:
-    client_id``. Strip defensively.
-    """
-    value = os.getenv(name)
-    if value is None:
-        return None
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-        value = value[1:-1]
-    return value or None
-
-
-CLIENT_ID = _read_env("CLIENT_ID")
-CLIENT_SECRET = _read_env("CLIENT_SECRET")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/auth"
