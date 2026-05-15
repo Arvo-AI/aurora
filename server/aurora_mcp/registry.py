@@ -14,8 +14,11 @@ are intentionally excluded.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +686,10 @@ def _check_skill_connected(skill_id: str, user_id: str) -> bool:
         is_connected, _ = SkillRegistry.get_instance().check_connection(skill_id, user_id)
         return bool(is_connected)
     except Exception:
+        logger.warning(
+            "skill connection check failed for skill_id=%s user_id=%s",
+            skill_id, user_id, exc_info=True,
+        )
         return False
 
 

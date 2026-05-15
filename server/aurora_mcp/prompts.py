@@ -22,11 +22,11 @@ def register_prompts(mcp) -> None:
         """Analyze the blast radius of a failing service."""
         return (
             f"Analyze the blast radius for service '{service_name}'.\n"
-            "1. Use chat_with_aurora('what depends on {service_name}?')\n"
-            "2. list_incidents to check for active incidents on affected services\n"
-            "3. Summarize: which services are at risk, estimated user impact,"
-            " mitigation steps"
-        ).replace("{service_name}", service_name)
+            f"1. Use chat_with_aurora('what depends on {service_name}?')\n"
+            f"2. list_incidents to check for active incidents on affected services\n"
+            f"3. Summarize: which services are at risk, estimated user impact,"
+            f" mitigation steps"
+        )
 
     @mcp.prompt()
     def triage_alert(alert_id: str) -> str:

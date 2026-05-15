@@ -40,7 +40,7 @@ async def _do_catalog_skills(user_id: str) -> Dict[str, Any]:
         out: List[Dict[str, Any]] = []
         for skill_id in reg.get_all_skill_ids():
             connected, _ = reg.check_connection(skill_id, user_id)
-            meta = reg._skills.get(skill_id)  # noqa: SLF001
+            meta = reg.get_skill_metadata(skill_id)
             out.append(_shape_skill_entry(skill_id, meta, connected))
         return truncate_payload({"skills": out}, tool_name="catalog/skills")
     except Exception as e:
@@ -79,11 +79,12 @@ async def _do_runbooks_index(api_call: ApiCall) -> Dict[str, Any]:
         *(api_call("GET", path) for _, path in sources),
         return_exceptions=True,
     )
-    out = [
-        {"source": name, "items": res}
-        for (name, _), res in zip(sources, results)
-        if not isinstance(res, Exception)
-    ]
+    out = []
+    for (name, _), res in zip(sources, results):
+        if isinstance(res, Exception):
+            logger.warning("runbooks/index source %s failed: %s", name, res)
+            continue
+        out.append({"source": name, "items": res})
     return truncate_payload({"sources": out}, tool_name="runbooks/index")
 
 

@@ -156,6 +156,25 @@ def _get_token() -> str:
 _http_client: Optional[httpx.AsyncClient] = None
 
 
+def _shutdown_http_client() -> None:
+    """Close the shared httpx.AsyncClient on process exit.
+
+    We schedule .aclose() on a fresh event loop because atexit handlers run
+    after the main loop is gone. Best-effort — swallow failures so shutdown
+    doesn't block on a half-torn-down runtime.
+    """
+    client = _http_client
+    if client is None or client.is_closed:
+        return
+    try:
+        asyncio.run(client.aclose())
+    except Exception:
+        logger.debug("error closing shared httpx client at exit", exc_info=True)
+
+
+atexit.register(_shutdown_http_client)
+
+
 def _get_http_client() -> httpx.AsyncClient:
     """Lazily build a long-lived httpx client with keepalive pooling.
 
@@ -203,7 +222,7 @@ async def _api(
         code = exc.response.status_code
         try:
             detail = exc.response.json()
-        except Exception:
+        except (ValueError, httpx.ResponseNotRead):
             detail = {"error": exc.response.text[:500]}
         raise ValueError(f"Aurora API returned {code}: {detail}")
     return resp.json()
@@ -271,6 +290,10 @@ async def _filtered_list_tools():  # type: ignore[no-redef]
         token = _current_bearer_token.get()
         user_id, _org_id = _resolve_token(token)
     except Exception:
+        logger.exception(
+            "failed to resolve bearer token in _filtered_list_tools — "
+            "falling back to always-on tools only"
+        )
         return [t for t in all_tools if t.name not in _GATED_NAMES]
 
     filtered = []
