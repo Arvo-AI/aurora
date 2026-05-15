@@ -19,11 +19,14 @@ import requests
 from flask import Blueprint, jsonify
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
+_LOG_PREFIX = "[ConnectorStatus]"
+
+from utils.splunk_config import SPLUNK_SSL_VERIFY
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
@@ -39,6 +42,7 @@ def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT 1 FROM user_tokens
                        WHERE (user_id = %s OR org_id = %s)
@@ -112,7 +116,7 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
             f"{base_url}/services/server/info?output_mode=json",
             headers={"Authorization": f"Bearer {api_token}"},
             timeout=HTTP_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
         r.raise_for_status()
         return {"connected": True, "baseUrl": base_url}
@@ -442,6 +446,25 @@ def _check_sharepoint(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_notion(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validates Notion connection via GET /v1/users/me; handles OAuth refresh."""
+    from connectors.notion_connector.client import NotionClient, NotionAuthExpiredError
+    uid = creds.get("_user_id")
+    if not uid:
+        return {"connected": False}
+    try:
+        NotionClient(uid).get_self()
+        return {
+            "connected": True,
+            "workspaceName": creds.get("workspace_name"),
+            "authType": creds.get("type", "oauth"),
+        }
+    except NotionAuthExpiredError:
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_spinnaker(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /spinnaker/status — validates via Spinnaker Gate API."""
     try:
@@ -603,6 +626,22 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True}
 
 
+def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """GCP credential-existence check that also surfaces the auth mode
+    (OAuth vs service-account) so the frontend can label the connection.
+    """
+    from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+
+    auth_type = get_gcp_auth_type(creds)
+    response: Dict[str, Any] = {"connected": True, "authType": auth_type}
+    if auth_type == GCP_AUTH_TYPE_SA:
+        if creds.get("client_email"):
+            response["clientEmail"] = creds["client_email"]
+        if creds.get("default_project_id"):
+            response["defaultProjectId"] = creds["default_project_id"]
+    return response
+
+
 def _check_newrelic(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validate New Relic credentials via NerdGraph user query."""
     api_key = creds.get("api_key")
@@ -634,6 +673,34 @@ def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True, "spaceName": creds.get("space_name")}
 
 
+def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate Sentry credentials by hitting the org endpoint."""
+    auth_token = creds.get("auth_token")
+    org_slug = creds.get("org_slug")
+    if not auth_token or not org_slug:
+        return {"connected": False}
+    region = (creds.get("region") or "us").strip().lower()
+    base_url = "https://de.sentry.io" if region == "eu" else "https://sentry.io"
+    try:
+        r = requests.get(
+            f"{base_url}/api/0/organizations/{org_slug}/",
+            headers={"Authorization": f"Bearer {auth_token}", "Accept": "application/json"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code == 200:
+            data = r.json() if r.content else {}
+            return {
+                "connected": True,
+                "orgSlug": org_slug,
+                "orgName": data.get("name"),
+                "region": region,
+                "hasWebhookSecret": bool(creds.get("client_secret")),
+            }
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 # ── Provider checker registry ──────────────────────────────────────
 
 
@@ -655,16 +722,18 @@ PROVIDER_CHECKERS = {
     "scaleway": _check_scaleway,
     "ovh": _check_ovh,
     "sharepoint": _check_sharepoint,
+    "notion": _check_notion,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
     "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
+    "sentry": _check_sentry,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
-    "gcp": _check_credentials_only,
+    "gcp": _check_gcp_credentials,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,
 }
@@ -673,7 +742,7 @@ PROVIDER_CHECKERS = {
 # ── Route + batch logic ─────────────────────────────────────────────
 
 
-@connector_status_bp.route("/api/connectors/status", methods=["GET", "OPTIONS"])
+@connector_status_bp.route("/api/connectors/status", methods=["GET"])
 @require_permission("connectors", "read")
 def all_connector_status(user_id):
     org_id = get_org_id_from_request() or ""
@@ -691,6 +760,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
             cursor.execute(
                 """
                 SELECT DISTINCT ON (provider) provider, user_id
@@ -731,6 +801,7 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
                 with fallback_conn.cursor() as cur:
+                    set_rls_context(cur, fallback_conn, user_id, log_prefix=_LOG_PREFIX)
                     cur.execute(
                         "SELECT 1 FROM user_connections WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active' LIMIT 1",
                         (user_id, org_id, provider),
@@ -771,6 +842,7 @@ def _check_onprem(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT COUNT(*) FROM user_manual_vms
                        WHERE (user_id = %s OR org_id = %s)
@@ -788,6 +860,7 @@ def _check_kubectl(user_id: str, org_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT COUNT(*) FROM active_kubectl_connections ac
                        JOIN kubectl_agent_tokens kat ON ac.token = kat.token

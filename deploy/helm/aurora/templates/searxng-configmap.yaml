@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aurora.fullname" . }}-searxng-settings
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+data:
+  settings.yml: |
+    use_default_settings: true
+
+    general:
+      debug: false
+      instance_name: "Aurora SearXNG"
+
+    server:
+      port: 8080
+      bind_address: "0.0.0.0"
+      limiter: false
+      image_proxy: true
+
+    search:
+      safe_search: 0
+      default_lang: "en"
+      formats:
+        - html
+        - json
+
+    engines:
+      - name: google
+        engine: google
+        shortcut: go
+
+      - name: duckduckgo
+        engine: duckduckgo
+        shortcut: ddg
+
+      - name: bing
+        engine: bing
+        shortcut: bi
+
+      - name: wikipedia
+        engine: wikipedia
+        shortcut: wp
+
+      - name: github
+        engine: github
+        shortcut: gh
+
+      - name: stackoverflow
+        engine: stackexchange
+        shortcut: so
+        api_site: 'stackoverflow'
+        categories: [it, q&a]
+
+      - name: reddit
+        engine: reddit
+        shortcut: re

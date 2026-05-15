@@ -15,13 +15,14 @@ from flask import Blueprint, jsonify, request
 from werkzeug.utils import secure_filename
 
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
+from utils.log_sanitizer import sanitize
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 
 logger = logging.getLogger(__name__)
 
 knowledge_base_bp = Blueprint("knowledge_base", __name__)
+_LOG_PREFIX = "[KnowledgeBase]"
 
 MEMORY_MAX_LENGTH = 5000
 ALLOWED_EXTENSIONS = {'md', 'txt', 'pdf'}
@@ -63,21 +64,16 @@ def serialize_document(row: tuple) -> dict[str, Any]:
 # Memory Endpoints
 # =============================================================================
 
-@knowledge_base_bp.route("/memory", methods=["GET", "OPTIONS"])
+@knowledge_base_bp.route("/memory", methods=["GET"])
 @require_permission("knowledge_base", "read")
 def get_memory(user_id):
     """Get the org's knowledge base memory content."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """
@@ -107,13 +103,10 @@ def get_memory(user_id):
         return jsonify({"error": "Failed to retrieve memory"}), 500
 
 
-@knowledge_base_bp.route("/memory", methods=["PUT", "OPTIONS"])
+@knowledge_base_bp.route("/memory", methods=["PUT"])
 @require_permission("knowledge_base", "write")
 def update_memory(user_id):
     """Update user's knowledge base memory content."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -132,9 +125,7 @@ def update_memory(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Upsert the memory content
             cursor.execute(
@@ -167,21 +158,16 @@ def update_memory(user_id):
 # Document Endpoints
 # =============================================================================
 
-@knowledge_base_bp.route("/documents", methods=["GET", "OPTIONS"])
+@knowledge_base_bp.route("/documents", methods=["GET"])
 @require_permission("knowledge_base", "read")
 def list_documents(user_id):
     """List all documents for the user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """
@@ -211,13 +197,10 @@ def list_documents(user_id):
         return jsonify({"error": "Failed to list documents"}), 500
 
 
-@knowledge_base_bp.route("/upload", methods=["POST", "OPTIONS"])
+@knowledge_base_bp.route("/upload", methods=["POST"])
 @require_permission("knowledge_base", "write")
 def upload_document(user_id):
     """Upload a new document for processing."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     # Check if file is in request
@@ -273,9 +256,7 @@ def upload_document(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Check if document with same original filename exists
             cursor.execute(
@@ -315,9 +296,7 @@ def upload_document(user_id):
             try:
                 with db_pool.get_user_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-                    conn.commit()
+                    set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                     cursor.execute(
                         """
@@ -349,9 +328,7 @@ def upload_document(user_id):
             # Update status to failed - use generic message for users, log full error server-side
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
                 cursor.execute(
                     """
@@ -380,21 +357,16 @@ def upload_document(user_id):
         return jsonify({"error": "Failed to upload document"}), 500
 
 
-@knowledge_base_bp.route("/documents/<doc_id>", methods=["GET", "OPTIONS"])
+@knowledge_base_bp.route("/documents/<doc_id>", methods=["GET"])
 @require_permission("knowledge_base", "read")
 def get_document(user_id, doc_id: str):
     """Get a specific document's details."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """
@@ -413,25 +385,20 @@ def get_document(user_id, doc_id: str):
             return jsonify(serialize_document(row)), 200
 
     except Exception as e:
-        logger.exception(f"[KB] Error getting document {doc_id} for user {user_id}: {e}")
+        logger.exception(f"[KB] Error getting document {sanitize(doc_id)} for user {sanitize(user_id)}: {e}")
         return jsonify({"error": "Failed to get document"}), 500
 
 
-@knowledge_base_bp.route("/documents/<doc_id>", methods=["DELETE", "OPTIONS"])
+@knowledge_base_bp.route("/documents/<doc_id>", methods=["DELETE"])
 @require_permission("knowledge_base", "write")
 def delete_document(user_id, doc_id: str):
     """Delete a document and its chunks."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     org_id = get_org_id_from_request()
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Get document info first
             cursor.execute(
@@ -454,9 +421,9 @@ def delete_document(user_id, doc_id: str):
             try:
                 from routes.knowledge_base.weaviate_client import delete_document_chunks
                 delete_document_chunks(user_id, doc_id)
-                logger.info(f"[KB] Deleted Weaviate chunks for document {doc_id}")
+                logger.info(f"[KB] Deleted Weaviate chunks for document {sanitize(doc_id)}")
             except Exception as weaviate_error:
-                logger.warning(f"[KB] Failed to delete Weaviate chunks for {doc_id}: {weaviate_error}")
+                logger.warning(f"[KB] Failed to delete Weaviate chunks for {sanitize(doc_id)}: {weaviate_error}")
 
             # Delete from local filesystem
             if storage_path:
@@ -476,22 +443,19 @@ def delete_document(user_id, doc_id: str):
             )
             conn.commit()
 
-            logger.info(f"[KB] Deleted document {doc_id} ({original_filename}) for user {user_id}")
+            logger.info(f"[KB] Deleted document {sanitize(doc_id)} ({sanitize(original_filename)}) for user {sanitize(user_id)}")
 
             return jsonify({"success": True}), 200
 
     except Exception as e:
-        logger.exception(f"[KB] Error deleting document {doc_id} for user {user_id}: {e}")
+        logger.exception(f"[KB] Error deleting document {sanitize(doc_id)} for user {sanitize(user_id)}: {e}")
         return jsonify({"error": "Failed to delete document"}), 500
 
 
-@knowledge_base_bp.route("/search", methods=["POST", "OPTIONS"])
+@knowledge_base_bp.route("/search", methods=["POST"])
 @require_permission("knowledge_base", "read")
 def search_documents(user_id):
     """Search the knowledge base (for direct API usage, not agent tool)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -580,9 +544,7 @@ def _check_user_limits(user_id: str, file_size: int) -> str | None:
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(
                 """

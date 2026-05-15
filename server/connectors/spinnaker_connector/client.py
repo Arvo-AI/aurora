@@ -10,13 +10,17 @@ is reused across Flask requests and agent tool calls.
 import hashlib
 import logging
 import os
+import posixpath
 import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 from requests.auth import HTTPBasicAuth
+
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -240,15 +244,31 @@ class SpinnakerClient:
     # Internal request helper
     # ------------------------------------------------------------------
 
+    def _validate_path(self, path: str) -> None:
+        """Validate that *path* is a safe, canonical API path segment."""
+        if not path.startswith("/"):
+            raise SpinnakerAPIError("Invalid API path: must start with /")
+        parsed = urlparse(path)
+        if parsed.scheme or parsed.netloc:
+            raise SpinnakerAPIError("Invalid API path: must be a relative path")
+        if parsed.query or parsed.fragment:
+            raise SpinnakerAPIError("Invalid API path: query/fragment not allowed")
+        decoded = unquote(parsed.path)
+        if "/.." in decoded:
+            raise SpinnakerAPIError("Invalid API path: path traversal not allowed")
+        if posixpath.normpath(decoded) != decoded:
+            raise SpinnakerAPIError("Invalid API path: non-canonical path segments not allowed")
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         """Send an authenticated request to Spinnaker Gate API."""
         kwargs.setdefault("timeout", SPINNAKER_TIMEOUT)
+        self._validate_path(path)
         url = f"{self.base_url}{path}"
 
         try:
             resp = self._session.request(method, url, **kwargs)
         except requests.RequestException as exc:
-            logger.error("[SPINNAKER] %s %s network error: %s", method, path, exc)
+            logger.error("[SPINNAKER] %s %s network error: %s", method, sanitize(path), exc)
             raise SpinnakerAPIError("Unable to reach Spinnaker Gate API") from exc
 
         if resp.status_code == 401:
@@ -262,7 +282,7 @@ class SpinnakerClient:
         if not resp.ok:
             logger.error(
                 "[SPINNAKER] %s %s failed (HTTP %s)",
-                method, path, resp.status_code,
+                method, sanitize(path), resp.status_code,
             )
             raise SpinnakerAPIError(
                 f"Spinnaker API request failed (HTTP {resp.status_code})"
@@ -300,7 +320,7 @@ class SpinnakerClient:
 
     def get_application(self, app: str) -> Dict[str, Any]:
         """Get details for a specific application."""
-        return self._get(f"/applications/{app}")
+        return self._get(f"/applications/{quote(app, safe='')}")
 
     # ------------------------------------------------------------------
     # Pipeline Executions
@@ -313,11 +333,11 @@ class SpinnakerClient:
         params: Dict[str, Any] = {"limit": limit}
         if statuses:
             params["statuses"] = statuses
-        return self._get(f"/applications/{app}/pipelines", params=params)
+        return self._get(f"/applications/{quote(app, safe='')}/pipelines", params=params)
 
     def get_pipeline_execution(self, execution_id: str) -> Dict[str, Any]:
         """Get full details for a specific pipeline execution."""
-        return self._get(f"/pipelines/{execution_id}")
+        return self._get(f"/pipelines/{quote(execution_id, safe='')}")
 
     # ------------------------------------------------------------------
     # Pipeline Configs
@@ -325,7 +345,7 @@ class SpinnakerClient:
 
     def list_pipeline_configs(self, app: str) -> List[Dict[str, Any]]:
         """List pipeline definitions for an application."""
-        return self._get(f"/applications/{app}/pipelineConfigs")
+        return self._get(f"/applications/{quote(app, safe='')}/pipelineConfigs")
 
     # ------------------------------------------------------------------
     # Trigger Pipeline
@@ -338,7 +358,7 @@ class SpinnakerClient:
         body: Dict[str, Any] = {"type": "manual"}
         if parameters:
             body["parameters"] = parameters
-        return self._post(f"/pipelines/{app}/{pipeline_name}", json=body)
+        return self._post(f"/pipelines/{quote(app, safe='')}/{quote(pipeline_name, safe='')}", json=body)
 
     # ------------------------------------------------------------------
     # Clusters / Server Groups
@@ -346,11 +366,11 @@ class SpinnakerClient:
 
     def list_clusters(self, app: str) -> Dict[str, Any]:
         """List clusters for an application."""
-        return self._get(f"/applications/{app}/clusters")
+        return self._get(f"/applications/{quote(app, safe='')}/clusters")
 
     def list_server_groups(self, app: str, account: str, cluster: str) -> List[Dict[str, Any]]:
         """List server groups for a cluster."""
-        return self._get(f"/applications/{app}/clusters/{account}/{cluster}/serverGroups")
+        return self._get(f"/applications/{quote(app, safe='')}/clusters/{quote(account, safe='')}/{quote(cluster, safe='')}/serverGroups")
 
     # ------------------------------------------------------------------
     # Tasks
@@ -358,8 +378,8 @@ class SpinnakerClient:
 
     def list_tasks(self, app: str) -> List[Dict[str, Any]]:
         """List tasks for an application."""
-        return self._get(f"/applications/{app}/tasks")
+        return self._get(f"/applications/{quote(app, safe='')}/tasks")
 
     def get_task(self, task_id: str) -> Dict[str, Any]:
         """Get details for a specific task."""
-        return self._get(f"/tasks/{task_id}")
+        return self._get(f"/tasks/{quote(task_id, safe='')}")

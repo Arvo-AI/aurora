@@ -22,13 +22,13 @@ export function useGitHubStatus(userId: string | null) {
   const inFlightRef = useRef(false);
 
   const checkStatus = useCallback(async () => {
-    if (!userId || inFlightRef.current) return;
+    if (inFlightRef.current) return;
     inFlightRef.current = true;
 
     try {
       const [credentials, repos] = await Promise.all([
-        GitHubIntegrationService.checkStatus(userId),
-        GitHubIntegrationService.fetchRepoSelections(userId).catch(() => []),
+        GitHubIntegrationService.checkStatus(),
+        GitHubIntegrationService.fetchRepoSelections().catch(() => []),
       ]);
 
       const isAuthenticated = credentials.connected || false;
@@ -49,7 +49,7 @@ export function useGitHubStatus(userId: string | null) {
     } finally {
       inFlightRef.current = false;
     }
-  }, [userId]);
+  }, []);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
 

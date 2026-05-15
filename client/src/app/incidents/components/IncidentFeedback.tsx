@@ -193,10 +193,11 @@ export default function IncidentFeedback({
         </div>
 
         <div className="space-y-2">
-          <label className="text-xs text-zinc-400">
+          <label htmlFor="incident-feedback-comment" className="text-xs text-zinc-400">
             Optional: What could be improved?
           </label>
           <Textarea
+            id="incident-feedback-comment"
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             placeholder="The root cause was incorrect because..."

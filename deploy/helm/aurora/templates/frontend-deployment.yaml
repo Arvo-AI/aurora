@@ -40,14 +40,44 @@ spec:
           ports:
             - name: http
               containerPort: 3000
-          envFrom:
-            - configMapRef:
-                name: {{ include "aurora.fullname" . }}-config
-            - secretRef:
-                name: {{ include "aurora.secretName.app" . }}
           env:
             - name: NODE_ENV
               value: "production"
+            # --- From configmap ---
+            {{- $configMapName := (include "aurora.fullname" .) }}
+            {{- $frontendKeys := list "AURORA_ENV" "FRONTEND_URL" "BACKEND_URL" "NEXT_PUBLIC_BACKEND_URL" "NEXT_PUBLIC_WEBSOCKET_URL" "PUBLIC_API_URL" "PUBLIC_WS_URL" }}
+            {{- range $key := $frontendKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}-config
+                  key: {{ $key }}
+            {{- end }}
+            # Feature flags (NEXT_PUBLIC_ENABLE_*)
+            {{- range $key, $value := .Values.config }}
+            {{- if hasPrefix "NEXT_PUBLIC_ENABLE_" $key }}
+            - name: {{ $key }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}-config
+                  key: {{ $key }}
+            {{- end }}
+            {{- end }}
+            # Auth.js derives redirect URLs from AUTH_URL
+            - name: AUTH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}-config
+                  key: AUTH_URL
+            # --- From app secret (cherry-picked) ---
+            {{- $appSecretName := (include "aurora.secretName.app" .) }}
+            {{- range $key := list "AUTH_SECRET" "INTERNAL_API_SECRET" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $appSecretName }}
+                  key: {{ $key }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /

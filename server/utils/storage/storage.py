@@ -33,6 +33,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError, NoCredenti
 from werkzeug.datastructures import FileStorage
 
 from utils.cache.redis_client import get_redis_client
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +75,23 @@ class StorageConfig:
         bucket = os.getenv("STORAGE_BUCKET")
         endpoint_url = os.getenv("STORAGE_ENDPOINT_URL")
 
-        if not all([access_key, secret_key, bucket]):
+        if not bucket:
             raise ValueError(
                 "Missing required storage configuration. "
-                "Set STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY, and STORAGE_BUCKET environment variables."
+                "Set STORAGE_BUCKET environment variable."
             )
+
+        if not access_key and not secret_key:
+            logger.info(
+                "STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY not set - "
+                "using default credential chain (IRSA, instance profile, etc.)"
+            )
+        elif bool(access_key) != bool(secret_key):
+            logger.warning(
+                "Only one of STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY is set - "
+                "both must be provided together, or neither for default credential chain"
+            )
+
         use_ssl = os.getenv("STORAGE_USE_SSL", "false").lower() in ("1", "true", "yes")
         verify_ssl = os.getenv("STORAGE_VERIFY_SSL", "true").lower() in (
             "1",
@@ -88,7 +101,7 @@ class StorageConfig:
 
         # Warn about insecure credentials in non-dev environments
         if aurora_env in ("prod", "production", "staging"):
-            if (
+            if access_key and secret_key and (
                 access_key in cls._INSECURE_CREDENTIALS
                 or secret_key in cls._INSECURE_CREDENTIALS
             ):
@@ -376,11 +389,23 @@ class S3Backend(StorageBackend):
             self._client = self._create_client()
         return self._client
 
+    def _is_gcs_endpoint(self) -> bool:
+        """Check if endpoint is Google Cloud Storage S3-compatible API."""
+        if not self._config.endpoint_url:
+            return False
+        from urllib.parse import urlparse
+        parsed = urlparse(self._config.endpoint_url)
+        return (parsed.hostname or "").lower() == "storage.googleapis.com"
+
     def _create_client(self):
         """Create boto3 S3 client with configuration."""
         try:
+            # GCS S3-interop requires V2 signatures; boto3's V4 chunked upload
+            # signing is incompatible with GCS's S3 endpoint for write operations.
+            sig_version = "s3" if self._is_gcs_endpoint() else "s3v4"
+
             client_config = Config(
-                signature_version="s3v4",
+                signature_version=sig_version,
                 retries={"max_attempts": 3, "mode": "standard"},
                 connect_timeout=10,
                 read_timeout=30,
@@ -408,14 +433,16 @@ class S3Backend(StorageBackend):
 
             endpoint_desc = self._config.endpoint_url or "AWS S3"
             logger.info(
-                f"S3 client initialized: endpoint={endpoint_desc}, bucket={self._config.bucket}"
+                "S3 client initialized: endpoint=%s, bucket=%s, signature=%s",
+                endpoint_desc, self._config.bucket, sig_version,
             )
 
             return client
 
         except NoCredentialsError as e:
             raise StorageConnectionError(
-                "S3 credentials not configured. Set STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY.",
+                "S3 credentials not found. Provide STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY "
+                "or configure pod-level credentials (IRSA, instance profile, etc.).",
                 cause=e,
             )
         except Exception as e:
@@ -643,7 +670,7 @@ class S3Backend(StorageBackend):
                 deleted += len(response.get("Deleted", []))
 
             if deleted:
-                logger.info(f"Deleted {deleted} files with prefix: {prefix}")
+                logger.info(f"Deleted {deleted} files with prefix: {sanitize(prefix)}")
             return deleted
 
         except ClientError as e:

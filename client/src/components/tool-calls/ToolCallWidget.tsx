@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ToolCall } from "@/app/chat/types";
+import { DISPATCH_SUBAGENT_TOOL_NAME, ToolCall } from "@/app/chat/types";
 import ToolExecutionWidget from "./ToolExecutionWidget"
 
 interface ToolCallWidgetProps {
@@ -15,6 +15,12 @@ interface ToolCallWidgetProps {
 }
 
 const ToolCallWidget = ({ tool, className, sendMessage, sendRaw, onToolUpdate, sessionId, userId }: ToolCallWidgetProps) => {
+  // Multi-agent dispatch tool calls are rendered as a grouped widget at the
+  // message level (see message-item.tsx). Skip rendering here so direct
+  // ToolCallWidget callers gracefully ignore them.
+  if (tool.tool_name === DISPATCH_SUBAGENT_TOOL_NAME) {
+    return null;
+  }
   // Delegate all other tools to the generic ToolExecutionWidget for a unified look & feel
   return (
     <ToolExecutionWidget 

@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -210,10 +211,29 @@ def tailscale_ssh(
             "error": "Device hostname is required"
         })
 
+    if not re.match(r'^[A-Za-z0-9._:\-]+$', device_hostname):
+        return json.dumps({
+            "success": False,
+            "error": "Invalid device hostname"
+        })
+
     if not command or not command.strip():
         return json.dumps({
             "success": False,
             "error": "Command cannot be empty"
+        })
+
+    # Unified gate: signature + org policy + LLM judge + HITL (foreground).
+    from utils.auth.command_gate import gate_command
+    gate = gate_command(user_id=user_id, tool_name="tailscale_ssh", command=command)
+    if not gate.allowed:
+        logger.warning("tailscale_ssh blocked for user %s (%s): %s",
+                       user_id, gate.code, gate.block_reason[:200])
+        return json.dumps({
+            "success": False,
+            "error": gate.block_reason,
+            "code": gate.code,
+            "provider": "tailscale_ssh",
         })
 
     # Validate SSH user (basic sanitization)

@@ -194,10 +194,15 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
             "mode": normalized_mode,
         })
         
-        # Store token data for reuse
+        # Store token data for reuse, always under the token owner's user_id.
+        # When credentials are org-shared, user_id may be an org member (User B)
+        # rather than the connector owner (User A). Writing under User B's ID
+        # creates a ghost row and causes org-wide credential inconsistency.
         try:
             from utils.auth.token_management import store_tokens_in_db
-            store_tokens_in_db(user_id, azure_token_data, "azure")
+            from utils.secrets.secret_ref_utils import get_token_owner_id
+            owner_id = get_token_owner_id(user_id, "azure")
+            store_tokens_in_db(owner_id, azure_token_data, "azure")
             logger.info(f"Stored new Azure token in database for user {user_id}")
         except Exception as store_error:
             logger.warning(f"Failed to store Azure token in database: {store_error}")
@@ -297,10 +302,18 @@ def generate_gcp_access_token(
     selected_project_id: str = None,
     mode: Optional[str] = None,
 ) -> Dict:
-    """Generate access token via GCP service account impersonation."""
-    from connectors.gcp_connector.auth.service_accounts import generate_sa_access_token
+    """Generate access token via GCP service account impersonation.
 
-    return generate_sa_access_token(user_id, scopes, lifetime, selected_project_id, mode=mode)
+    When credentials are org-shared, the Aurora service account was provisioned
+    under the original connector owner's user_id.  Resolve that owner here so
+    that all downstream callers automatically use the correct SA identity,
+    regardless of which org member triggered the tool.
+    """
+    from connectors.gcp_connector.auth.service_accounts import generate_sa_access_token
+    from utils.secrets.secret_ref_utils import get_token_owner_id
+
+    sa_owner_id = get_token_owner_id(user_id, "gcp")
+    return generate_sa_access_token(sa_owner_id, scopes, lifetime, selected_project_id, mode=mode)
 
 
 def get_provider_preference_from_context() -> Optional[str]:

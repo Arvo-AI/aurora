@@ -14,6 +14,7 @@ from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,7 @@ def _refresh_jira_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[D
 # POST /jira/search
 # ------------------------------------------------------------------
 
-@jira_bp.route("/search", methods=["POST", "OPTIONS"])
+@jira_bp.route("/search", methods=["POST"])
 @require_permission("connectors", "read")
 def search(user_id):
     client, creds, error = _get_jira_client(user_id)
@@ -127,7 +128,7 @@ def search(user_id):
 # GET /jira/issue/<issue_key>
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue/<issue_key>", methods=["GET", "OPTIONS"])
+@jira_bp.route("/issue/<issue_key>", methods=["GET"])
 @require_permission("connectors", "read")
 def get_issue(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
@@ -146,7 +147,7 @@ def get_issue(user_id, issue_key):
 # POST /jira/issue (create)
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue", methods=["POST", "OPTIONS"])
+@jira_bp.route("/issue", methods=["POST"])
 @require_permission("connectors", "write")
 def create_issue(user_id):
     client, creds, error = _get_jira_client(user_id)
@@ -184,7 +185,7 @@ def create_issue(user_id):
 # PATCH /jira/issue/<issue_key> (update)
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue/<issue_key>", methods=["PATCH", "OPTIONS"])
+@jira_bp.route("/issue/<issue_key>", methods=["PATCH"])
 @require_permission("connectors", "write")
 def update_issue(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
@@ -208,7 +209,7 @@ def update_issue(user_id, issue_key):
 # POST /jira/issue/<issue_key>/comment
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue/<issue_key>/comment", methods=["POST", "OPTIONS"])
+@jira_bp.route("/issue/<issue_key>/comment", methods=["POST"])
 @require_permission("connectors", "write")
 def add_comment(user_id, issue_key):
     client, creds, error = _get_jira_client(user_id)
@@ -234,7 +235,7 @@ def add_comment(user_id, issue_key):
 # POST /jira/issue/link
 # ------------------------------------------------------------------
 
-@jira_bp.route("/issue/link", methods=["POST", "OPTIONS"])
+@jira_bp.route("/issue/link", methods=["POST"])
 @require_permission("connectors", "write")
 def link_issues(user_id):
     client, creds, error = _get_jira_client(user_id)
@@ -265,7 +266,7 @@ JIRA_MODE_KEY = "jira_mode"
 VALID_MODES = ("full", "comment_only")
 
 
-@jira_bp.route("/settings", methods=["GET", "OPTIONS"])
+@jira_bp.route("/settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_settings(user_id):
     mode = get_user_preference(user_id, JIRA_MODE_KEY, default="comment_only")
@@ -276,7 +277,7 @@ def get_settings(user_id):
 # PUT /jira/settings
 # ------------------------------------------------------------------
 
-@jira_bp.route("/settings", methods=["PUT", "OPTIONS"])
+@jira_bp.route("/settings", methods=["PUT"])
 @require_permission("connectors", "write")
 def update_settings(user_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -286,7 +287,7 @@ def update_settings(user_id):
         return jsonify({"error": f"jiraMode must be one of: {', '.join(VALID_MODES)}"}), 400
 
     store_user_preference(user_id, JIRA_MODE_KEY, mode)
-    logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", user_id, mode)
+    logger.info("[JIRA] Updated settings for user %s: jiraMode=%s", sanitize(user_id), sanitize(mode))
 
     return jsonify({"success": True, "jiraMode": mode})
 
@@ -295,7 +296,7 @@ def update_settings(user_id):
 # GET /jira/status
 # ------------------------------------------------------------------
 
-@jira_bp.route("/status", methods=["GET", "OPTIONS"])
+@jira_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def jira_status(user_id):
     """Check Jira connection status."""
@@ -340,7 +341,7 @@ def jira_status(user_id):
 # POST|DELETE /jira/disconnect
 # ------------------------------------------------------------------
 
-@jira_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@jira_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Jira by removing stored credentials."""

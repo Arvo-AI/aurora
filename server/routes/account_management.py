@@ -1,11 +1,10 @@
 """Account management routes for connected accounts."""
 import logging
 from flask import Blueprint, request, jsonify
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_auth_only
 from utils.db.db_utils import connect_to_db_as_admin, connect_to_db_as_user
 from utils.auth.token_management import get_token_data
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret, SUPPORTED_SECRET_PROVIDERS
 from routes.connector_status import _check_kubectl, _check_onprem
 from routes.audit_routes import record_audit_event
@@ -13,6 +12,7 @@ import requests
 import os
 
 account_management_bp = Blueprint("account_management", __name__)
+_DELETE_LOG_PREFIX = "[AccountMgmt:delete_connected_account]"
 
 
 def _validate_provider_connection(provider: str, token_data: dict) -> bool:
@@ -33,11 +33,6 @@ def _validate_provider_connection(provider: str, token_data: dict) -> bool:
         return False
 
 
-@account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["OPTIONS"])
-def get_connected_accounts_options(target_user_id):
-    return create_cors_response()
-
-
 @account_management_bp.route("/api/connected-accounts/<target_user_id>", methods=["GET"])
 @require_auth_only
 def get_connected_accounts(user_id, target_user_id):
@@ -53,6 +48,8 @@ def get_connected_accounts(user_id, target_user_id):
 
         conn = connect_to_db_as_admin()
         cursor = conn.cursor()
+
+        set_rls_context(cursor, conn, user_id, log_prefix="[AccountMgmt]")
         
         # ------------------------------
         # 1) OAuth / secret-based providers (user_tokens)
@@ -88,9 +85,11 @@ def get_connected_accounts(user_id, target_user_id):
                 return None
             account_info = {"isConnected": True}
             if provider == "gcp":
+                from connectors.gcp_connector.auth import get_gcp_auth_type
                 account_info["email"] = token_data.get("email", "Unknown")
                 account_info["name"] = token_data.get("name", "Google Cloud")
                 account_info["displayText"] = account_info["email"]
+                account_info["authType"] = get_gcp_auth_type(token_data)
             elif provider == "aws":
                 account_info["accountId"] = token_data.get("aws_account_id", "Unknown")
                 account_info["name"] = f"AWS Account"
@@ -207,11 +206,6 @@ def get_connected_accounts(user_id, target_user_id):
             conn.close()
 
 
-@account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["OPTIONS"])
-def delete_connected_account_options(target_user_id, provider):
-    return create_cors_response()
-
-
 @account_management_bp.route("/api/connected-accounts/<target_user_id>/<provider>", methods=["DELETE"])
 @require_auth_only
 def delete_connected_account(user_id, target_user_id, provider):
@@ -228,6 +222,7 @@ def delete_connected_account(user_id, target_user_id, provider):
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
             cursor.execute(
                 "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
                 (user_id, org_id, provider)
@@ -251,6 +246,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             # For providers that don't use Vault, delete from DB directly
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
 
             cursor.execute(
                 "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
@@ -278,6 +274,7 @@ def delete_connected_account(user_id, target_user_id, provider):
             try:
                 conn = connect_to_db_as_admin()
                 cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
                 cursor.execute(
                     "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
                     (user_id, org_id)
@@ -307,11 +304,11 @@ def delete_connected_account(user_id, target_user_id, provider):
                 list_active_connections,
                 delete_connection_secret,
             )
-            
+
             active = list_active_connections(user_id)
             if not active:
                 logging.info("No active AWS connections found for user %s", user_id)
-            
+
             for conn in active:
                 acc_id = conn["account_id"]
                 _ok = delete_connection_secret(user_id, "aws", acc_id)
@@ -321,18 +318,39 @@ def delete_connected_account(user_id, target_user_id, provider):
                 except Exception:
                     pass
                 deletion_ok = deletion_ok and _ok
-            
+
+            # Clean up Memgraph discovery nodes for AWS before returning.
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            except Exception as e:
+                logging.warning(
+                    "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
+                    user_id, e,
+                )
+
             record_audit_event(org_id or "", user_id, "disconnect_provider", "connected_account", provider,
                                {"provider": provider}, request)
             return jsonify({"success": True, "message": "AWS connection(s) removed"}), 200
-        
+
+        # Clean up Memgraph discovery nodes for all other providers that reach this
+        # generic path (GCP, Azure, and any provider that uses Vault-backed tokens).
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, provider_lc)
+        except Exception as e:
+            logging.warning(
+                "Failed to delete Memgraph nodes for user=%s provider=%s: %s",
+                user_id, provider_lc, e,
+            )
+
         # Idempotent behaviour: If there were no credentials stored in the first place
         # treat the request as successfully processed. This prevents unnecessary 404
         # errors that bubble up to the frontend when a user disconnects a provider
         # that was never connected (common after manual DB cleanup).
         if deleted == 0 and deletion_ok:
             return jsonify({"success": True, "message": "No tokens found for provider – nothing to delete"}), 200
-        
+
         if not deletion_ok:
             record_audit_event(org_id or "", user_id, "disconnect_provider", "connected_account", provider,
                                {"provider": provider, "partial": True}, request)
@@ -347,11 +365,6 @@ def delete_connected_account(user_id, target_user_id, provider):
         return jsonify({"error": "Failed to delete connected account"}), 500
 
 
-@account_management_bp.route("/api/getUserId", methods=["OPTIONS"])
-def get_user_id_options():
-    return create_cors_response()
-
-
 @account_management_bp.route("/api/getUserId", methods=["GET"])
 @require_auth_only
 def get_user_id(user_id):
@@ -362,11 +375,6 @@ def get_user_id(user_id):
     except Exception as e:
         logging.error(f"Error getting user ID: {e}", exc_info=True)
         return jsonify({"error": "Failed to get user ID"}), 500
-
-
-@account_management_bp.route("/user_tokens", methods=["OPTIONS"])
-def get_user_tokens_options():
-    return create_cors_response()
 
 
 @account_management_bp.route("/user_tokens", methods=["GET"])
@@ -395,10 +403,7 @@ def get_user_tokens(user_id):
         
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        if org_id:
-            cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix="[AccountMgmt]")
         cursor.execute(
             """
             SELECT DISTINCT ON (provider)

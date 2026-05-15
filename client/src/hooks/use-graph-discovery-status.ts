@@ -80,7 +80,7 @@ export function useGraphDiscoveryStatus(
       let errorCount = 0;
       const poll = async () => {
         try {
-          const status = await pollDiscoveryStatus(uid, taskId);
+          const status = await pollDiscoveryStatus(taskId);
           errorCount = 0; // Reset on success
           if (!status.complete) return;
 
@@ -124,7 +124,7 @@ export function useGraphDiscoveryStatus(
       }
 
       try {
-        const resp = await triggerGraphDiscovery(uid);
+        const resp = await triggerGraphDiscovery();
         // Backend returns status "already_running" if a task is active
         setStoredTask({ taskId: resp.task_id, userId: uid, startedAt: Date.now() });
         startPolling(resp.task_id, uid);

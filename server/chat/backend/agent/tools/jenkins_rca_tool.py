@@ -113,8 +113,10 @@ def _action_recent_deployments(user_id: str, service: Optional[str], hours: int,
     """Query stored deployment events for temporal correlation."""
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[JenkinsRCA:deployments]")
                 base_where = "user_id = %s"
                 params: list = [user_id]
 
@@ -278,8 +280,10 @@ def _action_trace_context(user_id: str, event_id: Optional[int], job_path: Optio
     if event_id and user_id:
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[JenkinsRCA:trace]")
                     cursor.execute(
                         """SELECT trace_id, span_id, build_url, service, commit_sha
                            FROM jenkins_deployment_events

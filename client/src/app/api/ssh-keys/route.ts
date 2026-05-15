@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
-
-// BACKEND_URL for server-side API calls; fallback to public URL for local dev
-const API_BASE_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL
+import { env } from '@/lib/server-env'
 
 export async function GET() {
   try {
@@ -14,7 +12,7 @@ export async function GET() {
 
     const { headers: authHeaders } = authResult
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/ssh-keys`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/ssh-keys`, {
       method: 'GET',
       headers: authHeaders,
     })
@@ -49,7 +47,7 @@ export async function POST(request: NextRequest) {
 
     const { headers: authHeaders } = authResult
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/ssh-keys`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/ssh-keys`, {
       method: 'POST',
       headers: {
         ...authHeaders,
@@ -76,4 +74,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

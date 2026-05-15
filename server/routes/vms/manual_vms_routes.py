@@ -5,8 +5,10 @@ from flask import Blueprint, jsonify, request
 from psycopg2 import sql
 
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import set_rls_context
 from utils.ssh.ssh_utils import (
     load_user_private_key_safe,
     parse_ssh_key_id,
@@ -35,7 +37,7 @@ def _validate_required(fields: Dict[str, Any]):
         raise ValueError(f"Missing required field(s): {', '.join(missing)}")
 
 
-def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
+def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
     (
         vm_id,
         name,
@@ -60,6 +62,7 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
         "createdAt": created_at.isoformat() if created_at else None,
         "updatedAt": updated_at.isoformat() if updated_at else None,
         "source": "manual",
+        "isShared": is_shared,
     }
 
 
@@ -67,21 +70,28 @@ def _serialize_vm_row(row: tuple) -> Dict[str, Any]:
 @limiter.limit("30 per minute;200 per hour")
 @require_permission("vms", "read")
 def list_manual_vms(user_id):
+    from utils.db.org_scope import resolve_org, org_read_predicate
+    org_id = resolve_org(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:list]")
             cur.execute(
-                """
-                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at
+                f"""
+                SELECT id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at, user_id
                 FROM user_manual_vms
-                WHERE user_id = %s
+                WHERE {predicate}
                 ORDER BY created_at DESC
                 """,
-                (user_id,),
+                pred_params,
             )
             rows = cur.fetchall()
-    return jsonify({"vms": [_serialize_vm_row(r) for r in rows]})
+    vms = []
+    for r in rows:
+        row_data = r[:10]
+        row_owner_id = r[10]
+        vms.append(_serialize_vm_row(row_data, is_shared=(row_owner_id != user_id)))
+    return jsonify({"vms": vms})
 
 
 @manual_vms_bp.route("/api/vms/manual", methods=["POST"])
@@ -114,8 +124,7 @@ def create_manual_vm(user_id):
 
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:create]")
             # Unique constraint is on (user_id, ip_address, port)
             # If same IP+port already exists, update the name and config
             # Reset connection_verified on upsert since credentials may have changed
@@ -218,8 +227,17 @@ def update_manual_vm(user_id, vm_id: int):
 
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:update]")
+            cur.execute(
+                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                (vm_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                return jsonify({"error": "Manual VM not found"}), 404
+            if existing[0] != user_id:
+                return jsonify({"error": "Cannot modify a shared VM"}), 403
+
             query = sql.SQL(
                 """
                 UPDATE user_manual_vms
@@ -244,8 +262,16 @@ def update_manual_vm(user_id, vm_id: int):
 def delete_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[VMs:delete]")
+            cur.execute(
+                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                (vm_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                return jsonify({"error": "Manual VM not found"}), 404
+            if existing[0] != user_id:
+                return jsonify({"error": "Cannot delete a shared VM"}), 403
             cur.execute(
                 "DELETE FROM user_manual_vms WHERE id = %s AND user_id = %s RETURNING id;",
                 (vm_id, user_id),
@@ -282,19 +308,20 @@ def check_manual_vm_connection(user_id):
             return jsonify({"error": "vmId must be an integer"}), 400
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-load]")
                 cur.execute(
                     """
-                    SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username
+                    SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, user_id
                     FROM user_manual_vms
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s
                     """,
-                    (vm_id, user_id),
+                    (vm_id,),
                 )
                 vm_row = cur.fetchone()
         if not vm_row:
             return jsonify({"error": "Manual VM not found"}), 404
+        if vm_row[5] != user_id:
+            return jsonify({"error": "Cannot run connection check on a shared VM"}), 403
 
         ip_address = ip_address or vm_row[0]
         port = port or vm_row[1]
@@ -334,16 +361,16 @@ def check_manual_vm_connection(user_id):
             try:
                 with db_pool.get_user_connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+                        set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-verify]")
                         cur.execute(
                             "UPDATE user_manual_vms SET connection_verified = TRUE, updated_at = NOW() WHERE id = %s AND user_id = %s",
                             (vm_id, user_id),
                         )
                         conn.commit()
-                logger.info(f"Connection verified for VM {vm_id}, user {user_id}")
+                logger.info(f"Connection verified for VM {sanitize(vm_id)}, user {sanitize(user_id)}")
             except Exception as db_exc:
                 logger.error(
-                    f"Failed to update connection_verified for VM {vm_id}: {db_exc}"
+                    f"Failed to update connection_verified for VM {sanitize(vm_id)}: {db_exc}"
                 )
         return jsonify({"success": True, "connectedAs": connected_as})
     except Exception as exc:

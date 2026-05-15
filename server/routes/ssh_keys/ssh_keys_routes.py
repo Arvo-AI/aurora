@@ -16,6 +16,7 @@ from utils.ssh.ssh_key_utils import (
 )
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db
+from utils.auth.stateless_auth import set_rls_context
 
 ssh_keys_bp = Blueprint("ssh_keys_bp", __name__)
 logger = logging.getLogger(__name__)
@@ -29,8 +30,7 @@ def _list_user_keys(user_id: str) -> List[Dict[str, Any]]:
     """Fetch keys for a user using RLS-aware connection."""
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:list]")
             cur.execute(
                 """
                 SELECT id, provider, token_data, secret_ref, timestamp
@@ -51,8 +51,7 @@ def _list_user_keys(user_id: str) -> List[Dict[str, Any]]:
 def _load_raw_key_row(user_id: str, key_id: int) -> Optional[tuple]:
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:load]")
             cur.execute(
                 """
                 SELECT id, provider, token_data, secret_ref, timestamp
@@ -84,6 +83,7 @@ def create_ssh_key(user_id):
         # Store public key in DB token_data for quick listing (safe to keep outside Vault)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:create]")
                 cur.execute(
                     """
                     UPDATE user_tokens
@@ -103,8 +103,7 @@ def create_ssh_key(user_id):
             # Fallback lookup in unlikely event the UPDATE didn't return a row
             with db_pool.get_user_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-                    conn.commit()
+                    set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:create-fallback]")
                     cur.execute(
                         """
                         SELECT id, timestamp
@@ -182,6 +181,7 @@ def rename_ssh_key(user_id, key_id: int):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[SSHKeys:rename]")
                 cur.execute(
                     """
                     UPDATE user_tokens

@@ -4,17 +4,73 @@ import asyncio
 import json
 import hashlib
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from .redis_cache import RedisCache
 from .async_save_queue import AsyncSaveQueue
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
 
 logger = logging.getLogger(__name__)
 
 
+def _redact_tool_messages_impl(messages, *, user_id: str, session_id: str):
+    """Module-level Hook 2 implementation: redact ``ToolMessage.content`` and
+    emit per-finding audit events. Kept stateless so tests can exercise the
+    exact persistence path without standing up a full ``ContextManager``.
+
+    Per-message fail-open: if the redactor or audit emit raises, the original
+    message is kept and processing continues. Dropping the whole context save
+    because one message tripped the engine would defeat the entire backstop.
+    """
+    if not messages or not _guardrails_config.enabled:
+        return messages
+
+    from langchain_core.messages import ToolMessage
+
+    out = []
+    for msg in messages:
+        if not isinstance(msg, ToolMessage) or not isinstance(msg.content, str):
+            out.append(msg)
+            continue
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _redact(msg.content)
+            if not findings:
+                out.append(msg)
+                continue
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            for idx, f in enumerate(findings):
+                try:
+                    _emit_redaction(
+                        user_id=user_id or "",
+                        session_id=session_id or "",
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="db_save",
+                        # Per-call scan latency only on the first finding in
+                        # the batch; remaining events carry 0 so dashboards
+                        # summing latency do not overcount by a factor of N.
+                        latency_ms=latency_ms if idx == 0 else 0.0,
+                    )
+                except Exception as audit_err:
+                    logger.warning("output-redaction db_save audit emit failed: %s", audit_err)
+            # Preserve every ToolMessage field (name, id, additional_kwargs,
+            # response_metadata, artifact, status, ...) by copying the model
+            # with only ``content`` replaced. Constructing a fresh ToolMessage
+            # would silently drop any field LangGraph/LangChain adds later.
+            out.append(msg.model_copy(update={"content": redacted}))
+        except Exception as redact_err:
+            logger.warning("output-redaction db_save failed open for message: %s", redact_err)
+            out.append(msg)
+    return out
+
+
 class ContextManager:
     """Drop-in replacement for LLMContextManager with performance optimizations."""
-    
+
     def __init__(self):
         """Initialize optimized components."""
         self.cache = RedisCache()
@@ -26,7 +82,8 @@ class ContextManager:
         # Start async queue in background
         try:
             loop = asyncio.get_running_loop()
-            asyncio.create_task(self.async_queue.start())
+            # Keep a reference so the task is not GC'd before start() completes.
+            self._queue_start_task = asyncio.create_task(self.async_queue.start())
         except RuntimeError:
             # No event loop running yet
             logger.debug("Event loop not available for async queue")
@@ -35,12 +92,11 @@ class ContextManager:
     def save_context_history(cls, session_id: str, user_id: str, 
                            messages: List[Dict[str, Any]], 
                            tool_capture: Optional[List[Any]] = None) -> bool:
-        """Optimized save with caching and async execution.
-        
-        This method replaces the original synchronous save with:
-        1. Deduplication checking
-        2. Cached serialization
-        3. Async non-blocking saves
+        """Save LLM context with Redis-based dedup + cached serialization.
+
+        Runs synchronously. The previous async-queue path was removed because
+        it raced with asyncio.run() teardown in Celery tasks and silently
+        dropped saves.
         """
         instance = cls._get_instance()
         
@@ -61,24 +117,6 @@ class ContextManager:
                     logger.debug(f"Skipping duplicate save for session {session_id}")
                     return True
             
-            # Try async save first
-            if hasattr(instance, 'async_queue'):
-                try:
-                    loop = asyncio.get_running_loop()
-                    # Schedule async save without blocking
-                    future = asyncio.create_task(
-                        instance.async_queue.enqueue_save(
-                            session_id, user_id, messages, tool_capture
-                        )
-                    )
-                    logger.debug(f"Scheduled async save for session {session_id}")
-                    return True  # Return immediately, save happens in background
-                    
-                except RuntimeError:
-                    # No event loop, fall back to sync save
-                    pass
-            
-            # Fallback to synchronous save if async not available
             return instance._execute_actual_save(
                 session_id, user_id, messages, tool_capture
             )
@@ -122,102 +160,115 @@ class ContextManager:
                            messages: List[Dict[str, Any]], 
                            tool_capture: Optional[List[Any]] = None) -> bool:
         """Execute the actual database save operation (moved from LLMContextManager)."""
-        import json
         from datetime import datetime
         from utils.db.connection_pool import db_pool
         
         try:
             logger.info(f"Saving context for session {session_id}: {len(messages)} messages")
             
-            # Process messages to use summarized content for context storage to save tokens
-            processed_messages = []
-            for msg in messages:
-                # Check if this is a tool message that has summarized content available
-                if (hasattr(msg, 'tool_call_id') and 
-                    tool_capture and 
-                    hasattr(tool_capture, 'summarized_tool_results') and
-                    msg.tool_call_id in tool_capture.summarized_tool_results):
-                    
-                    # Use summarized content for context storage to save tokens
-                    summarized_data = tool_capture.summarized_tool_results[msg.tool_call_id]
-                    logger.info(f"Using summarized content for tool_call_id {msg.tool_call_id} in context storage")
-                    
-                    # Create a copy of the message with summarized content for storage
-                    from langchain_core.messages import ToolMessage
-                    summarized_msg = ToolMessage(
-                        content=summarized_data['summarized_output'],
-                        tool_call_id=msg.tool_call_id
-                    )
-                    processed_messages.append(summarized_msg)
-                else:
-                    # Use original message
-                    processed_messages.append(msg)
-            
-            # Use cached serialization if available
-            cached_serialized = self.cache.get_serialized(processed_messages)
-            if cached_serialized:
-                serialized_messages = json.loads(cached_serialized)
-                logger.debug(f"Using cached serialization for {len(processed_messages)} messages")
-            else:
-                serialized_messages = [LLMContextManager.serialize_message(msg) for msg in processed_messages]
-                # Cache the serialization
-                self.cache.set_serialized(processed_messages, json.dumps(serialized_messages))
+            processed_messages = self._apply_summarization(messages, tool_capture)
+            processed_messages = self._redact_tool_messages(
+                processed_messages, user_id=user_id, session_id=session_id,
+            )
+            serialized_messages = self._serialize_messages(processed_messages)
             
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+                from utils.auth.stateless_auth import set_rls_context
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextManager]"):
+                    return False
                 
-                # Try to update existing session first
-                cursor.execute("""
-                    UPDATE chat_sessions 
-                    SET llm_context_history = %s, updated_at = %s
-                    WHERE id = %s AND user_id = %s
-                """, (json.dumps(serialized_messages), datetime.now(), session_id, user_id))
-                
-                if cursor.rowcount == 0:
-                    # Session doesn't exist, check if it's a valid session that should exist
-                    cursor.execute("""
-                        SELECT COUNT(*) FROM chat_sessions 
-                        WHERE id = %s AND user_id = %s AND is_active = true
-                    """, (session_id, user_id))
-                    
-                    session_exists = cursor.fetchone()[0] > 0
-                    
-                    if not session_exists:
-                        # AUTO-CREATE SESSION: Create the session if it doesn't exist
-                        try:
-                            logger.info(f"Session {session_id} not found - creating it automatically")
-                            cursor.execute("""
-                                INSERT INTO chat_sessions (id, user_id, title, messages, ui_state, llm_context_history, created_at, updated_at, is_active)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (
-                                session_id, 
-                                user_id, 
-                                "New Chat", 
-                                json.dumps([]), 
-                                json.dumps({}), 
-                                json.dumps(serialized_messages), 
-                                datetime.now(), 
-                                datetime.now(), 
-                                True
-                            ))
-                            conn.commit()
-                            logger.info(f"✓ Auto-created session {session_id} and saved context")
-                            return True
-                        except Exception as create_error:
-                            logger.error(f"Failed to auto-create session {session_id}: {create_error}")
-                            return False
-                    else:
-                        # Session exists but update failed for other reasons
-                        logger.error(f"Failed to update context for existing session {session_id}")
-                        return False
-                
+                result = self._upsert_session(
+                    cursor, conn, session_id, user_id,
+                    json.dumps(serialized_messages), datetime.now(),
+                )
+                if result is not None:
+                    return result
+
                 conn.commit()
                 logger.info(f"Saved complete LLM context history for session {session_id} with {len(messages)} messages")
                 return True
                 
         except Exception as e:
             logger.error(f"Error saving LLM context history: {e}")
+            return False
+
+    def _apply_summarization(self, messages, tool_capture):
+        """Replace tool messages with their summarized versions when available."""
+        processed = []
+        for msg in messages:
+            if (hasattr(msg, 'tool_call_id') and 
+                tool_capture and 
+                hasattr(tool_capture, 'summarized_tool_results') and
+                msg.tool_call_id in tool_capture.summarized_tool_results):
+                
+                summarized_data = tool_capture.summarized_tool_results[msg.tool_call_id]
+                logger.info(f"Using summarized content for tool_call_id {msg.tool_call_id} in context storage")
+                from langchain_core.messages import ToolMessage
+                processed.append(ToolMessage(
+                    content=summarized_data['summarized_output'],
+                    tool_call_id=msg.tool_call_id,
+                ))
+            else:
+                processed.append(msg)
+        return processed
+
+    def _redact_tool_messages(self, messages, *, user_id: str, session_id: str):
+        """Output redaction (Hook 2): belt-and-suspenders pass on tool output
+        before persistence.
+
+        Hook 1 redacts at ``send_tool_completion``; this is the authoritative
+        guarantee for the DB and covers paths that bypass Hook 1 (background
+        chats, directly-constructed ToolMessages, summarization rewrites). The
+        engine is idempotent so already-redacted content is a near-no-op.
+        A non-zero rate of ``location=db_save`` audit events is an operational
+        signal that an upstream path is bypassing Hook 1.
+        """
+        return _redact_tool_messages_impl(
+            messages, user_id=user_id, session_id=session_id,
+        )
+
+    def _serialize_messages(self, processed_messages):
+        """Serialize messages, using cache when possible."""
+        cached_serialized = self.cache.get_serialized(processed_messages)
+        if cached_serialized:
+            logger.debug(f"Using cached serialization for {len(processed_messages)} messages")
+            return json.loads(cached_serialized)
+        serialized = [LLMContextManager.serialize_message(msg) for msg in processed_messages]
+        self.cache.set_serialized(processed_messages, json.dumps(serialized))
+        return serialized
+
+    @staticmethod
+    def _upsert_session(cursor, conn, session_id, user_id, context_json, now):
+        """Try UPDATE, then INSERT if the session doesn't exist. Returns bool or None (updated OK, continue)."""
+        cursor.execute("""
+            UPDATE chat_sessions 
+            SET llm_context_history = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s
+        """, (context_json, now, session_id, user_id))
+
+        if cursor.rowcount > 0:
+            return None
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM chat_sessions 
+            WHERE id = %s AND user_id = %s AND is_active = true
+        """, (session_id, user_id))
+        if cursor.fetchone()[0] > 0:
+            logger.error(f"Failed to update context for existing session {session_id}")
+            return False
+
+        try:
+            logger.info(f"Session {session_id} not found - creating it automatically")
+            cursor.execute("""
+                INSERT INTO chat_sessions (id, user_id, title, messages, ui_state, llm_context_history, created_at, updated_at, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (session_id, user_id, "New Chat", json.dumps([]), json.dumps({}), context_json, now, now, True))
+            conn.commit()
+            logger.info(f"Auto-created session {session_id} and saved context")
+            return True
+        except Exception as create_error:
+            logger.error(f"Failed to auto-create session {session_id}: {create_error}")
             return False
     
     @classmethod
@@ -229,7 +280,7 @@ class ContextManager:
         return True
 
     @classmethod
-    def cleanup(cls):
-        """Cleanup resources on shutdown."""
+    async def cleanup(cls) -> None:
+        """Cleanup resources on shutdown. Must be awaited from an async context."""
         if hasattr(cls, '_instance'):
-            asyncio.create_task(cls._instance.async_queue.stop())
+            await cls._instance.async_queue.stop()

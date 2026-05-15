@@ -14,8 +14,8 @@ def is_pagerduty_oauth_enabled() -> bool:
 
 
 def is_confluence_enabled() -> bool:
-    """Check if Confluence integration is enabled via environment variable."""
-    return os.getenv("NEXT_PUBLIC_ENABLE_CONFLUENCE", "false").lower() == "true"
+    """Confluence is always enabled (no longer feature-gated)."""
+    return True
 
 
 def is_jira_enabled() -> bool:

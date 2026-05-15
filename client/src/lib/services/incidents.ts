@@ -8,7 +8,7 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda' | 'chat';
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'summarizing' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
@@ -75,6 +75,10 @@ export interface Suggestion {
   type: SuggestionType;
   risk: SuggestionRisk;
   command?: string; // Optional command to run
+  // Execution tracking
+  executedAt?: string;
+  executionSessionId?: string;
+  executionStatus?: 'in_progress' | 'completed' | 'failed' | 'executed';
   // Fix-type suggestion fields
   filePath?: string;
   originalContent?: string;
@@ -110,6 +114,11 @@ export interface PostmortemData {
   confluencePageId?: string;
   confluencePageUrl?: string;
   confluenceExportedAt?: string;
+  notionPageId?: string;
+  notionPageUrl?: string;
+  notionExportedAt?: string;
+  notionDatabaseId?: string;
+  generationSessionId?: string;
 }
 
 export interface PostmortemListItem {
@@ -122,6 +131,23 @@ export interface PostmortemListItem {
   confluencePageId: string | null;
   confluencePageUrl: string | null;
   confluenceExportedAt: string | null;
+  notionPageId: string | null;
+  notionPageUrl: string | null;
+  notionExportedAt: string | null;
+  notionDatabaseId: string | null;
+}
+
+export interface PostmortemVersion {
+  id: string;
+  versionNumber: number;
+  source: string;
+  userId: string;
+  createdAt: string;
+  generationSessionId: string | null;
+}
+
+export interface PostmortemVersionDetail extends PostmortemVersion {
+  content: string;
 }
 
 export interface StreamingThought {
@@ -312,6 +338,9 @@ export const incidentsService = {
           prNumber: s.prNumber,
           createdBranch: s.createdBranch,
           appliedAt: s.appliedAt,
+          executedAt: s.executedAt,
+          executionSessionId: s.executionSessionId,
+          executionStatus: s.executionStatus,
         })),
         citations: (inc.citations || []).map((c: any) => ({
           id: c.id,
@@ -522,16 +551,19 @@ export const incidentsService = {
 // ============================================================================
 
 export const postmortemService = {
-  async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; error?: string }> {
+  async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; generating?: boolean; error?: string }> {
     try {
-      const data = await apiGet<{ postmortem: PostmortemData | null }>(`/api/incidents/${incidentId}/postmortem`);
+      const data = await apiGet<{ postmortem: PostmortemData }>(`/api/incidents/${incidentId}/postmortem`);
       return { data: data.postmortem || null };
     } catch (error) {
-      if ((error as ApiError).status === 404) {
+      const apiErr = error as ApiError;
+      if (apiErr.status === 202) {
+        return { data: null, generating: true };
+      }
+      if (apiErr.status === 404) {
         return { data: null };
       }
-      console.error('Error fetching postmortem:', error);
-      return { data: null, error: error instanceof Error ? error.message : 'Network error' };
+      return { data: null, error: apiErr.message || 'Network error' };
     }
   },
 
@@ -545,6 +577,40 @@ export const postmortemService = {
     } catch (error) {
       console.error('Error updating postmortem:', error);
       return { success: false };
+    }
+  },
+
+  async regeneratePostmortem(incidentId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await apiPost(`/api/incidents/${incidentId}/postmortem/regenerate`);
+      return { success: true };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { success: false, error: apiErr.message || 'Failed to regenerate' };
+    }
+  },
+
+  async getVersions(incidentId: string): Promise<{ versions: PostmortemVersion[]; currentVersionId: string | null; error?: string }> {
+    try {
+      const data = await apiGet<{ versions: PostmortemVersion[]; currentVersionId: string | null }>(
+        `/api/incidents/${incidentId}/postmortem/versions`
+      );
+      return { versions: data.versions ?? [], currentVersionId: data.currentVersionId ?? null };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { versions: [], currentVersionId: null, error: apiErr.message || 'Failed to load versions' };
+    }
+  },
+
+  async restoreVersion(incidentId: string, versionId: string): Promise<{ success: boolean; content?: string; error?: string }> {
+    try {
+      const data = await apiPost<{ success: boolean; content: string }>(
+        `/api/incidents/${incidentId}/postmortem/versions/${versionId}/restore`,
+      );
+      return { success: true, content: data.content };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { success: false, error: apiErr.message || 'Failed to restore version' };
     }
   },
 
@@ -562,6 +628,41 @@ export const postmortemService = {
       console.error('Error exporting to Confluence:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
+    }
+  },
+
+  async exportToNotion(
+    incidentId: string,
+    params: {
+      databaseId: string;
+      titleProperty?: string;
+      propertyMapping?: Record<string, string>;
+      actionItemsDatabaseId?: string;
+    },
+  ): Promise<{ success: boolean; pageUrl?: string; pageId?: string; actionItemCount?: number; error?: string; code?: string }> {
+    try {
+      const data = await apiPost<{ success?: boolean; pageUrl?: string; pageId?: string; actionItemCount?: number }>(
+        `/api/incidents/${incidentId}/postmortem/export/notion`,
+        {
+          databaseId: params.databaseId,
+          titleProperty: params.titleProperty,
+          propertyMapping: params.propertyMapping,
+          actionItemsDatabaseId: params.actionItemsDatabaseId,
+        },
+      );
+      return {
+        success: Boolean(data.success ?? true),
+        pageUrl: data.pageUrl,
+        pageId: data.pageId,
+        actionItemCount: data.actionItemCount,
+      };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return {
+        success: false,
+        error: apiErr.message || 'Export failed',
+        code: apiErr.code,
+      };
     }
   },
 

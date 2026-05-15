@@ -23,9 +23,10 @@ def get_api_cost(user_id: str) -> float:
         float: Total estimated API cost (raw provider cost)
     """
     try:
+        from utils.auth.stateless_auth import set_rls_context
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Billing]")
 
             cursor.execute(
                 """

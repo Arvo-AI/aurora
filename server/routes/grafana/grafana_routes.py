@@ -6,10 +6,10 @@ from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
+from utils.log_sanitizer import sanitize
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists
+from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists, set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,15 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
     Returns (row_exists, is_active).
     """
     try:
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:has_row]")
                 cursor.execute(
-                    "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
-                    (user_id,),
+                    f"SELECT is_active FROM user_tokens WHERE {predicate} AND provider = 'grafana' ORDER BY is_active DESC LIMIT 1",
+                    (*pred_params,),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -40,12 +44,16 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
 def _set_grafana_active(user_id: str, active: bool) -> bool:
     """Flip is_active on the existing Grafana user_tokens row."""
     try:
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:set_active]")
                 cursor.execute(
-                    "UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
-                    "WHERE user_id = %s AND provider = 'grafana'",
-                    (active, user_id),
+                    f"UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
+                    f"WHERE {predicate} AND provider = 'grafana'",
+                    (active, *pred_params),
                 )
                 updated = cursor.rowcount > 0
             conn.commit()
@@ -55,7 +63,7 @@ def _set_grafana_active(user_id: str, active: bool) -> bool:
         return False
 
 
-@grafana_bp.route("/status", methods=["GET", "OPTIONS"])
+@grafana_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     row_exists, is_active = _has_grafana_row(user_id)
@@ -66,7 +74,7 @@ def status(user_id):
     return jsonify({"connected": True})
 
 
-@grafana_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@grafana_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Grafana by deactivating the stored connection."""
@@ -88,16 +96,13 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Grafana"}), 500
 
 
-@grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@grafana_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Grafana for a specific user.
 
     Auto-creates or re-activates a connection record when needed.
     Always stores the alert; skips RCA for connection webhooks.
     """
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[GRAFANA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -113,20 +118,20 @@ def alert_webhook(user_id: str):
     if not row_exists or (row_exists and not is_active):
         skip_rca = True
         if not row_exists:
-            logger.info("[GRAFANA] Auto-connecting user %s via webhook", user_id)
+            logger.info("[GRAFANA] Auto-connecting user %s via webhook", sanitize(user_id))
             try:
                 store_tokens_in_db(user_id, {}, "grafana")
-            except Exception as exc:
-                logger.exception("[GRAFANA] Failed to auto-connect user %s: %s", user_id, exc)
+            except Exception:
+                logger.exception("[GRAFANA] Failed to auto-connect user %s", sanitize(user_id))
                 return jsonify({"error": "Failed to create Grafana connection"}), 500
         else:
             reactivated = _set_grafana_active(user_id, True)
             if not reactivated:
-                logger.warning("[GRAFANA] Failed to re-activate connection for user %s via webhook", user_id)
+                logger.warning("[GRAFANA] Failed to re-activate connection for user %s via webhook", sanitize(user_id))
             else:
-                logger.info("[GRAFANA] Re-activated connection for user %s via webhook", user_id)
+                logger.info("[GRAFANA] Re-activated connection for user %s via webhook", sanitize(user_id))
 
-    logger.info("[GRAFANA] Received alert webhook for user %s: %s", user_id, payload.get("title", "unknown"))
+    logger.info("[GRAFANA] Received alert webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("title", "unknown")))
 
     metadata = {
         "headers": dict(request.headers),
@@ -138,7 +143,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@grafana_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@grafana_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch Grafana alerts for the authenticated user."""
@@ -150,7 +155,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Grafana]")
             
             if state_filter:
                 cursor.execute(
@@ -213,26 +218,31 @@ def get_alerts(user_id):
             "limit": limit,
             "offset": offset,
         })
-    except Exception as exc:
-        logger.exception("[GRAFANA] Failed to fetch alerts for user %s: %s", user_id, exc)
+    except Exception:
+        logger.exception("[GRAFANA] Failed to fetch alerts for user %s", sanitize(user_id))
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@grafana_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@grafana_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
-    """Get the webhook URL that should be configured in Grafana."""
-    # Use ngrok URL for development if available, otherwise use backend URL
+    """Get the webhook URL that should be configured in Grafana.
+
+    When credentials are org-shared, returns the URL belonging to the token
+    owner so org members see the same webhook URL without needing their own row.
+    """
+    from utils.secrets.secret_ref_utils import get_token_owner_id
+    webhook_owner_id = get_token_owner_id(user_id, "grafana")
+
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
 
-    # For development, prefer ngrok URL if available
     if ngrok_url and backend_url.startswith("http://localhost"):
         base_url = ngrok_url
     else:
         base_url = backend_url
 
-    webhook_url = f"{base_url}/grafana/alerts/webhook/{user_id}"
+    webhook_url = f"{base_url}/grafana/alerts/webhook/{webhook_owner_id}"
 
     return jsonify({
         "webhookUrl": webhook_url,

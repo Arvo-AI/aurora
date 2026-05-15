@@ -60,8 +60,8 @@ class ProviderPreferencesService {
   }
 
   async setProviderPreferences(providers: string[]): Promise<boolean> {
-    const sortedProviders = [...providers].sort();
-    const sortedLast = this.lastSetProviders ? [...this.lastSetProviders].sort() : null;
+    const sortedProviders = [...providers].sort((a, b) => a.localeCompare(b));
+    const sortedLast = this.lastSetProviders ? [...this.lastSetProviders].sort((a, b) => a.localeCompare(b)) : null;
     
     if (sortedLast && JSON.stringify(sortedProviders) === JSON.stringify(sortedLast)) {
       return true;

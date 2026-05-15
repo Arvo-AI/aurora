@@ -1,6 +1,6 @@
 from flask import Flask, request, session, jsonify, redirect
 from msal import ConfidentialClientApplication
-import os, logging, urllib.parse, jwt
+import os, logging, urllib.parse
 from dotenv import load_dotenv
 from connectors.azure_connector.billing import fetch_subscriptions
 from connectors.azure_connector.k8s_client import get_aks_clusters
@@ -187,7 +187,7 @@ def azure_callback():
 
         # Store the access token in session
         azure_access_token = azure_result.get("access_token")
-        logging.debug(f"Access token: {azure_access_token}");
+        logging.debug("Access token received (length=%d)", len(azure_access_token) if azure_access_token else 0)
         if not azure_access_token:
             raise ValueError("Azure access token is missing in response.")
 
@@ -196,13 +196,12 @@ def azure_callback():
         # Extract user_id from state parameter (strip the "azure_" prefix)
         #user_id = state[len("azure_"):] if state.startswith("azure_") else None
         
-        # (Optionally) decode the id_token to log the tenant ID:
-        id_token = azure_result.get("id_token")
-        if not id_token:
-            raise ValueError("Azure ID token is missing in response.")
+        # Extract tenant ID from MSAL's already-validated id_token claims
+        id_token_claims = azure_result.get("id_token_claims")
+        if not id_token_claims:
+            raise ValueError("Azure ID token claims are missing in response.")
 
-        decoded_token = jwt.decode(id_token, options={"verify_signature": False})  # Decode without verifying signature
-        tenant_id = decoded_token.get("tid")  # Tenant ID
+        tenant_id = id_token_claims.get("tid")
         # SECURITY: Mask tenant ID in logs
         masked_tenant = mask_credential_value(tenant_id, 8) if tenant_id else "unknown"
         logging.info(f"User authenticated from Tenant: {masked_tenant}, User ID: {user_id}")

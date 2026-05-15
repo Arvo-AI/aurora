@@ -4,11 +4,12 @@ import logging
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
 metrics_bp = Blueprint("metrics", __name__)
+_LOG_PREFIX = "[Metrics]"
 
 # Valid period values and their PostgreSQL interval strings
 _PERIOD_MAP = {
@@ -44,7 +45,6 @@ def _parse_window_hours(default: int = 4) -> tuple[int | None, tuple | None]:
 @require_permission("incidents", "read")
 def get_metrics_summary(user_id):
     """Dashboard overview — key SRE metrics in a single call."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     window_hours, err = _parse_window_hours()
     if err:
@@ -53,9 +53,7 @@ def get_metrics_summary(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             # Total / active / resolved counts
             cursor.execute("""
@@ -171,7 +169,6 @@ def get_metrics_summary(user_id):
 @require_permission("incidents", "read")
 def get_mttr(user_id):
     """Mean Time to Resolve — only incidents explicitly marked resolved by a human."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     severity_filter = request.args.get("severity")
     service_filter = request.args.get("service")
@@ -179,9 +176,7 @@ def get_mttr(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             where_clauses = [
                 "resolved_at IS NOT NULL",
@@ -265,7 +260,6 @@ def get_mttr(user_id):
 @require_permission("incidents", "read")
 def get_mtts(user_id):
     """Mean Time to Solution — how fast Aurora produces an RCA (analyzed_at - started_at)."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     severity_filter = request.args.get("severity")
     service_filter = request.args.get("service")
@@ -273,9 +267,7 @@ def get_mtts(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             where_clauses = [
                 "analyzed_at IS NOT NULL",
@@ -346,15 +338,12 @@ def get_mttd(user_id):
     """MTTD = pickup latency — time from webhook arrival (started_at) to the
     moment the RCA worker actually began running (investigation_started_at).
     """
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute("""
                 SELECT
@@ -396,7 +385,6 @@ def get_mttd(user_id):
 @require_permission("incidents", "read")
 def get_incident_frequency(user_id):
     """Incident count over time, grouped by severity or service."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     group_by = request.args.get("group_by", "severity")
 
@@ -408,9 +396,7 @@ def get_incident_frequency(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute(f"""
                 SELECT
@@ -440,7 +426,6 @@ def get_incident_frequency(user_id):
 @require_permission("incidents", "read")
 def get_change_failure_rate(user_id):
     """Percentage of deployments followed by an incident within a time window."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     window_hours, err = _parse_window_hours()
     if err:
@@ -449,9 +434,7 @@ def get_change_failure_rate(user_id):
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             cursor.execute("""
                 WITH deploys AS (
@@ -513,16 +496,13 @@ def get_change_failure_rate(user_id):
 @require_permission("incidents", "read")
 def get_agent_execution(user_id):
     """Agent execution waterfall (per-incident) or aggregate tool stats."""
-    org_id = get_org_id_from_request()
     period = _get_period_interval(request.args.get("period", "30d"))
     incident_id = request.args.get("incident_id")
 
     try:
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-            if org_id:
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
             if incident_id:
                 # Per-incident waterfall

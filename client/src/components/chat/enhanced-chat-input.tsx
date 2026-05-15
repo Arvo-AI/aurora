@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Send, Loader2, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
+import SlashCommandMenu, { ActionItem, getFilteredActions } from "./SlashCommandMenu";
 
 export interface ImageAttachment {
   file: File;
@@ -31,6 +32,9 @@ interface EnhancedChatInputProps {
   onRemoveContext?: () => void;
   images?: ImageAttachment[];
   onImagesChange?: (images: ImageAttachment[]) => void;
+  actions?: ActionItem[];
+  selectedAction?: ActionItem | null;
+  onActionSelect?: (action: ActionItem | null) => void;
 }
 
 export default function EnhancedChatInput({
@@ -52,10 +56,31 @@ export default function EnhancedChatInput({
   incidentContext,
   onRemoveContext,
   images = [],
-  onImagesChange
+  onImagesChange,
+  actions = [],
+  selectedAction = null,
+  onActionSelect,
 }: EnhancedChatInputProps) {
   const [isDragOver, setIsDragOver] = useState(false);
-  
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const menuDismissed = useRef(false);
+
+  const { menuVisible, menuStage, filteredActions, menuItemCount } = useMemo(() => {
+    if (menuDismissed.current) return { menuVisible: false, menuStage: 'command' as const, filteredActions: [] as ActionItem[], menuItemCount: 0 };
+    const match = selectedAction ? null : (/(^|\s)(\/\S*)$/).exec(input);
+    const token = match?.[2] ?? '';
+    const isFull = /^\/actions?$/i.test(token);
+    const isPartial = !isFull && '/action'.startsWith(token.toLowerCase()) && token.length >= 1;
+    const hasCompleted = !selectedAction && /(^|\s)\/actions?\s/i.test(input);
+    const visible = isFull || isPartial || hasCompleted;
+    const stage: 'command' | 'action' = (isFull || hasCompleted) ? 'action' : 'command';
+    const filtered = visible && stage === 'action' ? getFilteredActions(input, actions).slice(0, 8) : [];
+    const itemCount = stage === 'command' ? 1 : (filtered.length || 1);
+    return { menuVisible: visible, menuStage: stage, filteredActions: filtered, menuItemCount: itemCount };
+  }, [input, actions, selectedAction]);
+
+  const hasActiveOverlay = selectedAction != null && input.toLowerCase().includes('/action ' + selectedAction.name.toLowerCase());
+
   let parsedContext = null;
   try {
     parsedContext = incidentContext ? JSON.parse(incidentContext) : null;
@@ -63,14 +88,64 @@ export default function EnhancedChatInput({
     console.error('Failed to parse incident context:', e);
   }
 
+  const handleSelect = useCallback((action: ActionItem) => {
+    onActionSelect?.(action);
+    const idx = input.search(/(^|\s)\/actions?\s/i);
+    let replaced: string;
+    if (idx >= 0) {
+      const keepUntil = idx === 0 ? 0 : idx + 1;
+      replaced = input.slice(0, keepUntil) + `/action ${action.name} `;
+    } else {
+      replaced = `/action ${action.name} `;
+    }
+    setInput(replaced);
+    setHighlightedIndex(0);
+  }, [onActionSelect, setInput, input]);
+
+  const handleCommandSelect = useCallback(() => {
+    // Replace the partial slash token with the full /action command
+    const replaced = input.replace(/(^|\s)(\/\S*)$/, '$1/action ');
+    setInput(replaced);
+    setHighlightedIndex(0);
+  }, [input, setInput]);
+
+  const handleMenuKey = useCallback((e: React.KeyboardEvent): boolean => {
+    if (!menuVisible || menuItemCount === 0) return false;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex(i => (i + 1) % menuItemCount);
+      return true;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex(i => (i - 1 + menuItemCount) % menuItemCount);
+      return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      if (menuStage === 'command') handleCommandSelect();
+      else if (filteredActions[highlightedIndex]) handleSelect(filteredActions[highlightedIndex]);
+      return true;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      menuDismissed.current = true;
+      onActionSelect?.(null);
+      setHighlightedIndex(0);
+      return true;
+    }
+    return false;
+  }, [menuVisible, menuItemCount, menuStage, filteredActions, highlightedIndex, handleSelect, handleCommandSelect, setInput]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (handleMenuKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (input.trim() && !isSending && !disabled) {
+      if ((input.trim() || selectedAction) && !isSending && !disabled) {
         onSend();
       }
     }
-  }, [input, isSending, disabled, onSend]);
+  }, [input, isSending, disabled, onSend, selectedAction, handleMenuKey]);
 
   const processImageFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -132,7 +207,7 @@ export default function EnhancedChatInput({
   return (
     <div className={`w-full max-w-4xl mx-auto space-y-3 ${className}`}>
       {/* Input container with original styling */}
-      <div 
+      <div
         className={`bg-muted rounded-3xl border border-input p-4 space-y-3 transition-colors ${
           isDragOver ? 'border-primary bg-primary/5' : ''
         }`}
@@ -140,27 +215,49 @@ export default function EnhancedChatInput({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
       >
-        {/* Incident context chip */}
+        {/* Context chips */}
         {parsedContext && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
-            <span className="text-orange-400 font-medium">Incident {parsedContext.title}</span>
-            {onRemoveContext && (
-              <button onClick={onRemoveContext} className="text-orange-400 hover:text-orange-300">
-                <X className="h-3 w-3" />
-              </button>
-            )}
+          <div className="flex flex-wrap gap-2">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs w-fit">
+                <span className="text-orange-400 font-medium">Incident {parsedContext.title}</span>
+                {onRemoveContext && (
+                  <button onClick={onRemoveContext} className="text-orange-400 hover:text-orange-300">
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+            </div>
           </div>
         )}
         
         {/* Text input area */}
         <div className="relative">
+          {menuVisible && (
+            <SlashCommandMenu
+              input={input}
+              actions={actions}
+              onSelect={handleSelect}
+              onCommandSelect={handleCommandSelect}
+              highlightedIndex={highlightedIndex}
+              stage={menuStage}
+            />
+          )}
+          {selectedAction && (
+            <ActionOverlay input={input} actionName={selectedAction.name} />
+          )}
           <AutoResizeTextarea
             placeholder={placeholder}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setHighlightedIndex(0);
+              menuDismissed.current = false;
+              if (selectedAction && !e.target.value.toLowerCase().includes(selectedAction.name.toLowerCase())) {
+                onActionSelect?.(null);
+              }
+            }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className="w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none"
+            className={`w-full bg-transparent border-0 py-2 pl-2 pr-24 focus:ring-0 focus:outline-none text-base placeholder:text-muted-foreground resize-none ${hasActiveOverlay ? 'caret-white text-transparent' : ''}`}
             maxRows={6}
           />
           
@@ -177,7 +274,7 @@ export default function EnhancedChatInput({
             ) : (
               <Button
                 onClick={onSend}
-                disabled={!input.trim() || isSending || disabled}
+                disabled={!(input.trim() || selectedAction) || isSending || disabled}
                 className="rounded-full h-8 w-8 p-0 bg-muted hover:bg-muted/80 border-0 shadow-none text-muted-foreground hover:text-foreground"
                 size="sm"
               >
@@ -223,6 +320,23 @@ export default function EnhancedChatInput({
           onToggleRCA={onToggleRCA}
         />
       </div>
+    </div>
+  );
+}
+
+function ActionOverlay({ input, actionName }: { readonly input: string; readonly actionName: string }) {
+  const escaped = actionName.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const pattern = new RegExp(String.raw`(\/actions?\s+${escaped})`, 'i');
+  const parts = input.split(pattern);
+  if (parts.length < 2) return null;
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute inset-0 py-2 pl-2 pr-24 text-base whitespace-pre-wrap break-words pointer-events-none overflow-hidden"
+    >
+      {parts.map((part, idx) => (
+        <span key={part + String(idx)} className={pattern.test(part) ? 'text-blue-400' : 'text-foreground'}>{part}</span>
+      ))}
     </div>
   );
 }

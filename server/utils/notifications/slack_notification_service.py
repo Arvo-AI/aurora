@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from connectors.slack_connector.client import SlackClient, get_slack_client_for_user
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[SlackNotification:started]")
                     cursor.execute(
                         "SELECT email FROM users WHERE id = (SELECT user_id FROM incidents WHERE id = %s)",
                         (incident_id,)
@@ -103,7 +105,7 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
                         owner_name = owner_row[0].split('@')[0]
         except Exception as e:
             logger.warning(f"[SlackNotification] Could not fetch owner name: {e}")
-        
+
         # Build Slack message with blocks for better formatting
         blocks = [
             {
@@ -161,6 +163,7 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[SlackNotification:storeTs]")
                             cursor.execute(
                                 "UPDATE incidents SET slack_message_ts = %s WHERE id = %s",
                                 (message_ts, incident_id)
@@ -246,6 +249,7 @@ def send_slack_investigation_completed_notification(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[SlackNotification:completed]")
                     cursor.execute(
                         "SELECT email FROM users WHERE id = (SELECT user_id FROM incidents WHERE id = %s)",
                         (incident_id,)

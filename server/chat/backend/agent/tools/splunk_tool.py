@@ -13,6 +13,9 @@ from utils.auth.token_management import get_token_data
 logger = logging.getLogger(__name__)
 
 SPLUNK_SEARCH_TIMEOUT = 60
+
+from utils.splunk_config import SPLUNK_SSL_VERIFY
+
 MAX_OUTPUT_SIZE = 2 * 1024 * 1024  # 2MB max output
 MAX_RESULT_SIZE = 10000  # 10KB max per individual result
 MAX_FIELD_VALUE_LENGTH = 1000  # Truncate individual field values longer than this
@@ -100,9 +103,10 @@ def _get_splunk_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         creds = get_token_data(user_id, "splunk")
         if not creds:
             return None
-        api_token = creds.get("api_token")
-        base_url = creds.get("base_url")
+        api_token = creds.get("api_token") or creds.get("token") or creds.get("access_token")
+        base_url = creds.get("base_url") or creds.get("url") or creds.get("instance_url")
         if not api_token or not base_url:
+            logger.warning("[SPLUNK-TOOL] Credentials exist but missing api_token or base_url")
             return None
         return {"base_url": base_url, "api_token": api_token}
     except Exception as exc:
@@ -173,7 +177,7 @@ def search_splunk(
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=SPLUNK_SEARCH_TIMEOUT,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -254,7 +258,7 @@ def list_splunk_indexes(user_id: Optional[str] = None, **kwargs) -> str:
             headers=headers,
             params={"output_mode": "json", "count": MAX_INDEXES_RETURN},
             timeout=30,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:
@@ -340,7 +344,7 @@ def list_splunk_sourcetypes(
             headers=_splunk_headers(creds["api_token"]),
             data=payload,
             timeout=30,
-            verify=False,
+            verify=SPLUNK_SSL_VERIFY,
         )
 
         if response.status_code == 401:

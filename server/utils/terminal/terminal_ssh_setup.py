@@ -7,6 +7,7 @@ from kubernetes.client.exceptions import ApiException
 
 from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,12 @@ SSH_PROVIDER_PATTERN = '%_ssh_%'
 def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
     """
     Return all SSH private keys for a user, keyed by a readable name:
-    e.g., {"scaleway_4b9511a5": "<private key>", "ovh_abc123": "<private key>"}
+    e.g., {"scaleway_4b9511a5": "<private key>"}
     """
     ssh_keys: Dict[str, str] = {}
     with db_pool.get_admin_connection() as conn:
         cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, log_prefix="[SSHSetup:_fetch_user_ssh_keys]")
         cursor.execute(
             "SELECT provider FROM user_tokens WHERE user_id = %s AND provider LIKE %s",
             (user_id, SSH_PROVIDER_PATTERN)
@@ -32,8 +34,7 @@ def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
             try:
                 token_data = get_token_data(user_id, provider)
                 if token_data and "private_key" in token_data:
-                    # provider is like "scaleway_ssh_<vmId>" or "ovh_ssh_<vmId>"
-                    vm_key = provider.replace("_ssh_", "_")  # scaleway_<vmId>
+                    vm_key = provider.replace("_ssh_", "_")
                     ssh_keys[vm_key] = token_data["private_key"]
             except (KeyError, ValueError, TypeError) as e:
                 logger.warning(f"Failed to load SSH key for {provider}: {e}")

@@ -156,7 +156,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         {step === "email" ? (
-          <form onSubmit={handleEmailSubmit}>
+          <form key="email-step" onSubmit={handleEmailSubmit}>
             <DialogHeader>
               <DialogTitle>Add team member</DialogTitle>
               <DialogDescription>
@@ -194,7 +194,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
             </DialogFooter>
           </form>
         ) : (
-          <form onSubmit={handleCreateUser}>
+          <form key="new-user-step" onSubmit={handleCreateUser}>
             <DialogHeader>
               <DialogTitle>Create new account</DialogTitle>
               <DialogDescription>
@@ -220,7 +220,19 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
             <DialogFooter className="gap-2 sm:gap-0">
-              <Button type="button" variant="outline" size="sm" onClick={() => { setStep("email"); setError(""); }}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPassword("");
+                  setConfirmPassword("");
+                  setError("");
+                  setStep("email");
+                }}
+              >
                 Back
               </Button>
               <Button type="submit" disabled={saving} size="sm" className="gap-2">

@@ -10,9 +10,11 @@ from celery_config import celery_app
 from chat.background.visualization_extractor import VisualizationData, VisualizationExtractor
 from utils.db.connection_pool import db_pool
 from utils.cache.redis_client import get_redis_client
+from utils.auth.stateless_auth import set_rls_context
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 logger = logging.getLogger(__name__)
+_LOG_PREFIX = "[Visualization]"
 
 # Module-level singleton extractor (reuses LLM client across invocations)
 _extractor: Optional[VisualizationExtractor] = None
@@ -22,7 +24,7 @@ def _get_extractor() -> VisualizationExtractor:
     global _extractor
     if _extractor is None:
         _extractor = VisualizationExtractor()
-        logger.info("[Visualization] Created singleton VisualizationExtractor")
+        logger.info(f"{_LOG_PREFIX} Created singleton VisualizationExtractor")
     return _extractor
 
 
@@ -51,21 +53,21 @@ def update_visualization(
         force_full: If True, process all available context (final viz)
         tool_calls_json: JSON string of recent tool calls to process
     """
-    logger.info(f"[Visualization] Starting update for incident {incident_id} (force_full={force_full})")
+    logger.info(f"{_LOG_PREFIX} Starting update for incident {incident_id} (force_full={force_full})")
     
     try:
         # Get recent tool calls
         if tool_calls_json:
             tool_calls = json.loads(tool_calls_json)
-            logger.info(f"[Visualization] Using {len(tool_calls)} tool calls from parameters")
+            logger.info(f"{_LOG_PREFIX} Using {len(tool_calls)} tool calls from parameters")
         else:
             tool_calls = _fetch_recent_tool_calls(session_id, user_id, limit=10 if not force_full else 50)
-            logger.info(f"[Visualization] Fetched {len(tool_calls)} tool calls from llm_context_history")
+            logger.info(f"{_LOG_PREFIX} Fetched {len(tool_calls)} tool calls from llm_context_history")
         
         if not tool_calls:
             return {"status": "skipped", "reason": "no_tool_calls"}
         
-        existing_viz = _fetch_existing_visualization(incident_id)
+        existing_viz = _fetch_existing_visualization(incident_id, user_id)
         
         extractor = _get_extractor()
         updated_viz = extractor.extract_incremental(
@@ -74,7 +76,7 @@ def update_visualization(
         )
         
         if not updated_viz.nodes:
-            logger.warning(f"[Visualization] No entities extracted for incident {incident_id}")
+            logger.warning(f"{_LOG_PREFIX} No entities extracted for incident {incident_id}")
             return {"status": "skipped", "reason": "no_entities"}
         
         # Post-process: Remove 'investigating' status from final visualization
@@ -86,14 +88,14 @@ def update_visualization(
                     investigating_count += 1
             
             if investigating_count > 0:
-                logger.info(f"[Visualization] Converted {investigating_count} 'investigating' nodes to 'unknown' in final visualization")
+                logger.info(f"{_LOG_PREFIX} Converted {investigating_count} 'investigating' nodes to 'unknown' in final visualization")
         
         validated_json = updated_viz.model_dump_json(indent=2)
-        _store_visualization(incident_id, validated_json)
+        _store_visualization(incident_id, validated_json, user_id)
         _notify_sse_clients(incident_id, updated_viz.version)
         
         logger.info(
-            f"[Visualization] Updated incident {incident_id}: "
+            f"{_LOG_PREFIX} Updated incident {incident_id}: "
             f"v{updated_viz.version}, {len(updated_viz.nodes)} nodes, {len(updated_viz.edges)} edges"
         )
         
@@ -105,55 +107,98 @@ def update_visualization(
         }
     
     except Exception as e:
-        logger.error(f"[Visualization] Update failed for incident {incident_id}: {e}")
+        logger.error(f"{_LOG_PREFIX} Update failed for incident {incident_id}: {e}")
         return {"status": "error", "error": str(e)}
 
 
 def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
-    """Fetch recent tool calls from database llm_context_history."""
+    """Fetch recent infrastructure tool calls for an RCA session.
+
+    For orchestrator (fanout) RCAs, the parent session's llm_context_history
+    is empty — all tool calls live under child session_ids like
+    `{parent}::sa_N` / `{parent}::sa_wN_M`. We aggregate from execution_steps
+    so the final visualization has the data it needs.
+    """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT llm_context_history
-                    FROM chat_sessions
-                    WHERE id = %s
-                """, (session_id,))
-                
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return []
+
+                # Parent session's llm_context_history (single-agent path)
+                parent_calls: List[Dict] = []
+                cursor.execute(
+                    "SELECT llm_context_history FROM chat_sessions WHERE id = %s",
+                    (session_id,),
+                )
                 row = cursor.fetchone()
-        
-        if not row or not row[0]:
-            logger.warning(f"[Visualization] No llm_context_history found for session {session_id}")
+                if row and row[0]:
+                    llm_context = row[0]
+                    if isinstance(llm_context, str):
+                        llm_context = json.loads(llm_context)
+                    for msg in llm_context:
+                        if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
+                            parent_calls.append({
+                                'tool': msg.get('name'),
+                                'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
+                            })
+
+                # Child sub-agent sessions (orchestrator fanout path).
+                # session_id format: `{parent}::{agent_id}` (e.g. `{uuid}::sa_1`,
+                # `{uuid}::sa_w2_1`). execution_steps is the canonical store of
+                # tool invocations and is indexed on session_id. Bound the query
+                # so it doesn't scale with RCA history — fetch the most recent
+                # `limit` rows and reverse to chronological order for the
+                # visualization extractor.
+                child_calls: List[Dict] = []
+                # Prefix range scan over the `{parent}::` namespace — index-friendly
+                # and immune to wildcards in session_id (LIKE would mismatch on `%`/`_`).
+                # Upper bound replaces the final `:` with `;` (next ASCII codepoint),
+                # making it the smallest string strictly greater than every `{sid}::*`.
+                child_lo = f"{session_id}::"
+                child_hi = f"{session_id}:;"
+                cursor.execute(
+                    """
+                    SELECT tool_name, tool_output
+                      FROM execution_steps
+                     WHERE session_id >= %s AND session_id < %s
+                       AND tool_name = ANY(%s)
+                     ORDER BY created_at DESC
+                     LIMIT %s
+                    """,
+                    (child_lo, child_hi, list(INFRASTRUCTURE_TOOLS), limit),
+                )
+                for tname, toutput in reversed(cursor.fetchall()):
+                    child_calls.append({
+                        'tool': tname,
+                        'output': str(toutput or '')[:MAX_TOOL_OUTPUT_CHARS],
+                    })
+
+        combined = parent_calls + child_calls
+        if not combined:
+            logger.warning(
+                f"{_LOG_PREFIX} No tool calls found for session {session_id} (parent or children)"
+            )
             return []
-        
-        llm_context = row[0]
-        if isinstance(llm_context, str):
-            import json
-            llm_context = json.loads(llm_context)
-        
-        tool_calls = []
-        
-        # Extract tool messages from llm_context_history
-        for msg in llm_context:
-            if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
-                tool_calls.append({
-                    'tool': msg.get('name'),
-                    'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
-                })
-        
-        logger.info(f"[Visualization] Fetched {len(tool_calls)} infrastructure tool calls from database for session {session_id}")
-        return tool_calls[-limit:] if tool_calls else []
-    
+
+        logger.info(
+            f"{_LOG_PREFIX} Fetched {len(parent_calls)} parent + {len(child_calls)} child "
+            f"infrastructure tool calls for session {session_id}"
+        )
+        return combined[-limit:]
+
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch tool calls from database: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to fetch tool calls: {e}")
         return []
 
 
-def _fetch_existing_visualization(incident_id: str) -> Optional[VisualizationData]:
+def _fetch_existing_visualization(incident_id: str, user_id: str) -> Optional[VisualizationData]:
     """Fetch current visualization from incidents table."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return None
                 cursor.execute("""
                     SELECT visualization_code
                     FROM incidents
@@ -168,15 +213,17 @@ def _fetch_existing_visualization(incident_id: str) -> Optional[VisualizationDat
         return None
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to fetch existing viz: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to fetch existing viz: {e}")
         return None
 
 
-def _store_visualization(incident_id: str, json_str: str):
+def _store_visualization(incident_id: str, json_str: str, user_id: str):
     """Store updated visualization in database."""
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    raise RuntimeError(f"Cannot resolve org_id for user {user_id}")
                 cursor.execute("""
                     UPDATE incidents
                     SET visualization_code = %s,
@@ -186,7 +233,7 @@ def _store_visualization(incident_id: str, json_str: str):
                 conn.commit()
     
     except Exception as e:
-        logger.error(f"[Visualization] Failed to store viz: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to store viz: {e}")
         raise
 
 
@@ -195,11 +242,11 @@ def _notify_sse_clients(incident_id: str, version: int):
     try:
         redis_client = get_redis_client()
         if not redis_client:
-            logger.warning("[Visualization] Redis unavailable, skipping SSE notification")
+            logger.warning(f"{_LOG_PREFIX} Redis unavailable, skipping SSE notification")
             return
         
         channel = f"visualization:{incident_id}"
         message = json.dumps({"type": "update", "version": version})
         redis_client.publish(channel, message)
     except Exception as e:
-        logger.warning(f"[Visualization] Failed to notify SSE clients: {e}")
+        logger.warning(f"{_LOG_PREFIX} Failed to notify SSE clients: {e}")

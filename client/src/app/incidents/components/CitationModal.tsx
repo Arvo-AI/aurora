@@ -87,9 +87,9 @@ export default function CitationModal({ citation, isOpen, onClose }: CitationMod
           {/* Command */}
           {citation.command && citation.command !== 'Command not available' && (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
                 Command
-              </label>
+              </span>
               <div className="p-3 rounded-lg bg-zinc-800 border border-zinc-700">
                 <code className="text-sm font-mono text-orange-300 break-all">
                   {citation.command}
@@ -101,9 +101,9 @@ export default function CitationModal({ citation, isOpen, onClose }: CitationMod
           {/* Output */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
                 Output
-              </label>
+              </span>
               <button
                 onClick={handleCopy}
                 className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors"

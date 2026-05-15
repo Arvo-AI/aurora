@@ -4,8 +4,8 @@ Provides low-level command execution, parsing, and analysis utilities.
 Designed to be tool-agnostic for future Pulumi support.
 """
 
-import json
 import logging
+import os
 import re
 import subprocess
 from utils.terminal.terminal_run import terminal_run
@@ -29,10 +29,12 @@ def run_terraform_command(
     """Execute a Terraform command in the specified directory."""
     try:
         success, resource_id, isolated_env = setup_terraform_environment_isolated(user_id)
-        # Only require success and isolated_env - resource_id can be None for OVH 
-        # where project is discovered dynamically via CLI
         if not success or isolated_env is None:
             return {"error": "Failed to setup Terraform environment"}
+
+        tf_config = os.environ.get("TF_CLI_CONFIG_FILE")
+        if tf_config:
+            isolated_env.setdefault("TF_CLI_CONFIG_FILE", tf_config)
 
         result = terminal_run(
             command,
@@ -42,6 +44,7 @@ def run_terraform_command(
             timeout=timeout,
             cwd=working_dir,
             env=isolated_env,
+            trusted=True,
         )
 
         # For terraform plan -detailed-exitcode, exit code 2 means "changes detected" (success)
@@ -80,7 +83,7 @@ def initialize_terraform(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Initialize Terraform in the specified directory."""
-    return run_terraform_command("terraform init", directory, user_id, session_id)
+    return run_terraform_command("terraform init -input=false", directory, user_id, session_id, timeout=600)
 
 
 def collect_terraform_context(
@@ -102,13 +105,13 @@ def collect_terraform_context(
 
     # Check if directory exists in terminal pod (where files are actually stored)
     check_dir_cmd = f"test -d {terraform_dir} && echo 'exists' || echo 'missing'"
-    dir_check = terminal_run(check_dir_cmd, shell=True, capture_output=True, text=True, timeout=10)
+    dir_check = terminal_run(check_dir_cmd, shell=True, capture_output=True, text=True, timeout=10, trusted=True)
     if dir_check.returncode != 0 or 'missing' in dir_check.stdout:
         return None, [], f"Terraform directory does not exist: {terraform_dir}"
 
     # List .tf files in terminal pod
     list_tf_cmd = f"ls {terraform_dir}/*.tf 2>/dev/null || true"
-    tf_list = terminal_run(list_tf_cmd, shell=True, capture_output=True, text=True, timeout=10)
+    tf_list = terminal_run(list_tf_cmd, shell=True, capture_output=True, text=True, timeout=10, trusted=True)
     if tf_list.returncode != 0 or not tf_list.stdout.strip():
         return terraform_dir, [], f"No Terraform files found in directory: {terraform_dir}"
     
@@ -122,7 +125,7 @@ def collect_terraform_context(
     required_files: List[str] = []
     for tf_file in tf_files:
         read_cmd = f"cat {tf_file}"
-        read_result = terminal_run(read_cmd, shell=True, capture_output=True, text=True, timeout=10)
+        read_result = terminal_run(read_cmd, shell=True, capture_output=True, text=True, timeout=10, trusted=True)
         if read_result.returncode == 0:
             content = read_result.stdout
             if "aws_lambda_function" in content:
@@ -132,7 +135,7 @@ def collect_terraform_context(
     missing_files = []
     for required_file in required_files:
         check_cmd = f"test -f {terraform_dir}/{required_file} && echo 'exists' || echo 'missing'"
-        check_result = terminal_run(check_cmd, shell=True, capture_output=True, text=True, timeout=10)
+        check_result = terminal_run(check_cmd, shell=True, capture_output=True, text=True, timeout=10, trusted=True)
         if check_result.returncode != 0 or 'missing' in check_result.stdout:
             missing_files.append(required_file)
     

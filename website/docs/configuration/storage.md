@@ -51,6 +51,8 @@ Aurora supports any S3-compatible storage:
 
 ### AWS S3
 
+#### With static credentials
+
 ```bash
 STORAGE_TYPE=s3
 STORAGE_BUCKET=your-bucket-name
@@ -58,6 +60,20 @@ STORAGE_REGION=us-east-1
 STORAGE_ACCESS_KEY=AKIA...
 STORAGE_SECRET_KEY=...
 ```
+
+#### With IRSA / pod identity (EKS)
+
+When running on EKS with IRSA, credentials are injected automatically via the ServiceAccount. Leave access keys empty:
+
+```bash
+STORAGE_TYPE=s3
+STORAGE_BUCKET=your-bucket-name
+STORAGE_REGION=us-east-1
+# STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY are omitted —
+# boto3 uses the IRSA credential chain automatically
+```
+
+See the [EKS setup guide](../deployment/eks-setup#step-3-configure-s3-storage) for IRSA role and ServiceAccount configuration.
 
 ### Cloudflare R2
 

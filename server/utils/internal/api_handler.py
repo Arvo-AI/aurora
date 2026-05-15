@@ -1,5 +1,6 @@
 """Internal API handler for chatbot service HTTP endpoints."""
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -49,7 +50,13 @@ async def handle_http_request(reader, writer):
 
 async def _handle_kubectl_execute(headers, body, writer):
     """Handle internal kubectl execution endpoint."""
-    if headers.get('x-internal-secret') != os.getenv('FLASK_SECRET_KEY'):
+    internal_secret = os.getenv('INTERNAL_API_SECRET') or ''
+    provided = headers.get('x-internal-secret') or ''
+    # Skip auth when the secret isn't configured (local dev convenience).
+    # Production safety is enforced at startup in main_chatbot.py — the
+    # container refuses to start without INTERNAL_API_SECRET when AURORA_ENV != "dev".
+    # When the secret IS set, compare in constant time to avoid leaking timing info.
+    if internal_secret and not hmac.compare_digest(internal_secret, provided):
         await _send_json_response(writer, {"error": "Unauthorized"}, status="403 Forbidden")
         return
     

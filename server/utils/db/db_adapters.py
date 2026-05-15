@@ -4,7 +4,7 @@ These functions allow existing code to work with the new connection pool without
 """
 
 import logging
-from utils.db.connection_pool import db_pool
+from utils.db.connection_pool import db_pool, DatabaseConnectionPool
 from contextlib import contextmanager
 import psycopg2
 
@@ -27,11 +27,19 @@ class PooledConnectionWrapper:
         """Override close to return connection to pool instead of actually closing."""
         if not self._closed:
             try:
+                self._connection.rollback()
+                with self._connection.cursor() as cur:  # No RLS needed — pool cleanup (RESET vars)
+                    cur.execute(
+                        "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    )
+                self._connection.commit()
+            except Exception as e:
+                logger.warning("Failed to reset session vars on pool return: %s", e)
+            try:
                 self._pool.putconn(self._connection)
                 self._closed = True
-                logger.debug(f"Returned {'admin' if self._is_admin else 'user'} connection to pool via close()")
             except Exception as e:
-                logger.error(f"Error returning connection to pool on close(): {e}")
+                logger.error("Error returning connection to pool on close(): %s", e)
     
     def __enter__(self):
         return self
@@ -56,16 +64,8 @@ def connect_to_db_as_admin():
         connection = pool.getconn()
         if connection:
             connection.autocommit = False
-            # Set default user context - admin connections typically don't need RLS context
-            try:
-                cursor = connection.cursor()
-                cursor.execute("SET myapp.current_user_id = 'admin_user';")
-                cursor.close()
-            except Exception:
-                # If setting fails, continue - admin connections may not need this
-                pass
+            DatabaseConnectionPool._set_rls_vars(connection)
             logger.debug("Retrieved admin connection from pool (backward compatibility mode)")
-            # Return wrapped connection that will return to pool on close()
             return PooledConnectionWrapper(connection, pool, is_admin=True)
         else:
             raise Exception("connection pool exhausted")
@@ -92,16 +92,8 @@ def connect_to_db_as_user():
         connection = pool.getconn()
         if connection:
             connection.autocommit = False
-            # Set default user context for RLS
-            try:
-                cursor = connection.cursor()
-                cursor.execute("SET myapp.current_user_id = 'default_user';")
-                cursor.close()
-            except Exception:
-                # If setting fails, continue - connection may still work for some queries
-                pass
+            DatabaseConnectionPool._set_rls_vars(connection)
             logger.debug("Retrieved user connection from pool (backward compatibility mode)")
-            # Return wrapped connection that will return to pool on close()
             return PooledConnectionWrapper(connection, pool, is_admin=False)
         else:
             raise Exception("connection pool exhausted")

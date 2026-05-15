@@ -138,8 +138,8 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
   if (totals.request_count === 0 && !currentStreaming) {
     return (
       <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-500">
-        <Activity className="h-3.5 w-3.5 text-zinc-600" />
-        <span className="transition-opacity duration-500">{thinkingMessage}</span>
+        <Activity className={`h-3.5 w-3.5 ${isSending ? "text-zinc-400 animate-pulse" : "text-zinc-600"}`} />
+        {isSending && <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>}
       </div>
     );
   }

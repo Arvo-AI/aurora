@@ -1,0 +1,170 @@
+"use client";
+
+import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { useConnectorAuth } from "@/hooks/use-connector-auth";
+import { incidentIoService } from "@/lib/services/incident-io";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2 } from "lucide-react";
+import { getUserFriendlyError } from "@/lib/utils";
+import { IncidentIoWebhookStep } from "@/components/incident-io/IncidentIoWebhookStep";
+import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import Image from "next/image";
+
+export default function IncidentIoAuthPage() {
+  const { toast } = useToast();
+  const [apiKey, setApiKey] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const {
+    isConnected,
+    isCheckingStatus,
+    updateLocalState,
+    disconnect,
+  } = useConnectorAuth({
+    cacheKey: "incident_io_connection_status",
+    storageKey: "isIncidentIoConnected",
+    fetchStatus: () => incidentIoService.getStatus(),
+    disconnectPath: "/api/connected-accounts/incidentio",
+  });
+
+  const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoading(true);
+
+    try {
+      const result = await incidentIoService.connect({ apiKey });
+      updateLocalState(result);
+      toast({ title: "Success", description: "incident.io connected successfully!" });
+    } catch (err: any) {
+      console.error("incident.io connection failed", err);
+      toast({
+        title: "Failed to connect to incident.io",
+        description: getUserFriendlyError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+      setApiKey("");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setLoading(true);
+    try {
+      await disconnect();
+      toast({ title: "Success", description: "incident.io disconnected successfully" });
+    } catch (err: any) {
+      console.error("incident.io disconnect failed", err);
+      toast({
+        title: "Failed to disconnect incident.io",
+        description: getUserFriendlyError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (isCheckingStatus) {
+    return (
+      <ConnectorAuthGuard connectorName="incident.io">
+        <div className="container mx-auto py-8 px-4 max-w-2xl">
+          <Card>
+            <CardContent className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </CardContent>
+          </Card>
+        </div>
+      </ConnectorAuthGuard>
+    );
+  }
+
+  return (
+    <ConnectorAuthGuard connectorName="incident.io">
+      <div className="container mx-auto py-8 px-4 max-w-2xl">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="flex items-center justify-center h-12 w-12 rounded-lg bg-white dark:bg-white p-1.5">
+            <Image src="/incidentio.svg" alt="incident.io" width={40} height={40} />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold">incident.io</h1>
+            <p className="text-muted-foreground mt-0.5">
+              Incident lifecycle tracking and automated RCA
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center mb-8">
+          <div className="flex items-center">
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold ${isConnected ? 'bg-gray-200 text-gray-600' : 'text-white'}`} style={isConnected ? undefined : { backgroundColor: '#F04438' }}>
+              1
+            </div>
+            <div className="w-24 h-1" style={{ backgroundColor: isConnected ? '#F04438' : '#e5e7eb' }}></div>
+            <div className={`flex items-center justify-center w-10 h-10 rounded-full font-bold ${isConnected ? 'text-white' : 'bg-gray-200 text-gray-600'}`} style={isConnected ? { backgroundColor: '#F04438' } : undefined}>
+              2
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center mb-6 text-sm font-medium">
+          <span className={isConnected ? 'text-muted-foreground' : 'text-foreground'} style={isConnected ? undefined : { color: '#F04438' }}>
+            Connect
+          </span>
+          <span className="mx-4 text-muted-foreground">&rarr;</span>
+          <span className={isConnected ? 'text-foreground' : 'text-muted-foreground'} style={isConnected ? { color: '#F04438' } : undefined}>
+            Configure Webhook
+          </span>
+        </div>
+
+        {isConnected ? (
+          <IncidentIoWebhookStep
+            onDisconnect={handleDisconnect}
+            loading={loading}
+          />
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>Connect to incident.io</CardTitle>
+              <CardDescription>
+                Create an API key at <strong>Settings &rarr; API keys</strong> in incident.io, then paste it below.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={handleConnect}>
+                <div className="space-y-2">
+                  <Label htmlFor="apiKey">API Key</Label>
+                  <Input
+                    id="apiKey"
+                    type="password"
+                    placeholder="Paste your incident.io API key"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The API key needs these permissions: <strong>View all incident data (including private incidents)</strong> and <strong>Create incidents</strong>. Keys are stored securely in Vault.
+                  </p>
+                </div>
+
+                <Button type="submit" className="w-full" disabled={loading || !apiKey}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    "Connect incident.io"
+                  )}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </ConnectorAuthGuard>
+  );
+}

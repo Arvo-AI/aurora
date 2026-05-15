@@ -11,7 +11,9 @@ import { useAuth } from '@/hooks/useAuthHooks';
 import { canWrite } from '@/lib/roles';
 
 import IncidentCard from '../components/IncidentCard';
-import ThoughtsPanel from '../components/ThoughtsPanel';
+import ThoughtsPanel, { PANEL_WIDTH_DEFAULT } from '../components/ThoughtsPanel';
+
+const STALE_POLL_MS = 5 * 60 * 1000;
 
 export default function IncidentDetailPage() {
   const params = useParams();
@@ -22,8 +24,11 @@ export default function IncidentDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showThoughts, setShowThoughts] = useState(false);
   const [thoughts, setThoughts] = useState<StreamingThought[]>([]);
+  const [thoughtsPanelWidth, setThoughtsPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
   const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const userClosedThoughtsRef = useRef<boolean>(false);
+  const pollStartRef = useRef<number>(0);
+  const lastUpdatedAtRef = useRef<string>('');
 
   const applyIncidentData = useCallback((data: Incident) => {
     const newThoughts = data.streamingThoughts || [];
@@ -45,6 +50,8 @@ export default function IncidentDetailPage() {
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    pollStartRef.current = 0;
+    lastUpdatedAtRef.current = '';
 
     const fetchAndSchedule = async (isInitial: boolean) => {
       if (!active || !params.id) return;
@@ -58,14 +65,30 @@ export default function IncidentDetailPage() {
         applyIncidentData(data);
 
         const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
-        if (needsPoll && active) {
-          timer = setTimeout(() => fetchAndSchedule(false), 1000);
+        if (!needsPoll || !active) { pollStartRef.current = 0; return; }
+
+        if (data.updatedAt !== lastUpdatedAtRef.current) {
+          lastUpdatedAtRef.current = data.updatedAt;
+          pollStartRef.current = Date.now();
         }
+        if (!pollStartRef.current) pollStartRef.current = Date.now();
+        if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
+          setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+          return;
+        }
+        timer = setTimeout(() => fetchAndSchedule(false), 1000);
       } catch (e) {
         if (!active) return;
         if (isInitial) {
           setError('Failed to load incident');
           console.error('Failed to load incident:', e instanceof Error ? e.message : 'Unknown error');
+        } else {
+          if (!pollStartRef.current) pollStartRef.current = Date.now();
+          if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
+            setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
+          } else {
+            timer = setTimeout(() => fetchAndSchedule(false), 2000);
+          }
         }
       } finally {
         if (isInitial && active) setLoading(false);
@@ -159,8 +182,9 @@ export default function IncidentDetailPage() {
 
       <div className="flex">
         {/* Main content area */}
-        <div 
-          className={`flex-1 transition-all duration-300 ${showThoughts ? 'mr-[400px]' : ''}`}
+        <div
+          className="flex-1 min-w-0"
+          style={{ marginRight: showThoughts ? thoughtsPanelWidth : 0 }}
           onClick={() => {
             if (showThoughts) {
               setShowThoughts(false);
@@ -186,10 +210,6 @@ export default function IncidentDetailPage() {
                 }
               }}
               citations={incident.citations}
-              onExecutionStarted={() => {
-                setShowThoughts(true);
-                userClosedThoughtsRef.current = false;
-              }}
               onRefresh={refreshIncident}
             />
           </div>
@@ -201,6 +221,7 @@ export default function IncidentDetailPage() {
           incident={incident}
           isVisible={showThoughts}
           canInteract={canWrite(role)}
+          onWidthChange={setThoughtsPanelWidth}
         />
       </div>
     </div>

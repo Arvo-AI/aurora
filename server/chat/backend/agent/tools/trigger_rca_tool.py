@@ -112,7 +112,7 @@ def trigger_rca(
         "triggered_at": timestamp_str,
     }
 
-    from utils.auth.stateless_auth import get_org_id_for_user
+    from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
 
     org_id = get_org_id_for_user(user_id)
@@ -123,6 +123,7 @@ def trigger_rca(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[TriggerRCA]")
                 cursor.execute(
                     """INSERT INTO incidents
                        (user_id, org_id, source_type, source_alert_id, alert_title,
@@ -190,7 +191,7 @@ def trigger_rca(
             trigger_metadata=trigger_metadata, incident_id=incident_id,
         )
 
-        rca_prompt = build_chat_rca_prompt(
+        rca_prompt, rail_text = build_chat_rca_prompt(
             description=issue_description, title=incident_title,
             service=service, severity=severity, user_id=user_id,
         )
@@ -199,11 +200,13 @@ def trigger_rca(
             user_id=user_id, session_id=rca_session_id,
             initial_message=rca_prompt, trigger_metadata=trigger_metadata,
             incident_id=incident_id,
+            rail_text=rail_text,
         )
 
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[TriggerRCA:store_task_id]")
                     cursor.execute(
                         "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
                         (task.id, incident_id),
@@ -222,6 +225,7 @@ def trigger_rca(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[TriggerRCA:mark_failed]")
                     cursor.execute(
                         "UPDATE incidents SET status = 'failed' WHERE id = %s",
                         (incident_id,),

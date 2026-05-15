@@ -5,41 +5,62 @@ Celery tasks for scheduled infrastructure discovery.
 import logging
 
 from celery_config import celery_app
+from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl')
 
 
-def _query_connected_providers(cur, user_id=None):
+def _query_connected_providers(cur, user_id=None, conn=None):
     """Query distinct (user_id, provider) pairs from active connections.
 
     If user_id is given, returns just the provider names for that user.
     Otherwise returns (user_id, provider) rows for all users.
+    Requires conn for cross-org queries to set RLS context per-org.
+
+    Includes org_id fallback so org-shared connections (e.g. AWS accounts
+    registered under the org rather than directly under the user) are picked
+    up the same way every other connection query in the codebase does.
     """
     if user_id is not None:
+        org_id = get_org_id_for_user(user_id)
+        if conn:
+            set_rls_context(cur, conn, user_id, log_prefix="[Discovery]")
         cur.execute("""
             SELECT DISTINCT provider FROM (
                 SELECT provider FROM user_connections
-                WHERE user_id = %s AND status = 'active' AND provider IN %s
+                WHERE (user_id = %s OR org_id = %s) AND status = 'active' AND provider IN %s
                 UNION
                 SELECT provider FROM user_tokens
-                WHERE user_id = %s AND is_active = true AND provider IN %s
+                WHERE (user_id = %s OR org_id = %s) AND is_active = true AND provider IN %s
             ) AS connected
-        """, (user_id, SUPPORTED_PROVIDERS, user_id, SUPPORTED_PROVIDERS))
+        """, (user_id, org_id, SUPPORTED_PROVIDERS, user_id, org_id, SUPPORTED_PROVIDERS))
         return [row[0] for row in cur.fetchall()]
     else:
-        cur.execute("""
-            SELECT DISTINCT user_id, provider FROM (
-                SELECT user_id, provider FROM user_connections
-                WHERE status = 'active' AND provider IN %s
-                UNION
-                SELECT user_id, provider FROM user_tokens
-                WHERE is_active = true AND provider IN %s
-            ) AS connected
-            ORDER BY user_id
-        """, (SUPPORTED_PROVIDERS, SUPPORTED_PROVIDERS))
-        return cur.fetchall()
+        # No RLS needed — cross-org loop sets RLS per user
+        cur.execute(
+            "SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL"
+        )
+        all_users = cur.fetchall()
+        results = []
+        for uid, org_id in all_users:
+            cur.execute("SET myapp.current_user_id = %s;", (uid,))
+            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            if conn:
+                conn.commit()
+            cur.execute("""
+                SELECT DISTINCT provider FROM (
+                    SELECT provider FROM user_connections
+                    WHERE (user_id = %s OR org_id = %s) AND status = 'active' AND provider IN %s
+                    UNION
+                    SELECT provider FROM user_tokens
+                    WHERE (user_id = %s OR org_id = %s) AND is_active = true AND provider IN %s
+                ) AS connected
+            """, (uid, org_id, SUPPORTED_PROVIDERS, uid, org_id, SUPPORTED_PROVIDERS))
+            for row in cur.fetchall():
+                results.append((uid, row[0]))
+        return results
 
 
 def _clear_discovery_lock(user_id):
@@ -156,8 +177,8 @@ def run_full_discovery(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
-        rows = _query_connected_providers(cur)
+        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
+        rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()
 
@@ -211,7 +232,8 @@ def run_user_discovery(self, user_id):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-        provider_names = _query_connected_providers(cur, user_id)
+        set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
+        provider_names = _query_connected_providers(cur, user_id, conn=conn)
 
         if not provider_names:
             cur.close()
@@ -223,13 +245,8 @@ def run_user_discovery(self, user_id):
 
         if "gcp" in providers:
             # Fetch root project while we still have the cursor
-            cur.execute(
-                "SELECT preference_value FROM user_preferences "
-                "WHERE user_id = %s AND preference_key = 'gcp_root_project'",
-                (user_id,)
-            )
-            root_row = cur.fetchone()
-            root_project = root_row[0] if root_row and root_row[0] else None
+            from utils.auth.stateless_auth import get_user_preference
+            root_project = get_user_preference(user_id, 'gcp_root_project')
 
         # Query active kubectl clusters for this user
         cur.execute("""
@@ -279,7 +296,11 @@ def run_user_discovery(self, user_id):
 
 @celery_app.task(name="services.discovery.tasks.mark_stale_services", bind=True, max_retries=0, soft_time_limit=300, time_limit=600)
 def mark_stale_services(self):
-    """Mark services not updated in 7 days as stale. Runs daily at 3 AM."""
+    """Mark services not updated in 7 days as stale, and delete those older than 30 days.
+
+    Runs daily at 3 AM. The 30-day deletion acts as a safety net for nodes
+    that were never cleaned up by a disconnect event.
+    """
     from utils.db.db_utils import connect_to_db_as_admin
     from services.graph.memgraph_client import get_memgraph_client
 
@@ -287,14 +308,15 @@ def mark_stale_services(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
-        rows = _query_connected_providers(cur)
+        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
+        rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()
         user_ids = list({row[0] for row in rows})
 
         client = get_memgraph_client()
         total_marked = 0
+        total_deleted = 0
         for user_id in user_ids:
             try:
                 marked = client.mark_stale_services(user_id, stale_days=7)
@@ -303,9 +325,16 @@ def mark_stale_services(self):
                     logger.info(f"[Discovery Task] Marked {marked} stale services for user {user_id}")
             except Exception as e:
                 logger.error(f"[Discovery Task] Stale detection failed for user {user_id}: {e}")
+            try:
+                deleted = client.delete_stale_services(user_id, stale_days=30)
+                total_deleted += deleted
+                if deleted > 0:
+                    logger.info(f"[Discovery Task] Deleted {deleted} stale services (>30d) for user {user_id}")
+            except Exception as e:
+                logger.exception(f"[Discovery Task] Stale deletion failed for user {user_id}: {e}")
 
-        logger.info(f"[Discovery Task] Stale detection complete: {total_marked} services marked")
-        return {"status": "completed", "total_marked": total_marked}
+        logger.info(f"[Discovery Task] Stale detection complete: {total_marked} marked, {total_deleted} deleted")
+        return {"status": "completed", "total_marked": total_marked, "total_deleted": total_deleted}
 
     except Exception as e:
         logger.error(f"[Discovery Task] Stale detection fatal error: {e}")

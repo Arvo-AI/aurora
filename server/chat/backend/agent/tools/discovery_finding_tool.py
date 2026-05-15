@@ -7,7 +7,7 @@ Used by the prediscovery agent to persist interconnection mappings.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -72,7 +72,7 @@ def save_discovery_finding(
         if not org_id:
             logger.warning(f"[Discovery] No org_id for user {user_id}, skipping (findings would be unsearchable)")
             return "Error: No organization context. Discovery findings require org scope."
-        document_id = f"{DISCOVERY_DOC_PREFIX}{datetime.utcnow().strftime('%Y%m%d')}:{uuid.uuid4().hex[:8]}"
+        document_id = f"{DISCOVERY_DOC_PREFIX}{datetime.now(timezone.utc).strftime('%Y%m%d')}:{uuid.uuid4().hex[:8]}"
 
         chunks = [{
             "content": content,

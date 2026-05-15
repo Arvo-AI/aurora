@@ -22,7 +22,7 @@ def _store_state_in_postgres(user_id: str, state_data: bytes) -> bool:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
 
-        # Create table if not exists
+        # No RLS needed — tailscale_state not RLS-protected
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tailscale_state (
                 user_id VARCHAR(255) PRIMARY KEY,
@@ -59,6 +59,7 @@ def _get_state_from_postgres(user_id: str) -> Optional[bytes]:
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
 
+        # No RLS needed — tailscale_state not RLS-protected
         cursor.execute(
             "SELECT state_data FROM tailscale_state WHERE user_id = %s",
             (user_id,)

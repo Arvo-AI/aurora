@@ -1,0 +1,9 @@
+models:
+  - type: main
+    engine: openai
+    model: placeholder
+
+rails:
+  input:
+    flows:
+      - self check input

@@ -13,10 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
-
-const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 // OVH regions with their display names
 const OVH_REGIONS = [
@@ -83,14 +80,12 @@ export default function OvhOnboardingPage() {
       }
 
       // Initiate OAuth flow
-      const response = await fetch(`${backendUrl}/ovh_api/ovh/oauth2/initiate`, {
+      const response = await fetch(`/api/proxy/ovh/oauth2/initiate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-User-ID': userId,
         },
         body: JSON.stringify({ endpoint: selectedRegion }),
-        credentials: 'include',
       });
 
       if (!response.ok) {

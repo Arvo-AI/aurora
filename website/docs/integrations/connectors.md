@@ -14,9 +14,70 @@ Aurora works without any cloud provider accounts. You only need an LLM API key t
 
 ### GCP (Google Cloud Platform)
 
-OAuth 2.0 authentication for Google Cloud Platform.
+Two authentication methods are available: **OAuth 2.0** (interactive, per-user consent) or **Service Account Key** (non-interactive, ideal for automation and cross-project setups).
 
-#### 1. Create OAuth Credentials
+#### Option A: Service Account Key
+
+Upload a GCP service account JSON key directly — no OAuth consent screen, no redirect URIs, no browser flow. The uploaded key becomes the working identity (Aurora skips its per-user SA impersonation chain).
+
+##### 1. Create a Service Account
+
+```bash
+gcloud iam service-accounts create aurora-connector \
+  --project=YOUR_PROJECT_ID \
+  --display-name="Aurora Connector"
+```
+
+##### 2. Grant Roles
+
+At minimum, grant read-only roles for investigation:
+
+```bash
+SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/logging.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/monitoring.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/container.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/compute.viewer"
+```
+
+For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
+
+##### 3. Download Key
+
+```bash
+gcloud iam service-accounts keys create aurora-sa-key.json \
+  --iam-account=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+##### 4. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **GCP**
+2. Select **Service Account** authentication
+3. Upload or paste the JSON key file contents
+4. Aurora validates the key, lists accessible projects, and connects
+
+##### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Service account key is malformed" | Verify the JSON file is complete and `private_key` is a valid PEM |
+| "Credential refresh failed" | The SA may be disabled or the key revoked — create a new key |
+| "No accessible projects" | Grant at least `roles/viewer` on the target project |
+
+---
+
+#### Option B: OAuth 2.0
+
+Interactive OAuth flow — best for development or when users connect their own GCP accounts.
+
+##### 1. Create OAuth Credentials
 
 1. Go to [GCP Console > Credentials](https://console.cloud.google.com/apis/credentials)
 2. If this is your first OAuth app, configure the **OAuth consent screen**:
@@ -32,7 +93,7 @@ OAuth 2.0 authentication for Google Cloud Platform.
    - Authorized redirect URIs: `http://localhost:5080/callback`
 4. Copy the **Client ID** and **Client Secret**
 
-#### 2. Configure Environment
+##### 2. Configure Environment
 
 Add to your `.env`:
 
@@ -41,7 +102,7 @@ CLIENT_ID=123456789-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
 CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-#### 3. Enable Required APIs
+##### 3. Enable Required APIs
 
 In GCP Console, enable these APIs for your project:
 - Cloud Resource Manager API
@@ -49,7 +110,7 @@ In GCP Console, enable these APIs for your project:
 - Cloud Logging API
 - Cloud Monitoring API
 
-#### Troubleshooting
+##### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
@@ -734,6 +795,85 @@ Aurora can also poll NerdGraph for active issues. Trigger manually via `POST /ne
 | "Invalid API key" | Ensure the key starts with `NRAK-` and belongs to a user with read access to APM, Infrastructure, Logs, and Alerts |
 | "Account not found" | Verify the Account ID is correct and the API key has access to that account |
 | "EU region issues" | Make sure you selected "EU" in the region selector if your account is on the EU data center |
+
+---
+
+### Sentry
+
+Internal Integration auth token authentication for ingesting issue/error webhooks and querying full stacktraces during RCA.
+
+#### 1. Open the Sentry Integration in Aurora
+
+Navigate to **Connectors** > **Sentry**. The page shows the **Webhook URL** Aurora expects (`https://your-aurora-domain/sentry/webhook/{user_id}`) — copy it now; you'll paste it into Sentry on the next step.
+
+#### 2. Create an Internal Integration in Sentry
+
+1. In Sentry, go to **Settings > Custom Integrations** (under *Developer Settings*)
+2. Click **Create New Integration** and choose **Internal Integration**
+3. Name it `Aurora` and paste the webhook URL from step 1 into the **Webhook URL** field
+4. Under **Permissions**, grant **read** access to: **Issue & Event**, **Project**, **Organization**
+5. Under **Webhooks**, subscribe to `issue` and `error` (the `error` resource requires a Business/Enterprise plan)
+6. Click **Save Changes**. Under **Credentials**, copy the **Client Secret** (long hex string).
+7. Scroll to the **Tokens** section and click **Create New Token**. Sentry does **not** generate an auth token automatically — you must create one. Copy the resulting `sntrys_…` token immediately; it's shown once.
+
+> **Read-only is sufficient.** Aurora never writes to Sentry during RCA. Granting read scopes only means revoking the integration immediately revokes Aurora's access.
+
+#### 3. Identify Your Region
+
+| Region | Host |
+|--------|------|
+| US | `sentry.io` |
+| EU | `de.sentry.io` |
+
+#### 4. Connect via Aurora UI
+
+1. Return to the Aurora Sentry page
+2. Fill in:
+   - **Organization Slug** — the slug in your Sentry URL (e.g. `acme-co`, not the display name)
+   - **Region** — US or EU
+   - **Auth Token** — the `sntrys_…` token from step 2
+   - **Client Secret** — the secret from step 2
+3. Click **Connect**
+
+Aurora validates the token against the org, lists accessible projects, and stores both secrets in Vault.
+
+#### What Aurora Queries
+
+Aurora uses the [Sentry web API](https://docs.sentry.io/api/) to:
+- Validate the organization and list accessible projects
+- Search **issues** by query (e.g. `is:unresolved`), time window, project, and environment
+- Fetch **issue metadata** plus the **latest event** for an issue (includes full stacktrace, breadcrumbs, tags)
+- Run **Discover-style event searches** across the org
+
+All requests use `Authorization: Bearer <auth_token>` against `https://sentry.io` (or `https://de.sentry.io` for EU). The integration is strictly read-only.
+
+#### How Aurora Processes Sentry Webhooks
+
+Sentry signs every webhook with HMAC-SHA256 of the raw JSON body using the integration's client secret. The signature lives in the `Sentry-Hook-Signature` header (hex digest, no prefix). Aurora rejects any request whose signature does not constant-time-match the secret stored at connect.
+
+For each accepted webhook Aurora:
+1. Persists the raw payload to `sentry_events` (deduplicated by `org_id + issue_id + action`)
+2. Runs alert correlation against existing open incidents (services, fingerprints, time window)
+3. Either attaches to a correlated incident or creates a new one with `source_type='sentry'`
+4. Generates an incident summary from the payload
+5. Kicks off a background RCA chat session pre-loaded with the Sentry skill context
+
+Subscribed resources: `issue` and `error`. The route also accepts `installation` and `comment` payloads from Sentry but only `issue` / `error` drive incident creation.
+
+#### Disconnecting
+
+Disconnecting deletes the user's Vault-stored credentials. Webhook deliveries for that user are rejected with `404` until the integration is reconnected. The Internal Integration object in Sentry is untouched — revoke it in Sentry separately if you want to invalidate the token immediately.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid Sentry auth token or insufficient permissions" | Verify the token starts with `sntrys_` and the Internal Integration grants `Issue & Event: Read`, `Project: Read`, `Organization: Read` |
+| "Sentry organization '\<slug\>' not found" | Use the slug in your Sentry URL (lowercase, hyphenated), not the display name |
+| "Webhook signing secret not configured" on incoming webhooks | Reconnect Sentry with the client secret — Aurora cannot verify signatures without it |
+| "Invalid webhook signature" | Confirm the **Client Secret** in Aurora matches what Sentry shows under the integration's *Credentials* section. Save the integration in Sentry to rotate if needed |
+| No webhooks arriving despite events firing | In Sentry, open the Aurora integration and confirm `issue` and `error` are checked under **Webhooks**, and that the Webhook URL field matches the URL Aurora shows |
+| "EU region issues" | Select **EU** in the region selector when connecting if your org is hosted on `de.sentry.io` |
 
 ---
 

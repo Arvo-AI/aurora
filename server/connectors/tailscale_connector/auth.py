@@ -12,7 +12,7 @@ Handles:
 
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def get_oauth_token(client_id: str, client_secret: str) -> Tuple[bool, Optional[
             return False, None, "No access token in response"
 
         expires_in = data.get('expires_in', 3600)
-        expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
         token_data = {
             'access_token': access_token,
@@ -305,8 +305,10 @@ def get_valid_access_token(
         if expires_at_str:
             try:
                 expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
                 buffer = timedelta(minutes=5)
-                if datetime.utcnow() < (expires_at - buffer):
+                if datetime.now(timezone.utc) < (expires_at - buffer):
                     logger.debug("Using existing valid Tailscale token")
                     return True, existing_token['access_token'], None
             except Exception as e:

@@ -40,7 +40,7 @@ echo "Waiting for Vault to be ready..."
 retries=0
 until vault status > /dev/null 2>&1; do
     retries=$((retries + 1))
-    if [ $retries -ge $MAX_RETRIES ]; then
+    if [[ $retries -ge $MAX_RETRIES ]]; then
         echo "ERROR: Vault did not become ready after $MAX_RETRIES attempts"
         exit 1
     fi

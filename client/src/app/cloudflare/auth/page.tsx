@@ -9,10 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, ExternalLink, AlertCircle, CheckCircle2, Globe, Shield, LogOut, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
-import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
-
-const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 interface CloudflareZone {
   id: string;
@@ -152,25 +149,10 @@ export default function CloudflareAuthPage() {
   const [zones, setZones] = useState<CloudflareZone[]>([]);
   const { toast } = useToast();
 
-  const getUserId = async (): Promise<string | null> => {
-    try {
-      const response = await fetch("/api/getUserId");
-      const data = await response.json();
-      return data.userId || null;
-    } catch {
-      return null;
-    }
-  };
-
   const fetchZones = useCallback(async () => {
     setIsLoadingZones(true);
     try {
-      const userId = await getUserId();
-      if (!userId) return;
-
-      const response = await fetch(`${backendUrl}/cloudflare_api/cloudflare/zones`, {
-        headers: { 'X-User-ID': userId },
-        credentials: 'include',
+      const response = await fetch(`/api/proxy/cloudflare/zones`, {
       });
 
       if (response.ok) {
@@ -191,15 +173,7 @@ export default function CloudflareAuthPage() {
   const checkStatus = useCallback(async () => {
     setIsCheckingStatus(true);
     try {
-      const userId = await getUserId();
-      if (!userId) {
-        setStatus({ connected: false });
-        return;
-      }
-
-      const response = await fetch(`${backendUrl}/cloudflare_api/cloudflare/status`, {
-        headers: { 'X-User-ID': userId },
-        credentials: 'include',
+      const response = await fetch(`/api/proxy/cloudflare/status`, {
       });
 
       if (response.ok) {
@@ -241,26 +215,12 @@ export default function CloudflareAuthPage() {
     setError(null);
 
     try {
-      const userId = await getUserId();
-
-      if (!userId) {
-        toast({
-          title: "Authentication Required",
-          description: "Please wait for authentication to complete before connecting to Cloudflare.",
-          variant: "destructive",
-        });
-        setIsLoading(false);
-        return;
-      }
-
-      const response = await fetch(`${backendUrl}/cloudflare_api/cloudflare/connect`, {
+      const response = await fetch(`/api/proxy/cloudflare/connect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-User-ID': userId,
         },
         body: JSON.stringify({ apiToken }),
-        credentials: 'include',
       });
 
       const data = await response.json();
@@ -304,16 +264,11 @@ export default function CloudflareAuthPage() {
   const handleDisconnect = async () => {
     setIsDisconnecting(true);
     try {
-      const userId = await getUserId();
-      if (!userId) return;
-
-      const response = await fetch(`${backendUrl}/cloudflare_api/cloudflare/disconnect`, {
+      const response = await fetch(`/api/proxy/cloudflare/disconnect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-User-ID': userId,
         },
-        credentials: 'include',
       });
 
       if (response.ok) {

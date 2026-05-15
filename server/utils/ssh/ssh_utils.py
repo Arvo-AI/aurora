@@ -6,6 +6,7 @@ import requests
 from typing import Any, Optional, Tuple
 
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import get_token_data
 from utils.ssh.ssh_jump_parser import SSHJumpConfig, parse_ssh_jump_command
@@ -28,21 +29,21 @@ def delete_ssh_credentials(
         Tuple of (success: bool, status_code: int, message: str)
     """
     secret_name = f"{provider}_ssh_{vm_id}"
-    logger.info(f"Deleting SSH key for {provider} VM {vm_id}, user: {user_id}")
+    logger.info(f"Deleting SSH key for {sanitize(provider)} VM {sanitize(vm_id)}, user: {sanitize(user_id)}")
 
     # delete_user_secret returns (success: bool, rows_deleted: int)
     success, rows_deleted = delete_user_secret(user_id, secret_name)
 
     if success:
         if rows_deleted > 0:
-            logger.info(f"Successfully deleted SSH key for {provider} VM {vm_id}")
+            logger.info(f"Successfully deleted SSH key for {sanitize(provider)} VM {sanitize(vm_id)}")
             return True, 200, "SSH credentials removed successfully"
         else:
             # No rows deleted means no credentials were found
-            logger.info(f"No SSH credentials found for {provider} VM {vm_id}")
+            logger.info(f"No SSH credentials found for {sanitize(provider)} VM {sanitize(vm_id)}")
             return False, 404, "No credentials found to delete"
     else:
-        logger.error(f"Failed to delete SSH key for {provider} VM {vm_id}")
+        logger.error(f"Failed to delete SSH key for {sanitize(provider)} VM {sanitize(vm_id)}")
         return False, 500, "Failed to delete credentials"
 
 
@@ -131,8 +132,8 @@ def load_user_private_key(user_id: str, ssh_key_id: int) -> str:
     """
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
-            conn.commit()
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cur, conn, user_id, log_prefix="[SSHUtils]")
             cur.execute(
                 """
                 SELECT provider

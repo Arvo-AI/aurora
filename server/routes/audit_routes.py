@@ -29,6 +29,7 @@ def record_audit_event(org_id, user_id, action, resource_type,
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # No RLS needed — audit_log not RLS-protected
                 cur.execute("""
                     INSERT INTO audit_log (org_id, user_id, action, resource_type, resource_id, detail, ip_address, user_agent)
                     VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)
@@ -162,6 +163,7 @@ def get_audit_log(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # No RLS needed — audit_log not RLS-protected
                 cur.execute(f"""
                     SELECT id, org_id, user_id, action, resource_type, resource_id, detail, ip_address, created_at
                     FROM audit_log

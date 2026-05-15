@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
@@ -12,14 +13,22 @@ from typing import Dict, Any, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
+# Home directory for isolated subprocess environments.
+# Terminal pods (Dockerfile-user-terminal) create 'appuser' at /home/appuser.
+# The server container (Dockerfile) creates 'app' at /home/app.
+# In local dev (no pod isolation), use the actual process home so cloud CLIs
+# can write config/cache files (.kube, .azure, .config/gcloud, etc.).
+_POD_ISOLATION = os.getenv("ENABLE_POD_ISOLATION", "true") == "true"
+_ISOLATED_HOME = "/home/appuser" if _POD_ISOLATION else str(Path.home())
+
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
-from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+from utils.log_sanitizer import hash_for_log
 
 
 def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
@@ -44,77 +53,6 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
     return LLMUsageTracker.count_tokens(text, model)
 
-# --------------------------------------------------------------------------------------
-# Common verb sets used across providers
-# --------------------------------------------------------------------------------------
-_READ_ONLY_VERBS: set[str] = {
-    "list", "describe", "get", "show", "config", "version", "info", "view", "read", "status",
-}
-# A non-exhaustive but conservative set of verbs considered to CHANGE state
-_ACTION_VERBS: set[str] = {
-    "create", "delete", "update", "apply", "destroy", "terminate", "start", "stop",
-    "restart", "attach", "detach", "enable", "disable", "put", "remove",
-}
-
-
-def summarize_cloud_command(cmd: str) -> str:
-    """Return a short description of what the CLI command (gcloud/az/aws) intends to do."""
-
-    try:
-        tokens = shlex.split(cmd)
-    except Exception:
-        tokens = cmd.split()
-
-    action = None
-    resource_type = None
-    resource_name = None
-    zone_or_region = None
-
-    # Tokens representing the CLI executable that we should skip when searching
-    cli_tokens = {"gcloud", "az", "aws", "kubectl", "gsutil", "bq", "scw", "ovh"}
-
-    for i, tok in enumerate(tokens):
-        low = tok.lower()
-
-        # Detect action verb
-        if low in _ACTION_VERBS.union(_READ_ONLY_VERBS):
-            action = low
-
-            # Try to infer resource type – walk backwards until we find a token
-            # that is not a flag or CLI executable.
-            j = i - 1
-            while j >= 0 and (tokens[j].lower() in cli_tokens or tokens[j].startswith("-")):
-                j -= 1
-            if j >= 0:
-                resource_type = tokens[j]
-
-            # Resource name usually follows the action verb (unless it's a flag)
-            k = i + 1
-            while k < len(tokens) and tokens[k].startswith("-"):
-                k += 1
-            if k < len(tokens):
-                resource_name = tokens[k]
-
-        # Capture location / region / zone flags for common CLIs
-        if low.startswith("--zone="):
-            zone_or_region = tok.split("=", 1)[1]
-        elif low == "--zone" and i + 1 < len(tokens):
-            zone_or_region = tokens[i + 1]
-        elif low.startswith("--region=") or low.startswith("--location="):
-            zone_or_region = tok.split("=", 1)[1]
-        elif low in {"--region", "--location", "-r", "-l"} and i + 1 < len(tokens):
-            zone_or_region = tokens[i + 1]
-
-    parts: list[str] = []
-    if action and resource_type:
-        parts.append(f"The command will {action} {resource_type}")
-    if resource_name and not resource_name.startswith("--"):
-        parts.append(f"named '{resource_name}'")
-    if zone_or_region:
-        parts.append(f"in {zone_or_region}")
-
-    summary_core = " ".join(parts) if parts else cmd
-    return f"{summary_core}.\n\n"
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +98,8 @@ def check_cli_availability(cli_tool: str) -> bool:
             check_cmd,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            trusted=True
         )
         return result.returncode == 0
     except Exception:
@@ -170,7 +109,8 @@ def check_cli_availability(cli_tool: str) -> bool:
                 [cli_tool, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                trusted=True
             )
             return result.returncode == 0
         except Exception:
@@ -198,12 +138,12 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "AZURE_CLIENT_ID": str(client_id),
             "AZURE_CLIENT_SECRET": str(client_secret),
             "AZURE_TENANT_ID": str(tenant_id),
-            "AZURE_CONFIG_DIR": "/home/appuser/.azure",  # Ensure Azure CLI uses correct config directory
+            "AZURE_CONFIG_DIR": f"{_ISOLATED_HOME}/.azure",
         }
         
         # Store auth command for chaining with user commands (NEVER log the secret!)
@@ -308,7 +248,8 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 external_id=external_id,
                 workspace_id=ws["id"],
                 region=selected_region or "us-east-1",
-                session_policy=session_policy
+                session_policy=session_policy,
+                user_id=user_id,
             )
 
             aws_credentials = {
@@ -344,7 +285,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "AWS_ACCESS_KEY_ID": str(access_key_id),
             "AWS_SECRET_ACCESS_KEY": str(secret_access_key),
@@ -357,97 +298,59 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         # Ensure region is available to CLI/SDK
         isolated_env["AWS_DEFAULT_REGION"] = region
         
-        # Validate credentials by making a test call to AWS STS
+        # Validate credentials by making a test call to AWS STS.
+        # Use a botocore session with config/credentials files pointed at /dev/null
+        # so boto3 doesn't pick up stale profile state from disk.
         try:
-            # Temporarily set environment to prevent boto3 from looking for profiles
-            # We'll use a context manager approach for thread safety
-            import contextlib
+            import boto3
+            import botocore.session
+            from botocore.config import Config
             
-            @contextlib.contextmanager
-            def temporary_aws_env_override():
-                """Context manager to temporarily override AWS env vars for boto3."""
-                saved_vars = {}
-                vars_to_clear = ["AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CONFIG_FILE", 
-                                "AWS_SHARED_CREDENTIALS_FILE", "AWS_CREDENTIAL_FILE"]
-                
-                # Save and clear problematic environment variables
-                for var in vars_to_clear:
-                    if var in os.environ:
-                        saved_vars[var] = os.environ[var]
-                        del os.environ[var]
-                
-                # Set dummy AWS_CONFIG_FILE to prevent boto3 from searching for config
-                os.environ["AWS_CONFIG_FILE"] = "/dev/null"
-                os.environ["AWS_SHARED_CREDENTIALS_FILE"] = "/dev/null"
-                
-                try:
-                    yield
-                finally:
-                    # Restore original environment
-                    os.environ.pop("AWS_CONFIG_FILE", None)
-                    os.environ.pop("AWS_SHARED_CREDENTIALS_FILE", None)
-                    for var, value in saved_vars.items():
-                        os.environ[var] = value
+            sts_start = time.perf_counter()
             
-            # Use the context manager to ensure clean environment for boto3
-            with temporary_aws_env_override():
-                import boto3
-                from botocore.config import Config
-                
-                sts_start = time.perf_counter()
-                
-                # Create a config to avoid profile issues
-                config = Config(
-                    region_name=region,
-                    signature_version='v4',
-                    retries={'max_attempts': 3}
-                )
-                
-                # Use explicit credentials with boto3.client
-                sts_kwargs = {
-                    'service_name': 'sts',
-                    'aws_access_key_id': access_key_id,
-                    'aws_secret_access_key': secret_access_key,
-                    'region_name': region,
-                    'config': config,
-                    'use_ssl': True,
-                }
-                if session_token:
-                    sts_kwargs['aws_session_token'] = session_token
+            botocore_sess = botocore.session.Session()
+            botocore_sess.set_config_variable('config_file', '/dev/null')
+            botocore_sess.set_config_variable('credentials_file', '/dev/null')
+            
+            session = boto3.Session(
+                aws_access_key_id=access_key_id,
+                aws_secret_access_key=secret_access_key,
+                aws_session_token=session_token if session_token else None,
+                region_name=region,
+                botocore_session=botocore_sess,
+            )
+            
+            # Create a config to avoid profile issues
+            config = Config(
+                region_name=region,
+                signature_version='v4',
+                retries={'max_attempts': 3}
+            )
+            
+            sts = session.client('sts', config=config, use_ssl=True)
+            identity = sts.get_caller_identity()
+            logger.info(f"TIME: AWS STS validation took {time.perf_counter() - sts_start:.2f}s")
+            
+            account_id = identity['Account']
+            user_arn = identity.get('Arn', 'Unknown')
+            logger.info(f"Successfully validated AWS credentials for account: {account_id}")
+            logger.info(f"User ARN: {user_arn}")
 
-                sts = boto3.client(**sts_kwargs)
-                
-                identity = sts.get_caller_identity()
-                logger.info(f"TIME: AWS STS validation took {time.perf_counter() - sts_start:.2f}s")
-                
-                account_id = identity['Account']
-                user_arn = identity.get('Arn', 'Unknown')
-                logger.info(f"Successfully validated AWS credentials for account: {account_id}")
-                logger.info(f"User ARN: {user_arn}")
+            # Stash account ID in isolated env for downstream display without extra calls
+            try:
+                isolated_env["AURORA_AWS_ACCOUNT_ID"] = str(account_id)
+            except Exception as env_err:
+                logger.debug(f"Could not store AWS account ID in isolated_env: {env_err}")
 
-                # Stash account ID in isolated env for downstream display without extra calls
-                try:
-                    isolated_env["AURORA_AWS_ACCOUNT_ID"] = str(account_id)
-                except Exception:
-                    pass
-
-                # Also attempt to resolve a friendly account alias (optional)
-                try:
-                    iam = boto3.client(
-                        'iam',
-                        aws_access_key_id=access_key_id,
-                        aws_secret_access_key=secret_access_key,
-                        aws_session_token=session_token if session_token else None,
-                        config=config,
-                        use_ssl=True,
-                    )
-                    alias_resp = iam.list_account_aliases(MaxItems=1)
-                    aliases = alias_resp.get('AccountAliases', [])
-                    if isinstance(aliases, list) and aliases:
-                        isolated_env["AURORA_AWS_ACCOUNT_ALIAS"] = str(aliases[0])
-                except Exception as alias_err:
-                    logger.info(f"Could not resolve AWS account alias: {alias_err}")
-                    
+            # Also attempt to resolve a friendly account alias (optional)
+            try:
+                iam = session.client('iam', config=config, use_ssl=True)
+                alias_resp = iam.list_account_aliases(MaxItems=1)
+                aliases = alias_resp.get('AccountAliases', [])
+                if isinstance(aliases, list) and aliases:
+                    isolated_env["AURORA_AWS_ACCOUNT_ALIAS"] = str(aliases[0])
+            except Exception as alias_err:
+                logger.info(f"Could not resolve AWS account alias: {alias_err}")
         except Exception as e:
             logger.error(f"AWS credentials validation failed: {e}")
             return False, None, None, None
@@ -519,6 +422,7 @@ def setup_aws_environments_all_accounts(user_id: str):
                 workspace_id=ws["id"],
                 region=region,
                 session_policy=session_policy,
+                user_id=user_id,
             )
         except Exception as e:
             logger.error("Failed to assume role for account %s: %s", account_id, e)
@@ -547,6 +451,42 @@ def setup_aws_environments_all_accounts(user_id: str):
     return account_envs
 
 
+# Cache of per-user SA credentials file paths. Without an explicit
+# GOOGLE_APPLICATION_CREDENTIALS source, gcloud retries on API errors fall
+# through to Application Default Credentials, which probes the (unreachable)
+# GCE metadata server and can inflate a ~1s 403 into a 60s timeout. Writing
+# the SA JSON once per user and pointing GOOGLE_APPLICATION_CREDENTIALS at it
+# gives gcloud a concrete, refreshable credential source.
+_sa_adc_file_cache: dict[str, str] = {}
+
+
+def _get_sa_adc_file(user_id: str) -> Optional[str]:
+    """Return a tempfile path containing the user's SA JSON (cached per user)."""
+    cached = _sa_adc_file_cache.get(user_id)
+    if cached and os.path.exists(cached):
+        return cached
+    try:
+        from utils.auth.token_management import get_token_data
+        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+        token_data = get_token_data(user_id, "gcp")
+        if not token_data or get_gcp_auth_type(token_data) != GCP_AUTH_TYPE_SA:
+            return None
+        sa_json = token_data.get("service_account_json")
+        if not sa_json:
+            return None
+        # Sanity-check that the stored JSON parses before writing it.
+        json.loads(sa_json)
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="gcp_sa_adc_")
+        with os.fdopen(fd, "w") as f:
+            f.write(sa_json)
+        _sa_adc_file_cache[user_id] = path
+        logger.info("Wrote SA ADC file for local GCP tooling")
+        return path
+    except Exception as e:
+        logger.warning("Failed to write SA ADC file (error_type=%s)", type(e).__name__)
+        return None
+
+
 def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None = None, provider_preference: str | None = None):
     """Set up GCP environment with isolated credentials - NO global state modification."""
     try:
@@ -565,24 +505,52 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         access_token = token_resp["access_token"]
         project_id = token_resp["project_id"]
         sa_email = token_resp["service_account_email"]
+        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA
+        is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
+        auth_method = "service_account" if is_sa_mode else "impersonated"
 
-        # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
+        # Per-user gcloud config directory so concurrent users don't race on
+        # the same gcloud config/cache files and leak auth state between
+        # sessions. A user_id in Aurora is a UUID, which is already safe to
+        # embed in a filesystem path.
+        cloudsdk_config_dir = f"/tmp/.gcloud-{user_id}"
+        try:
+            os.makedirs(cloudsdk_config_dir, exist_ok=True)
+        except OSError as mkdir_err:
+            logger.warning(
+                "GCP isolated env: could not create per-user CLOUDSDK_CONFIG dir (error_type=%s) — falling back to shared path",
+                type(mkdir_err).__name__,
+            )
+            cloudsdk_config_dir = "/tmp/.gcloud"
+
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
             "GOOGLE_CLOUD_PROJECT": project_id,
-            "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT": sa_email,
-            "CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT": sa_email,
-            "CLOUDSDK_CONFIG": "/tmp/.gcloud",
+            "CLOUDSDK_CONFIG": cloudsdk_config_dir,
         }
-        
-        logger.info(f"GCP isolated environment configured for project: {project_id}")
-        logger.info(f"TIME: setup_gcp_environment_isolated completed in {time.perf_counter() - fn_start:.2f}s")
-        
-        return True, project_id, "impersonated", isolated_env
+        if is_sa_mode:
+            # Point gcloud at a concrete ADC source so it doesn't fall through
+            # to GCE metadata-server probing when the access token hits a 403
+            # (that probe hangs in non-GCE environments and turns fast API
+            # errors into 60s timeouts).
+            adc_file = _get_sa_adc_file(user_id)
+            if adc_file:
+                isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = adc_file
+        else:
+            # OAuth mode: set gcloud to impersonate Aurora's per-user SA so
+            # API calls run as that SA identity. SA mode skips this because
+            # the uploaded key already IS the working identity.
+            isolated_env["CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+            isolated_env["CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT"] = sa_email
+
+        logger.info("GCP isolated environment configured (%s)", auth_method)
+        logger.info("TIME: setup_gcp_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
+
+        return True, project_id, auth_method, isolated_env
 
     except Exception as e:
         logger.error(f"Failed to generate SA access token: {e}")
@@ -659,7 +627,9 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
                         }
                         if project_id:
                             updated_storage["projectId"] = project_id
-                        store_tokens_in_db(user_id, updated_storage, 'ovh')
+                        from utils.secrets.secret_ref_utils import get_token_owner_id
+                        owner_id = get_token_owner_id(user_id, "ovh")
+                        store_tokens_in_db(owner_id, updated_storage, 'ovh')
                         logger.info("Successfully refreshed OVH access token")
                     else:
                         logger.error(f"Failed to refresh OVH token: {refresh_response.status_code}")
@@ -686,7 +656,7 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "OVH_ACCESS_TOKEN": access_token,
             "OVH_ENDPOINT": ovh_endpoint,
@@ -740,7 +710,7 @@ def setup_scaleway_environment_isolated(user_id: str, selected_project_id: str |
         # SCW_DEFAULT_REGION, SCW_DEFAULT_ZONE
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "SCW_ACCESS_KEY": access_key,
             "SCW_SECRET_KEY": secret_key,
@@ -1103,169 +1073,6 @@ def execute_tailscale_command(command: str, isolated_env: dict) -> dict:
         }
 
 
-# OLD GLOBAL AWS FUNCTION REMOVED - Use setup_aws_environment_isolated() instead
-
-def setup_kubeconfig_for_eks(cluster_name: str, region: str) -> bool:
-    """Set up kubeconfig for EKS cluster using AWS CLI."""
-    try:
-        logger.info(f"Setting up kubeconfig for EKS cluster: {cluster_name} in {region}")
-        
-        # Update kubeconfig for the EKS cluster
-        kubeconfig_cmd = f"aws eks update-kubeconfig --name {cluster_name} --region {region}"
-        result = terminal_run(
-            shlex.split(kubeconfig_cmd),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=os.environ.copy()
-        )
-        
-        if result.returncode == 0:
-            logger.info(f"Successfully updated kubeconfig for cluster {cluster_name}")
-            return True
-        else:
-            logger.error(f"Failed to update kubeconfig: {result.stderr}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error setting up kubeconfig: {e}")
-        return False
-
-def deploy_helm_chart(chart_path: str, release_name: str, namespace: str = "default", values_file: str = None, kube_context: str = None) -> str:
-    """Deploy a Helm chart using the cloud execution tool."""
-    try:
-        logger.info(f"Deploying Helm chart: {chart_path} as {release_name} in namespace {namespace}")
-        
-        # Build the helm upgrade --install command
-        helm_cmd = f"helm upgrade --install {release_name} {chart_path} --namespace {namespace}"
-        
-        # Add values file if specified
-        if values_file:
-            helm_cmd += f" --values {values_file}"
-        
-        # Add kube context if specified
-        if kube_context:
-            helm_cmd += f" --kube-context {kube_context}"
-        
-        # Add additional flags for better output
-        helm_cmd += " --wait --timeout 10m"
-        
-        logger.info(f"Executing Helm command: {helm_cmd}")
-        
-        # Execute the helm command
-        result = terminal_run(
-            shlex.split(helm_cmd),
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minutes timeout for Helm operations
-            env=os.environ.copy()
-        )
-        
-        if result.returncode == 0:
-            logger.info(f"Helm deployment successful for {release_name}")
-            return json.dumps({
-                "success": True,
-                "message": f"Helm chart {release_name} deployed successfully",
-                "output": result.stdout,
-                "release_name": release_name,
-                "namespace": namespace
-            })
-        else:
-            logger.error(f"Helm deployment failed: {result.stderr}")
-            return json.dumps({
-                "success": False,
-                "error": f"Helm deployment failed: {result.stderr}",
-                "output": result.stdout,
-                "release_name": release_name,
-                "namespace": namespace
-            })
-            
-    except Exception as e:
-        logger.error(f"Error deploying Helm chart: {e}")
-        return json.dumps({
-            "success": False,
-            "error": f"Helm deployment error: {str(e)}",
-            "release_name": release_name,
-            "namespace": namespace
-        })
-
-def extract_and_deploy_helm_chart(zip_path: str, cluster_name: str, region: str, release_name: str = None) -> str:
-    """Extract Helm chart from zip and deploy it to EKS cluster."""
-    try:
-        import zipfile
-        import tempfile
-        import os
-        
-        logger.info(f"Extracting and deploying Helm chart from {zip_path}")
-        
-        # Create temporary directory for extraction
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Extract the zip file
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-            
-            # Look for deploy directory or Chart.yaml
-            chart_path = None
-            values_file = None
-            
-            # Check for deploy directory first
-            deploy_dir = os.path.join(temp_dir, "deploy")
-            if os.path.exists(deploy_dir) and os.path.isdir(deploy_dir):
-                chart_path = deploy_dir
-                values_file = os.path.join(deploy_dir, "values.yaml")
-                if not os.path.exists(values_file):
-                    values_file = None
-            else:
-                # Look for Chart.yaml in root or subdirectories
-                for root, dirs, files in os.walk(temp_dir):
-                    if "Chart.yaml" in files:
-                        chart_path = root
-                        # Look for values.yaml in the same directory
-                        potential_values = os.path.join(root, "values.yaml")
-                        if os.path.exists(potential_values):
-                            values_file = potential_values
-                        break
-            
-            if not chart_path:
-                return json.dumps({
-                    "success": False,
-                    "error": "No Helm chart found in the zip file. Expected 'deploy' directory or 'Chart.yaml' file."
-                })
-            
-            # Set up kubeconfig for the EKS cluster
-            if not setup_kubeconfig_for_eks(cluster_name, region):
-                return json.dumps({
-                    "success": False,
-                    "error": f"Failed to set up kubeconfig for EKS cluster {cluster_name}"
-                })
-            
-            # Use provided release name or default to chart name
-            if not release_name:
-                # Try to extract chart name from Chart.yaml
-                chart_yaml_path = os.path.join(chart_path, "Chart.yaml")
-                if os.path.exists(chart_yaml_path):
-                    try:
-                        with open(chart_yaml_path, 'r') as f:
-                            for line in f:
-                                if line.startswith('name:'):
-                                    release_name = line.split(':', 1)[1].strip()
-                                    break
-                    except Exception:
-                        pass
-                
-                if not release_name:
-                    release_name = "aurora-app"
-            
-            # Deploy the Helm chart
-            return deploy_helm_chart(chart_path, release_name, "default", values_file)
-            
-    except Exception as e:
-        logger.error(f"Error extracting and deploying Helm chart: {e}")
-        return json.dumps({
-            "success": False,
-            "error": f"Failed to extract and deploy Helm chart: {str(e)}"
-        })
-
 def is_read_only_command(command: str) -> bool:
     """Check if a cloud command is read-only (list, describe, get, etc.)."""
     read_only_verbs = ['list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status', 'read', 'view', 'help', 'logs', 'top']
@@ -1361,26 +1168,6 @@ def _cloud_exec_aws_multi_account(
             "command": command,
             "provider": "aws",
         })
-
-    if not is_read_only_command(command):
-        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
-        from .cloud_tools import get_state_context
-        summary_msg = summarize_cloud_command(command)
-        state_context = get_state_context()
-        context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-        if not wait_for_user_confirmation(
-            user_id=user_id,
-            message=f"[ALL {len(connections)} accounts] {summary_msg}",
-            tool_name="cloud_exec",
-            session_id=context_session_id,
-        ):
-            return json.dumps({
-                "success": False,
-                "error": "User declined multi-account command execution",
-                "multi_account": True,
-                "command": command,
-                "provider": "aws",
-            })
 
     def _run_on_account(conn: dict) -> dict:
         account_id = conn.get("account_id", "unknown")
@@ -1542,6 +1329,27 @@ Security & Compliance
 
         normalized_provider = _normalize_cloud_exec_provider(provider)
         provider = normalized_provider
+
+        # Unified gate: signature + org policy + LLM judge + HITL (foreground).
+        # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
+        # the subcommand without the provider prefix, e.g. "ecs list-clusters").
+        _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
+                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale"}
+        prefix = _CLI_PREFIX.get(provider.lower(), "")
+        gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        from utils.auth.command_gate import gate_command
+        gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
+        if not gate.allowed:
+            logger.warning("cloud_exec blocked for user %s (%s): %s",
+                           user_id, gate.code, gate.block_reason[:200])
+            return json.dumps({
+                "success": False,
+                "error": gate.block_reason,
+                "code": gate.code,
+                "final_command": command,
+                "provider": provider.lower(),
+            })
+
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
         auth_command = None
@@ -1633,7 +1441,7 @@ Security & Compliance
                             pj = r.json()
                             resource_name = pj.get("name") or pj.get("projectId") or resource_id
                     except Exception:
-                        pass
+                        pass  # optional metadata lookup; fallback to resource_id below
                 resource_name = resource_name or resource_id
 
             elif provider.lower() in ['aws', 'amazon']:
@@ -1895,11 +1703,18 @@ Security & Compliance
                 
         # --- Auto-inject impersonation flag for gsutil ---------------------------------
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gsutil' and auth_method == 'impersonated':
-            # Use whichever env-var we previously set to retrieve SA email.
-            sa_email = (
-                os.environ.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT") or
-                os.environ.get("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT")
-            )
+            # Read the impersonation email from the per-subprocess isolated_env
+            # built by setup_gcp_environment_isolated. os.environ is NOT
+            # consulted — this worker is long-lived, and a previous user's
+            # terraform call may have left stale CLOUDSDK_*_IMPERSONATE_* vars
+            # in os.environ. Using those here would cross-contaminate one
+            # user's gsutil command with another user's SA identity.
+            sa_email = None
+            if isinstance(isolated_env, dict):
+                sa_email = (
+                    isolated_env.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT")
+                    or isolated_env.get("CLOUDSDK_IMPERSONATE_SERVICE_ACCOUNT")
+                )
             if sa_email and "-i" not in command.split():
                 # Prepend the -i flag right after 'gsutil'
                 if command.startswith('gsutil'):
@@ -1913,7 +1728,7 @@ Security & Compliance
                             tokens.insert(idx + 2, sa_email)
                             command = ' '.join(tokens)
                             break
-                logger.info(f"Injected impersonation flag for gsutil: {sa_email}")
+                logger.info("Injected impersonation flag for gsutil: %s", hash_for_log(sa_email))
                 # Add --quiet flag for deletion commands to avoid prompts
                 if 'delete' in command and '--quiet' not in command and '-q' not in command:
                     command += " --quiet"
@@ -1936,42 +1751,11 @@ Security & Compliance
                 "provider": provider.lower(),
             })
 
-        # If command is potentially action, ask for confirmation first (after command processing)
-        if not is_read_only_command(command):
-            summary_msg = summarize_cloud_command(command)
-            # Get session_id from context for state saving
-            from .cloud_tools import get_state_context
-            state_context = get_state_context()
-            context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-            
-            if not wait_for_user_confirmation(
-                user_id=user_id, 
-                message=summary_msg, 
-                tool_name="cloud_exec",
-                session_id=context_session_id
-            ):
-                # Capture the cancellation result in the tool capture system
-                tool_capture = get_tool_capture()
-                current_tool_call_id = get_current_tool_call_id(
-                    tool_name="cloud_exec",
-                    tool_kwargs={'provider': original_provider, 'command': original_command}
-                )
-                
-                cancellation_result = json.dumps({
-                    "status": "cancelled",
-                    "message": "cloud_exec command cancelled by user",
-                    "chat_output": "Command cancelled.",
-                    "user_cancelled": True,
-                    "final_command": command,  # Now includes the processed command with all prefixes and flags
-                })
-                
-                # Capture the cancellation result if we have a tool capture and current tool call ID
-                if tool_capture and current_tool_call_id:
-                    logger.info(f"Capturing cancellation result for tool call {current_tool_call_id}")
-                    tool_capture.capture_tool_end(current_tool_call_id, cancellation_result, is_error=False)
-                
-                return cancellation_result
-        
+
+        # Destructive-command confirmation is handled by the unified command
+        # gate earlier in this function (signature + org policy + LLM judge +
+        # HITL). Org policy is the source of truth for what requires approval.
+
         # Check if CLI tool is available before attempting to execute
         if not check_cli_availability(cli_tool):
             logger.error(f"CLI tool '{cli_tool}' is not available")
@@ -2015,7 +1799,8 @@ Security & Compliance
                     capture_output=True,
                     text=True,
                     timeout=30,
-                    env=isolated_env
+                    env=isolated_env,
+                    trusted=True
                 )
                 if auth_result.returncode != 0:
                     logger.error(f"Azure authentication failed: {auth_result.stderr}")
@@ -2460,7 +2245,8 @@ Security & Compliance
                             capture_output=True,
                             text=True,
                             timeout=effective_timeout,
-                            env=isolated_env
+                            env=isolated_env,
+                            trusted=True
                         )
                         if filtered_result.returncode == 0:
                             filtered_output = filtered_result.stdout.strip() or filtered_result.stderr

@@ -34,9 +34,11 @@ agent:
     requests:
       memory: "128Mi"
       cpu: "100m"
+      ephemeral-storage: "512Mi"
     limits:
       memory: "256Mi"
       cpu: "200m"
+      ephemeral-storage: "1Gi"
   
   # Security context for the agent pod
   # Pod security context

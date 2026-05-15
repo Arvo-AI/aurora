@@ -27,8 +27,12 @@ class ChatContextManager:
     # Model context limits (tokens) - leaving some buffer for system prompts and tool calls
     # Keys use OpenRouter format (dot notation) since ModelMapper resolves to this
     MODEL_CONTEXT_LIMITS = {
+        "openai/gpt-5.5": 1000000,  # 1.05M - 50K buffer
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
+        "anthropic/claude-sonnet-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-4.7": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
         "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
         "google/gemini-3.1-pro-preview": 1000000,  # 1M context
@@ -308,10 +312,11 @@ Provide a detailed summary that preserves essential context:"""
     ):
         """Store context compression event in database for tracking."""
         try:
+            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ChatContextManager]"):
+                    return
 
                 # Add compression metadata to chat session
                 cursor.execute(

@@ -4,7 +4,7 @@
 
 set -e
 
-if [ -z "$TS_AUTH_KEY" ]; then
+if [[ -z "$TS_AUTH_KEY" ]]; then
     echo "No TS_AUTH_KEY set, skipping Tailscale setup"
     exit 0
 fi
@@ -31,14 +31,14 @@ TAILSCALED_PID=$!
 # Wait for tailscaled to be ready
 echo "Waiting for tailscaled to start..." | tee -a "$LOG_FILE"
 for i in {1..30}; do
-    if [ -S "$SOCKET_PATH" ]; then
+    if [[ -S "$SOCKET_PATH" ]]; then
         echo "tailscaled socket ready" | tee -a "$LOG_FILE"
         break
     fi
     sleep 1
 done
 
-if [ ! -S "$SOCKET_PATH" ]; then
+if [[ ! -S "$SOCKET_PATH" ]]; then
     echo "ERROR: tailscaled socket not found after 30 seconds" | tee -a "$LOG_FILE"
     exit 1
 fi
@@ -47,10 +47,10 @@ fi
 # Use USER_HASH (pre-computed hash of user_id) for consistent one-device-per-user
 # Falls back to USER_ID hash if USER_HASH not set, or generic name as last resort
 HOSTNAME="aurora-terminal"
-if [ -n "$USER_HASH" ]; then
+if [[ -n "$USER_HASH" ]]; then
     # Preferred: Use pre-computed user hash (first 8 chars)
     HOSTNAME="aurora-${USER_HASH:0:8}"
-elif [ -n "$USER_ID" ]; then
+elif [[ -n "$USER_ID" ]]; then
     # Fallback: Compute hash from user_id
     USER_HASH=$(echo -n "$USER_ID" | sha256sum | cut -c1-8)
     HOSTNAME="aurora-${USER_HASH}"

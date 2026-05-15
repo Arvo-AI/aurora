@@ -1,11 +1,8 @@
 import { Provider } from '../types';
-import { getEnv } from '@/lib/env';
 import {
   fetchConnectedAccounts,
   getConnectedAccounts,
 } from '@/lib/connected-accounts-cache';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export interface ProviderError {
   message: string;
@@ -376,7 +373,7 @@ export class ProviderPolling {
       }
 
       try {
-        const response = await fetch(`${BACKEND_URL}/gcp/setup/status/${taskId}`);
+        const response = await fetch(`/api/proxy/gcp/setup/status/${taskId}`);
         const data = await response.json();
         console.log(`GCP setup status attempt ${attempts}:`, data);
 
@@ -608,7 +605,7 @@ export class ProviderPolling {
     } else if (setupInProgress && taskId) {
       // Do a single immediate check to see if task completed while away
       console.log(`GCP setup in progress - checking if task ${taskId} completed while away`);
-      fetch(`${BACKEND_URL}/gcp/setup/status/${taskId}`)
+      fetch(`/api/proxy/gcp/setup/status/${taskId}`)
         .then(response => response.json())
         .then(data => {
           console.log(`Immediate task check result:`, data);
@@ -688,21 +685,14 @@ export class ProviderPolling {
       let method = 'POST';
       let body: any = {};
 
-      // Get userId for API calls
-      const userResponse = await fetch('/api/getUserId');
-      if (!userResponse.ok) return;
-      const userData = await userResponse.json();
-      const userId = userData.userId;
-      if (!userId) return;
-
       switch (providerId) {
         case 'gcp':
-          endpoint = `${BACKEND_URL}/billing`;
-          body = { userId };
+          endpoint = `/api/proxy/billing`;
+          body = {};
           break;
         case 'aws':
-          endpoint = `${BACKEND_URL}/aws_api/get-credentials`;
-          body = { userId };
+          endpoint = `/api/proxy/aws-api/get-credentials`;
+          body = {};
           break;
         case 'azure':
           // Azure uses token validation
@@ -711,8 +701,8 @@ export class ProviderPolling {
             console.error("Failed to fetch user tokens for Azure");
             return;
           }
-          endpoint = `${BACKEND_URL}/azure/subscriptions`;
-          body = { userId };
+          endpoint = `/api/proxy/azure/subscriptions`;
+          body = {};
           break;
       }
 
@@ -720,10 +710,8 @@ export class ProviderPolling {
         method,
         headers: {
           "Content-Type": "application/json",
-          "X-User-ID": userId
         },
         ...(method === 'POST' && { body: JSON.stringify(body) }),
-        credentials: 'include'
       });
 
       if (response.ok) {

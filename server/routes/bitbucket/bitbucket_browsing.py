@@ -7,7 +7,6 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from utils.auth.stateless_auth import get_credentials_from_db
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 
 bitbucket_browsing_bp = Blueprint("bitbucket_browsing", __name__)
@@ -37,7 +36,9 @@ def _get_bb_client(user_id):
         if bb_creds.get("access_token") != old_access_token:
             try:
                 from utils.auth.token_management import store_tokens_in_db
-                store_tokens_in_db(user_id, bb_creds, "bitbucket")
+                from utils.secrets.secret_ref_utils import get_token_owner_id
+                owner_id = get_token_owner_id(user_id, "bitbucket")
+                store_tokens_in_db(owner_id, bb_creds, "bitbucket")
             except Exception as e:
                 logger.warning(f"Failed to persist refreshed Bitbucket token: {e}")
 
@@ -50,12 +51,10 @@ def _get_bb_client(user_id):
     )
 
 
-@bitbucket_browsing_bp.route("/workspaces", methods=["GET", "OPTIONS"])
+@bitbucket_browsing_bp.route("/workspaces", methods=["GET"])
 @require_permission("connectors", "read")
 def list_workspaces(user_id):
     """List Bitbucket workspaces for the authenticated user."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
 
     try:
         client = _get_bb_client(user_id)
@@ -63,6 +62,8 @@ def list_workspaces(user_id):
             return jsonify({"error": "Bitbucket not connected"}), 401
 
         workspaces = client.get_workspaces()
+        if isinstance(workspaces, dict) and workspaces.get("error"):
+            return jsonify(workspaces), 502
         return jsonify({"workspaces": workspaces})
 
     except Exception as e:
@@ -70,12 +71,10 @@ def list_workspaces(user_id):
         return jsonify({"error": "Failed to list workspaces"}), 500
 
 
-@bitbucket_browsing_bp.route("/projects/<workspace>", methods=["GET", "OPTIONS"])
+@bitbucket_browsing_bp.route("/projects/<workspace>", methods=["GET"])
 @require_permission("connectors", "read")
 def list_projects(user_id, workspace):
     """List projects in a Bitbucket workspace."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
 
     try:
         client = _get_bb_client(user_id)
@@ -90,12 +89,10 @@ def list_projects(user_id, workspace):
         return jsonify({"error": "Failed to list projects"}), 500
 
 
-@bitbucket_browsing_bp.route("/repos/<workspace>", methods=["GET", "OPTIONS"])
+@bitbucket_browsing_bp.route("/repos/<workspace>", methods=["GET"])
 @require_permission("connectors", "read")
 def list_repos(user_id, workspace):
     """List repositories in a Bitbucket workspace, optionally filtered by project."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
 
     try:
         client = _get_bb_client(user_id)
@@ -119,12 +116,10 @@ def list_repos(user_id, workspace):
         return jsonify({"error": "Failed to list repositories"}), 500
 
 
-@bitbucket_browsing_bp.route("/branches/<workspace>/<repo_slug>", methods=["GET", "OPTIONS"])
+@bitbucket_browsing_bp.route("/branches/<workspace>/<repo_slug>", methods=["GET"])
 @require_permission("connectors", "read")
 def list_branches(user_id, workspace, repo_slug):
     """List branches for a Bitbucket repository."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
 
     try:
         client = _get_bb_client(user_id)
@@ -139,12 +134,10 @@ def list_branches(user_id, workspace, repo_slug):
         return jsonify({"error": "Failed to list branches"}), 500
 
 
-@bitbucket_browsing_bp.route("/pull-requests/<workspace>/<repo_slug>", methods=["GET", "OPTIONS"])
+@bitbucket_browsing_bp.route("/pull-requests/<workspace>/<repo_slug>", methods=["GET"])
 @require_permission("connectors", "read")
 def list_pull_requests(user_id, workspace, repo_slug):
     """List pull requests for a Bitbucket repository."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
 
     try:
         client = _get_bb_client(user_id)
@@ -160,12 +153,10 @@ def list_pull_requests(user_id, workspace, repo_slug):
         return jsonify({"error": "Failed to list pull requests"}), 500
 
 
-@bitbucket_browsing_bp.route("/issues/<workspace>/<repo_slug>", methods=["GET", "OPTIONS"])
+@bitbucket_browsing_bp.route("/issues/<workspace>/<repo_slug>", methods=["GET"])
 @require_permission("connectors", "read")
 def list_issues(user_id, workspace, repo_slug):
     """List issues for a Bitbucket repository."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
 
     try:
         client = _get_bb_client(user_id)

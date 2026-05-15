@@ -20,6 +20,7 @@ from routes.cloudflare import cloudflare_bp
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.secrets.secret_ref_utils import has_user_credentials, delete_user_secret
+from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_utils import set_connection_status
 from utils.db.connection_pool import db_pool
 from utils.web.limiter_ext import limiter
@@ -29,7 +30,7 @@ from connectors.cloudflare_connector.api_client import CloudflareClient
 logger = logging.getLogger(__name__)
 
 
-@cloudflare_bp.route('/cloudflare/connect', methods=['POST', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/connect', methods=['POST'])
 @limiter.limit("10 per minute;50 per hour")
 @require_permission("connectors", "write")
 def cloudflare_connect(user_id):
@@ -119,7 +120,7 @@ def cloudflare_connect(user_id):
         return jsonify({"error": "Failed to connect Cloudflare"}), 500
 
 
-@cloudflare_bp.route('/cloudflare/zones', methods=['GET', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/zones', methods=['GET'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "read")
 def cloudflare_zones_get(user_id):
@@ -174,7 +175,7 @@ def cloudflare_zones_get(user_id):
         return jsonify({"error": "Failed to fetch zones"}), 500
 
 
-@cloudflare_bp.route('/cloudflare/zones', methods=['POST', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/zones', methods=['POST'])
 @limiter.limit("30 per minute")
 @require_permission("connectors", "write")
 def cloudflare_zones_post(user_id):
@@ -206,7 +207,7 @@ def cloudflare_zones_post(user_id):
         return jsonify({"error": "Failed to save zones"}), 500
 
 
-@cloudflare_bp.route('/cloudflare/status', methods=['GET', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/status', methods=['GET'])
 @limiter.limit("60 per minute")
 @require_permission("connectors", "read")
 def cloudflare_status(user_id):
@@ -264,7 +265,7 @@ def cloudflare_status(user_id):
         return jsonify({"connected": has_creds, "provider": "cloudflare"}), 200
 
 
-@cloudflare_bp.route('/cloudflare/disconnect', methods=['POST', 'OPTIONS'])
+@cloudflare_bp.route('/cloudflare/disconnect', methods=['POST'])
 @limiter.limit("10 per minute")
 @require_permission("connectors", "write")
 def cloudflare_disconnect(user_id):
@@ -274,6 +275,7 @@ def cloudflare_disconnect(user_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[CLOUDFLARE:disconnect]")
                 cur.execute(
                     "UPDATE user_connections SET status = 'disconnected', last_verified_at = NOW() "
                     "WHERE user_id = %s AND provider = 'cloudflare'",

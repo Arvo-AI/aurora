@@ -18,4 +18,3 @@ class BackgroundWebSocket:
         """No-op send - background chats save to DB, don't stream to frontend."""
         # Log at debug level for troubleshooting if needed
         logger.debug("[BackgroundChat] Message discarded (no active WebSocket)")
-

@@ -27,6 +27,17 @@ logger = logging.getLogger("aurora.mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 API_BASE = os.environ.get("BACKEND_URL", "http://aurora-server:5080")
+_AURORA_ENV = os.environ.get("AURORA_ENV", "production")
+_INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+if not _INTERNAL_SECRET:
+    if _AURORA_ENV == "dev":
+        logger.warning("INTERNAL_API_SECRET not set (AURORA_ENV='dev') — MCP proxy auth disabled for local development")
+    else:
+        raise RuntimeError(
+            "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s'. "
+            "Refusing to start MCP proxy without authentication secrets." % _AURORA_ENV
+        )
 
 _current_bearer_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_bearer_token")
 
@@ -89,18 +100,22 @@ def _resolve_token(token: str) -> tuple[str, str]:
 
     Uses a direct superuser pool intentionally -- token resolution is a
     bootstrap step that precedes org context, so RLS does not apply.
+    Sets myapp.mcp_token_resolve to activate the permissive RLS policy that
+    allows point-lookups by token value without an org_id context.
     """
     pool = _get_pool()
     conn = pool.getconn()
     ok = False
     try:
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL myapp.mcp_token_resolve = 'true'")
             cur.execute(
                 "SELECT user_id, org_id FROM mcp_tokens "
                 "WHERE token = %s AND status = 'active' "
                 "AND (expires_at IS NULL OR expires_at > NOW())",
                 (token,),
             )
+
             row = cur.fetchone()
             if not row:
                 raise ValueError("Invalid, expired, or revoked MCP token")
@@ -108,10 +123,12 @@ def _resolve_token(token: str) -> tuple[str, str]:
             if now - _last_used_cache.get(token, 0) > 60:
                 cur.execute("UPDATE mcp_tokens SET last_used_at = NOW() WHERE token = %s", (token,))
                 _last_used_cache[token] = now
-            conn.commit()
-            ok = True
-            return row[0], row[1]
+        conn.commit()
+        ok = True
+        return row[0], row[1]
     finally:
+        if not ok:
+            conn.rollback()
         pool.putconn(conn, close=not ok)
 
 
@@ -131,6 +148,8 @@ async def _api(method: str, path: str, *, params: dict | None = None,
     token = _get_token()
     user_id, org_id = _resolve_token(token)
     headers = {"X-User-ID": user_id, "X-Org-ID": org_id}
+    if _INTERNAL_SECRET:
+        headers["X-Internal-Secret"] = _INTERNAL_SECRET
     async with httpx.AsyncClient(base_url=API_BASE, timeout=timeout) as client:
         resp = await client.request(method, path, params=params, json=body, headers=headers)
         try:
@@ -156,6 +175,7 @@ mcp = FastMCP(
         "Use the curated tools for incidents and infrastructure. "
         "For anything else, use aurora_api -- read aurora://api-catalog first to discover endpoints."
     ),
+    host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token in MCP_AUTH_TOKEN
     stateless_http=True,
     json_response=True,
 )
@@ -282,14 +302,31 @@ def blast_radius_analysis(service_name: str) -> str:
 
 if __name__ == "__main__":
     port = int(os.environ.get("MCP_PORT", "8811"))
-    mcp.settings.host = "0.0.0.0"
     mcp.settings.port = port
 
     _original_app_factory = mcp.streamable_http_app
 
     def _patched_app_factory():
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
         app = _original_app_factory()
         app.add_middleware(BearerTokenMiddleware)
+
+        def _healthz(request):
+            pool = _get_pool()
+            try:
+                conn = pool.getconn()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                finally:
+                    pool.putconn(conn)
+                return JSONResponse({"status": "ok"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+
+        app.routes.append(Route("/healthz", _healthz, methods=["GET"]))
         return app
 
     mcp.streamable_http_app = _patched_app_factory

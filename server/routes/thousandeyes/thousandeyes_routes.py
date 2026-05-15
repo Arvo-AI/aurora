@@ -12,7 +12,6 @@ from connectors.thousandeyes_connector.client import (
 from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.secrets.secret_ref_utils import delete_user_secret
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,7 @@ def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
 # Connection management
 # ------------------------------------------------------------------
 
-@thousandeyes_bp.route("/connect", methods=["POST", "OPTIONS"])
+@thousandeyes_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     payload = request.get_json(force=True, silent=True) or {}
@@ -79,7 +78,7 @@ def connect(user_id):
     })
 
 
-@thousandeyes_bp.route("/status", methods=["GET", "OPTIONS"])
+@thousandeyes_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     creds = _get_stored_credentials(user_id)
@@ -112,7 +111,7 @@ def status(user_id):
     })
 
 
-@thousandeyes_bp.route("/disconnect", methods=["DELETE", "POST", "OPTIONS"])
+@thousandeyes_bp.route("/disconnect", methods=["DELETE", "POST"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     try:

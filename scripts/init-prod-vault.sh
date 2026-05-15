@@ -32,7 +32,7 @@ MAX_RETRIES=30
 RETRY_COUNT=0
 while ! docker exec aurora-vault vault status &> /dev/null; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
-    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+    if [[ $RETRY_COUNT -ge $MAX_RETRIES ]]; then
         echo -e "${RED}Error: Vault did not become ready in time${NC}"
         exit 1
     fi
@@ -75,7 +75,7 @@ if ! docker exec aurora-vault vault status 2>&1 | grep -q "Initialized.*true"; t
     
     # Save root token to .env if VAULT_TOKEN is not set
     if ! grep -q "^VAULT_TOKEN=" .env 2>/dev/null || grep -q "^VAULT_TOKEN=$" .env 2>/dev/null; then
-        if [ -f .env ]; then
+        if [[ -f .env ]]; then
             if grep -q "^VAULT_TOKEN=" .env; then
                 sed -i.bak "s|^VAULT_TOKEN=.*|VAULT_TOKEN=$ROOT_TOKEN|" .env
             else
@@ -92,9 +92,9 @@ else
     echo -e "${YELLOW}Vault already initialized, enabling KV engine...${NC}"
     
     # Get root token from .env
-    if [ -f .env ]; then
+    if [[ -f .env ]]; then
         ROOT_TOKEN=$(grep "^VAULT_TOKEN=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
-        if [ -z "$ROOT_TOKEN" ]; then
+        if [[ -z "$ROOT_TOKEN" ]]; then
             echo -e "${RED}Error: VAULT_TOKEN not found in .env${NC}"
             exit 1
         fi

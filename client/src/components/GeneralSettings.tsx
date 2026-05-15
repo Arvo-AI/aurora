@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { getEnv } from '@/lib/env';
 import { useToast } from "@/hooks/use-toast";
 import { Trash2, FileText } from "lucide-react";
 import { clearTerraformState } from "@/lib/services/userSettings";
@@ -45,95 +44,6 @@ export function GeneralSettings() {
       });
     } finally {
       setIsClearingTerraformState(false);
-    }
-  };
-
-  const handleSyncInfrastructure = async () => {
-    if (!userId) {
-      toast({
-        title: "Error",
-        description: "You must be logged in to sync infrastructure",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsSyncing(true);
-    try {
-      const response = await fetch(`${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/gcp/cloud-graph/sync`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          user_id: userId,
-          provider: 'gcp'
-        }),
-      });
-
-      const result = await response.json();
-
-      if (response.ok) {
-        toast({
-          title: "Sync Started",
-          description: result.message || "Infrastructure sync started.",
-          variant: "default",
-        });
-        
-        if (result.task_id) {
-          pollTaskForFailures(result.task_id);
-        }
-      } else {
-        toast({
-          title: "Error",
-          description: result.error || "Failed to trigger infrastructure sync",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      console.error("Error syncing infrastructure:", error);
-      toast({
-        title: "Error",
-        description: "Failed to trigger infrastructure sync",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleDisconnectCloudGraph = async () => {
-    if (!userId) {
-      toast({
-        title: "Error",
-        description: "You must be logged in",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsDisconnectingCloudGraph(true);
-    try {
-      // Delete graph and feeds via backend API
-      // Note: Cloud graph data can also be deleted from:
-      // - AWS onboarding page (client/src/app/aws/onboarding/page.tsx:463) via cleanup endpoint
-      const graphRes = await fetch(`${getEnv('NEXT_PUBLIC_BACKEND_URL')}/api/gcp/cloud-graph/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, provider: 'gcp' }),
-      });
-
-      if (graphRes.ok) {
-        toast({ title: "Success", description: "Cloud graph disconnected successfully" });
-      } else {
-        const error = await graphRes.json();
-        throw new Error(error.error || 'Failed to disconnect');
-      }
-    } catch (error) {
-      console.error("Error disconnecting cloud graph:", error);
-      toast({ title: "Error", description: "Failed to disconnect cloud graph", variant: "destructive" });
-    } finally {
-      setIsDisconnectingCloudGraph(false);
     }
   };
 

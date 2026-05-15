@@ -10,6 +10,9 @@ import json
 from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
+from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import safe_provider
+from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.secrets.secret_cache import (
     get_cached_secret,
     update_secret_cache,
@@ -62,29 +65,11 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "cloudbees", # CloudBees CI connector tokens
     "spinnaker", # Spinnaker CD connector tokens
     "newrelic",  # New Relic connector tokens
+    "sentry",    # Sentry connector tokens
+    "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
+    "incidentio",  # incident.io connector tokens
 }
-
-
-def _resolve_org(user_id: str) -> Optional[str]:
-    """Best-effort org_id resolution for use in admin-connection queries."""
-    try:
-        from utils.auth.stateless_auth import resolve_org_id
-        return resolve_org_id(user_id)
-    except Exception:
-        return None
-
-
-def _org_clause(org_id: Optional[str]) -> Tuple[str, Tuple]:
-    """Build a reusable SQL fragment for org-scoped token queries.
-
-    Returns (sql_fragment, params) to append to a WHERE clause.
-    When org_id is available the fragment restricts to matching rows;
-    otherwise it returns an always-true fragment so the query still works.
-    """
-    if org_id:
-        return "AND (org_id = %s OR org_id IS NULL)", (org_id,)
-    return "", ()
 
 
 class SecretRefManager:
@@ -150,23 +135,24 @@ class SecretRefManager:
 
     def update_user_token_with_secret_ref(self, user_id: str, provider: str, secret_ref: str) -> bool:
         """Update a user's token record to point at a Vault secret reference."""
-        org_id = _resolve_org(user_id)
-        clause, params = _org_clause(org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:updateToken]")
             cursor.execute(
                 f"UPDATE user_tokens SET secret_ref = %s, is_active = TRUE "
-                f"WHERE user_id = %s AND provider = %s {clause}",
-                (secret_ref, user_id, provider) + params,
+                f"WHERE {predicate} AND provider = %s",
+                (secret_ref,) + pred_params + (provider,),
             )
             if cursor.rowcount > 0:
                 conn.commit()
-                logger.info("Updated secret_ref for provider %s", provider)
+                logger.info("Updated secret_ref for provider %s", safe_provider(provider))
                 return True
-            logger.warning("No record found for provider %s", provider)
+            logger.warning("No record found for provider %s", safe_provider(provider))
             return False
         except Exception as e:
             logger.error("Failed to update secret_ref: %s", e)
@@ -185,24 +171,26 @@ class SecretRefManager:
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return False
 
-        org_id = _resolve_org(user_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:hasCreds]")
             cursor.execute(
-                """SELECT 1 FROM user_tokens
-                   WHERE (user_id = %s OR org_id = %s)
+                f"""SELECT 1 FROM user_tokens
+                   WHERE {predicate}
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
                    LIMIT 1""",
-                (user_id, org_id, provider)
+                (*pred_params, provider_base),
             )
             return cursor.fetchone() is not None
         except Exception as e:
-            logger.debug("Error checking credentials for provider %s: %s", provider, e)
+            logger.debug("Error checking credentials for provider %s: %s", safe_provider(provider), e)
             return False
         finally:
             if cursor:
@@ -216,28 +204,29 @@ class SecretRefManager:
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return None
 
-        org_id = _resolve_org(user_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
 
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:getToken]")
             cursor.execute(
-                """SELECT secret_ref, client_id, client_secret
+                f"""SELECT secret_ref, client_id, client_secret
                    FROM user_tokens
-                   WHERE (user_id = %s OR org_id = %s)
+                   WHERE {predicate}
                      AND provider = %s
                      AND secret_ref IS NOT NULL
                      AND is_active = TRUE
-                   ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
                    LIMIT 1""",
-                (user_id, org_id, provider, user_id)
+                (*pred_params, provider_base),
             )
 
             result = cursor.fetchone()
             if not result:
-                logger.debug("No secret reference found for provider %s", provider)
+                logger.debug("No secret reference found for provider %s", safe_provider(provider))
                 return None
 
             secret_ref, role_arn, external_id_secret_ref = result
@@ -287,23 +276,24 @@ class SecretRefManager:
 
     def migrate_token_to_secret_ref(self, user_id: str, provider: str, secret_name_prefix: str = "aurora-dev") -> bool:
         """Migrate an existing token from token_data column to Vault."""
-        org_id = _resolve_org(user_id)
-        clause, params = _org_clause(org_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:migrate]")
 
             cursor.execute(
                 f"SELECT token_data FROM user_tokens "
-                f"WHERE user_id = %s AND provider = %s {clause} AND secret_ref IS NULL",
-                (user_id, provider) + params,
+                f"WHERE {predicate} AND provider = %s AND secret_ref IS NULL",
+                pred_params + (provider,),
             )
 
             result = cursor.fetchone()
             if not result:
-                logger.info("No token data to migrate for provider %s", provider)
+                logger.info("No token data to migrate for provider %s", safe_provider(provider))
                 return False
 
             token_data = result[0]
@@ -315,12 +305,12 @@ class SecretRefManager:
 
             cursor.execute(
                 f"UPDATE user_tokens SET secret_ref = %s "
-                f"WHERE user_id = %s AND provider = %s {clause}",
-                (secret_ref, user_id, provider) + params,
+                f"WHERE {predicate} AND provider = %s",
+                (secret_ref,) + pred_params + (provider,),
             )
 
             conn.commit()
-            logger.info("Successfully migrated token to Vault for provider %s", provider)
+            logger.info("Successfully migrated token to Vault for provider %s", safe_provider(provider))
             return True
 
         except Exception as e:
@@ -339,18 +329,19 @@ class SecretRefManager:
     # ------------------------------------------------------------------
 
     def _clear_secret_ref(self, user_id: str, provider: str) -> None:
-        """Set secret_ref to NULL for the given user/provider (stale reference cleanup)."""
-        org_id = _resolve_org(user_id)
-        clause, params = _org_clause(org_id)
+        """Set secret_ref to NULL for the org's row for provider (stale reference cleanup)."""
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         try:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:clearRef]")
             cursor.execute(
-                f"UPDATE user_tokens SET is_active = FALSE, secret_ref = '' "
-                f"WHERE user_id = %s AND provider = %s {clause}",
-                (user_id, provider) + params,
+                f"UPDATE user_tokens SET is_active = FALSE, secret_ref = NULL "
+                f"WHERE {predicate} AND provider = %s",
+                (*pred_params, provider),
             )
             conn.commit()
             logger.info(
@@ -358,7 +349,7 @@ class SecretRefManager:
                 provider,
             )
         except Exception as e:
-            logger.warning("Failed to clear stale secret_ref for provider %s: %s", provider, e)
+            logger.warning("Failed to clear stale secret_ref for provider %s: %s", safe_provider(provider), e)
         finally:
             if cursor:
                 cursor.close()
@@ -366,13 +357,15 @@ class SecretRefManager:
                 conn.close()
 
     def delete_user_secret(self, user_id: str, provider: str) -> Tuple[bool, int]:
-        """Delete a user's secret from Vault and clear its reference from the database.
+        """Delete a provider's credentials from Vault and the database for the whole org.
 
-        Scoping mirrors get_user_token_data: (user_id OR org_id) so that
-        org-shared credentials are also removed and the status check can't
-        fall back to another member's token after disconnect.
+        Scoping uses the org-read predicate (user_id OR org_id) so any authorized
+        org member can disconnect a connector regardless of who originally created it.
+        Deleting the shared row removes access for all org members, which is the
+        correct outcome — the credential no longer exists for the org.
         """
-        org_id = _resolve_org(user_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         conn = None
         cursor = None
         delete_success = True
@@ -382,37 +375,32 @@ class SecretRefManager:
             conn = connect_to_db_as_admin()
             cursor = conn.cursor()
 
-            if org_id:
-                scope_where = "(user_id = %s OR org_id = %s)"
-                scope_params: Tuple = (user_id, org_id)
-            else:
-                scope_where = "user_id = %s"
-                scope_params = (user_id,)
+            set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:deleteSecret]")
 
             cursor.execute(
                 f"SELECT secret_ref FROM user_tokens "
-                f"WHERE {scope_where} AND provider = %s AND secret_ref IS NOT NULL",
-                scope_params + (provider,),
+                f"WHERE {predicate} AND provider = %s AND secret_ref IS NOT NULL",
+                (*pred_params, provider),
             )
             for row in cursor.fetchall():
                 if not self.delete_secret(row[0]):
-                    logger.warning("Failed to delete secret from Vault for provider %s", provider)
+                    logger.warning("Failed to delete secret from Vault for provider %s", safe_provider(provider))
                     delete_success = False
 
             cursor.execute(
-                f"DELETE FROM user_tokens WHERE {scope_where} AND provider = %s",
-                scope_params + (provider,),
+                f"DELETE FROM user_tokens WHERE {predicate} AND provider = %s",
+                (*pred_params, provider),
             )
             deleted_rows = cursor.rowcount
             conn.commit()
 
             if deleted_rows > 0:
-                logger.info("Deleted credentials for provider %s", provider)
+                logger.info("Deleted credentials for provider %s", safe_provider(provider))
 
             return delete_success, deleted_rows
 
         except Exception as e:
-            logger.error("Failed to delete user secret for provider %s: %s", provider, e)
+            logger.error("Failed to delete user secret for provider %s: %s", safe_provider(provider), e)
             if conn:
                 conn.rollback()
             return False, 0
@@ -435,6 +423,48 @@ def has_user_credentials(user_id: str, provider: str) -> bool:
 def get_user_token_data(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
     """Get user token data, automatically handling secret references."""
     return secret_manager.get_user_token_data(user_id, provider)
+
+
+def get_token_owner_id(user_id: str, provider: str) -> str:
+    """Return the user_id of the row that owns the provider token visible to user_id.
+
+    When credentials are shared within an org the stored row belongs to the
+    user who originally connected the provider (User A), not the requesting
+    user (User B).  Resources derived from that identity — such as GCP service
+    account names that embed a hash of the owner's user_id — must be looked up
+    using the owner's user_id, not the requester's.
+
+    Falls back to the requesting user_id if no row is found or the lookup fails.
+    """
+    provider_base = provider.lower().split('_')[0]
+    org_id = resolve_org(user_id)
+    predicate, pred_params = org_read_predicate(user_id, org_id)
+    conn = None
+    cursor = None
+    try:
+        conn = connect_to_db_as_admin()
+        cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, log_prefix="[SecretRef:tokenOwner]")
+        cursor.execute(
+            f"""SELECT user_id FROM user_tokens
+               WHERE {predicate}
+                 AND provider = %s
+                 AND secret_ref IS NOT NULL
+                 AND is_active = TRUE
+               ORDER BY (org_id IS NOT NULL) DESC, timestamp DESC
+               LIMIT 1""",
+            (*pred_params, provider_base),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else user_id
+    except Exception as e:
+        logger.debug("get_token_owner_id lookup failed for provider %s: %s", safe_provider(provider), e)
+        return user_id
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 def migrate_user_token_to_secret_ref(user_id: str, provider: str) -> bool:

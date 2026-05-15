@@ -22,7 +22,6 @@ from connectors.confluence_connector.client import (
     parse_confluence_page_id,
 )
 from connectors.confluence_connector.runbook_parser import parse_confluence_runbook
-from utils.web.cors_utils import create_cors_response
 from utils.auth.oauth2_state_cache import retrieve_oauth2_state, store_oauth2_state
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -141,13 +140,10 @@ def _fetch_page_payload(
     return page_payload, creds, None, None
 
 
-@confluence_bp.route("/connect", methods=["POST", "OPTIONS"])
+@confluence_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Connect Confluence Cloud (OAuth) or Data Center (PAT)."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -272,13 +268,10 @@ def connect(user_id):
     })
 
 
-@confluence_bp.route("/status", methods=["GET", "OPTIONS"])
+@confluence_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Confluence connection status."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     creds = _get_stored_confluence_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -327,13 +320,10 @@ def status(user_id):
     })
 
 
-@confluence_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@confluence_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Confluence by removing stored credentials."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         success, deleted_count = delete_user_secret(user_id, "confluence")
         if not success:
@@ -347,13 +337,10 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Confluence"}), 500
 
 
-@confluence_bp.route("/fetch", methods=["POST", "OPTIONS"])
+@confluence_bp.route("/fetch", methods=["POST"])
 @require_permission("connectors", "read")
 def fetch_page(user_id):
     """Fetch a Confluence page by URL and return the raw page payload."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:
@@ -369,13 +356,10 @@ def fetch_page(user_id):
     return jsonify(page_payload)
 
 
-@confluence_bp.route("/parse", methods=["POST", "OPTIONS"])
+@confluence_bp.route("/parse", methods=["POST"])
 @require_permission("connectors", "read")
 def parse_page(user_id):
     """Fetch a Confluence page and return cleaned runbook content."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     try:
         data = request.get_json(force=True, silent=True) or {}
     except Exception:

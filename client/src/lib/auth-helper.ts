@@ -7,6 +7,12 @@ export interface AuthResult {
   headers: Record<string, string>
 }
 
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || ''
+
+if (!INTERNAL_API_SECRET) {
+  console.warn('[auth-helper] INTERNAL_API_SECRET not set — requests to Flask will fail if the server requires it')
+}
+
 /**
  * Get authenticated user from Auth.js session
  */
@@ -23,6 +29,10 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
 
   if (session.orgId && session.orgId.trim() !== '') {
     headers['X-Org-ID'] = session.orgId
+  }
+
+  if (INTERNAL_API_SECRET) {
+    headers['X-Internal-Secret'] = INTERNAL_API_SECRET
   }
 
   return {
@@ -46,9 +56,9 @@ export async function makeAuthenticatedRequest(
     throw new Error('User not authenticated')
   }
 
-  // Default 10s timeout unless caller provides their own signal
+  // Default 30s timeout unless caller provides their own signal
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10_000)
+  const timeout = setTimeout(() => controller.abort(), 30_000)
   if (options.signal) {
     options.signal.addEventListener('abort', () => controller.abort())
   }

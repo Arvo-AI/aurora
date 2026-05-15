@@ -158,7 +158,7 @@ const logos = {
   ),
   dynatrace: (
     <img
-      src="/dynatrace.png"
+      src="/dynatrace.svg"
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="Dynatrace"
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
@@ -228,12 +228,54 @@ const logos = {
       onError={(e) => console.error('Failed to load Confluence logo:', e)}
     />
   ),
+  notion: (
+    <img
+      src="/notion.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Notion"
+      onError={(e) => console.error('Failed to load Notion logo:', e)}
+    />
+  ),
   opsgenie: (
     <img
       src="/opsgenie.svg"
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="OpsGenie / JSM"
       onError={(e) => console.error('Failed to load OpsGenie logo:', e)}
+    />
+  ),
+  slack: (
+    <img
+      src="/slack.png"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Slack"
+      onError={(e) => console.error('Failed to load Slack logo:', e)}
+    />
+  ),
+  postmortem: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-zinc-400"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <line x1="10" y1="9" x2="8" y2="9" />
+    </svg>
+  ),
+  incidentio: (
+    <img
+      src="/incidentio.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain rounded-sm"
+      alt="incident.io"
+      onError={(e) => console.error('Failed to load incident.io logo:', e)}
     />
   ),
   web: (
@@ -256,6 +298,24 @@ const logos = {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+    </svg>
+  ),
+  loadSkill: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-teal-500 dark:text-teal-400"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <line x1="12" y1="3" x2="12" y2="9" />
+      <line x1="5.5" y1="17.5" x2="9.5" y2="14" />
+      <line x1="18.5" y1="17.5" x2="14.5" y2="14" />
+      <circle cx="12" cy="3" r="1.5" fill="currentColor" />
+      <circle cx="5.5" cy="17.5" r="1.5" fill="currentColor" />
+      <circle cx="18.5" cy="17.5" r="1.5" fill="currentColor" />
     </svg>
   ),
   rcaUpdate: (
@@ -289,6 +349,22 @@ const logos = {
       <line x1="18" y1="12" x2="22" y2="12" />
     </svg>
   ),
+  triggerAction: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-blue-500"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect width="8" height="8" x="3" y="3" rx="2" />
+      <path d="M7 11v4a2 2 0 0 0 2 2h4" />
+      <rect width="8" height="8" x="13" y="13" rx="2" />
+    </svg>
+  ),
   github: <GitHubLogo />,
   default: (
     <span className="text-green-600 dark:text-green-400 select-none font-bold">$</span>
@@ -303,6 +379,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Tailscale - check provider prop (cloud_exec passes provider)
   if (prov === 'tailscale' || tool.includes('tailscale') || cmd.includes('tailscale')) {
     return 'tailscale'
+  }
+
+  // Load skill tool
+  if (tool === 'load_skill') {
+    return 'loadSkill'
   }
 
   // Web search tool
@@ -389,9 +470,29 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'confluence'
   }
 
+  // Notion tools
+  if (tool.startsWith('notion_') || tool === 'notion') {
+    return 'notion'
+  }
+
   // OpsGenie / JSM Operations tools
   if (tool === 'query_opsgenie' || tool.includes('opsgenie')) {
     return 'opsgenie'
+  }
+
+  // incident.io tools
+  if (tool.includes('incidentio')) {
+    return 'incidentio'
+  }
+
+  // Slack tools
+  if (tool.includes('slack') || tool === 'get_channel_history' || tool === 'get_thread_replies') {
+    return 'slack'
+  }
+
+  // Postmortem tools
+  if (tool === 'get_postmortem' || tool === 'save_postmortem' || tool.includes('postmortem')) {
+    return 'postmortem'
   }
 
   // IAC tools
@@ -492,6 +593,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool === 'trigger_rca') {
     return 'triggerRca'
+  }
+
+  if (tool === 'trigger_action') {
+    return 'triggerAction'
   }
 
   return 'default'

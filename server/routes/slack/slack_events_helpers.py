@@ -9,6 +9,7 @@ import hashlib
 import time
 from typing import Optional
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 import re
 from datetime import datetime
 
@@ -69,7 +70,7 @@ def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Query user_tokens for Slack users with matching team_id (stored in subscription_id)
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT user_id 
@@ -88,7 +89,7 @@ def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
                 
                 return None
     except Exception as e:
-        logger.error(f"Error looking up user from Slack team_id {team_id}: {e}", exc_info=True)
+        logger.error(f"Error looking up user from Slack team_id {sanitize(team_id)}: {e}", exc_info=True)
         return None
 
 
@@ -101,7 +102,7 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Query user_tokens for Slack users with matching team_id (stored in subscription_id)
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT user_id, secret_ref 
@@ -137,7 +138,7 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
                 
                 return None
     except Exception as e:
-        logger.error(f"Error looking up user from Slack user_id {slack_user_id}: {e}", exc_info=True)
+        logger.error(f"Error looking up user from Slack user_id {sanitize(slack_user_id)}: {e}", exc_info=True)
         return None
 
 
@@ -506,6 +507,7 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT id, aurora_chat_session_id
@@ -546,7 +548,7 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
         # Otherwise, look up by thread_ts in chat session metadata
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Look up chat session by thread_ts in trigger_metadata
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT id, ui_state
@@ -677,6 +679,7 @@ def get_incident_suggestions(incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
                 cursor.execute(
                     """
                     SELECT id, title, description, type, risk, command
@@ -796,9 +799,16 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
     """
     if not suggestions:
         return []
-    
+
+    eligible = [
+        s for s in suggestions
+        if s.get('command')
+    ][:max_suggestions]
+    if not eligible:
+        return []
+
     blocks = []
-    
+
     # Header
     blocks.append({
         "type": "header",
@@ -807,38 +817,36 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
             "text": "Suggested Next Steps"
         }
     })
-    
-    # Show up to max_suggestions
-    for i, suggestion in enumerate(suggestions[:max_suggestions]):
-        if not suggestion.get('command'):
-            continue  # Skip suggestions without commands
-        
+
+    for suggestion in eligible:
         # Validate required fields
         title = suggestion.get('title', 'Action')
         if not title:
             title = 'Action'
-        
+
+        is_high_risk = suggestion.get('risk') == 'high'
         command = suggestion.get('command', '')
-        
+
         # Truncate command for display (Slack has limits)
         # Show more context - users can click "More details" for full command
         command_display = command[:COMMAND_FULL_DISPLAY_LENGTH] + '... (click More details for full command)' if len(command) > COMMAND_FULL_DISPLAY_LENGTH else command
-        
+
         # Build compact text with just title and command (no description)
-        text = f"*{title}*\n`{command_display}`"
+        risk_label = " ⚠️ _High Risk_" if is_high_risk else ""
+        text = f"*{title}*{risk_label}\n`{command_display}`"
         if len(text) > SLACK_SECTION_TEXT_BUFFER:  # Leave buffer for Slack
             text = text[:SLACK_SECTION_TEXT_BUFFER] + "..."
-        
-        # Build the run button (always green/primary)
+
+        # Build the run button — red/danger for high-risk, green/primary otherwise
         run_button = {
             "type": "button",
             "text": {
                 "type": "plain_text",
-                "text": "Run"
+                "text": "⚠️ Run" if is_high_risk else "Run"
             },
             "value": f"{incident_id}:{suggestion['id']}",
             "action_id": f"run_suggestion_{suggestion['id']}",
-            "style": "primary"  # Always green
+            "style": "danger" if is_high_risk else "primary"
         }
         
         # Build actions with Run button and More details button

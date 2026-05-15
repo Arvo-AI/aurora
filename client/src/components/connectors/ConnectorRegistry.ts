@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -82,7 +82,7 @@ class ConnectorRegistry {
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
-        iconPath: "/dynatrace.png",
+        iconPath: "/dynatrace.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Monitoring",
         path: "/dynatrace/auth",
@@ -115,6 +115,18 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "sentry",
+      name: "Sentry",
+      description: "Connect Sentry to ingest issue and error alerts and query full stacktraces and breadcrumbs for automated root cause analysis.",
+      iconPath: "/sentry.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/sentry/auth",
+      storageKey: "isSentryConnected",
+      useCustomConnection: true,
+    });
+
+    this.register({
         id: "thousandeyes",
         name: "ThousandEyes",
         description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",
@@ -129,7 +141,7 @@ class ConnectorRegistry {
       id: "pagerduty",
       name: "PagerDuty",
       description: "Connect PagerDuty to receive incident alerts and manage on-call schedules. Integrate with your PagerDuty account for real-time incident management.",
-      iconPath: "/pagerduty-icon.svg",
+      iconPath: "/pagerduty.svg",
       iconBgColor: "bg-white dark:bg-white",
       category: "Incident Management",
       path: "/pagerduty/auth",
@@ -148,6 +160,19 @@ class ConnectorRegistry {
     });
 
     this.register({
+        id: "incidentio",
+        name: "incident.io",
+        description: "Connect incident.io for real-time incident lifecycle tracking. Receive webhook events, investigate incidents with timeline data, and post RCA results back automatically.",
+        iconPath: "/incidentio.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Incident Management",
+        path: "/incident-io/auth",
+        storageKey: "isIncidentIoConnected",
+        alertsPath: "/incident-io/incidents",
+        alertsLabel: "View Incidents",
+      });
+
+    this.register({
         id: "bigpanda",
         name: "BigPanda",
         description: "Connect BigPanda for AIOps incident correlation. Receive pre-correlated incident clusters with enriched metadata for improved root cause analysis.",
@@ -159,15 +184,15 @@ class ConnectorRegistry {
       });
 
     this.register({
-        id: "confluence",
-        name: "Confluence",
-        description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
-        iconPath: "/confluence.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/confluence/connect",
-        storageKey: "isConfluenceConnected",
-      });
+      id: "confluence",
+      name: "Confluence",
+      description: "Fetch runbooks and documentation from Confluence pages to automate incident response workflows.",
+      iconPath: "/confluence.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/confluence/connect",
+      storageKey: "isConfluenceConnected",
+    });
 
     if (isJiraEnabled()) {
       this.register({
@@ -192,6 +217,19 @@ class ConnectorRegistry {
         category: "Documentation",
         path: "/sharepoint/connect",
         storageKey: "isSharePointConnected",
+      });
+    }
+
+    if (isNotionEnabled()) {
+      this.register({
+        id: "notion",
+        name: "Notion",
+        description: "Export postmortems, search workspace docs, and let Aurora create runbooks and action-item rows in your Notion workspace.",
+        iconPath: "/notion.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Documentation",
+        path: "/notion/connect",
+        storageKey: "isNotionConnected",
       });
     }
 

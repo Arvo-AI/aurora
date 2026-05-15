@@ -30,13 +30,13 @@ export function useBitbucketStatus(userId: string | null) {
     }
 
     try {
-      const credentials = await BitbucketIntegrationService.checkStatus(userId);
+      const credentials = await BitbucketIntegrationService.checkStatus();
       if (!credentials.connected) {
         setStatus({ ...DISCONNECTED_STATUS, hasWorkspaceSelected: false });
         return;
       }
 
-      const selection = await BitbucketIntegrationService.loadWorkspaceSelection(userId);
+      const selection = await BitbucketIntegrationService.loadWorkspaceSelection();
       const hasWorkspaceSelected = Boolean(
         selection?.workspace && selection?.repository && selection?.branch
       );

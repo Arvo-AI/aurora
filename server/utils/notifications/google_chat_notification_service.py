@@ -8,6 +8,7 @@ import os
 from typing import Dict, Any, Optional
 from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 from routes.google_chat.google_chat_events_helpers import (
     format_response_for_google_chat,
     extract_summary_section,
@@ -66,6 +67,7 @@ def send_google_chat_investigation_started_notification(user_id: str, incident_d
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[GChatNotification:started]")
                     cursor.execute(
                         "SELECT email FROM users WHERE id = (SELECT user_id FROM incidents WHERE id = %s)",
                         (incident_id,),
@@ -137,6 +139,7 @@ def send_google_chat_investigation_started_notification(user_id: str, incident_d
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[GChatNotification:storeMsg]")
                             cursor.execute(
                                 "UPDATE incidents SET google_chat_message_name = %s WHERE id = %s",
                                 (message_name, incident_id),
@@ -190,6 +193,7 @@ def send_google_chat_investigation_completed_notification(
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[GChatNotification:completed]")
                     cursor.execute(
                         "SELECT email FROM users WHERE id = (SELECT user_id FROM incidents WHERE id = %s)",
                         (incident_id,),
@@ -277,6 +281,7 @@ def send_google_chat_investigation_completed_notification(
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[GChatNotification:updateMsg]")
                             cursor.execute(
                                 "UPDATE incidents SET google_chat_message_name = %s WHERE id = %s",
                                 (new_message_name, incident_id),

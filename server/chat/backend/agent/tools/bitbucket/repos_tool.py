@@ -121,7 +121,7 @@ def bitbucket_repos(
                 return build_error_response("branch is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Commit file '{path}' to branch '{branch}' in {ws}/{repo}",
-                    "bitbucket_repos"):
+                    "bitbucket:commit_file"):
                 return cancelled
             result = client.create_or_update_file(ws, repo, path, content, message, branch)
             if err := forward_if_error(result):
@@ -139,7 +139,7 @@ def bitbucket_repos(
                 return build_error_response("branch is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Delete file '{path}' from branch '{branch}' in {ws}/{repo}",
-                    "bitbucket_repos"):
+                    "bitbucket:delete_file"):
                 return cancelled
             result = client.delete_file(ws, repo, path, message, branch)
             if err := forward_if_error(result):

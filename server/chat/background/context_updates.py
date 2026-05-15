@@ -9,6 +9,9 @@ from typing import Any, Dict, List, Optional
 from langchain_core.messages import HumanMessage
 from utils.cloud.cloud_utils import get_workflow_context
 from utils.cache.redis_client import get_redis_client
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+from chat.background.task import TERMINAL_SESSION_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +29,11 @@ def _get_session_status(user_id: str, session_id: str) -> Optional[str]:
     Uses RLS to ensure users can only check status of their own sessions.
     """
     try:
-        from utils.db.connection_pool import db_pool
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
-                # Set user context for RLS
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
-                
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextUpdates]"):
+                    return None
+
                 cursor.execute(
                     "SELECT status FROM chat_sessions WHERE id = %s AND user_id = %s",
                     (session_id, user_id)
@@ -55,8 +56,6 @@ def _append_context_update_to_completed_session(
     with tool calls, placing it logically at the end of the investigation.
     """
     try:
-        from utils.db.connection_pool import db_pool
-        
         content = _format_updates_for_prompt([update_payload])
         tool_call_id = f"rca_context_update_{uuid.uuid4().hex}"
         injected_at = update_payload.get("received_at") or datetime.now(timezone.utc).isoformat()
@@ -85,9 +84,8 @@ def _append_context_update_to_completed_session(
         
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
-                # Set user context for RLS
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextUpdates]"):
+                    return False
                 
                 # Lock the row and get current messages to prevent race conditions
                 cursor.execute(
@@ -173,7 +171,7 @@ def enqueue_rca_context_update(
 
     # Check if session is already completed
     session_status = _get_session_status(user_id, session_id)
-    if session_status in ("completed", "failed"):
+    if session_status in TERMINAL_SESSION_STATUSES:
         logger.info(
             "[RCA-UPDATE] Session %s is %s, appending context update directly to database",
             session_id, session_status
@@ -356,6 +354,10 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
         logger.debug("[RCA-UPDATE] State is_background=%s, skipping", getattr(state, "is_background", None))
         return None
     if not getattr(state, "rca_context", None):
+        sid = getattr(state, "session_id", "") or ""
+        if "::sa_" in sid:
+            # Sub-agent session — rca_context is intentionally not propagated.
+            return None
         logger.warning("[RCA-UPDATE] State has is_background=True but rca_context is None, skipping context update injection")
         return None
 
@@ -372,7 +374,7 @@ def apply_rca_context_updates(state: Any) -> Optional[HumanMessage]:
 
     # Check if session is completed - if so, write directly to database instead of injecting into state
     session_status = _get_session_status(user_id, session_id)
-    if session_status in ("completed", "failed"):
+    if session_status in TERMINAL_SESSION_STATUSES:
         logger.info(
             "[RCA-UPDATE] Session %s is %s, writing %d drained update(s) directly to database",
             session_id,

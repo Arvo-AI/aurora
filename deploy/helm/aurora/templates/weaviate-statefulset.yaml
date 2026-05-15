@@ -52,18 +52,28 @@ spec:
           volumeMounts:
             - name: weaviate-data
               mountPath: /var/lib/weaviate
+          startupProbe:
+            httpGet:
+              path: /v1/.well-known/ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /v1/.well-known/ready
               port: 8080
-            initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /v1/.well-known/live
               port: 8080
-            initialDelaySeconds: 30
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.weaviate | nindent 12 }}
   volumeClaimTemplates:

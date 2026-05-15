@@ -42,7 +42,8 @@ def _get_fix_suggestion(suggestion_id: int, user_id: str) -> Optional[dict]:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            # Join with incidents to verify user ownership
+            from utils.auth.stateless_auth import set_rls_context
+            set_rls_context(cursor, conn, user_id, log_prefix="[GithubApplyFix:_get_fix_suggestion]")
             cursor.execute(
                 """
                 SELECT s.id, s.incident_id, s.title, s.description, s.type,
@@ -90,6 +91,7 @@ def _update_suggestion_with_pr(
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            # No RLS needed — incident_suggestions not RLS-protected
             cursor.execute(
                 """
                 UPDATE incident_suggestions

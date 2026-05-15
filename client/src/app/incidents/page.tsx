@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
@@ -22,10 +22,12 @@ import { useToast } from '@/hooks/use-toast';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
-const ALERT_PROVIDERS = new Set([
-  'grafana', 'datadog', 'netdata', 'splunk', 'dynatrace',
-  'coroot', 'newrelic', 'thousandeyes', 'pagerduty', 'bigpanda',
-]);
+const ALERT_PROVIDERS = new Set(
+  connectorRegistry
+    .getAll()
+    .filter(c => c.category && ALERT_CATEGORIES.has(c.category))
+    .map(c => c.id),
+);
 
 interface IncidentsResponse { incidents: any[] }
 
@@ -62,7 +64,7 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
 };
 
 export default function IncidentsPage() {
-  const { providerIds } = useConnectedAccounts();
+  const { providerIds, isLoading: isLoadingAccounts } = useConnectedAccounts();
 
   const isConnectedToIncidentPlatform = useMemo(
     () => providerIds.some(id => ALERT_PROVIDERS.has(id)),
@@ -129,7 +131,7 @@ export default function IncidentsPage() {
         </div>
       ) : (
         <div className="space-y-8">
-          {incidents.length > 0 && !isConnectedToIncidentPlatform && (
+          {incidents.length > 0 && !isConnectedToIncidentPlatform && !isLoadingAccounts && (
             <DisconnectedBanner />
           )}
 
@@ -181,7 +183,7 @@ export default function IncidentsPage() {
           {incidents.length === 0 && (
             <Card>
               <CardContent className="py-12 text-center">
-                {!isConnectedToIncidentPlatform ? (
+                {!isConnectedToIncidentPlatform && !isLoadingAccounts ? (
                   <ConnectPlatformCTA />
                 ) : (
                   <>
@@ -234,8 +236,11 @@ function IncidentRow({ incident }: { incident: Incident }) {
                 )}
                 {isActive && (
                   <span className="flex items-center gap-1 text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Aurora investigating
+                    {Date.now() - new Date(incident.startedAt).getTime() > 30 * 60 * 1000 ? (
+                      <><AlertTriangle className="h-3 w-3 text-red-400" /> Investigation stalled</>
+                    ) : (
+                      <><Loader2 className="h-3 w-3 animate-spin" /> Aurora investigating</>
+                    )}
                   </span>
                 )}
                 {isMerged && (

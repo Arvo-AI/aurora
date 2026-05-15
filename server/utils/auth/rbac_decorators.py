@@ -19,9 +19,21 @@ from flask import jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from utils.auth.stateless_auth import get_user_id_from_request, get_org_id_from_request
-from utils.auth.enforcer import get_enforcer, reload_policies
+from utils.auth.enforcer import enforce_with_reload
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
+
+_INTERNAL_SERVER_ERROR = "Internal server error"
+
+
+def _audit_auth_failure(user_id, org_id, action, detail) -> None:
+    """Best-effort audit log for auth/RBAC failures."""
+    try:
+        from routes.audit_routes import record_audit_event
+        record_audit_event(org_id or "", user_id or "", action, "auth", None, detail, request)
+    except Exception:
+        logger.debug("Could not record auth audit event", exc_info=True)
 
 
 def require_permission(resource: str, action: str):
@@ -46,25 +58,33 @@ def require_permission(resource: str, action: str):
 
             user_id = get_user_id_from_request()
             if not user_id:
+                _audit_auth_failure(None, None, "auth_failed", {"endpoint": fn.__name__, "reason": "no_user_id"})
                 return jsonify({"error": "Unauthorized"}), 401
 
             org_id = get_org_id_from_request()
             if not org_id:
                 logger.warning(
                     "RBAC denied: no org context for user=%s endpoint=%s",
-                    user_id, fn.__name__,
+                    sanitize(user_id), fn.__name__,
                 )
+                _audit_auth_failure(user_id, None, "rbac_denied", {"endpoint": fn.__name__, "reason": "no_org_context"})
                 return jsonify({"error": "Forbidden - no organization context"}), 403
 
-            enforcer = get_enforcer()
-            if not enforcer.enforce(user_id, org_id, resource, action):
-                reload_policies()
-                if not enforcer.enforce(user_id, org_id, resource, action):
-                    logger.warning(
-                        "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
-                        user_id, org_id, resource, action, fn.__name__,
-                    )
-                    return jsonify({"error": "Forbidden"}), 403
+            try:
+                allowed = enforce_with_reload(user_id, org_id, resource, action)
+            except Exception as exc:
+                logger.info("Enforcer error in %s (%s)", fn.__name__, type(exc).__name__)
+                return jsonify({"error": _INTERNAL_SERVER_ERROR}), 500
+
+            if not allowed:
+                logger.warning(
+                    "RBAC denied: user=%s org=%s resource=%s action=%s endpoint=%s",
+                    sanitize(user_id), sanitize(org_id), resource, action, fn.__name__,
+                )
+                _audit_auth_failure(user_id, org_id, "rbac_denied", {
+                    "endpoint": fn.__name__, "resource": resource, "action": action,
+                })
+                return jsonify({"error": "Forbidden"}), 403
 
             try:
                 return fn(user_id, *args, **kwargs)
@@ -72,7 +92,7 @@ def require_permission(resource: str, action: str):
                 raise
             except Exception as exc:
                 logger.error("Unhandled error in %s: %s", fn.__name__, exc, exc_info=True)
-                return jsonify({"error": "Internal server error"}), 500
+                return jsonify({"error": _INTERNAL_SERVER_ERROR}), 500
         return wrapper
     return decorator
 
@@ -97,6 +117,7 @@ def require_auth_only(fn):
 
         user_id = get_user_id_from_request()
         if not user_id:
+            _audit_auth_failure(None, None, "auth_failed", {"endpoint": fn.__name__, "reason": "no_user_id"})
             return jsonify({"error": "Unauthorized"}), 401
         try:
             return fn(user_id, *args, **kwargs)
@@ -104,5 +125,5 @@ def require_auth_only(fn):
             raise
         except Exception as exc:
             logger.error("Unhandled error in %s: %s", fn.__name__, exc, exc_info=True)
-            return jsonify({"error": "Internal server error"}), 500
+            return jsonify({"error": _INTERNAL_SERVER_ERROR}), 500
     return wrapper

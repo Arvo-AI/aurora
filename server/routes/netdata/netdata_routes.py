@@ -8,10 +8,10 @@ from flask import Blueprint, jsonify, request
 
 from routes.netdata.tasks import process_netdata_alert
 from utils.db.connection_pool import db_pool
-from utils.web.cors_utils import create_cors_response
+from utils.log_sanitizer import sanitize
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def _get_stored_netdata_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-@netdata_bp.route("/connect", methods=["POST", "OPTIONS"])
+@netdata_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
     """Store Netdata API token and space info."""
@@ -67,7 +67,7 @@ def connect(user_id):
     })
 
 
-@netdata_bp.route("/status", methods=["GET", "OPTIONS"])
+@netdata_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
     """Check Netdata connection status."""
@@ -93,7 +93,7 @@ def status(user_id):
     })
 
 
-@netdata_bp.route("/disconnect", methods=["POST", "DELETE", "OPTIONS"])
+@netdata_bp.route("/disconnect", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect(user_id):
     """Disconnect Netdata by removing stored credentials."""
@@ -105,6 +105,7 @@ def disconnect(user_id):
         alert_rows = 0
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA:disconnect]")
                 cursor.execute(
                     "DELETE FROM netdata_alerts WHERE user_id = %s",
                     (user_id,)
@@ -126,12 +127,9 @@ def disconnect(user_id):
         return jsonify({"error": "Failed to disconnect Netdata"}), 500
 
 
-@netdata_bp.route("/alerts/webhook/<user_id>", methods=["POST", "OPTIONS"])
+@netdata_bp.route("/alerts/webhook/<user_id>", methods=["POST"])
 def alert_webhook(user_id: str):
     """Receive alert webhook from Netdata."""
-    if request.method == "OPTIONS":
-        return create_cors_response()
-
     if not user_id:
         logger.warning("[NETDATA] Webhook received without user_id")
         return jsonify({"error": "user_id is required"}), 400
@@ -139,7 +137,7 @@ def alert_webhook(user_id: str):
     # Check if user has Netdata connected
     creds = get_token_data(user_id, "netdata")
     if not creds:
-        logger.warning("[NETDATA] Webhook received for user %s with no Netdata connection", user_id)
+        logger.warning("[NETDATA] Webhook received for user %s with no Netdata connection", sanitize(user_id))
         return jsonify({"error": "Netdata not connected for this user"}), 404
 
     payload = request.get_json(silent=True) or {}
@@ -151,7 +149,7 @@ def alert_webhook(user_id: str):
                   alert_obj.get("name") or 
                   "unknown")
                   
-    logger.info("[NETDATA] Received webhook for user %s: %s", user_id, alert_name)
+    logger.info("[NETDATA] Received webhook for user %s: %s", sanitize(user_id), sanitize(alert_name))
     logger.debug("[NETDATA] Payload keys: %s", list(payload.keys()) if payload else "empty")
     
     # Store verification token from test notifications directly in DB (not a secret)
@@ -162,6 +160,7 @@ def alert_webhook(user_id: str):
         try:
             with db_pool.get_admin_connection() as conn:
                 cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA:webhook]")
                 cursor.execute(
                     """
                     INSERT INTO netdata_verification_tokens (user_id, token, created_at)
@@ -180,7 +179,7 @@ def alert_webhook(user_id: str):
     return jsonify({"received": True})
 
 
-@netdata_bp.route("/alerts", methods=["GET", "OPTIONS"])
+@netdata_bp.route("/alerts", methods=["GET"])
 @require_permission("connectors", "read")
 def get_alerts(user_id):
     """Fetch stored Netdata alerts for user."""
@@ -192,7 +191,7 @@ def get_alerts(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+            set_rls_context(cursor, conn, user_id, log_prefix="[Netdata]")
 
             if status_filter:
                 cursor.execute(
@@ -261,7 +260,7 @@ def get_alerts(user_id):
         return jsonify({"error": "Failed to fetch alerts"}), 500
 
 
-@netdata_bp.route("/alerts/webhook-url", methods=["GET", "OPTIONS"])
+@netdata_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Get the webhook URL and verification token for Netdata configuration."""
@@ -282,6 +281,7 @@ def get_webhook_url(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[NETDATA:webhook_url]")
             cursor.execute(
                 "SELECT token FROM netdata_verification_tokens WHERE user_id = %s",
                 (user_id,)

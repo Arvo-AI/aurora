@@ -11,7 +11,6 @@ from websockets.exceptions import ConnectionClosed
 import uuid
 import hashlib
 from aiohttp import web
-import subprocess
 
 
 RECONNECT_INTERVAL = 30
@@ -90,20 +89,29 @@ class KubectlAgent:
     async def execute_kubectl_command(self, command: str, timeout: int = 60) -> dict:
         """Execute kubectl command and return results."""
         try:
-            result = subprocess.run(
-                ['kubectl'] + command.split(),
-                capture_output=True,
-                text=True,
-                timeout=timeout
+            proc = await asyncio.create_subprocess_exec(
+                'kubectl', *command.split(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {
+                    'success': False,
+                    'error': f'Command timed out after {timeout} seconds',
+                    'return_code': 124,
+                }
             return {
-                'success': result.returncode == 0,
-                'output': result.stdout,
-                'error': result.stderr if result.returncode != 0 else None,
-                'return_code': result.returncode
+                'success': proc.returncode == 0,
+                'output': stdout_b.decode(errors='replace'),
+                'error': stderr_b.decode(errors='replace') if proc.returncode != 0 else None,
+                'return_code': proc.returncode,
             }
-        except subprocess.TimeoutExpired:
-            return {'success': False, 'error': f'Command timed out after {timeout} seconds', 'return_code': 124}
         except Exception as e:
             return {'success': False, 'error': str(e), 'return_code': 1}
     

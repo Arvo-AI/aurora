@@ -1,20 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
-
-// BACKEND_URL for server-side API calls; fallback to public URL for local dev
-const API_BASE_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL
+import { env } from '@/lib/server-env'
 
 export async function GET() {
   try {
-    // Check if backend URL is configured
-    if (!API_BASE_URL) {
-      console.error('BACKEND_URL environment variable is not set')
-      return NextResponse.json(
-        { error: 'Server configuration error', vms: [] },
-        { status: 500 }
-      )
-    }
-
     const authResult = await getAuthenticatedUser()
 
     if (authResult instanceof NextResponse) {
@@ -23,7 +12,7 @@ export async function GET() {
 
     const { headers: authHeaders } = authResult
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/vms/manual`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/manual`, {
       method: 'GET',
       headers: authHeaders,
     })
@@ -41,7 +30,6 @@ export async function GET() {
     return NextResponse.json(data)
   } catch (error: any) {
     console.error('Error fetching manual VMs:', error?.message || error)
-    console.error('BACKEND_URL was:', API_BASE_URL || 'NOT SET')
     return NextResponse.json(
       { error: error?.message || 'Failed to fetch VMs', vms: [] },
       { status: 500 }
@@ -60,7 +48,7 @@ export async function POST(request: NextRequest) {
     const { headers: authHeaders } = authResult
     const body = await request.json()
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/vms/manual`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/vms/manual`, {
       method: 'POST',
       headers: {
         ...authHeaders,
@@ -79,4 +67,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

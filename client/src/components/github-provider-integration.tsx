@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
@@ -9,12 +9,9 @@ import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useGitHubStatus } from '@/hooks/use-github-status';
 import { ToastAction } from "@/components/ui/toast";
-import { getEnv } from '@/lib/env';
-
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
-
 export interface GitHubCredentials {
   connected: boolean;
   username?: string;
@@ -54,23 +51,17 @@ export interface ConnectedRepo {
 }
 
 export class GitHubIntegrationService {
-  private static getAuthHeaders(userId: string) {
-    return { 'X-User-ID': userId };
-  }
-
-  static async checkStatus(userId: string): Promise<GitHubCredentials> {
-    const response = await fetch(`${BACKEND_URL}/github/status`, {
-      headers: this.getAuthHeaders(userId),
-    });
+  static async checkStatus(): Promise<GitHubCredentials> {
+    const response = await fetch('/api/proxy/github/status');
     if (!response.ok) return { connected: false };
     return response.json();
   }
 
-  static async initiateOAuth(userId: string): Promise<string> {
-    const response = await fetch(`${BACKEND_URL}/github/login`, {
+  static async initiateOAuth(): Promise<string> {
+    const response = await fetch('/api/proxy/github/login', {
       method: 'POST',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
@@ -86,62 +77,54 @@ export class GitHubIntegrationService {
     return data.oauth_url;
   }
 
-  static async disconnect(userId: string): Promise<void> {
-    await fetch(`${BACKEND_URL}/github/disconnect`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(userId),
-    });
+  static async disconnect(): Promise<void> {
+    const response = await fetch('/api/proxy/github/disconnect', { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to disconnect GitHub');
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static async fetchRepositories(userId: string): Promise<any> {
-    const response = await fetch(`${BACKEND_URL}/github/user-repos`, {
-      headers: this.getAuthHeaders(userId),
-    });
+  static async fetchRepositories(): Promise<any> {
+    const response = await fetch('/api/proxy/github/user-repos');
     if (!response.ok) throw new Error('Failed to fetch repositories');
     return response.json();
   }
 
-  static async fetchRepoSelections(userId: string): Promise<ConnectedRepo[]> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-selections`, {
-      headers: this.getAuthHeaders(userId),
-    });
+  static async fetchRepoSelections(): Promise<ConnectedRepo[]> {
+    const response = await fetch('/api/proxy/github/repo-selections');
     if (!response.ok) return [];
     const data = await response.json();
     return data.repositories || [];
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static async saveRepoSelections(userId: string, repositories: Repository[]): Promise<any> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-selections`, {
+  static async saveRepoSelections(repositories: Repository[]): Promise<any> {
+    const response = await fetch('/api/proxy/github/repo-selections', {
       method: 'POST',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repositories }),
     });
     if (!response.ok) throw new Error('Failed to save repository selections');
     return response.json();
   }
 
-  static async clearRepoSelections(userId: string): Promise<void> {
-    await fetch(`${BACKEND_URL}/github/repo-selections`, {
-      method: 'DELETE',
-      headers: this.getAuthHeaders(userId),
-    });
+  static async clearRepoSelections(): Promise<void> {
+    const response = await fetch('/api/proxy/github/repo-selections', { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to clear repository selections');
   }
 
-  static async updateRepoMetadata(userId: string, repoFullName: string, summary: string): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
+  static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
+    const response = await fetch(`/api/proxy/github/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
       method: 'PUT',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ metadata_summary: summary }),
     });
     if (!response.ok) throw new Error('Failed to update metadata');
   }
 
-  static async generateRepoMetadata(userId: string, repoFullName: string): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/github/repo-metadata/generate`, {
+  static async generateRepoMetadata(repoFullName: string): Promise<void> {
+    const response = await fetch('/api/proxy/github/repo-metadata/generate', {
       method: 'POST',
-      headers: { ...this.getAuthHeaders(userId), 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repo_full_name: repoFullName }),
     });
     if (!response.ok) throw new Error('Failed to trigger metadata generation');
@@ -160,6 +143,8 @@ export default function GitHubProviderIntegration() {
   const [hasLoadedRepos, setHasLoadedRepos] = useState(false);
   const [checkedRepos, setCheckedRepos] = useState<Set<string>>(new Set());
   const [searchFilter, setSearchFilter] = useState('');
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
+  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "public" | "private">("all");
   const [expanded, setExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -178,7 +163,7 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     setIsLoadingRepos(true);
     try {
-      const data = await GitHubIntegrationService.fetchRepositories(userId);
+      const data = await GitHubIntegrationService.fetchRepositories();
       const repos: Repository[] = Array.isArray(data) ? data : data?.repos || [];
       setAllRepos(repos);
     } catch { setAllRepos([]); }
@@ -191,7 +176,7 @@ export default function GitHubProviderIntegration() {
     if (!hasPending || !userId) return;
     pollingRef.current = setInterval(async () => {
       try {
-        const updated = await GitHubIntegrationService.fetchRepoSelections(userId!);
+        const updated = await GitHubIntegrationService.fetchRepoSelections();
         setSavedRepos(updated);
         const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
         if (!stillPending && pollingRef.current) {
@@ -205,7 +190,7 @@ export default function GitHubProviderIntegration() {
   const loadSavedRepos = useCallback(async () => {
     if (!userId) return;
     try {
-      const repos = await GitHubIntegrationService.fetchRepoSelections(userId);
+      const repos = await GitHubIntegrationService.fetchRepoSelections();
       setSavedRepos(repos);
       setCheckedRepos(new Set(repos.map(r => r.repo_full_name)));
       startMetadataPolling(repos);
@@ -232,7 +217,7 @@ export default function GitHubProviderIntegration() {
     setIsSaving(true);
     try {
       const selected = allRepos.filter(r => checkedRepos.has(r.full_name));
-      await GitHubIntegrationService.saveRepoSelections(userId, selected);
+      await GitHubIntegrationService.saveRepoSelections(selected);
       toast({ title: "Repositories saved", description: `${selected.length} repositories connected.` });
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -247,7 +232,7 @@ export default function GitHubProviderIntegration() {
     const summary = editingMetadata[repoFullName];
     if (summary === undefined) return;
     try {
-      await GitHubIntegrationService.updateRepoMetadata(userId, repoFullName, summary);
+      await GitHubIntegrationService.updateRepoMetadata(repoFullName, summary);
       setSavedRepos(prev => prev.map(r =>
         r.repo_full_name === repoFullName ? { ...r, metadata_summary: summary, metadata_status: 'ready' } : r
       ));
@@ -261,7 +246,7 @@ export default function GitHubProviderIntegration() {
   const handleRegenerate = async (repoFullName: string) => {
     if (!userId) return;
     try {
-      await GitHubIntegrationService.generateRepoMetadata(userId, repoFullName);
+      await GitHubIntegrationService.generateRepoMetadata(repoFullName);
       const updated = savedRepos.map(r =>
         r.repo_full_name === repoFullName ? { ...r, metadata_status: 'generating' } : r
       );
@@ -276,7 +261,7 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     setIsLoading(true);
     try {
-      const oauthUrl = await GitHubIntegrationService.initiateOAuth(userId);
+      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
       const popup = window.open(oauthUrl, 'github-oauth', 'width=600,height=700,scrollbars=yes,resizable=yes');
       const checkClosed = setInterval(() => {
         if (popup?.closed) {
@@ -294,7 +279,7 @@ export default function GitHubProviderIntegration() {
           variant: "destructive",
           action: (
             <ToastAction altText="View setup guide"
-              onClick={() => window.open("https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md", "_blank")}>
+              onClick={() => window.open("https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md", "_blank", "noopener,noreferrer")}>
               <ExternalLink className="h-3 w-3 mr-1" />Setup Guide
             </ToastAction>
           ),
@@ -309,8 +294,8 @@ export default function GitHubProviderIntegration() {
   const handleDisconnect = async () => {
     if (!userId) return;
     try {
-      await GitHubIntegrationService.clearRepoSelections(userId);
-      await GitHubIntegrationService.disconnect(userId);
+      await GitHubIntegrationService.clearRepoSelections();
+      await GitHubIntegrationService.disconnect();
       setSavedRepos([]);
       setCheckedRepos(new Set());
       setAllRepos([]);
@@ -322,6 +307,29 @@ export default function GitHubProviderIntegration() {
     } catch {}
   };
 
+  const owners = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of allRepos) counts.set(r.owner.login, (counts.get(r.owner.login) ?? 0) + 1);
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [allRepos]);
+
+  const filteredRepos = useMemo(() => allRepos.filter(r => {
+    if (ownerFilter !== "all" && r.owner.login !== ownerFilter) return false;
+    if (visibilityFilter === "private" && !r.private) return false;
+    if (visibilityFilter === "public" && r.private) return false;
+    if (searchFilter && !r.full_name.toLowerCase().includes(searchFilter.toLowerCase())) return false;
+    return true;
+  }), [allRepos, ownerFilter, visibilityFilter, searchFilter]);
+
+  const allFilteredSelected = useMemo(
+    () => filteredRepos.length > 0 && filteredRepos.every(r => checkedRepos.has(r.full_name)),
+    [filteredRepos, checkedRepos],
+  );
+  const someFilteredSelected = useMemo(
+    () => filteredRepos.some(r => checkedRepos.has(r.full_name)),
+    [filteredRepos, checkedRepos],
+  );
+
   if (!userId || githubStatus.hasReposConnected === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 border border-border rounded-lg">
@@ -330,9 +338,17 @@ export default function GitHubProviderIntegration() {
     );
   }
 
-  const filteredRepos = allRepos.filter(r =>
-    r.full_name.toLowerCase().includes(searchFilter.toLowerCase())
-  );
+  const isFilterActive = ownerFilter !== "all" || visibilityFilter !== "all" || !!searchFilter;
+
+  const setFilteredSelection = (selected: boolean) =>
+    setCheckedRepos(prev => {
+      const next = new Set(prev);
+      for (const r of filteredRepos) selected ? next.add(r.full_name) : next.delete(r.full_name);
+      return next;
+    });
+  const isClearFilteredMode = isFilterActive && someFilteredSelected;
+  const handleClear = () =>
+    isClearFilteredMode ? setFilteredSelection(false) : setCheckedRepos(new Set());
 
   const hasUnsavedChanges = (() => {
     const savedSet = new Set(savedRepos.map(r => r.repo_full_name));
@@ -345,8 +361,11 @@ export default function GitHubProviderIntegration() {
     <>
       {/* Header */}
       <div
+        role="button"
+        tabIndex={0}
         className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
         onClick={() => { if (githubStatus.isAuthenticated) setExpanded(!expanded); }}
+        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && githubStatus.isAuthenticated) { e.preventDefault(); setExpanded(!expanded); } }}
       >
         <div className="flex items-center gap-3">
           <div className="w-6 h-6 relative flex-shrink-0">
@@ -389,7 +408,14 @@ export default function GitHubProviderIntegration() {
             </Button>
           )}
           {githubStatus.isAuthenticated && (
-            <div className="cursor-pointer p-1 hover:bg-muted rounded" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
+            <div
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer p-1 hover:bg-muted rounded"
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); } }}
+              aria-label={expanded ? 'Collapse' : 'Expand'}
+            >
               {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
             </div>
           )}
@@ -475,15 +501,68 @@ export default function GitHubProviderIntegration() {
               </div>
             </div>
 
-            {allRepos.length > 10 && (
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-                <Input
-                  placeholder="Filter repositories..."
-                  value={searchFilter}
-                  onChange={(e) => setSearchFilter(e.target.value)}
-                  className="h-8 text-xs pl-7"
-                />
+            {allRepos.length > 0 && (
+              <>
+                <div className="flex items-center gap-2">
+                  <Select value={ownerFilter} onValueChange={setOwnerFilter}>
+                    <SelectTrigger className="h-8 text-xs flex-1">
+                      <SelectValue placeholder="All owners" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All owners</SelectItem>
+                      {owners.map(([login, count]) => (
+                        <SelectItem key={login} value={login}>{login} ({count})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as "all" | "public" | "private")}>
+                    <SelectTrigger className="h-8 text-xs w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="public">Public</SelectItem>
+                      <SelectItem value="private">Private</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                  <Input
+                    placeholder="Filter repositories..."
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    className="h-8 text-xs pl-7"
+                  />
+                </div>
+              </>
+            )}
+
+            {filteredRepos.length > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  {checkedRepos.size} selected • {filteredRepos.length} shown
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setFilteredSelection(true)}
+                    disabled={allFilteredSelected}
+                  >
+                    Select all
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={handleClear}
+                    disabled={checkedRepos.size === 0}
+                  >
+                    {isClearFilteredMode ? "Clear filtered" : "Clear all"}
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -518,7 +597,7 @@ export default function GitHubProviderIntegration() {
                 ))
               ) : (
                 <p className="text-xs text-muted-foreground text-center py-4">
-                  {searchFilter ? 'No repositories match your filter.' : 'No repositories available.'}
+                  {isFilterActive ? 'No repositories match your filter.' : 'No repositories available.'}
                 </p>
               )}
             </div>
@@ -526,12 +605,14 @@ export default function GitHubProviderIntegration() {
             {allRepos.length > 0 && (
               <Button
                 onClick={handleSaveSelections}
-                disabled={isSaving || checkedRepos.size === 0 || !hasUnsavedChanges}
+                disabled={isSaving || !hasUnsavedChanges}
                 size="sm"
                 className="w-full"
               >
                 {isSaving ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
-                {hasUnsavedChanges ? `Save ${checkedRepos.size} Repositories` : `${checkedRepos.size} Repositories Saved`}
+                {hasUnsavedChanges
+                  ? (checkedRepos.size === 0 ? 'Remove All Repositories' : `Save ${checkedRepos.size} Repositories`)
+                  : `${checkedRepos.size} Repositories Saved`}
               </Button>
             )}
           </div>

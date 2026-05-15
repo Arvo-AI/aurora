@@ -48,7 +48,7 @@ _DESTRUCTIVE_MCP_TOOLS = {
     "merge_pull_request", "update_pull_request_branch", "fork_repository",
     "add_issue_comment", "add_comment_to_pending_review", "add_project_item",
     "delete_file", "delete_pending_review", "cancel_workflow_run",
-    "rerun_workflow", "rerun_workflow_failed_jobs", "assign_copilot_to_issue",
+    "rerun_workflow_run", "rerun_failed_jobs", "assign_copilot_to_issue",
     "request_copilot_review", "update_issue", "update_project_item_field_value",
     "close_pull_request_review", "manage_pull_request_review",
 }
@@ -117,8 +117,8 @@ class RealMCPServerManager:
             #     "description": "Azure MCP Server"
             # },
             "github": {
-                "command": ["docker", "run", "-i", "--rm"],
-                "description": "GitHub Official MCP Server (Docker)"
+                "command": ["github-mcp-server", "stdio"],
+                "description": "GitHub Official MCP Server"
             },
             "context7": {
                 "command": ["npx", "-y", "@upstash/context7-mcp"],
@@ -222,10 +222,8 @@ class RealMCPServerManager:
                 python_cmd = shutil.which("python") or "/usr/local/bin/python"
                 cmd = [python_cmd, "-m", "awslabs.aws_api_mcp_server.server"]
             elif server_type == "github":
-                # Official GitHub MCP Server via Docker
-                # Command is built dynamically below to include the token
-                docker_cmd = shutil.which("docker") or "/usr/bin/docker"
-                # Get GitHub token from credentials
+                # Official GitHub MCP Server - native binary baked into the image
+                github_binary = shutil.which("github-mcp-server") or "/usr/local/bin/github-mcp-server"
                 github_token = ""
                 if user_credentials and "github" in user_credentials:
                     github_token = str(user_credentials["github"].get("access_token", ""))
@@ -234,16 +232,8 @@ class RealMCPServerManager:
                     logging.error(" GitHub token is required for GitHub MCP server")
                     return None
                 
-                # Build Docker command with token passed via -e flag
-                # Using GITHUB_TOOLSETS=all to enable all 60+ tools
-                cmd = [
-                    docker_cmd, "run", "-i", "--rm",
-                    "-e", f"GITHUB_PERSONAL_ACCESS_TOKEN={github_token}",
-                    "-e", "GITHUB_TOOLSETS=all",
-                    "ghcr.io/github/github-mcp-server"
-                ]
-                
-                logging.info(f" GitHub MCP server command prepared (Docker with all toolsets)")
+                cmd = [github_binary, "stdio"]
+                logging.info(f" GitHub MCP server command prepared (native binary, all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
@@ -266,9 +256,9 @@ class RealMCPServerManager:
                     env["AWS_DEFAULT_REGION"] = str(aws_creds.get("region", "us-east-1"))
                     env["AWS_REGION"] = str(aws_creds.get("region", "us-east-1")) 
                     
-                    # Create AWS config directory in /tmp to ensure it's writable
-                    aws_dir = "/tmp/.aws"
-                    os.makedirs(aws_dir, exist_ok=True)
+                    # Per-invocation AWS config dir (0o700) so concurrent users in the same
+                    # worker cannot overwrite each other's credentials via a shared path.
+                    aws_dir = tempfile.mkdtemp(prefix=".aws-")
                     
                     # Create credentials file
                     credentials_content = f"""[default]
@@ -280,10 +270,15 @@ region = {aws_creds.get("region", "us-east-1")}
                         credentials_content += f"aws_session_token = {aws_creds.get('session_token', '')}\n"
                     
                     credentials_file = os.path.join(aws_dir, "credentials")
-                    # Write credentials with restricted permissions (0600 = owner read/write only)
-                    fd = os.open(credentials_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(credentials_content)
+
+                    # Write credentials with restricted permissions (0600 = owner read/write only).
+                    # Offload blocking file I/O to a thread so we don't stall the event loop.
+                    def _write_secure_file(path: str, content: str) -> None:
+                        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(content)
+
+                    await asyncio.to_thread(_write_secure_file, credentials_file, credentials_content)
                     
                     # Create config file
                     config_content = f"""[default]
@@ -291,34 +286,37 @@ region = {aws_creds.get("region", "us-east-1")}
 output = json
 """
                     config_file = os.path.join(aws_dir, "config")
-                    fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(config_content)
-                    
+                    await asyncio.to_thread(_write_secure_file, config_file, config_content)
+
                     # Set environment variables to point to our custom AWS config location
                     env["AWS_SHARED_CREDENTIALS_FILE"] = credentials_file
                     env["AWS_CONFIG_FILE"] = config_file
                     
-                # GitHub credentials are passed via Docker -e flag in the command itself
-                # (handled above when building the docker command)
+                # GitHub credentials passed as env vars to the native binary
                 elif server_type == "github":
-                    # Token already passed in Docker command args, nothing to add to env
-                    pass
+                    if "github" in user_credentials:
+                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = str(user_credentials["github"].get("access_token", ""))
+                        env["GITHUB_TOOLSETS"] = "all"
 
             
-            process = subprocess.Popen(
+            # Offload the blocking Popen spawn to a worker thread so we don't
+            # stall the event loop while the child is fork/exec'd. The returned
+            # Popen object is still used with its synchronous stdin/stdout
+            # pipes in send_mcp_message, so we keep subprocess.Popen here rather
+            # than switching to asyncio.create_subprocess_exec.
+            process = await asyncio.to_thread(
+                subprocess.Popen,
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
                 text=True,
-                bufsize=1
+                bufsize=1,
             )
-            
+
             # Give the process a moment to start
-            # Docker containers need more time, especially on first run (image pull)
-            startup_wait = 2.0 if server_type == "github" else 0.5
+            startup_wait = 0.5
             await asyncio.sleep(startup_wait)
             
             # Check if process started successfully
@@ -870,7 +868,7 @@ def get_user_cloud_credentials(user_id: str) -> Dict[str, Dict]:
             """Get credentials for a specific provider from database."""
             try:
                 with conn.cursor() as cursor:
-                    # Cloud providers store credentials in connected_accounts table
+                    # No RLS needed — connected_accounts not RLS-protected
                     cursor.execute("""
                         SELECT provider_data FROM connected_accounts 
                         WHERE user_id = %s AND provider = %s AND status = 'active'
@@ -1226,7 +1224,7 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Generate consistent tool_call_id for start/completion matching
                 import hashlib
                 import json
-                tool_name = f"mcp_{original_tool_name}"
+                tool_name = f"mcp_{server_type}_{original_tool_name}"
                 # Use JSON serialization with sorted keys for deterministic hashing
                 signature = f"{tool_name}_{json.dumps(kwargs, sort_keys=True, default=str)}"
                 # Use longer hash (16 chars) to reduce collision risk
@@ -1243,25 +1241,19 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Check if this is a destructive MCP tool and ask for confirmation
                 if is_destructive_mcp_tool(original_tool_name):
                     try:
-                        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+                        from utils.auth.command_gate import gate_action
                         from utils.cloud.cloud_utils import get_user_context
-                        from chat.backend.agent.tools.cloud_tools import get_state_context
-                        
-                        # Get user context
+
                         context = get_user_context()
                         user_id = context.get('user_id') if isinstance(context, dict) else context
-                        state_context = get_state_context()
-                        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-                        
+
                         if user_id:
                             summary_msg = summarize_mcp_tool_action(original_tool_name, kwargs)
-                            if not wait_for_user_confirmation(
+                            if not gate_action(
                                 user_id=user_id,
-                                message=summary_msg,
                                 tool_name=tool_name,
-                                session_id=session_id
-                            ):
-                                # User cancelled the action
+                                summary=summary_msg,
+                            ).allowed:
                                 cancellation_result = f"MCP tool {original_tool_name} cancelled by user."
                                 try:
                                     if send_tool_completion:

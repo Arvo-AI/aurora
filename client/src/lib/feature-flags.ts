@@ -13,16 +13,8 @@ export const isOvhEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_OVH') === 'true';
 };
 
-export const isScalewayEnabled = () => {
-  return getEnv('NEXT_PUBLIC_ENABLE_SCALEWAY') === 'true';
-};
-
 export const isSharePointEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SHAREPOINT') === 'true';
-};
-
-export const isConfluenceEnabled = () => {
-  return getEnv('NEXT_PUBLIC_ENABLE_CONFLUENCE') === 'true';
 };
 
 export const isJiraEnabled = () => {
@@ -31,4 +23,8 @@ export const isJiraEnabled = () => {
 
 export const isSpinnakerEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_SPINNAKER') === 'true';
+};
+
+export const isNotionEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_NOTION') === 'true';
 };

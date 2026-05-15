@@ -1,12 +1,31 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type ChangeEvent } from 'react';
+import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { MessageSquare, Send } from 'lucide-react';
 import { StreamingThought, Incident, ChatSession, incidentsService } from '@/lib/services/incidents';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import SubAgentInvestigationsSection from '@/app/incidents/components/SubAgentInvestigationsSection';
 
 // Maximum length for short titles in incident chat tabs
 const TITLE_SHORT_MAX_LENGTH = 15;
+
+const PANEL_WIDTH_STORAGE_KEY = 'thoughts-panel-width';
+export const PANEL_WIDTH_DEFAULT = 400;
+const PANEL_WIDTH_MIN = 320;
+const PANEL_WIDTH_MAX_RATIO = 0.8;
+
+function readStoredPanelWidth(): number {
+  if (typeof window === 'undefined') return PANEL_WIDTH_DEFAULT;
+  const raw = window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY);
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= PANEL_WIDTH_MIN ? parsed : PANEL_WIDTH_DEFAULT;
+}
+
+function clampPanelWidth(value: number): number {
+  if (typeof window === 'undefined') return Math.max(PANEL_WIDTH_MIN, value);
+  const max = Math.max(PANEL_WIDTH_MIN, Math.floor(window.innerWidth * PANEL_WIDTH_MAX_RATIO));
+  return Math.max(PANEL_WIDTH_MIN, Math.min(value, max));
+}
 
 interface ChatMessage {
   id: string;
@@ -19,6 +38,7 @@ interface ThoughtsPanelProps {
   incident: Incident;
   isVisible: boolean;
   canInteract?: boolean;
+  onWidthChange?: (width: number) => void;
 }
 
 /**
@@ -60,19 +80,71 @@ function stripIncidentPrefix(title: string): string {
   return title.replace(/^Incident:\s*/i, '');
 }
 
-export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true }: ThoughtsPanelProps) {
-  // Don't render RCA panel for merged incidents
-  if (incident.status === 'merged') {
-    return null;
-  }
-
+export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true, onWidthChange }: ThoughtsPanelProps) {
   // 'thoughts' or session ID
   const [activeTab, setActiveTab] = useState<string>('thoughts');
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>(incident.chatSessions || []);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(
+    (incident.chatSessions || []).filter((s: ChatSession) => s.id !== incident.chatSessionId)
+  );
   const [currentMessages, setCurrentMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
+  const [hasSubAgentFindings, setHasSubAgentFindings] = useState(false);
+  const [panelWidth, setPanelWidth] = useState<number>(PANEL_WIDTH_DEFAULT);
+  const panelWidthRef = useRef<number>(PANEL_WIDTH_DEFAULT);
+  const pollStartRef = useRef<number>(0);
+  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    panelWidthRef.current = panelWidth;
+  }, [panelWidth]);
+
+  useEffect(() => {
+    setPanelWidth(clampPanelWidth(readStoredPanelWidth()));
+  }, []);
+
+  useEffect(() => {
+    onWidthChange?.(panelWidth);
+  }, [panelWidth, onWidthChange]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onWindowResize = () => setPanelWidth((w) => clampPanelWidth(w));
+    window.addEventListener('resize', onWindowResize);
+    return () => window.removeEventListener('resize', onWindowResize);
+  }, []);
+
+  const handleResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizeStateRef.current = { startX: e.clientX, startWidth: panelWidthRef.current };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: PointerEvent) => {
+      const state = resizeStateRef.current;
+      if (!state) return;
+      setPanelWidth(clampPanelWidth(state.startWidth + (state.startX - ev.clientX)));
+    };
+    const cleanup = () => {
+      resizeStateRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', cleanup);
+      window.removeEventListener('pointercancel', cleanup);
+      try { window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(panelWidthRef.current)); } catch { /* ignore quota errors */ }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', cleanup);
+    window.addEventListener('pointercancel', cleanup);
+  }, []);
+
+  const failSession = useCallback((sid: string) => {
+    setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
+      s.id === sid ? { ...s, status: 'failed' } : s
+    ));
+  }, []);
   
   // Track session IDs we're currently creating to avoid state conflicts with parent component.
   // When we send a message, we create an optimistic session in local state (chatSessions).
@@ -85,7 +157,10 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   // Preserves optimistic sessions that exist in local state but not yet in parent's data.
   useEffect(() => {
     // Parent's data: from incident prop (polled from backend every 3s)
-    const incidentSessions = incident.chatSessions || [];
+    // Exclude the RCA session — its content is already shown in the Thoughts tab
+    const incidentSessions = (incident.chatSessions || []).filter(
+      (s: ChatSession) => s.id !== incident.chatSessionId
+    );
     
     // Clean up creatingSessionIds: remove IDs that now exist in parent's data
     // This prevents the Set from growing indefinitely
@@ -116,8 +191,11 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     // Don't reset if we're creating a session
     if (creatingSessionIds.current.size > 0) return;
     
-    if (incident.activeTab === 'chat' && incident.chatSessions && incident.chatSessions.length > 0) {
-      setActiveTab(incident.chatSessions[incident.chatSessions.length - 1].id);
+    const filteredSessions = (incident.chatSessions || []).filter(
+      (s: ChatSession) => s.id !== incident.chatSessionId
+    );
+    if (incident.activeTab === 'chat' && filteredSessions.length > 0) {
+      setActiveTab(filteredSessions[filteredSessions.length - 1].id);
     } else {
       setActiveTab('thoughts');
     }
@@ -157,21 +235,40 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
         };
       }).filter((m: ChatMessage) => m.content.trim() !== '');
       
-      // Only update messages if we have more messages than before, or if switching tabs
-      // This prevents the flash when the optimistic message (in local state) is briefly replaced
-      // by stale data from parent's poll (which might not have the new session yet)
+      // Merge server messages with local optimistic state.
+      // The optimistic user message lives in local state while the streaming bot
+      // response arrives from the server via polling.  We keep the local user
+      // messages and append/update any server-side assistant messages.
       setCurrentMessages((prev: ChatMessage[]) => {
-        // If we're currently polling this session (waiting for response), check if data is actually newer
         if (pollingSessionId === activeTab && prev.length > 0) {
-          // Only keep prev if messages haven't changed (same length AND same last message content)
-          // This allows assistant responses to come through even if message count is same
-          const prevLastContent = prev[prev.length - 1]?.content || '';
-          const messagesLastContent = messages[messages.length - 1]?.content || '';
-          
-          if (messages.length < prev.length || 
-              (messages.length === prev.length && messagesLastContent === prevLastContent)) {
-            return prev; // Keep optimistic messages - data is stale or unchanged
+          const serverUserMessages = messages.filter((m: ChatMessage) => m.role === 'user');
+          const localUserMessages = prev.filter((m: ChatMessage) => m.role === 'user');
+
+          // Server has caught up with all optimistic user messages — use server state as-is
+          if (serverUserMessages.length >= localUserMessages.length) {
+            return messages;
           }
+
+          // Check if assistant content actually changed since last render
+          const serverAssistantMessages = messages.filter((m: ChatMessage) => m.role === 'assistant');
+          if (serverAssistantMessages.length === 0) {
+            return prev;
+          }
+          const prevAssistant = prev.filter((m: ChatMessage) => m.role === 'assistant');
+          const prevAssistantLast = prevAssistant[prevAssistant.length - 1]?.content || '';
+          const serverAssistantLast = serverAssistantMessages[serverAssistantMessages.length - 1]?.content || '';
+          if (prevAssistant.length === serverAssistantMessages.length && prevAssistantLast === serverAssistantLast) {
+            return prev;
+          }
+
+          // Server has new assistant content but hasn't persisted all our user messages yet.
+          // Keep server order and append only the optimistic user messages the server is missing.
+          // Re-key with "optimistic-" prefix to avoid React key collisions with server-indexed IDs.
+          const optimisticTail = localUserMessages.slice(serverUserMessages.length).map((m) => ({
+            ...m,
+            id: `optimistic-${m.id}`,
+          }));
+          return [...messages, ...optimisticTail];
         }
         return messages;
       });
@@ -185,14 +282,23 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
   // Poll for session updates when a session is in progress
   useEffect(() => {
-    if (!pollingSessionId) return;
+    if (!pollingSessionId) { pollStartRef.current = 0; return; }
+    pollStartRef.current = Date.now();
+    let lastMsgCount = -1;
 
     let isCancelled = false;
     const abortController = new AbortController();
-    const sessionIdToFetch = pollingSessionId; // Capture value to avoid stale closure
+    const sessionIdToFetch = pollingSessionId;
+
+    const markSessionFailed = () => {
+      setPollingSessionId(null);
+      setIsLoading(false);
+      failSession(sessionIdToFetch);
+    };
 
     const pollInterval = setInterval(async () => {
       if (isCancelled) return;
+      if (Date.now() - pollStartRef.current > 5 * 60 * 1000) { markSessionFailed(); return; }
       
       try {
         const sessionResp = await fetch(`/api/chat-sessions/${sessionIdToFetch}`, {
@@ -202,8 +308,13 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
 
         const sessionData = await sessionResp.json();
         if (isCancelled) return;
-        
-        // Update the session in our local state
+
+        const msgCount = sessionData.messages?.length ?? 0;
+        if (msgCount !== lastMsgCount) {
+          lastMsgCount = msgCount;
+          pollStartRef.current = Date.now();
+        }
+
         setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) => 
           s.id === sessionIdToFetch 
             ? { ...s, messages: sessionData.messages || [], status: sessionData.status }
@@ -342,10 +453,22 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
     }
   };
 
+  // Don't render RCA panel for merged incidents or when panel is hidden
+  if (incident.status === 'merged') return null;
   if (!isVisible) return null;
 
   return (
-    <div className="fixed top-[49px] right-0 h-[calc(100vh-49px)] w-[400px] bg-background z-20 border-l border-zinc-800/50 flex flex-col">
+    <div
+      className="fixed top-[49px] right-0 h-[calc(100vh-49px)] bg-background z-20 border-l border-zinc-800/50 flex flex-col"
+      style={{ width: panelWidth }}
+    >
+      <div
+        role="separator"
+        aria-label="Resize thoughts panel"
+        aria-orientation="vertical"
+        onPointerDown={handleResizeStart}
+        className="absolute left-0 top-0 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-orange-500/40 transition-colors z-30"
+      />
       {/* Tab Bar */}
       <div className="flex items-center border-b border-zinc-800/50 bg-zinc-900/50 px-2 h-10 shrink-0 overflow-x-auto">
         {/* Thoughts tab */}
@@ -400,9 +523,14 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                   </div>
                 </div>
               )}
-              {thoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
+              {thoughts.length === 0 && !hasSubAgentFindings && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
                 <p className="text-center text-zinc-500 text-sm py-8">No investigation thoughts yet</p>
               )}
+              <SubAgentInvestigationsSection
+                incidentId={incident.id}
+                isActive={incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing'}
+                onHasFindings={setHasSubAgentFindings}
+              />
             </div>
           </div>
 
@@ -440,34 +568,38 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
       {/* Chat View - for any chat session tab */}
       {activeTab !== 'thoughts' && (
         <div className="flex-1 relative overflow-hidden">
-          <div className="absolute inset-0 overflow-y-auto py-4 pb-32">
-            {currentMessages.map((msg: ChatMessage) => (
-              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} px-4 py-2`}>
-                <div className={
+          <div className="absolute inset-0 overflow-y-auto p-5 pb-32">
+            <div className="space-y-4">
+              {currentMessages.map((msg: ChatMessage) => (
+                <div key={msg.id} className={
                   msg.role === 'user'
-                    ? 'rounded-2xl py-2 px-4 max-w-[70%] bg-muted text-foreground'
-                    : 'w-full text-foreground'
+                    ? 'pl-4 border-l-2 border-blue-500/50'
+                    : 'pl-4 border-l-2 border-zinc-700 hover:border-orange-500/50 transition-colors'
                 }>
-                  <div className="break-words leading-relaxed">
+                  <div className="text-xs text-zinc-500 mb-1">
+                    {msg.role === 'user' ? 'You' : 'Aurora'}
+                  </div>
+                  <div className="text-sm text-zinc-300 break-words leading-relaxed min-w-0 overflow-hidden">
                     <MarkdownRenderer content={msg.content} />
                   </div>
                 </div>
-              </div>
-            ))}
-            {isLoading && pollingSessionId === activeTab && (
-              <div className="flex justify-start px-4 py-2">
-                <div className="w-full text-foreground">
-                  <div className="flex gap-1 items-center">
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
-                    <span className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+              ))}
+              {isLoading && pollingSessionId === activeTab && (
+                <div className="pl-4 border-l-2 border-orange-500/50">
+                  <div className="flex items-center gap-2 text-sm text-zinc-400">
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
+                      <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
+                    </div>
+                    <span>Thinking...</span>
                   </div>
                 </div>
-              </div>
-            )}
-            {currentMessages.length === 0 && !isLoading && (
-              <p className="text-center text-zinc-500 text-sm py-8">No messages in this chat yet</p>
-            )}
+              )}
+              {currentMessages.length === 0 && !isLoading && (
+                <p className="text-center text-zinc-500 text-sm py-8">No messages in this chat yet</p>
+              )}
+            </div>
           </div>
 
           {/* Input at bottom */}

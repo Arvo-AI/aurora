@@ -10,16 +10,15 @@ from connectors.azure_connector.k8s_client import (
 )
 from utils.logging.secure_logging import mask_credential_value
 from utils.auth.token_management import get_token_data
+from utils.log_sanitizer import sanitize
 import json
 
 azure_bp = Blueprint("azure_bp", __name__)
 
 # ---- Azure Routes ------------------------------------------------------#
-@azure_bp.route("/azure/login", methods=["POST", "GET", "OPTIONS"])
+@azure_bp.route("/azure/login", methods=["POST"])
 @require_permission("connectors", "write")
 def azure_login_route(user_id):
-    if flask.request.method == 'OPTIONS':
-        return create_cors_response()
     return azure_login()
 
 
@@ -76,7 +75,7 @@ def azure_callback_route():
     return azure_callback()
 
 
-@azure_bp.route("/azure/fetch_data", methods=["GET", "POST", "OPTIONS"])
+@azure_bp.route("/azure/fetch_data", methods=["GET", "OPTIONS"])
 @require_permission("connectors", "read")
 def fetch_data(user_id):
     if flask.request.method == 'OPTIONS':
@@ -147,31 +146,36 @@ def azure_clusters(user_id):
         return jsonify({"error": "Failed to fetch AKS clusters"}), 500
 
 
-@azure_bp.route("/api/azure-subscriptions", methods=["GET", "POST", "OPTIONS"])
+@azure_bp.route("/api/azure-subscriptions", methods=["GET"])
 @require_permission("connectors", "read")
-def azure_subscriptions(user_id):
-    if request.method == "OPTIONS":
-        return create_cors_response()
+def azure_subscriptions_get(user_id):
     try:
-        if request.method == "GET":
-            from utils.auth.stateless_auth import get_org_id_from_request
-            org_id = get_org_id_from_request()
-            token_data = get_token_data(user_id, "azure", org_id=org_id)
-            if not token_data:
-                logging.warning(f"[AZURE API] No Azure token data found for user {user_id}")
-                return jsonify({"error": "No Azure credentials found. Please authenticate with Azure."}), 401
-            subscription_id = token_data.get("subscription_id")
-            subscription_name = token_data.get("subscription_name", "Azure Subscription")
-            if not subscription_id:
-                logging.warning(f"[AZURE API] No Azure subscription found for user {user_id}")
-                return jsonify({"error": "No Azure subscription found. Please configure your Azure subscription."}), 401
-            projects = [{"projectId": subscription_id, "name": subscription_name, "enabled": True}]
-            return jsonify({"projects": projects}), 200
-        else:
-            data = request.get_json()
-            projects = data.get("projects", [])
-            logging.info(f"Azure subscription selection update received: {projects}")
-            return jsonify({"status": "success"})
+        from utils.auth.stateless_auth import get_org_id_from_request
+        org_id = get_org_id_from_request()
+        token_data = get_token_data(user_id, "azure", org_id=org_id)
+        if not token_data:
+            logging.warning("[AZURE API] No Azure token data found for user %s", sanitize(user_id))
+            return jsonify({"error": "No Azure credentials found. Please authenticate with Azure."}), 401
+        subscription_id = token_data.get("subscription_id")
+        subscription_name = token_data.get("subscription_name", "Azure Subscription")
+        if not subscription_id:
+            logging.warning("[AZURE API] No Azure subscription found for user %s", sanitize(user_id))
+            return jsonify({"error": "No Azure subscription found. Please configure your Azure subscription."}), 401
+        projects = [{"projectId": subscription_id, "name": subscription_name, "enabled": True}]
+        return jsonify({"projects": projects}), 200
     except Exception as e:
-        logging.error("Error in azure_subscriptions", exc_info=e)
+        logging.error("Error in azure_subscriptions_get", exc_info=e)
+        return jsonify({"error": "Failed to process Azure subscriptions"}), 500
+
+
+@azure_bp.route("/api/azure-subscriptions", methods=["POST"])
+@require_permission("connectors", "write")
+def azure_subscriptions_post(user_id):
+    try:
+        data = request.get_json() or {}
+        projects = data.get("projects", [])
+        logging.info("Azure subscription selection update received (count=%d)", len(projects))
+        return jsonify({"status": "success"})
+    except Exception as e:
+        logging.error("Error in azure_subscriptions_post", exc_info=e)
         return jsonify({"error": "Failed to process Azure subscriptions"}), 500

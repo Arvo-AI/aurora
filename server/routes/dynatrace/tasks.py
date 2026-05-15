@@ -187,14 +187,17 @@ def process_dynatrace_problem(
                 trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
                 incident_id=str(incident_id),
             )
+            rca_prompt, rail_text = build_dynatrace_rca_prompt(payload, user_id=user_id)
             task = run_background_chat.delay(
                 user_id=user_id, session_id=session_id,
-                initial_message=build_dynatrace_rca_prompt(payload, user_id=user_id),
+                initial_message=rca_prompt,
                 trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
                 incident_id=str(incident_id),
+                rail_text=rail_text,
             )
             with db_pool.get_admin_connection() as conn:
                 cursor = conn.cursor()
+                set_rls_context(cursor, conn, user_id, log_prefix="[DYNATRACE:task_id_update]")
                 cursor.execute(
                     "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
                     (task.id, str(incident_id)),

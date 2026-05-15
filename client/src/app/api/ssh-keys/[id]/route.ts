@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthenticatedUser } from '@/lib/auth-helper'
-
-// BACKEND_URL for server-side API calls; fallback to public URL for local dev
-const API_BASE_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL
+import { env } from '@/lib/server-env'
 
 export async function GET(
   request: NextRequest,
@@ -18,7 +16,7 @@ export async function GET(
     const { headers: authHeaders } = authResult
     const { id } = await params
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/ssh-keys/${id}`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/ssh-keys/${id}`, {
       method: 'GET',
       headers: authHeaders,
     })
@@ -58,7 +56,7 @@ export async function PATCH(
     const { id } = await params
     const body = await request.json()
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/ssh-keys/${id}`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/ssh-keys/${id}`, {
       method: 'PATCH',
       headers: {
         ...authHeaders,
@@ -101,7 +99,7 @@ export async function DELETE(
     const { headers: authHeaders } = authResult
     const { id } = await params
 
-    const backendResp = await fetch(`${API_BASE_URL}/api/ssh-keys/${id}`, {
+    const backendResp = await fetch(`${env.BACKEND_URL}/api/ssh-keys/${id}`, {
       method: 'DELETE',
       headers: authHeaders,
     })

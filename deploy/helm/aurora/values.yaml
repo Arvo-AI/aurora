@@ -28,6 +28,8 @@ services:
     enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
+  memgraph:
+    enabled: true    # Set false if graph features are not needed
   minio:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
 
@@ -37,6 +39,22 @@ services:
 # Each service gets its own ServiceAccount for proper RBAC
 # On-prem: annotations can be left empty
 # Cloud: add workload identity annotations as needed (GKE, EKS IRSA, AKS, etc.)
+#
+# IRSA (EKS) — the annotated role must have ALL of the following permissions:
+#   1. S3 access on your storage bucket (if not using static STORAGE_ACCESS_KEY/SECRET_KEY)
+#   2. secretsmanager:* on aurora/users/* (if SECRETS_BACKEND=aws_secrets_manager)
+#   3. sts:AssumeRole on * (for the AWS connector — needs cross-account access, so resource must be *)
+#      Without this, the AWS connector cannot assume cross-account roles and will return
+#      "not authorized to perform: sts:AssumeRole" errors.
+#
+# The IRSA role's trust policy must use StringLike to cover ALL backend SAs:
+#   "StringLike": { "<oidc>:sub": "system:serviceaccount:<ns>:<release>-aurora-oss-*" }
+# Scoping to only the server SA causes AssumeRoleWithWebIdentity failures in
+# the chatbot and celery workers.
+#
+# Example EKS IRSA annotation:
+#   annotations:
+#     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<your-aurora-irsa-role>
 serviceAccount:
   # Annotations applied to backend service accounts (server, chatbot, celery)
   annotations: {}
@@ -65,6 +83,7 @@ image:
 replicaCounts:
   # Scalable services (can increase for load balancing)
   server: 1          # API server (Flask) - stateless, can scale
+  mcp: 1             # MCP server (streamable-http on 8811)
   celeryWorker: 1    # Background task workers - stateless, can scale
   chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
   frontend: 1        # Next.js frontend - stateless, can scale
@@ -75,6 +94,7 @@ replicaCounts:
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
   redis: 1           # Redis - single instance, no clustering configured
   weaviate: 1        # Vector database - single instance, clustering requires additional config
+  memgraph: 1        # Graph database - single instance, in-memory
   vault: 1           # Secrets manager - single instance, HA requires additional config
   postgres: 1        # Database - single instance, replication requires additional config
 
@@ -108,6 +128,12 @@ config:
   WEAVIATE_PORT: "8080"
   WEAVIATE_GRPC_PORT: "50051"
   
+  # --- Graph Database (Memgraph) ---
+  MEMGRAPH_HOST: ""  # Auto-generated if empty: <release>-memgraph
+  MEMGRAPH_PORT: "7687"
+  MEMGRAPH_SCHEME: "bolt"  # Use "bolt+ssc" for Memgraph Cloud (SSL, self-signed), "bolt+s" for CA-signed SSL
+  MEMGRAPH_MEMORY_LIMIT: "512"  # MB, passed to --memory-limit flag
+  
   # --- SSL/TLS for External Services ---
   # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
   POSTGRES_SSLMODE: "prefer"
@@ -130,7 +156,6 @@ config:
   CHATBOT_INTERNAL_URL: ""    # Auto-generated if empty: http://<release>-chatbot:5007
   VAULT_ADDR: ""              # Default applied by chart when empty: http://<release>-vault:8200
   SEARXNG_URL: ""             # Auto-generated if empty: http://<release>-searxng:8080
-  SEARXNG_BASE_URL: ""        #Example: https://aurora.example.com
   
   # --- Secrets Backend ---
   # "vault" (default) or "aws_secrets_manager"
@@ -144,30 +169,59 @@ config:
   # --- AWS Secrets Manager (only when SECRETS_BACKEND=aws_secrets_manager) ---
   AWS_SM_REGION: ""
   AWS_SM_PREFIX: "aurora/users"
+  AWS_SM_ACCESS_KEY_ID: ""      # Dedicated IAM key for Secrets Manager access (avoids collision with AWS connector creds)
+  AWS_SM_SECRET_ACCESS_KEY: ""  # Falls back to default boto3 chain if both are empty
   
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
-  
+
+  # --- AI Safety Guardrails ---
+  # Input rail + signature matcher + LLM safety judge. All three activate with
+  # the master switch; LLM checks fail closed. Adapted from Meta's PurpleLlama
+  # (MIT licensed).
+  GUARDRAILS_ENABLED: "true"
+  # Gate the vendored SigmaHQ rule corpus inside the signature matcher.
+  # Requires GUARDRAILS_ENABLED=true. Set to "false" to run only hand-written rules.
+  GUARDRAILS_SIGMA_ENABLED: "true"
+  # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
+  GUARDRAILS_LLM_MODEL: ""
+
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
   AURORA_SETUP_CACHE_TTL: "3600"
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
-  
+
+  # --- Multi-agent RCA orchestrator ---
+  # When "true" (default), a lead orchestrator triages each background RCA and
+  # may fan out parallel read-only sub-agents. When "false", background RCA
+  # falls back to the legacy single-agent path. Operational kill-switch: set
+  # to "false" and restart celery workers to fully revert.
+  ORCHESTRATOR_ENABLED: "true"
+  # Triage + synthesis brain. Required when ORCHESTRATOR_ENABLED=true.
+  # Provider/model format (e.g. anthropic/claude-sonnet-4.6).
+  RCA_ORCHESTRATOR_MODEL: ""
+  # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
+  # Needs reliable tool-calling.
+  RCA_SUBAGENT_MODEL: ""
+
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"
+  SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
   
   # --- Optional Features (enable as needed) ---
-  ENABLE_POD_ISOLATION: "false"              # Isolate terminal commands in separate pods
+  ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
   # NEXT_PUBLIC_* feature flags — written to window.__ENV by docker-entrypoint.sh at startup, no image rebuild needed
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
-  NEXT_PUBLIC_ENABLE_SCALEWAY: "false"       # Scaleway integration
   NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
+  NEXT_PUBLIC_ENABLE_JIRA: "false"           # Jira integration
+  NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
+  NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
@@ -227,12 +281,13 @@ secrets:
   backend:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-backend and all pods will reference
-    # this secret directly. It must contain keys: VAULT_TOKEN, STORAGE_ACCESS_KEY,
-    # STORAGE_SECRET_KEY, plus any optional integration keys you use.
+    # this secret directly. It must contain VAULT_TOKEN (if using Vault), plus any
+    # optional integration keys you use. STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY are
+    # optional when using IRSA or other pod-level credential injection.
     # existingSecret: ""
-    VAULT_TOKEN: ""              # REQUIRED - Root token from Vault init - Set after running: kubectl exec -it statefulset/<release>-vault -- vault operator init
-    STORAGE_ACCESS_KEY: ""       # REQUIRED - Your S3 access key
-    STORAGE_SECRET_KEY: ""       # REQUIRED - Your S3 secret key
+    VAULT_TOKEN: ""              # Required when SECRETS_BACKEND=vault. Not needed for aws_secrets_manager.
+    STORAGE_ACCESS_KEY: ""       # S3 access key (optional when using IRSA/pod identity)
+    STORAGE_SECRET_KEY: ""       # S3 secret key (optional when using IRSA/pod identity)
 
     # --- Optional: Slack Integration ---
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
@@ -288,8 +343,11 @@ secrets:
     FLASK_SECRET_KEY: ""         # REQUIRED - Generate with: openssl rand -base64 32
     AUTH_SECRET: ""              # REQUIRED - Generate with: openssl rand -base64 32
     SEARXNG_SECRET: ""           # REQUIRED - Generate with: openssl rand -base64 32
+    INTERNAL_API_SECRET: ""      # REQUIRED - Generate with: openssl rand -base64 32
 
-    # --- Optional: AWS Integration ---
+    # --- Optional: AWS Connector ---
+    # IAM identity for cross-account STS AssumeRole into user AWS accounts.
+    # Not related to AWS_SM_* credentials used for the secrets backend.
     AWS_ACCESS_KEY_ID: ""
     AWS_SECRET_ACCESS_KEY: ""
     
@@ -303,7 +361,13 @@ secrets:
     
     # --- Optional: Rate Limiting Bypass ---
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
-  
+
+    # --- Optional: Memgraph Graph Database ---
+    # Only needed if connecting to a Memgraph instance with auth enabled (e.g., Memgraph Cloud).
+    # In-cluster Memgraph runs without auth by default (network-isolated via ClusterIP).
+    MEMGRAPH_USER: ""
+    MEMGRAPH_PASSWORD: ""
+
   # --- LLM API Keys (secret-llm.yaml) ---
   # Mounted by: chatbot, celery-worker, celery-beat
   llm:
@@ -363,16 +427,29 @@ resources:
     requests:
       cpu: "200m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
     limits:
       cpu: "2000m"
       memory: "2Gi"
+      ephemeral-storage: "2Gi"
+  mcp:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+      ephemeral-storage: "100Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+      ephemeral-storage: "500Mi"
   celeryWorker:
     requests:
       cpu: "100m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
     limits:
       cpu: "1000m"
       memory: "4Gi"
+      ephemeral-storage: "2Gi"
   celeryBeat:
     requests:
       cpu: "50m"
@@ -384,37 +461,56 @@ resources:
     requests:
       cpu: "100m"
       memory: "256Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   frontend:
     requests:
       cpu: "50m"
       memory: "256Mi"
+      ephemeral-storage: "512Mi"
     limits:
       cpu: "300m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
   redis:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+      ephemeral-storage: "1Gi"
   searxng:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "300m"
       memory: "512Mi"
+      ephemeral-storage: "1Gi"
   weaviate:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "100Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
+  memgraph:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+      ephemeral-storage: "100Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+      ephemeral-storage: "500Mi"
   transformers:
     requests:
       cpu: "100m"
@@ -426,16 +522,20 @@ resources:
     requests:
       cpu: "50m"
       memory: "128Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "200m"
       memory: "256Mi"
+      ephemeral-storage: "1Gi"
   postgres:
     requests:
       cpu: "100m"
       memory: "512Mi"
+      ephemeral-storage: "50Mi"
     limits:
       cpu: "500m"
       memory: "1Gi"
+      ephemeral-storage: "1Gi"
   minio:
     requests:
       cpu: "50m"
@@ -539,6 +639,8 @@ persistence:
     size: 10Gi           # Secrets storage
   redis:
     size: 5Gi            # Celery task state and cache
+  memgraph:
+    size: 5Gi            # Graph database snapshots
   minio:
     size: 10Gi           # Object storage (local dev only)
 
@@ -625,6 +727,28 @@ ingress:
     frontend: "aurora.example.com"
     api: "api.aurora.example.com"
     ws: "ws.aurora.example.com"
+
+  # Additional Ingress resources (e.g., external ingress for webhooks).
+  # Each entry creates a separate Kubernetes Ingress object.
+  # IMPORTANT: 'name' is required, must be unique across entries, and must not
+  # be 'ingress' (reserved for the primary ingress object).
+  # Service names are NOT auto-resolved. Use the full Kubernetes service name.
+  # Aurora services follow the pattern: <release-name>-<component>
+  # e.g., aurora-oss-server, aurora-oss-frontend, aurora-oss-chatbot
+  additional: []
+    # - name: external-webhooks
+    #   className: "nginx"
+    #   annotations: {}
+    #   tls: []
+    #   rules:
+    #     - host: "api-external.example.com"
+    #       http:
+    #         paths:
+    #           - path: /
+    #             pathType: Prefix
+    #             backend:
+    #               service: aurora-oss-server
+    #               port: 5080
 
 # ------------------------------------------------------------------------------
 # Vault Configuration

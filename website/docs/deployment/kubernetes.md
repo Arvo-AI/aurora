@@ -6,6 +6,26 @@ sidebar_position: 2
 
 Deploy Aurora on any Kubernetes cluster using Helm.
 
+## Add the Helm Chart Source
+
+Aurora's Helm chart is published to two registries. Use whichever your cluster tooling supports:
+
+### Option 1: Helm repository
+
+```bash
+helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+helm repo update
+helm search repo aurora
+```
+
+### Option 2: OCI registry (GHCR)
+
+```bash
+helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > my-values.yaml
+```
+
+Both methods deliver the same chart. Choose OCI if your GitOps tooling (ArgoCD, Flux) already uses OCI, or the traditional repo if you prefer `helm repo add`.
+
 ## Prerequisites
 
 You need a Kubernetes cluster with:
@@ -88,7 +108,7 @@ The script will prompt you for several values. Here's what to enter:
 | Bucket name | Your S3 bucket name from Step 2 |
 | Endpoint URL | `https://s3.amazonaws.com` (or your provider's endpoint) |
 | Region | `us-east-1` (or your bucket's region) |
-| Access key / Secret key | From Step 2 |
+| Access key / Secret key | From Step 2 (leave blank when using IRSA/pod identity) |
 | LLM Provider | `openrouter` (or whichever you chose) |
 | API key | Your key from Step 2 |
 | Environment | `staging` (or `production`) |
@@ -104,11 +124,18 @@ The script will:
 
 ### Option B: Manual Helm deployment
 
-For more control, deploy step by step:
+For more control, deploy step by step.
+
+#### Using the published chart (recommended)
 
 ```bash
-# 1. Create values file
-cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
+# 1. Add the repo (skip if already added)
+helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+helm repo update
+
+# 2. Pull the default values
+helm show values aurora/aurora-oss > values.generated.yaml
+# or via OCI: helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > values.generated.yaml
 ```
 
 Edit `values.generated.yaml` — see [Configuration Reference](#configuration-reference) below for all options. At minimum, set:
@@ -130,8 +157,8 @@ secrets:
   db:
     POSTGRES_PASSWORD: ""         # openssl rand -base64 32
   backend:
-    STORAGE_ACCESS_KEY: ""
-    STORAGE_SECRET_KEY: ""
+    STORAGE_ACCESS_KEY: ""        # optional when using IRSA/pod identity
+    STORAGE_SECRET_KEY: ""        # optional when using IRSA/pod identity
   app:
     FLASK_SECRET_KEY: ""          # openssl rand -base64 32
     AUTH_SECRET: ""               # openssl rand -base64 32
@@ -146,12 +173,44 @@ ingress:
     ws: "ws.aurora-oss.<IP>.nip.io"
 ```
 
+:::note Guardrails require an LLM
+AI safety guardrails ship on by default (`GUARDRAILS_ENABLED: "true"` in `values.yaml`). The LLM judge and input rail **fail closed** on any LLM error, so every shell command is blocked if the provider is unreachable. Make sure at least one LLM key in the `llm` secret group is valid before installing the chart, or set `GUARDRAILS_ENABLED: "false"` in your values overlay. See [Command Safety](../configuration/command-safety).
+:::
+
 ```bash
 # 2. Install an ingress controller if not already installed (see Ingress Controller section below)
 # Example: nginx ingress (optional — use any controller that supports the Kubernetes Ingress API)
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
 
-# 3. Deploy
+# 3. Deploy from the published chart
+helm upgrade --install aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --create-namespace --reset-values \
+  -f values.generated.yaml
+
+# Or deploy from the OCI registry
+helm upgrade --install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss \
+  --namespace aurora-oss --create-namespace --reset-values \
+  -f values.generated.yaml
+
+# 4. Set up Vault — see Step 4 below
+```
+
+#### Using the chart from a local clone
+
+If you prefer to install from a local checkout (e.g., for development or custom chart modifications):
+
+```bash
+# 1. Create values file
+cp deploy/helm/aurora/values.yaml deploy/helm/aurora/values.generated.yaml
+```
+
+Edit `values.generated.yaml` with the same settings shown above, then:
+
+```bash
+# 2. Install an ingress controller if not already installed (see Ingress Controller section below)
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+
+# 3. Deploy from local chart
 helm upgrade --install aurora-oss ./deploy/helm/aurora \
   --namespace aurora-oss --create-namespace --reset-values \
   -f deploy/helm/aurora/values.generated.yaml
@@ -281,6 +340,29 @@ Regardless of which controller you use, ensure these are configured:
 
 When `className` is `nginx`, these are auto-applied as annotations by the Helm chart. For other controllers, configure equivalent settings via `ingress.annotations` or your controller's configuration.
 
+### MCP Ingress {#mcp-ingress}
+
+The MCP server (`aurora-mcp`) runs on port 8811 inside the cluster.
+By default, it is reachable through the API ingress host at `/mcp` (e.g., `https://api.<domain>/mcp`).
+For local-only access, developers can use `kubectl port-forward`:
+
+```bash
+kubectl port-forward svc/aurora-oss-mcp 8811:8811 -n aurora-oss
+# MCP endpoint: http://localhost:8811/mcp
+```
+
+To expose MCP on a dedicated hostname, set `ingress.hosts.mcp`:
+
+```yaml
+ingress:
+  hosts:
+    mcp: "mcp.aurora-oss.<IP>.nip.io"  # or mcp.yourdomain.com
+```
+
+:::warning
+Enabling a dedicated MCP ingress exposes full platform access to any client with a valid token. The default `/mcp` path on the API host is already accessible. Always pair with an auth proxy (e.g. oauth2-proxy sidecar or nginx `auth_request`). See the [MCP security guide](../integrations/mcp#security-considerations).
+:::
+
 ## EKS: Fixing nip.io URLs
 
 AWS load balancers return a hostname instead of an IP. The deploy script resolves this automatically, but if your URLs aren't working, see the [EKS setup guide](./eks-setup) or resolve manually:
@@ -319,6 +401,7 @@ For testing, [nip.io](https://nip.io) works without any DNS setup. For productio
 aurora.yourdomain.com      CNAME  <ingress-hostname-or-IP>
 api.aurora.yourdomain.com  CNAME  <ingress-hostname-or-IP>
 ws.aurora.yourdomain.com   CNAME  <ingress-hostname-or-IP>
+mcp.aurora.yourdomain.com  CNAME  <ingress-hostname-or-IP>   # optional, see MCP Ingress below
 ```
 
 ### TLS with cert-manager (Let's Encrypt)
@@ -413,12 +496,17 @@ This skips registry push, enables built-in MinIO for S3 storage, and builds imag
 ## Upgrading
 
 ```bash
-# Config-only change
+# Config-only change (published chart) — pin --version to avoid unintended upgrades
+helm upgrade aurora-oss aurora/aurora-oss --version <current-version> \
+  --reset-values -f values.generated.yaml -n aurora-oss
+
+# Config-only change (local chart)
 helm upgrade aurora-oss ./deploy/helm/aurora \
   --reset-values -f deploy/helm/aurora/values.generated.yaml -n aurora-oss
 
-# New code/images
-git pull && make deploy
+# Upgrade to a newer chart version (OCI) — replace <version> with the target release
+helm upgrade aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss --version <version> \
+  --reset-values -f values.generated.yaml -n aurora-oss
 
 # Rollback
 helm rollback aurora-oss -n aurora-oss
@@ -544,7 +632,7 @@ You can mix and match -- use `existingSecret` for some groups and inline values 
 | Group | Required Keys |
 |-------|--------------|
 | `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD` |
-| `backend` | `VAULT_TOKEN`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` (plus any optional integration keys) |
+| `backend` | `VAULT_TOKEN` (if using Vault). `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` are optional when using IRSA/pod identity. |
 | `app` | `FLASK_SECRET_KEY`, `AUTH_SECRET`, `SEARXNG_SECRET` |
 | `llm` | At least one of: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` |
 

@@ -10,14 +10,15 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
+from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -27,6 +28,7 @@ from utils.notifications.google_chat_notification_service import (
     send_google_chat_investigation_completed_notification,
 )
 from connectors.google_chat_connector.client import get_chat_app_client
+from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
@@ -35,7 +37,26 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 logger = logging.getLogger(__name__)
 
 
-def cancel_rca_for_incident(incident_id: str) -> bool:
+def _resolve_permitted_tools(user_id: str) -> Optional[set]:
+    """Resolve permitted tools for background chats. Always fetches fresh from DB."""
+    try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return None
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:perms]")
+                cur.execute(
+                    "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                    (org_id,),
+                )
+                return {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        logger.warning("[BackgroundChat] Failed to fetch tool permissions: %s", e)
+        return None
+
+
+def cancel_rca_for_incident(incident_id: str, user_id: str) -> bool:
     """Cancel a running RCA for an incident by revoking its Celery task.
     
     This is the proper way to stop an RCA when an incident is merged.
@@ -43,6 +64,7 @@ def cancel_rca_for_incident(incident_id: str) -> bool:
     
     Args:
         incident_id: The incident ID whose RCA should be cancelled
+        user_id: User ID for RLS context
         
     Returns:
         True if a task was found and revoked, False otherwise
@@ -50,6 +72,7 @@ def cancel_rca_for_incident(incident_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:CancelRCA]")
                 cursor.execute(
                     "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
                     (incident_id,)
@@ -91,27 +114,37 @@ def cancel_rca_for_incident(incident_id: str) -> bool:
         return False
 
 
-def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
-    """Extract infrastructure tool calls from database for final visualization."""
+def _extract_tool_calls_for_viz(
+    session_id: str,
+    user_id: str,
+    llm_context: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict]:
+    """Extract infrastructure tool calls for visualization.
+
+    Accepts a pre-loaded ``llm_context`` to avoid an extra SELECT on the happy
+    path (``_ensure_llm_context_history`` already fetches the column).
+    """
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT llm_context_history
-                    FROM chat_sessions
-                    WHERE id = %s AND user_id = %s
-                """, (session_id, user_id))
-                
-                row = cursor.fetchone()
-        
-        if not row or not row[0]:
-            logger.warning(f"[Visualization] No llm_context_history for session {session_id}")
-            return []
-        
-        llm_context = row[0]
-        if isinstance(llm_context, str):
-            llm_context = json.loads(llm_context)
-        
+        if llm_context is None:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ExtractToolCalls]")
+                    cursor.execute(
+                        """
+                        SELECT llm_context_history
+                        FROM chat_sessions
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (session_id, user_id),
+                    )
+                    row = cursor.fetchone()
+            if not row or not row[0]:
+                logger.warning(f"[Visualization] No llm_context_history for session {session_id}")
+                return []
+            llm_context = row[0]
+            if isinstance(llm_context, str):
+                llm_context = json.loads(llm_context)
+
         tool_calls = []
         for msg in llm_context:
             if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
@@ -119,18 +152,147 @@ def _extract_tool_calls_for_viz(session_id: str, user_id: str) -> List[Dict]:
                     'tool': msg.get('name'),
                     'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS]
                 })
-        
+
         return tool_calls
-    
-    except Exception as e:
-        logger.error(f"[Visualization] Failed to extract tool calls from database: {e}")
+
+    except Exception:
+        logger.exception(f"[Visualization] Failed to extract tool calls for session {session_id}")
         return []
+
+
+def _ensure_llm_context_history(
+    session_id: str, user_id: str
+) -> Optional[List[Dict[str, Any]]]:
+    """Return the session's llm_context_history, rebuilding from UI messages if empty.
+
+    Returns the deserialized context list so the caller can skip a second DB
+    read. Returns ``None`` when the session row is missing or on error.
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+    from chat.backend.agent.utils.llm_context_manager import LLMContextManager
+    from chat.backend.agent.utils.persistence.context_manager import ContextManager
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:EnsureLLMContext]")
+                cursor.execute(
+                    """
+                    SELECT llm_context_history, messages
+                    FROM chat_sessions
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (session_id, user_id),
+                )
+                row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        llm_context, ui_messages = row[0], row[1]
+        if isinstance(llm_context, str):
+            try:
+                llm_context = json.loads(llm_context) if llm_context else []
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"[BackgroundChat] Malformed llm_context_history JSON for session {session_id}: {e}; treating as empty"
+                )
+                llm_context = []
+        if llm_context:
+            return llm_context
+
+        if isinstance(ui_messages, str):
+            try:
+                ui_messages = json.loads(ui_messages) if ui_messages else []
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"[BackgroundChat] Malformed messages JSON for session {session_id}: {e}; cannot rebuild context"
+                )
+                return []
+        if not ui_messages:
+            return []
+
+        logger.warning(
+            f"[BackgroundChat] llm_context_history empty for session {session_id}; "
+            f"rebuilding from UI messages as fallback"
+        )
+
+        rebuilt_messages: List[Any] = []
+        for ui_msg in ui_messages:
+            tool_calls_ui = ui_msg.get("toolCalls") or []
+            if not tool_calls_ui:
+                continue
+
+            ai_tool_calls = []
+            tool_messages: List[ToolMessage] = []
+            for tc in tool_calls_ui:
+                tool_call_id = tc.get("id")
+                if not tool_call_id:
+                    continue
+                tool_name = tc.get("tool_name") or tc.get("name") or "unknown"
+                try:
+                    args = json.loads(tc["input"]) if isinstance(tc.get("input"), str) else (tc.get("input") or {})
+                except (ValueError, TypeError):
+                    args = {}
+                ai_tool_calls.append({
+                    "id": tool_call_id,
+                    "name": tool_name,
+                    "args": args,
+                    "type": "tool_call",
+                })
+                output = tc.get("output")
+                if output is None:
+                    continue
+                tool_messages.append(
+                    ToolMessage(
+                        content=str(output),
+                        tool_call_id=tool_call_id,
+                        name=tool_name,
+                    )
+                )
+
+            if not ai_tool_calls:
+                continue
+
+            if ui_msg.get("sender") == "bot":
+                ai_content = ui_msg.get("text") or ui_msg.get("content") or ""
+            else:
+                ai_content = ""
+            rebuilt_messages.append(AIMessage(content=ai_content, tool_calls=ai_tool_calls))
+            rebuilt_messages.extend(tool_messages)
+
+        if not rebuilt_messages:
+            return []
+
+        # Bypass ContextManager.save_context_history's Redis dedup — a stale
+        # hash from the lost async save would cause this forced rewrite to
+        # no-op. We already know the DB column is empty, so write directly.
+        saved = ContextManager._get_instance()._execute_actual_save(
+            session_id, user_id, rebuilt_messages
+        )
+        if not saved:
+            logger.error(
+                f"[BackgroundChat] Forced rewrite of llm_context_history failed for session {session_id}"
+            )
+            return None
+        logger.info(
+            f"[BackgroundChat] Rebuilt llm_context_history for session {session_id} "
+            f"with {len(rebuilt_messages)} synthetic messages"
+        )
+        return [LLMContextManager.serialize_message(m) for m in rebuilt_messages]
+
+    except Exception:
+        logger.exception(
+            f"[BackgroundChat] Failed to ensure llm_context_history for session {session_id}"
+        )
+        return None
+
 
 _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'action'}
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -170,125 +332,22 @@ def is_background_chat_allowed(user_id: str) -> bool:
 
 
 def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
-    """Check which integrations are connected for a user."""
-    integrations = {
-        'splunk': False,
-        'dynatrace': False,
-        'datadog': False,
-        'github': False,
-        'confluence': False,
-        'jira': False,
-        'sharepoint': False,
-        'coroot': False,
-        'jenkins': False,
-        'cloudbees': False,
-        'spinnaker': False,
-        'newrelic': False,
-        'opsgenie': False,
-    }
+    """Check which integrations are connected for a user.
 
+    Delegates to SkillRegistry as the single source of truth for connection
+    checks, avoiding drift between hardcoded checks here and SKILL.md
+    connection_check definitions.
+    """
     try:
-        # Check Splunk
-        from chat.backend.agent.tools.splunk_tool import is_splunk_connected
-        integrations['splunk'] = is_splunk_connected(user_id)
+        from chat.backend.agent.skills.registry import SkillRegistry
+        registry = SkillRegistry.get_instance()
+        connected_ids = registry.get_connected_skill_ids(user_id)
+        integrations = {skill_id: True for skill_id in connected_ids}
+        logger.info("[BackgroundChat] Connected integrations via SkillRegistry: %s", list(integrations.keys()))
+        return integrations
     except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Splunk: {e}")
-
-    try:
-        from chat.backend.agent.tools.dynatrace_tool import is_dynatrace_connected
-        integrations['dynatrace'] = is_dynatrace_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Dynatrace: {e}")
-
-    try:
-        from chat.backend.agent.tools.datadog_tool import is_datadog_connected
-        integrations['datadog'] = is_datadog_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Datadog: {e}")
-
-    try:
-        # Check GitHub
-        github_creds = get_credentials_from_db(user_id, "github")
-        integrations['github'] = bool(github_creds and github_creds.get("access_token"))
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking GitHub: {e}")
-
-    try:
-        from utils.auth.token_management import get_token_data
-        confluence_creds = get_token_data(user_id, "confluence")
-        integrations['confluence'] = bool(
-            confluence_creds and (confluence_creds.get("access_token") or confluence_creds.get("pat_token"))
-        )
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Confluence: {e}")
-
-    try:
-        from utils.flags.feature_flags import is_jira_enabled
-        if is_jira_enabled():
-            from utils.auth.token_management import get_token_data as _get_jira_creds
-            jira_creds = _get_jira_creds(user_id, "jira")
-            integrations['jira'] = bool(
-                jira_creds and (jira_creds.get("access_token") or jira_creds.get("pat_token"))
-            )
-            if integrations['jira']:
-                from utils.auth.stateless_auth import get_user_preference
-                integrations['jira_mode'] = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Jira: {e}")
-
-    try:
-        from utils.flags.feature_flags import is_sharepoint_enabled
-        if is_sharepoint_enabled():
-            from utils.auth.token_management import get_token_data
-            sharepoint_creds = get_token_data(user_id, "sharepoint")
-            integrations['sharepoint'] = bool(
-                sharepoint_creds and sharepoint_creds.get("access_token")
-            )
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking SharePoint: {e}")
-
-    try:
-        from chat.backend.agent.tools.coroot_tool import is_coroot_connected
-        integrations['coroot'] = is_coroot_connected(user_id)
-    except Exception as e:
-        logger.info("[BackgroundChat] Error checking Coroot: %s", e, exc_info=True)
-
-    try:
-        from utils.auth.token_management import get_token_data
-        jenkins_creds = get_token_data(user_id, "jenkins")
-        integrations['jenkins'] = bool(jenkins_creds and jenkins_creds.get("base_url"))
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Jenkins: {e}")
-
-    try:
-        from utils.auth.token_management import get_token_data
-        cloudbees_creds = get_token_data(user_id, "cloudbees")
-        integrations['cloudbees'] = bool(cloudbees_creds and cloudbees_creds.get("base_url"))
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking CloudBees: {e}")
-
-    try:
-        from utils.flags.feature_flags import is_spinnaker_enabled
-        if is_spinnaker_enabled():
-            from chat.backend.agent.tools.spinnaker_rca_tool import is_spinnaker_connected
-            integrations['spinnaker'] = is_spinnaker_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking Spinnaker: {e}")
-
-    try:
-        from chat.backend.agent.tools.newrelic_tool import is_newrelic_connected
-        integrations['newrelic'] = is_newrelic_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking New Relic: {e}")
-
-    # OpsGenie
-    try:
-        from chat.backend.agent.tools.opsgenie_tool import is_opsgenie_connected
-        integrations['opsgenie'] = is_opsgenie_connected(user_id)
-    except Exception as e:
-        logger.debug(f"[BackgroundChat] Error checking OpsGenie: {e}")
-
-    return integrations
+        logger.warning("[BackgroundChat] SkillRegistry check failed, returning empty: %s", e)
+        return {}
 
 
 def _build_rca_context(
@@ -301,6 +360,10 @@ def _build_rca_context(
     This context is passed to State and used by prompt_builder to inject
     RCA instructions into the system prompt (not the user message).
 
+    Single source of truth: cloud providers come from user_connections
+    (role-based, always valid), integrations come from SkillRegistry
+    (credential-validated). The agent only sees providers that actually work.
+
     Returns:
         Dict with source, providers, integrations, etc. or None if not an RCA source.
     """
@@ -310,26 +373,33 @@ def _build_rca_context(
 
     logger.info(f"[BackgroundChat] Building RCA context for source: {source}")
 
-    # Get providers - prefer explicit preference, then fetch from DB
-    providers = provider_preference
-    if not providers:
-        try:
-            from chat.background.rca_prompt_builder import get_user_providers
-            providers = get_user_providers(user_id)
-        except Exception as e:
-            logger.warning(f"[BackgroundChat] Failed to fetch providers: {e}")
-            providers = []
-
-    # Get connected integrations
+    # Get verified integrations from SkillRegistry (single source of truth)
     integrations = _get_connected_integrations(user_id)
 
-    logger.info(f"[BackgroundChat] User {user_id} has providers: {providers}, integrations: {integrations}")
+    # Build verified providers list: cloud providers (role-based auth) +
+    # SkillRegistry-validated integrations. Never show unverified providers.
+    _cloud_providers = {'aws', 'gcp', 'azure', 'ovh', 'scaleway'}
+    verified_cloud = []
+    if not provider_preference:
+        try:
+            from utils.auth.stateless_auth import get_connected_providers
+            all_db_providers = get_connected_providers(user_id)
+            verified_cloud = [p for p in all_db_providers if p.lower() in _cloud_providers]
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to fetch cloud providers: {e}")
+    else:
+        verified_cloud = [p for p in provider_preference if p.lower() in _cloud_providers]
+
+    providers = sorted(set(verified_cloud + list(integrations.keys())))
+
+    logger.info(f"[BackgroundChat] User {user_id} verified providers: {providers}, integrations: {list(integrations.keys())}")
 
     return {
         'source': source,
-        'providers': providers or [],
+        'providers': providers,
         'integrations': integrations,
         'trigger_metadata': trigger_metadata,
+        'user_id': user_id,
     }
 
 
@@ -349,6 +419,7 @@ def run_background_chat(
     incident_id: Optional[str] = None,
     send_notifications: bool = True,
     mode: str = "ask",
+    rail_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -367,6 +438,12 @@ def run_background_chat(
             e.g., {"source": "grafana", "alert_id": "abc123"}
         provider_preference: Cloud providers to use, defaults to user's configured providers
         mode: Chat mode - "ask" for read-only (default), "agent" for execution
+        rail_text: Optional user-authored subset of the initial_message to evaluate
+            with the input guardrail rail. When triggers synthesize a large prompt
+            around a webhook payload (e.g. PagerDuty incident title + description),
+            only the externally-controlled fields should be checked for prompt
+            injection; the internal instruction scaffolding should not. When
+            omitted, falls back to initial_message (legacy behavior).
 
     Returns:
         Dict with session_id, status, and any error information
@@ -383,7 +460,12 @@ def run_background_chat(
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                            logger.error("[BackgroundChat] Cannot resolve org_id for user %s, skipping incident linking", user_id)
+                            raise ValueError(f"Missing org_id for user {user_id}")
                     # Ensure chat_sessions.incident_id is set (single source of truth)
+                    # RLS already set on this conn at line above
                     with conn.cursor() as cursor:
                         cursor.execute(
                             "UPDATE chat_sessions SET incident_id = %s WHERE id = %s AND incident_id IS NULL",
@@ -392,6 +474,7 @@ def run_background_chat(
                     conn.commit()
 
                     # Store session ID and Celery task ID (if not already set by webhook handler)
+                    # RLS already set on this conn at line above
                     with conn.cursor() as cursor:
                         # First check if there's already a task ID set
                         cursor.execute(
@@ -432,6 +515,7 @@ def run_background_chat(
                     # "time from webhook arrival to investigation start"). We
                     # COALESCE so a retry doesn't overwrite the original pickup.
                     pickup_at = datetime.now()
+                    # RLS already set on this conn at line above
                     with conn.cursor() as cursor:
                         cursor.execute(
                             """UPDATE incidents
@@ -446,6 +530,7 @@ def run_background_chat(
 
                     # Record lifecycle event for RCA start
                     try:
+                        # RLS already set on this conn at line above
                         with conn.cursor() as cursor:
                             cursor.execute(
                                 """INSERT INTO incident_lifecycle_events
@@ -457,6 +542,16 @@ def run_background_chat(
                             logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
                     except Exception as le:
                         logger.error(f"[BackgroundChat] Failed to record lifecycle event 'rca_started' for incident {incident_id}: {le}")
+
+                    # Dispatch on_incident actions for this incident (fire-and-forget)
+                    source = trigger_metadata.get('source', '') if trigger_metadata else ''
+                    # Prevent infinite loops: actions must not trigger other on_incident actions
+                    if source and source != 'action':
+                        try:
+                            from services.actions.executor import dispatch_on_incident_actions
+                            dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
+                        except Exception:
+                            logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
                     
                     # Send investigation started notifications (if enabled)
                     # Skip notifications if explicitly disabled (e.g., for Slack @mentions)
@@ -466,7 +561,7 @@ def run_background_chat(
                     email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
                     email_start_notification_enabled = email_general_enabled and email_start_enabled
                     
-                    slack_notification_enabled = _has_slack_connected(user_id)
+                    slack_notification_enabled = get_slack_client_for_user(user_id) is not None
                     google_chat_notification_enabled = _has_google_chat_connected(user_id)
                     
                     if send_notifications and (email_start_notification_enabled or slack_notification_enabled or google_chat_notification_enabled):
@@ -489,6 +584,7 @@ def run_background_chat(
                 provider_preference=provider_preference,
                 incident_id=incident_id,
                 mode=mode,
+                rail_text=rail_text,
             ))
             pass
         except Exception as e:
@@ -498,7 +594,7 @@ def run_background_chat(
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
         
         # Update session status to completed
-        _update_session_status(session_id, "completed")
+        _update_session_status(session_id, "completed", user_id=user_id)
         
         # Update incident status to analyzed if incident_id provided
         if incident_id:
@@ -506,6 +602,7 @@ def run_background_chat(
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ClearTaskID]")
                         cursor.execute(
                             "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
                             (incident_id,)
@@ -514,9 +611,7 @@ def run_background_chat(
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
-            _update_incident_status(incident_id, "analyzed")
-
-            _update_incident_aurora_status(incident_id, "summarizing",  user_id=user_id)
+            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
 
             # Post RCA-complete comment to linked JSM incident
             if (trigger_metadata or {}).get("source") == "opsgenie":
@@ -596,15 +691,45 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                if result.get("guardrail_blocked"):
+                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
+                    update_action_run_status(
+                        run_id=trigger_metadata['run_id'], status='error',
+                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                    )
+                else:
+                    update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+        # Dispatch on_incident actions configured for after_rca timing
+        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+            try:
+                from services.actions.executor import dispatch_on_incident_actions
+                dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
+
         completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
     
     except SoftTimeLimitExceeded:
         logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
-        _update_session_status(session_id, "failed")
+        _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+            _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
+                                         error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+            except Exception:
+                logger.debug("Failed to update action run status after timeout")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -613,9 +738,17 @@ def run_background_chat(
 
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed for session {session_id}: {e}")
-        _update_session_status(session_id, "failed")
+        _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
+            _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
+                                         error_message=str(e), user_id=user_id)
+            except Exception:
+                logger.debug("Failed to update action run status during error handling")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -628,6 +761,7 @@ def run_background_chat(
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:FinallyCleanup]")
                         cursor.execute(
                             "UPDATE chat_sessions SET status = 'failed', updated_at = %s WHERE id = %s AND status = 'in_progress'",
                             (datetime.now(), session_id)
@@ -635,8 +769,26 @@ def run_background_chat(
                         if cursor.rowcount > 0:
                             conn.commit()
                             logger.warning(f"[BackgroundChat] Finally block marked session {session_id} as failed")
+                            _propagate_suggestion_status(session_id, "failed")
             except Exception as cleanup_err:
                 logger.error(f"[BackgroundChat] Failed to cleanup session {session_id}: {cleanup_err}")
+
+            if trigger_metadata and trigger_metadata.get('source') == 'action':
+                try:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ActionCleanup]")
+                            cursor.execute(
+                                "UPDATE action_runs SET status = 'error', completed_at = NOW(), "
+                                "error = 'Background chat did not complete successfully' "
+                                "WHERE id = %s AND status = 'running'",
+                                (trigger_metadata['run_id'],)
+                            )
+                            if cursor.rowcount > 0:
+                                conn.commit()
+                                logger.warning("[BackgroundChat] Finally block marked action run as error")
+                except Exception:
+                    logger.debug("Failed to mark action run as error in finally block")
 
 
 # ---------------------------------------------------------------------------
@@ -646,15 +798,15 @@ def run_background_chat(
 _JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
 
 
-def _session_has_successful_jira_action(session_id: str) -> bool:
+def _session_has_successful_jira_action(session_id: str, user_id: str) -> bool:
     """Return True if the session already contains a successful Jira tool call.
 
     Used after _run_jira_action to confirm the agent actually filed.
     """
-    from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:JiraActionCheck]")
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s", (session_id,)
                 )
@@ -662,19 +814,33 @@ def _session_has_successful_jira_action(session_id: str) -> bool:
                 if not row or not row[0]:
                     return False
                 msgs = row[0] if isinstance(row[0], list) else json.loads(row[0])
-                for msg in msgs:
-                    for tc in (msg.get('toolCalls') or []):
-                        if (tc.get('tool_name') or '').lower() in _JIRA_TOOL_NAMES:
-                            output = tc.get('output') or ''
-                            try:
-                                parsed = json.loads(output) if isinstance(output, str) else output
-                                if isinstance(parsed, dict) and parsed.get('status') == 'success':
-                                    return True
-                            except (json.JSONDecodeError, TypeError, ValueError):
-                                if '"success"' in str(output):
-                                    return True
+                return _any_jira_success(msgs)
     except Exception as exc:
         logger.warning(f"[JiraFollowup] Failed to check existing actions: {exc}")
+    return False
+
+
+def _any_jira_success(msgs: list) -> bool:
+    """Scan chat messages for a successful Jira tool call."""
+    for msg in msgs:
+        for tc in (msg.get('toolCalls') or []):
+            if (tc.get('tool_name') or '').lower() not in _JIRA_TOOL_NAMES:
+                continue
+            if _tool_call_succeeded(tc):
+                return True
+    return False
+
+
+def _tool_call_succeeded(tc: dict) -> bool:
+    """Return True if a single tool-call dict indicates success."""
+    output = tc.get('output') or ''
+    try:
+        parsed = json.loads(output) if isinstance(output, str) else output
+        if isinstance(parsed, dict) and parsed.get('status') == 'success':
+            return True
+    except (json.JSONDecodeError, TypeError, ValueError):
+        if '"success"' in str(output):
+            return True
     return False
 
 
@@ -784,12 +950,12 @@ def _build_jira_followup_prompt(jira_mode: str, service_name: str = "") -> str:
     )
 
 
-def _snapshot_session_messages(session_id: str) -> list:
+def _snapshot_session_messages(session_id: str, user_id: str) -> list:
     """Return the current UI messages list for the session."""
-    from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SnapshotMessages]")
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s", (session_id,)
                 )
@@ -801,7 +967,7 @@ def _snapshot_session_messages(session_id: str) -> list:
     return []
 
 
-def _merge_investigation_messages(session_id: str, investigation_messages: list, followup_prompt_prefix: str = "") -> None:
+def _merge_investigation_messages(session_id: str, investigation_messages: list, followup_prompt_prefix: str = "", user_id: str = "") -> None:
     """Replace session messages with investigation + Jira-only follow-up messages.
     
     The Jira follow-up workflow saves compressed investigation context + Jira
@@ -811,10 +977,10 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
     """
     if not investigation_messages:
         return
-    from utils.db.connection_pool import db_pool
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:MergeMessages]")
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s", (session_id,)
                 )
@@ -873,8 +1039,6 @@ async def _run_jira_action(
     service_name = ""
     if incident_id:
         try:
-            from utils.db.connection_pool import db_pool
-            from utils.auth.stateless_auth import set_rls_context
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, user_id, log_prefix="[JiraAction]")
@@ -887,7 +1051,7 @@ async def _run_jira_action(
 
     followup_text = _build_jira_followup_prompt(jira_mode, service_name=service_name)
 
-    investigation_messages = _snapshot_session_messages(session_id)
+    investigation_messages = _snapshot_session_messages(session_id, user_id=user_id)
     logger.info(f"[JiraAction] Saved {len(investigation_messages)} investigation messages")
 
     # Flush any pending async context save so the Jira follow-up can load
@@ -920,11 +1084,11 @@ async def _run_jira_action(
     except Exception as exc:
         logger.error(f"[JiraAction] Failed: {exc}")
         _merge_investigation_messages(session_id, investigation_messages,
-                                       followup_prompt_prefix=followup_text[:80])
+                                       followup_prompt_prefix=followup_text[:80], user_id=user_id)
         return
 
     _merge_investigation_messages(session_id, investigation_messages,
-                                   followup_prompt_prefix=followup_text[:80])
+                                   followup_prompt_prefix=followup_text[:80], user_id=user_id)
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 
@@ -936,6 +1100,7 @@ async def _execute_background_chat(
     provider_preference: Optional[List[str]] = None,
     incident_id: Optional[str] = None,
     mode: str = "ask",
+    rail_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -990,28 +1155,52 @@ async def _execute_background_chat(
         if rca_context:
             logger.info(f"[BackgroundChat] Built RCA context: source={rca_context.get('source')}, providers={rca_context.get('providers')}")
 
-        # Create the initial message (kept simple - user sees this)
-        human_message = HumanMessage(content=initial_message)
+        # Create the initial message; tag it so the UI layer can skip the
+        # synthesized RCA scaffold (internal instructions, not user input).
+        # Slack/Google Chat messages are user-authored and should NOT be hidden.
+        source = trigger_metadata.get("source", "") if trigger_metadata else ""
+        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat')
+        human_message = HumanMessage(
+            content=initial_message,
+            additional_kwargs={"is_rca_scaffold": is_scaffold},
+        )
 
         # Import centralized model config
         from chat.backend.agent.llm import ModelConfig
+
+        # state.question is what input guardrails evaluate (see
+        # workflow._get_input_rail_text). For synthesized RCA prompts built
+        # around an external webhook payload, only the webhook-authored text
+        # should be rail-checked — the internal instruction scaffolding is not
+        # user input and would produce false positives. Callers pass rail_text
+        # for that case; fall back to initial_message to preserve legacy
+        # semantics for triggers that forward a raw user question.
+        rail_question = rail_text if rail_text else initial_message
+
+        # State.incident_id is read-only context for downstream nodes (triage
+        # uses it to look up prior findings, prompt_builder for RCA scaffolding).
+        # Distinct from the function param `incident_id` which gates RCA-style
+        # side effects — incident-chat follow-ups pass that as None but still
+        # need the incident in state so context-aware nodes can find it.
+        context_incident_id = incident_id or (trigger_metadata or {}).get("incident_id")
 
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
             user_id=user_id,
             session_id=session_id,
-            incident_id=incident_id,
+            incident_id=context_incident_id,
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],
-            question=initial_message,
+            question=rail_question,
             model=ModelConfig.RCA_MODEL,
             mode=mode,
-            is_background=True,  # Key flag for background behavior
-            rca_context=rca_context,  # RCA context for prompt_builder
+            is_background=True,
+            rca_context=rca_context,
+            permitted_tools=_resolve_permitted_tools(user_id),
         )
-        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}")
+        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}, context_incident_id={context_incident_id}")
         
         # Set user context for tools (AFTER state is created so we can pass it)
         set_user_context(
@@ -1046,7 +1235,7 @@ async def _execute_background_chat(
         # --- Phase 2: Jira action ---
         # Investigation is done. Now deterministically file in Jira.
         if rca_context and rca_context.get('integrations', {}).get('jira') \
-                and not _session_has_successful_jira_action(session_id):
+                and not _session_has_successful_jira_action(session_id, user_id=user_id):
             await _run_jira_action(
                 session_id=session_id,
                 user_id=user_id,
@@ -1062,15 +1251,17 @@ async def _execute_background_chat(
             # Check if status was already set to complete (shouldn't happen, but log if it does)
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:StatusCheck]")
                     cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
                     row = cursor.fetchone()
                     if row and row[0] == 'complete':
                         logger.error(f"[BackgroundChat] ⚠️ WARNING: Incident {incident_id} aurora_status is already 'complete' before we set it! This indicates a race condition.")
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
-        
-        # Extract tool calls from database llm_context_history
-        tool_calls = _extract_tool_calls_for_viz(session_id, user_id)
+
+        # Fallback: rebuild llm_context_history from UI messages if the save was lost.
+        llm_context = _ensure_llm_context_history(session_id, user_id)
+        tool_calls = _extract_tool_calls_for_viz(session_id, user_id, llm_context)
         logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
         
         return {
@@ -1078,6 +1269,7 @@ async def _execute_background_chat(
             "status": "completed",
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
+            "guardrail_blocked": getattr(state, "guardrail_blocked", False),
         }
         
     except Exception as e:
@@ -1101,35 +1293,112 @@ async def _execute_background_chat(
                 logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
 
 
-def _update_session_status(session_id: str, status: str) -> None:
+TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _append_block_message(session_id: str, user_id: str, text: str) -> None:
+    """Append a visible bot message to the session so the chat isn't empty."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                row = cursor.fetchone()
+                raw = row[0] if row else None
+                if isinstance(raw, list):
+                    messages = raw
+                elif raw:
+                    messages = json.loads(raw)
+                else:
+                    messages = []
+                messages.append({"sender": "bot", "text": text, "message_number": len(messages) + 1})
+                cursor.execute(
+                    "UPDATE chat_sessions SET messages = %s::jsonb, updated_at = %s WHERE id = %s",
+                    (json.dumps(messages), datetime.now(), session_id),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to append block message: {e}")
+
+
+def _update_session_status(session_id: str, status: str, user_id: str) -> None:
     """Update the status of a chat session.
     
     Args:
         session_id: The chat session ID
-        status: New status ('in_progress', 'completed', 'failed', 'active')
-    """ 
+        status: New status ('in_progress', 'completed', 'failed', 'cancelled', 'active')
+        user_id: User ID for RLS context (required from Celery workers)
+    """
+    rows_updated = 0
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                    return
                 cursor.execute(
-                    "UPDATE chat_sessions SET status = %s, updated_at = %s WHERE id = %s",
-                    (status, datetime.now(), session_id)
+                    "UPDATE chat_sessions SET status = %s, updated_at = %s "
+                    "WHERE id = %s AND status != ALL(%s)",
+                    (status, datetime.now(), session_id, list(TERMINAL_SESSION_STATUSES))
                 )
                 rows_updated = cursor.rowcount
+                if rows_updated == 0:
+                    cursor.execute("SELECT status FROM chat_sessions WHERE id = %s", (session_id,))
+                    existing = cursor.fetchone()
+                    if existing is None:
+                        logger.info(f"[BackgroundChat] No session found with id {session_id}")
+                    elif existing[0] in TERMINAL_SESSION_STATUSES:
+                        logger.info(
+                            f"[BackgroundChat] Skipped update for session {session_id}: "
+                            f"already in terminal status '{existing[0]}'"
+                        )
+                    else:
+                        logger.info(
+                            f"[BackgroundChat] Update for session {session_id} to '{status}' "
+                            f"affected 0 rows (current status='{existing[0]}')"
+                        )
+                else:
+                    logger.info(f"[BackgroundChat] Updated session {session_id} status to '{status}' (rows={rows_updated})")
             conn.commit()
-            logger.info(f"[BackgroundChat] Updated session {session_id} status to '{status}' (rows={rows_updated})")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update session {session_id} status to '{status}': {e}")
+        return
+
+    if rows_updated > 0 and status in TERMINAL_SESSION_STATUSES:
+        _propagate_suggestion_status(session_id, status)
 
 
-def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
+def _propagate_suggestion_status(session_id: str, status: str) -> None:
+    """Propagate a terminal session status to any linked incident_suggestions rows.
+
+    This ensures suggestions whose execution was kicked off via *session_id*
+    get their ``execution_status`` moved out of ``in_progress`` (or ``executed``)
+    when the session finishes or is cleaned up.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
+                cursor.execute(
+                    """UPDATE incident_suggestions
+                       SET execution_status = %s
+                       WHERE execution_session_id = %s::uuid
+                         AND execution_status IN ('in_progress', 'executed')""",
+                    (status, session_id),
+                )
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"[BackgroundChat] Updated suggestion execution_status to '{status}' for session {session_id}")
+    except Exception as e:
+        logger.warning(f"[BackgroundChat] Failed to update suggestion execution_status for session {session_id}: {e}")
+
+
+def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id: str) -> None:
     """Update incident aurora_status (running/complete/error).
 
     Args:
         incident_id: The incident ID
         aurora_status: New status ('running', 'complete', 'error', 'summarizing')
-        user_id: The user ID for lifecycle event recording
-        org_id: The org ID for lifecycle event recording (optional)
+        user_id: The user ID for RLS context and lifecycle event recording
     """
     # Map aurora_status values to lifecycle event types
     _STATUS_EVENT_MAP = {
@@ -1140,6 +1409,9 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:AuroraStatus]")
+                if not resolved_org_id:
+                    return
                 now = datetime.now()
                 if aurora_status == 'complete':
                     cursor.execute(
@@ -1161,12 +1433,13 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
             event_type = _STATUS_EVENT_MAP.get(aurora_status)
             if event_type and user_id:
                 try:
+                    # RLS already set on this conn above
                     with conn.cursor() as cursor:
                         cursor.execute(
                             """INSERT INTO incident_lifecycle_events
                                (incident_id, user_id, org_id, event_type, new_value)
                                VALUES (%s, %s, %s, %s, %s)""",
-                            (incident_id, user_id, org_id, event_type, aurora_status)
+                            (incident_id, user_id, resolved_org_id, event_type, aurora_status)
                         )
                     conn.commit()
                     logger.info(f"[BackgroundChat] Recorded lifecycle event '{event_type}' for incident {incident_id}")
@@ -1174,6 +1447,63 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
                     logger.error(f"[BackgroundChat] Failed to record lifecycle event '{event_type}' for incident {incident_id}: {le}")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
+
+
+def _mark_inflight_findings_failed(incident_id: str, user_id: str, reason: str) -> int:
+    """Mark every still-running rca_findings row for this incident as terminal.
+
+    Called from the parent task's except handlers so the sub-agent UI rows stop
+    spinning when the orchestrator itself fails — without this, children stay
+    status='running' forever even after incidents.aurora_status flips to 'error'.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:FindingsCleanup]"):
+                    return 0
+                cursor.execute(
+                    """UPDATE rca_findings
+                       SET status = 'timeout',
+                           completed_at = NOW(),
+                           error_message = COALESCE(error_message, %s)
+                       WHERE incident_id = %s AND status = 'running'""",
+                    (reason, incident_id),
+                )
+                rowcount = cursor.rowcount
+            conn.commit()
+            if rowcount:
+                logger.info(
+                    f"[BackgroundChat] Marked {rowcount} in-flight rca_findings as timeout for incident {incident_id}"
+                )
+            return rowcount
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to mark in-flight findings for incident {incident_id}: {e}")
+        return 0
+
+
+def _update_incident_status_and_aurora(
+    incident_id: str, status: str, aurora_status: str, user_id: str
+) -> None:
+    """Atomically update both incident status and aurora_status in one transaction."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:StatusAndAurora]"):
+                    return
+                now = datetime.now()
+                cursor.execute(
+                    """UPDATE incidents
+                       SET status = %s,
+                           aurora_status = %s,
+                           analyzed_at = CASE WHEN %s = 'analyzed' THEN COALESCE(analyzed_at, %s) ELSE analyzed_at END,
+                           updated_at = %s
+                       WHERE id = %s AND status != 'merged'""",
+                    (status, aurora_status, status, now, now, incident_id),
+                )
+            conn.commit()
+            logger.info(f"[BackgroundChat] Set incident {incident_id} status='{status}' aurora_status='{aurora_status}'")
+    except Exception as e:
+        logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status/aurora_status: {e}")
 
 
 def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str) -> None:
@@ -1188,6 +1518,8 @@ def _determine_severity_from_rca(incident_id: str, session_id: str, user_id: str
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Severity]"):
+                    return
                 cursor.execute("SELECT severity FROM incidents WHERE id = %s", (incident_id,))
                 row = cursor.fetchone()
                 if not row or row[0] not in (None, 'unknown'):
@@ -1293,12 +1625,13 @@ Respond with ONLY ONE WORD: critical, high, medium, or low"""
         logger.error(f"[BackgroundChat] Failed to determine severity: {e}")
 
 
-def _update_incident_status(incident_id: str, status: str) -> None:
+def _update_incident_status(incident_id: str, status: str, user_id: str) -> None:
     """Update incident status when RCA completes.
     
     Args:
         incident_id: The incident ID
         status: New status ('investigating', 'analyzed')
+        user_id: The user ID (required for RLS)
     
     Note: Will NOT update if current status is 'merged' to preserve merge state.
     """
@@ -1306,7 +1639,8 @@ def _update_incident_status(incident_id: str, status: str) -> None:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Don't overwrite 'merged' status - preserve merge state
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:IncidentStatus]"):
+                    return
                 cursor.execute(
                     """
                     UPDATE incidents 
@@ -1339,6 +1673,7 @@ def _is_rca_email_notification_enabled(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCAEmailNotifCheck]")
                 cursor.execute(
                     """
                     SELECT preference_value 
@@ -1363,16 +1698,6 @@ def _is_rca_email_notification_enabled(user_id: str) -> bool:
         logger.error(f"[EmailNotification] Error checking notification preference: {e}")
         return False
 
-
-def _has_slack_connected(user_id: str) -> bool:
-    """Check if user has Slack connected."""
-    try:
-        from connectors.slack_connector.client import get_slack_client_for_user
-        client = get_slack_client_for_user(user_id)
-        return client is not None
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error checking Slack connection: {e}")
-        return False
 
 
 def _has_google_chat_connected(user_id: str) -> bool:
@@ -1403,6 +1728,7 @@ def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCAEmailStartNotifCheck]")
                 cursor.execute(
                     """
                     SELECT preference_value 
@@ -1428,11 +1754,12 @@ def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
         return False
 
 
-def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
+def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Fetch incident data from database.
     
     Args:
         incident_id: The incident UUID
+        user_id: User ID for RLS context
         
     Returns:
         Dictionary with incident data or None if not found
@@ -1440,6 +1767,7 @@ def _get_incident_data(incident_id: str) -> Optional[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GetIncidentData]")
                 cursor.execute(
                     """
                     SELECT id, user_id, source_type, status, severity, alert_title, 
@@ -1489,7 +1817,7 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
         session_id: Optional chat session ID (used to extract last message for 'completed' notifications)
     """
     # Get incident data (needed for both email and Slack)
-    incident_data = _get_incident_data(incident_id)
+    incident_data = _get_incident_data(incident_id, user_id=user_id)
     if not incident_data:
         logger.error(f"[RCANotification] Incident {incident_id} not found")
         return
@@ -1497,10 +1825,10 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
     # For completed notifications, extract the summary section from last message if not already present
     if event_type == 'completed' and session_id and not incident_data.get('aurora_summary'):
         try:
-            from utils.db.connection_pool import db_pool
             from routes.slack.slack_events_helpers import extract_summary_section
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCANotifSummary]")
                     cursor.execute(
                         "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
                         (session_id, user_id)
@@ -1538,6 +1866,7 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCANotifEmails]")
                             cursor.execute(
                                 """
                                 SELECT email FROM rca_notification_emails
@@ -1623,6 +1952,7 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
         # Get the last assistant message from the chat session
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SlackResponse]")
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
                     (session_id, user_id)
@@ -1660,7 +1990,7 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
-                        # Get user email
+                        # No RLS needed — users + incident_suggestions not RLS-protected
                         cursor.execute(
                             "SELECT email FROM users WHERE id = %s",
                             (user_id,)
@@ -1745,6 +2075,7 @@ def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadat
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GoogleChatResponse]")
                 cursor.execute(
                     "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
                     (session_id, user_id)
@@ -1817,6 +2148,7 @@ def create_background_chat_session(
     title: str,
     trigger_metadata: Optional[Dict[str, Any]] = None,
     incident_id: Optional[str] = None,
+    question: Optional[str] = None,
 ) -> str:
     """Create a new chat session for a background chat.
     
@@ -1837,18 +2169,17 @@ def create_background_chat_session(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Look up org_id for this user
+                # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
                 org_id = row[0] if row and row[0] else None
 
                 if not org_id:
                     logger.warning("No org_id found for user %s in background task session creation", user_id)
+                    raise ValueError(f"Missing org_id for user {user_id}")
                 
-                # Set user and org context for RLS
-                cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s;", (org_id or '',))
-                conn.commit()
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:session]"):
+                    raise ValueError(f"Failed to set RLS context for user {user_id}")
                 
                 # Create the session with initial metadata and in_progress status
                 ui_state = {
@@ -1858,6 +2189,10 @@ def create_background_chat_session(
                 if trigger_metadata:
                     ui_state["triggerMetadata"] = trigger_metadata
                 
+                initial_messages = []
+                if question:
+                    initial_messages.append({"sender": "user", "text": question})
+
                 cursor.execute("""
                     INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1866,7 +2201,7 @@ def create_background_chat_session(
                     user_id,
                     org_id,
                     title,
-                    json.dumps([]),
+                    json.dumps(initial_messages),
                     json.dumps(ui_state),
                     datetime.now(),
                     datetime.now(),
@@ -1876,7 +2211,7 @@ def create_background_chat_session(
                 ))
             conn.commit()
             
-            logger.info(f"[BackgroundChat] Created session {session_id} for user {user_id} org {org_id} (status=in_progress, incident_id={incident_id})")
+            logger.info(f"[BackgroundChat] Created session {sanitize(session_id)} for user {sanitize(user_id)} org {sanitize(org_id)} (status=in_progress, incident_id={sanitize(incident_id)})")
             
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed to create session: {e}")
@@ -1884,80 +2219,269 @@ def create_background_chat_session(
     
     return session_id
 
-@celery_app.task(name="chat.background.cleanup_stale_sessions")
-def cleanup_stale_background_chats() -> Dict[str, Any]:
-    """Cleanup background chat sessions stuck in 'in_progress' for >20 minutes.
-    
-    Runs periodically to mark abandoned sessions as 'failed' and update their incidents.
-    """    
-    stale_threshold = datetime.now() - __import__('datetime').timedelta(minutes=20)
-    
+def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
+    """Write an rca_error lifecycle event, wrapped in a savepoint to avoid aborting the caller."""
+    try:
+        cursor.execute("SAVEPOINT sp_rca_err")
+        cursor.execute(
+            """INSERT INTO incident_lifecycle_events
+               (incident_id, user_id, org_id, event_type, new_value)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (incident_id, user_id, None, 'rca_error', 'error')
+        )
+        cursor.execute("RELEASE SAVEPOINT sp_rca_err")
+    except Exception as e:
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT sp_rca_err")
+        except Exception as rollback_err:
+            logger.debug("[Cleanup] Rollback failed for incident %s: %s", incident_id, rollback_err)
+        logger.debug("[Cleanup] Failed to record rca_error for incident %s: %s", incident_id, e)
+
+
+def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_id=None) -> bool:
+    """Check whether a Celery task is no longer running.
+
+    For STARTED tasks past the threshold, look for evidence the workflow is
+    still progressing before declaring it dead: any running ``execution_steps``
+    tool call OR any running ``rca_findings`` sub-agent counts as a heartbeat.
+    Multi-agent reasoning models can spend several minutes between tool calls
+    on the reasoning step alone, so checking only tool activity false-positives.
+    """
+    result = celery_app.AsyncResult(task_id)
+    if result.state in ('FAILURE', 'REVOKED'):
+        return True
+    if result.state == 'PENDING' and result.result is None:
+        return True
+    if result.state == 'STARTED' and last_activity and last_activity < threshold:
+        if cursor and incident_id:
+            cursor.execute("""
+                SELECT 1 FROM execution_steps
+                WHERE incident_id = %s AND status = 'running'
+                LIMIT 1
+            """, (incident_id,))
+            if cursor.fetchone():
+                return False
+            cursor.execute("""
+                SELECT 1 FROM rca_findings
+                WHERE incident_id = %s AND status = 'running'
+                LIMIT 1
+            """, (incident_id,))
+            if cursor.fetchone():
+                return False
+        return True
+    return False
+
+
+def _affected_users(cursor):
+    """Return user_ids that could have stale work. users table has no RLS."""
+    cursor.execute("SELECT DISTINCT id FROM users WHERE org_id IS NOT NULL")
+    return [r[0] for r in cursor.fetchall()]
+
+
+def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
+    """Mark investigations left in 'running' state by a previous process as failed.
+
+    Intended to be called once on process startup (chatbot or worker).
+    Uses AsyncResult to avoid killing investigations whose Celery task is still alive.
+    Returns the number of incidents cleaned.
+    """
+    cleaned = 0
+    threshold = datetime.now() - timedelta(minutes=threshold_minutes)
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # Find stale sessions with their incident IDs
-                cursor.execute("""
-                    SELECT cs.id, cs.user_id, i.id as incident_id
-                    FROM chat_sessions cs
-                    LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
-                    WHERE cs.status = 'in_progress' AND cs.updated_at < %s
-                """, (stale_threshold,))
-                
-                stale_sessions = cursor.fetchall()
-                
-                if not stale_sessions:
-                    logger.info("[BackgroundChat:Cleanup] No stale sessions found")
-                    return {"cleaned": 0}
-                
-                # Mark sessions as failed
-                cursor.execute("""
-                    UPDATE chat_sessions 
-                    SET status = 'failed', updated_at = %s 
-                    WHERE status = 'in_progress' AND updated_at < %s
-                """, (datetime.now(), stale_threshold))
-                
-                cleaned_count = cursor.rowcount
-            conn.commit()
-            
-            # Update associated incidents (both aurora_status and status)
-            if stale_sessions:
-                with conn.cursor() as cursor:
-                    for session_id, user_id, incident_id in stale_sessions:
+                for uid in _affected_users(cursor):
+                    if not set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]"):
+                        continue
+                    cursor.execute("""
+                        SELECT id, rca_celery_task_id,
+                               COALESCE((SELECT cs.updated_at FROM chat_sessions cs
+                                         WHERE cs.id::text = i.aurora_chat_session_id::text), i.updated_at)
+                        FROM incidents i
+                        WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
+                    """, (threshold, uid))
+                    for inc_id, task_id, last_activity in cursor.fetchall():
+                        if task_id and not _is_task_dead(task_id, last_activity, threshold,
+                                                         cursor=cursor, incident_id=inc_id):
+                            continue
+                        cursor.execute("""
+                            UPDATE incidents SET aurora_status = 'error', status = 'analyzed',
+                                   analyzed_at = COALESCE(analyzed_at, NOW()),
+                                   rca_celery_task_id = NULL, updated_at = NOW()
+                            WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id
+                        """, (inc_id,))
+                        if cursor.fetchone():
+                            _record_rca_error(cursor, str(inc_id), uid)
+                            cleaned += 1
+                        conn.commit()
+                    cursor.execute("""
+                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
+                        RETURNING id
+                    """, (threshold, uid))
+                    for (sid,) in cursor.fetchall():
+                        _propagate_suggestion_status(str(sid), 'failed')
+                    conn.commit()
+
+        if cleaned:
+            logger.info(f"[StartupCleanup] Marked {cleaned} orphaned investigations as error")
+    except Exception as e:
+        logger.error(f"[StartupCleanup] Failed to clean orphaned investigations: {e}")
+    return cleaned
+
+
+@celery_app.task(name="chat.background.cleanup_stale_sessions")
+def cleanup_stale_background_chats() -> Dict[str, Any]:
+    """Cleanup background chat sessions stuck in 'in_progress' and incidents
+    whose Celery task is no longer alive. Runs every 5 minutes.
+    """
+    stale_threshold = datetime.now() - timedelta(minutes=20)
+    dead_task_threshold = datetime.now() - timedelta(minutes=3)
+    # Per-role timeout caps at 600s; 35 min is safely past any legitimate run.
+    findings_threshold = datetime.now() - timedelta(minutes=35)
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            cleaned_count = 0
+            dead_task_count = 0
+            orphaned_count = 0
+            stale_findings_count = 0
+
+            with conn.cursor() as cursor:
+                for uid in _affected_users(cursor):
+                    if not set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]"):
+                        continue
+
+                    # --- 1. Stale sessions (>20 min with no update) ---
+                    cursor.execute("""
+                        SELECT cs.id, i.id as incident_id
+                        FROM chat_sessions cs
+                        LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
+                        WHERE cs.status = 'in_progress' AND cs.updated_at < %s AND cs.user_id = %s
+                    """, (stale_threshold, uid))
+                    for session_id, incident_id in cursor.fetchall():
+                        cursor.execute("""
+                            UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
+                            WHERE id = %s AND status = 'in_progress' RETURNING id
+                        """, (session_id,))
+                        if not cursor.fetchone():
+                            continue
+                        cleaned_count += 1
+                        _propagate_suggestion_status(str(session_id), 'failed')
                         if incident_id:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', updated_at = %s WHERE id = %s",
-                                (datetime.now(), incident_id)
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged'",
+                                (incident_id,)
                             )
-                            # Record lifecycle event for stale session error. Wrap in savepoint
-                            # so a failure here doesn't abort the outer transaction and stop
-                            # the status UPDATE from committing for remaining sessions.
-                            try:
-                                cursor.execute("SAVEPOINT sp_rca_error")
-                                cursor.execute(
-                                    """INSERT INTO incident_lifecycle_events
-                                       (incident_id, user_id, org_id, event_type, new_value)
-                                       VALUES (%s, %s, %s, %s, %s)""",
-                                    (incident_id, user_id, None, 'rca_error', 'error')
-                                )
-                                cursor.execute("RELEASE SAVEPOINT sp_rca_error")
-                            except Exception as lc_exc:
-                                try:
-                                    cursor.execute("ROLLBACK TO SAVEPOINT sp_rca_error")
-                                except Exception as rb_exc:
-                                    logger.debug(
-                                        "[BackgroundChat:Cleanup] Rollback to sp_rca_error failed for incident %s: %s",
-                                        incident_id, rb_exc,
-                                    )
-                                logger.warning(
-                                    "[BackgroundChat:Cleanup] Failed to record rca_error lifecycle event "
-                                    "for incident %s (user %s): %s",
-                                    incident_id, user_id, lc_exc,
-                                )
-                conn.commit()
-            
-            logger.info(f"[BackgroundChat:Cleanup] Marked {cleaned_count} stale sessions as failed")
-            return {"cleaned": cleaned_count, "session_ids": [s[0] for s in stale_sessions]}
-            
+                            _record_rca_error(cursor, str(incident_id), uid)
+                        conn.commit()
+
+                    # --- 2. Dead Celery tasks (task no longer alive in broker) ---
+                    cursor.execute("""
+                        SELECT i.id, i.rca_celery_task_id, i.aurora_chat_session_id,
+                               COALESCE(cs.updated_at, i.updated_at) as last_activity
+                        FROM incidents i
+                        LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
+                        WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
+                          AND i.updated_at < %s AND i.user_id = %s
+                    """, (dead_task_threshold, uid))
+                    for inc_id, task_id, session_id, last_activity in cursor.fetchall():
+                        if not _is_task_dead(task_id, last_activity, dead_task_threshold,
+                                             cursor=cursor, incident_id=inc_id):
+                            continue
+                        cursor.execute(
+                            "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
+                            (inc_id,)
+                        )
+                        if not cursor.fetchone():
+                            conn.commit()
+                            continue
+                        if session_id:
+                            cursor.execute(
+                                "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress' RETURNING id",
+                                (str(session_id),)
+                            )
+                            if cursor.fetchone():
+                                _propagate_suggestion_status(str(session_id), 'failed')
+                        _record_rca_error(cursor, str(inc_id), uid)
+                        conn.commit()
+                        dead_task_count += 1
+
+                    # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
+                    cursor.execute("""
+                        SELECT i.id, i.aurora_status FROM incidents i
+                        WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM chat_sessions cs
+                              WHERE cs.id::text = i.aurora_chat_session_id::text
+                                AND cs.status = 'in_progress'
+                          )
+                    """, (stale_threshold, uid))
+                    for inc_id, cur_aurora in cursor.fetchall():
+                        if cur_aurora in ('complete', 'error'):
+                            cursor.execute(
+                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
+                                (inc_id,)
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' RETURNING id",
+                                (inc_id,)
+                            )
+                        if cursor.fetchone():
+                            if cur_aurora not in ('complete', 'error'):
+                                _record_rca_error(cursor, str(inc_id), uid)
+                            orphaned_count += 1
+                        conn.commit()
+
+                    # --- 4. Stale rca_findings: cascade from any incident already
+                    # marked aurora_status='error' (immediate, catches sections 1-3
+                    # that just flipped the parent), plus a time-based safety net
+                    # for the rare case where the parent itself never got marked. ---
+                    cursor.execute(
+                        """UPDATE rca_findings rf
+                           SET status = 'timeout',
+                               completed_at = NOW(),
+                               error_message = COALESCE(
+                                   rf.error_message,
+                                   CASE WHEN i.aurora_status = 'error'
+                                        THEN 'parent incident failed'
+                                        ELSE 'orphaned: no progress within 35 minutes'
+                                   END
+                               )
+                           FROM incidents i
+                           WHERE i.id = rf.incident_id
+                             AND rf.status = 'running'
+                             AND rf.user_id = %s
+                             AND (i.aurora_status = 'error' OR rf.started_at < %s)""",
+                        (uid, findings_threshold),
+                    )
+                    if cursor.rowcount:
+                        stale_findings_count += cursor.rowcount
+                        conn.commit()
+
+            # --- 5. Stale action runs (per-org, action_runs is RLS-protected) ---
+            stale_actions_count = 0
+            stale_action_threshold = datetime.now() - timedelta(minutes=35)
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
+                org_ids = [r[0] for r in cursor.fetchall()]
+                for oid in org_ids:
+                    cursor.execute("SET myapp.current_org_id = %s;", (oid,))
+                    cursor.execute("""
+                        UPDATE action_runs SET status = 'error', completed_at = NOW(),
+                               error = 'Stale: background chat did not complete'
+                        WHERE status IN ('running', 'pending') AND started_at < %s
+                    """, (stale_action_threshold,))
+                    stale_actions_count += cursor.rowcount
+                if stale_actions_count > 0:
+                    conn.commit()
+
+            if cleaned_count or dead_task_count or orphaned_count or stale_actions_count or stale_findings_count:
+                logger.info("[BackgroundChat:Cleanup] stale=%d dead_tasks=%d orphaned=%d stale_actions=%d stale_findings=%d",
+                            cleaned_count, dead_task_count, orphaned_count, stale_actions_count, stale_findings_count)
+            return {"cleaned": cleaned_count, "dead_tasks": dead_task_count, "orphaned": orphaned_count, "stale_actions": stale_actions_count, "stale_findings": stale_findings_count}
+
     except Exception as e:
         logger.exception(f"[BackgroundChat:Cleanup] Failed: {e}")
         return {"error": str(e), "cleaned": 0}

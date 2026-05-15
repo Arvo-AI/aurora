@@ -5,6 +5,7 @@ import requests
 import boto3
 import os
 from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.secrets.secret_ref_utils import get_token_owner_id
 
 # GCP OAuth2 constants
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -69,7 +70,12 @@ def refresh_token_if_needed(user_id, provider):
             token_data['expires_at'] = current_time + new_token_data['expires_in']
             token_data['refresh_token'] = token_data.get('refresh_token')  # Keep the existing one
 
-            store_tokens_in_db(user_id, token_data, provider)
+            # Always write back under the token owner's user_id. When credentials
+            # are org-shared, user_id may belong to an org member who didn't
+            # originally connect the provider. Writing under their ID would
+            # create a duplicate row and break SA identity resolution for GCP.
+            owner_id = get_token_owner_id(user_id, provider)
+            store_tokens_in_db(owner_id, token_data, provider)
             logging.info(f"{provider.upper()} token refreshed successfully")
 
         return token_data

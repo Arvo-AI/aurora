@@ -11,6 +11,7 @@ from flask import Blueprint, request, jsonify
 from connectors.google_chat_connector.client import get_chat_app_client
 from utils.db.connection_pool import db_pool
 from utils.auth.enforcer import get_user_roles_in_org
+from utils.auth.stateless_auth import set_rls_context
 from routes.google_chat.google_chat_events_helpers import (
     verify_google_chat_request,
     get_org_google_chat_credentials,
@@ -32,6 +33,7 @@ def _user_can_execute(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # No RLS needed — users not RLS-protected
                 cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cur.fetchone()
                 if not row or not row[0]:
@@ -296,6 +298,7 @@ def _handle_run_suggestion(
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, clicker_user_id, log_prefix="[GChatEvents:run_suggestion]")
                 cursor.execute(
                     """
                     SELECT s.command, s.title, s.risk, i.user_id,
@@ -381,6 +384,7 @@ def _handle_suggestion_details(
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
                 cursor.execute(
                     """
                     SELECT s.title, s.description, s.command, s.type, s.risk

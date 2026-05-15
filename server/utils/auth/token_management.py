@@ -8,24 +8,26 @@ import logging
 import time
 from typing import Dict, Optional, List, Any
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+from utils.log_sanitizer import safe_provider, hash_for_log
 
 logger = logging.getLogger(__name__)
 
 
 def _log_no_org(provider: str) -> None:
-    logger.warning("[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope", provider)
+    logger.warning("[STORE-TOKENS] No org_id resolved, provider %s - token will lack org scope", safe_provider(provider))
 
 
 def _log_store_start(provider: str) -> None:
-    logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", provider)
+    logger.info("[STORE-TOKENS] Starting credential storage for provider: %s", safe_provider(provider))
 
 
 def _log_store_ok(provider: str, elapsed_ms: float) -> None:
-    logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", provider, elapsed_ms)
+    logger.info("[STORE-TOKENS] Successfully stored credentials for provider %s in %.2fms", safe_provider(provider), elapsed_ms)
 
 
 def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
-    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", provider, elapsed_ms, type(exc).__name__, exc, exc_info=True)
+    logger.error("[STORE-TOKENS] Failed to store credentials for provider %s after %.2fms: %s: %s", safe_provider(provider), elapsed_ms, type(exc).__name__, exc, exc_info=True)
 
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
@@ -79,11 +81,15 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
             
+            resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[STORE-TOKENS]")
+            if resolved_org_id:
+                request_org_id = resolved_org_id
+
             # Store only metadata and secret reference in database
             if provider == "azure":
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id, tenant_id, client_id, client_secret) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -115,7 +121,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, client_secret, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
@@ -134,7 +140,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
@@ -146,13 +152,13 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             elif provider == "grafana":
                 # Store Grafana metadata for display (org info + base URL)
                 org_name = token_data.get("org_name") if isinstance(token_data, dict) else None
-                org_id = token_data.get("org_id") if isinstance(token_data, dict) else None
+                grafana_org_id = token_data.get("org_id") if isinstance(token_data, dict) else None
                 base_url = token_data.get("base_url") if isinstance(token_data, dict) else None
                 user_email = token_data.get("user_email") if isinstance(token_data, dict) else None
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id, client_id, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -161,17 +167,17 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "email = EXCLUDED.email, "
                     "timestamp = CURRENT_TIMESTAMP, "
                     "is_active = TRUE",
-                    (user_id, request_org_id, secret_ref, provider, org_name, org_id, base_url, user_email)
+                    (user_id, request_org_id, secret_ref, provider, org_name, grafana_org_id, base_url, user_email)
                 )
             elif provider == "datadog":
                 org_name = token_data.get("org_name") if isinstance(token_data, dict) else None
-                org_id = token_data.get("org_id") if isinstance(token_data, dict) else None
+                datadog_org_id = token_data.get("org_id") if isinstance(token_data, dict) else None
                 site = token_data.get("site") if isinstance(token_data, dict) else None
                 service_account = token_data.get("service_account_name") if isinstance(token_data, dict) else None
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id, client_id, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -180,7 +186,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                     "email = EXCLUDED.email, "
                     "timestamp = CURRENT_TIMESTAMP, "
                     "is_active = TRUE",
-                    (user_id, request_org_id, secret_ref, provider, org_name, org_id, site, service_account)
+                    (user_id, request_org_id, secret_ref, provider, org_name, datadog_org_id, site, service_account)
                 )
             elif provider == "netdata":
                 space_name = token_data.get("space_name") if isinstance(token_data, dict) else None
@@ -188,7 +194,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, client_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -206,7 +212,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, subscription_id, subscription_name) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
@@ -225,7 +231,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, subscription_id, subscription_name) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
@@ -245,7 +251,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, email, subscription_id, subscription_name) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "email = EXCLUDED.email, "
@@ -263,7 +269,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, subscription_name, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
@@ -279,7 +285,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_id) "
-                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_id = EXCLUDED.subscription_id, "
@@ -290,7 +296,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             elif provider == "google_chat":
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "timestamp = CURRENT_TIMESTAMP, "
@@ -303,7 +309,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
@@ -322,7 +328,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id, email, client_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -339,7 +345,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_id) "
-                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_id = EXCLUDED.subscription_id, "
@@ -355,20 +361,21 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 user_email = token_data.get("user_email") if isinstance(token_data, dict) else None
 
                 cursor.execute(
-                    "INSERT INTO user_tokens (user_id, secret_ref, provider, subscription_id, subscription_name, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_id, subscription_name, email) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
+                    "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_id = EXCLUDED.subscription_id, "
                     "subscription_name = EXCLUDED.subscription_name, "
                     "email = EXCLUDED.email, "
                     "timestamp = CURRENT_TIMESTAMP, "
                     "is_active = TRUE",
-                    (user_id, secret_ref, provider, site_id, site_name, user_email)
+                    (user_id, request_org_id, secret_ref, provider, site_id, site_name, user_email)
                 )
             elif provider == "bitbucket_workspace_selection":
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "timestamp = CURRENT_TIMESTAMP, "
@@ -381,14 +388,15 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 auth_type = token_data.get("auth_type", "token") if isinstance(token_data, dict) else None
 
                 cursor.execute(
-                    "INSERT INTO user_tokens (user_id, secret_ref, provider, client_id, subscription_name) "
-                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, client_id, subscription_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
+                    "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "client_id = EXCLUDED.client_id, "
                     "subscription_name = EXCLUDED.subscription_name, "
                     "timestamp = CURRENT_TIMESTAMP, "
                     "is_active = TRUE",
-                    (user_id, secret_ref, provider, base_url, auth_type)
+                    (user_id, request_org_id, secret_ref, provider, base_url, auth_type)
                 )
             elif provider == "newrelic":
                 account_id_val = token_data.get("account_id") if isinstance(token_data, dict) else None
@@ -398,7 +406,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
 
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_id, subscription_name, client_id, email) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_id = EXCLUDED.subscription_id, "
@@ -412,7 +420,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             elif subscription_name is not None and subscription_id is not None:
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider, subscription_name, subscription_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "subscription_name = EXCLUDED.subscription_name, "
@@ -424,7 +432,7 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
             else:
                 cursor.execute(
                     "INSERT INTO user_tokens (user_id, org_id, secret_ref, provider) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT (user_id, provider) DO UPDATE "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (org_id, provider) DO UPDATE "
                     "SET secret_ref = EXCLUDED.secret_ref, "
                     "org_id = COALESCE(EXCLUDED.org_id, user_tokens.org_id), "
                     "timestamp = CURRENT_TIMESTAMP, "
@@ -536,6 +544,6 @@ def _schedule_prediscovery(user_id: str) -> None:
             kwargs={"user_id": user_id, "trigger": "new_connector"},
             countdown=600,
         )
-        logger.info("[STORE-TOKENS] Scheduled prediscovery for user %s (10min delay)", user_id)
+        logger.info("[STORE-TOKENS] Scheduled prediscovery for user_hash=%s (10min delay)", hash_for_log(user_id))
     except Exception as e:
         logger.debug("[STORE-TOKENS] Could not schedule prediscovery: %s", e)

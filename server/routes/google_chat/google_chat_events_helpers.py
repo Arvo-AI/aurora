@@ -88,6 +88,7 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT id, org_id FROM users WHERE email = %s",
                     (sender_email,),
@@ -98,6 +99,9 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
                     return None
 
                 sender_user_id, org_id = user_row
+
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cursor, conn, sender_user_id, log_prefix="[GChatHelpers:get_org_creds]")
 
                 cursor.execute(
                     """
@@ -320,6 +324,7 @@ def get_session_from_thread(
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — webhook bootstrap, no user_id
                 cursor.execute(
                     """
                     SELECT cs.id, i.id
@@ -421,6 +426,7 @@ def get_incident_suggestions(incident_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                # No RLS needed — incident_suggestions not RLS-protected
                 cursor.execute(
                     """
                     SELECT id, title, description, type, risk, command

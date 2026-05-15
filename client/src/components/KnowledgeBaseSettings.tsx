@@ -30,9 +30,7 @@ import { userPreferencesService } from "@/lib/services/incident-feedback";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
 import { canWrite as checkCanWrite } from "@/lib/roles";
-import { getEnv } from '@/lib/env';
 
-const BACKEND_URL = getEnv('NEXT_PUBLIC_BACKEND_URL');
 const MEMORY_MAX_LENGTH = 5000;
 
 interface Document {
@@ -93,9 +91,7 @@ export function KnowledgeBaseSettings() {
     }
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/knowledge-base/memory`, {
-        headers: { "X-User-ID": userId },
-      });
+      const res = await fetch(`/api/proxy/knowledge-base/memory`);
 
       if (res.ok) {
         const data = await res.json();
@@ -118,9 +114,7 @@ export function KnowledgeBaseSettings() {
     }
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/knowledge-base/documents`, {
-        headers: { "X-User-ID": userId },
-      });
+      const res = await fetch(`/api/proxy/knowledge-base/documents`);
 
       if (res.ok) {
         const data = await res.json();
@@ -216,11 +210,10 @@ export function KnowledgeBaseSettings() {
 
     setIsSavingMemory(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/knowledge-base/memory`, {
+      const res = await fetch(`/api/proxy/knowledge-base/memory`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "X-User-ID": userId,
         },
         body: JSON.stringify({ content: memoryContent }),
       });
@@ -287,9 +280,8 @@ export function KnowledgeBaseSettings() {
     formData.append("file", file);
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/knowledge-base/upload`, {
+      const res = await fetch(`/api/proxy/knowledge-base/upload`, {
         method: "POST",
-        headers: { "X-User-ID": userId },
         body: formData,
       });
 
@@ -332,10 +324,9 @@ export function KnowledgeBaseSettings() {
     setDeletingId(docId);
     try {
       const res = await fetch(
-        `${BACKEND_URL}/api/knowledge-base/documents/${docId}`,
+        `/api/proxy/knowledge-base/documents/${docId}`,
         {
           method: "DELETE",
-          headers: { "X-User-ID": userId },
         }
       );
 

@@ -9,11 +9,14 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.42.0",
     "@git-diff-view/core": "^0.0.36",
     "@git-diff-view/file": "^0.0.36",
     "@git-diff-view/react": "^0.0.36",
     "@hookform/resolvers": "^3.9.1",
-    "@monaco-editor/react": "^4.7.0",
+    "@lezer/highlight": "^1.2.3",
     "@radix-ui/react-accordion": "^1.2.2",
     "@radix-ui/react-alert-dialog": "^1.1.4",
     "@radix-ui/react-aspect-ratio": "^1.1.1",
@@ -50,6 +53,7 @@
     "cmdk": "1.0.4",
     "dagre": "^0.8.5",
     "date-fns": "latest",
+    "dompurify": "3.4.0",
     "dotenv": "^16.4.7",
     "embla-carousel-react": "8.5.1",
     "framer-motion": "^12.12.2",
@@ -58,7 +62,7 @@
     "jszip": "^3.10.1",
     "lodash.debounce": "^4.0.8",
     "lucide-react": "^0.469.0",
-    "next": "^15.5.12",
+    "next": "^15.5.15",
     "next-auth": "^5.0.0-beta.30",
     "next-themes": "^0.4.4",
     "openai": "^4.91.1",
@@ -93,13 +97,21 @@
     "@types/react-dom": "^18.2.0",
     "eslint": "^9",
     "eslint-config-next": "15.1.2",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.10",
     "start-server-and-test": "^2.0.0",
     "tailwindcss": "^3.4.1",
     "typescript": "5.7.2",
     "wait-on": "^7.2.0"
   },
   "overrides": {
-    "minimatch": "^10.2.1"
+    "minimatch": "^10.2.1",
+    "brace-expansion": "^5.0.5",
+    "axios": "^1.15.0",
+    "follow-redirects": "^1.16.0",
+    "lodash": "^4.18.1",
+    "picomatch": "^4.0.4",
+    "yaml": "^2.8.3",
+    "flatted": "^3.4.2",
+    "postcss": "$postcss"
   }
 }

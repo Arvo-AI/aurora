@@ -39,11 +39,12 @@ function JiraLinkChip({ href, issueKey, isComment }: { href: string; issueKey: s
 
 // Custom components for ReactMarkdown
 const components = {
+  // Always use <div> instead of <p> — react-markdown nests block-level elements
+  // (CodeBlock/pre/div) arbitrarily deep inside paragraphs, and no shallow
+  // children check can reliably detect it. <div> prevents hydration errors.
   p: ({ children, ...props }: any) => {
-    // Process paragraph text to highlight keywords inline
     const processChildren = (child: any): any => {
       if (typeof child === 'string') {
-        // Use language detection to determine if this should be treated as text with keywords
         const detectedLanguage = getLanguageFromCode(child);
         if (detectedLanguage === 'text') {
           return processTextWithKeywords(child);
@@ -66,7 +67,7 @@ const components = {
       ? children.map(processChildren)
       : processChildren(children);
 
-    return <p {...props}>{processedChildren}</p>;
+    return <div className="mb-4 last:mb-0" {...props}>{processedChildren}</div>;
   },
   code: ({ node, inline, className, children, ...props }: any) => {
     const match = /language-(\w+)/.exec(className || "");
@@ -164,6 +165,11 @@ const components = {
       </pre>
     );
   },
+  table: ({ children, ...props }: any) => (
+    <div className="overflow-x-auto max-w-full my-4">
+      <table className="min-w-full text-sm" {...props}>{children}</table>
+    </div>
+  ),
   a: ({ href, children, ...props }: any) => {
     if (href) {
       const jiraMatch = jiraUrlRe.exec(href);
@@ -363,11 +369,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     if (!content) return content;
     
     // Filter out tool call delimiters with special Unicode characters
-    // Pattern matches: "Executing now:<｜tool▁calls▁begin｜><｜tool▁calls▁end｜>" and similar
-    const toolCallDelimiterRegex = /Executing now:[<｜▁]*tool[▁_\s]*calls?[▁_\s]*begin[｜>]*[<｜▁]*[｜>]*[<｜▁]*tool[▁_\s]*calls?[▁_\s]*end[｜>]*/gi;
-    
+    // Pattern matches: "Executing now:<｜tool▁calls▁begin｜><｜tool▁calls▁end｜>" and similar.
+    // Delimiter chars are merged into a single class and bounded to avoid super-linear backtracking.
+    const toolCallDelimiterRegex = /Executing now:[<｜▁>]{0,8}tool[▁_\s]{0,4}calls?[▁_\s]{0,4}begin[<｜▁>]{0,8}tool[▁_\s]{0,4}calls?[▁_\s]{0,4}end[<｜▁>]{0,8}/gi;
+
     // Also filter out standalone tool call delimiters
-    const standaloneDelimiterRegex = /[<｜▁]*tool[▁_\s]*calls?[▁_\s]*(begin|end)[｜>]*/gi;
+    const standaloneDelimiterRegex = /[<｜▁>]{0,8}tool[▁_\s]{0,4}calls?[▁_\s]{0,4}(begin|end)[<｜▁>]{0,8}/gi;
     
     let filtered = content.replace(toolCallDelimiterRegex, '');
     filtered = filtered.replace(standaloneDelimiterRegex, '');

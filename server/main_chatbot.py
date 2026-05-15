@@ -18,17 +18,21 @@ import json
 import time
 import uuid
 import os
+import jwt as pyjwt
 from utils.kubectl.agent_ws_handler import handle_kubectl_agent
-import psycopg2
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import List, Optional
+from typing import Optional
+from urllib.parse import parse_qs
 
 # Load environment variables
 load_dotenv()
 
 from collections import defaultdict
 import asyncio
+
+# Strong references for fire-and-forget tasks so they aren't GC'd before completion.
+_background_tasks: "set[asyncio.Task]" = set()
 from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage
 import websockets
 import logging
@@ -40,18 +44,24 @@ from chat.backend.agent.workflow import Workflow
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
-from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
 from utils.db.connection_pool import db_pool
 from utils.billing.billing_cache import update_api_cost_cache_async, get_cached_api_cost
 from utils.billing.billing_utils import get_api_cost
-from utils.billing.billing_cache import is_cache_fresh
 from utils.terraform.terraform_cleanup import cleanup_terraform_directory
 from utils.cloud.infrastructure_confirmation import handle_websocket_confirmation_response
 from chat.backend.agent.tools.cloud_tools import register_websocket_connection, set_user_context
 from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
 from utils.internal.api_handler import handle_http_request
-from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user
+from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user, set_rls_context
+
+
+class _MockState:
+    """Minimal state object for set_user_context when called outside the agent loop."""
+    __slots__ = ("session_id",)
+
+    def __init__(self, session_id):
+        self.session_id = session_id
 
 
 class RateLimiter:
@@ -75,13 +85,76 @@ class RateLimiter:
             return True
         return False
     
-class _NoopAsyncContextManager:
-    async def __aenter__(self):
-        return None
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
 
 rate_limiter = RateLimiter(rate=5, per=60)
+
+_INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+_AURORA_ENV = os.getenv("AURORA_ENV", "production")
+
+if not _INTERNAL_API_SECRET:
+    if _AURORA_ENV == "dev":
+        logger.warning(
+            "INTERNAL_API_SECRET is not set (AURORA_ENV='dev'). "
+            "WebSocket token authentication is disabled — acceptable for local development only."
+        )
+    else:
+        raise RuntimeError(
+            "FATAL: INTERNAL_API_SECRET is not set and AURORA_ENV='%s' (non-dev). "
+            "Refusing to start without authentication secrets in production." % _AURORA_ENV
+        )
+
+def _validate_ws_token(websocket) -> dict | None:
+    """Extract and validate a JWT from the WebSocket handshake query string.
+
+    Returns the decoded payload dict on success, or None if no token is present or validation fails.
+    """
+    if not _INTERNAL_API_SECRET:
+        return None
+
+    try:
+        raw_path = str(websocket.request.path)
+        if "?" not in raw_path:
+            return None
+
+        qs = parse_qs(raw_path.split("?", 1)[1])
+        token_list = qs.get("token")
+        if not token_list:
+            return None
+
+        token = token_list[0]
+        ws_key = _INTERNAL_API_SECRET + "aurora:ws-token-signing"
+        payload = pyjwt.decode(
+            token,
+            ws_key,
+            algorithms=["HS256"],
+            audience="chatbot-ws",
+            options={"require": ["exp", "aud"]},
+        )
+
+        jti = payload.get("jti")
+        if not jti:
+            logger.warning("WebSocket token missing required jti claim")
+            return None
+
+        from utils.cache.redis_client import get_redis_client
+        r = get_redis_client()
+        if not r:
+            logger.error("Redis unavailable for jti replay check, rejecting token jti=%s", jti)
+            return None
+        if not r.set(f"ws:jti:{jti}", "1", nx=True, ex=120):
+            logger.warning("WebSocket token replay detected: jti=%s", jti)
+            return None
+
+        return payload
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("WebSocket token expired")
+        return None
+    except pyjwt.InvalidTokenError as e:
+        logger.warning("WebSocket token invalid: %s", e)
+        return None
+    except Exception as e:
+        logger.warning("Unexpected error validating WS token: %s", e)
+        return None
 
 
 def _normalize_mode(mode: Optional[str]) -> str:
@@ -92,36 +165,70 @@ def _normalize_mode(mode: Optional[str]) -> str:
 
 # Deployment update listener removed
 
+async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
+    """Send an error frame and optionally close the WebSocket."""
+    await websocket.send(json.dumps({"type": "error", "data": {"text": text}}))
+    if close_reason:
+        await websocket.close(code=1008, reason=close_reason)
+
+
+def _warm_user_caches(user_id: str):
+    """Kick off background tasks that pre-warm per-user caches."""
+    _cost_warm_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+    _background_tasks.add(_cost_warm_task)
+    _cost_warm_task.add_done_callback(_background_tasks.discard)
+    logger.info(f"Started preemptive API cost cache update for user {user_id}")
+
+    try:
+        from chat.backend.agent.tools.mcp_preloader import preload_user_tools
+        preload_user_tools(user_id)
+        logger.info(f"Triggered MCP preload for user {user_id} on connection")
+    except Exception as e:
+        logger.debug(f"Failed to trigger MCP preload on connection: {e}")
+
+    try:
+        from chat.backend.agent.tools.mcp_preloader import update_user_activity
+        update_user_activity(user_id)
+        logger.debug(f"Updated MCP preloader activity for user {user_id}")
+    except Exception as e:
+        logger.debug(f"Failed to update MCP preloader activity: {e}")
+
+
 async def handle_init(data, websocket, current_user_id, deployment_listener_task):
-    """Handle connection initialization message and return updated state."""
+    """Handle connection initialization message and return updated state.
+
+    If the connection was already authenticated via a handshake token,
+    current_user_id is pre-set and we skip the DB validation step.
+    """
 
     user_id = data.get('user_id')
 
-    if user_id and current_user_id != user_id:
+    if user_id and current_user_id and current_user_id != user_id:
+        logger.warning(
+            f"WebSocket init rejected: token user {current_user_id!r} "
+            f"does not match init user_id {user_id!r}"
+        )
+        await _ws_reject(websocket, "Authentication failed: user identity mismatch.", close_reason="User identity mismatch")
+        return current_user_id, deployment_listener_task
+
+    if user_id and not current_user_id:
+        if _INTERNAL_API_SECRET:
+            logger.warning(
+                f"WebSocket init rejected: legacy auth attempted while INTERNAL_API_SECRET is configured (user_id={user_id!r})"
+            )
+            await _ws_reject(websocket, "Authentication failed: token-based auth required.", close_reason="Token-based auth required")
+            return current_user_id, deployment_listener_task
+
         if not validate_user_exists(user_id):
             logger.warning(f"WebSocket init rejected: invalid user_id {user_id!r}")
-            await websocket.send(json.dumps({
-                "type": "error",
-                "data": {"text": "Authentication failed: invalid user identity."}
-            }))
+            await _ws_reject(websocket, "Authentication failed: invalid user identity.")
             return current_user_id, deployment_listener_task
 
         logger.info(f"Initializing connection for user {user_id}")
         current_user_id = user_id
 
-        # Preemptively warm the API cost cache for this user
-        asyncio.create_task(update_api_cost_cache_async(user_id))
-        logger.info(f"Started preemptive API cost cache update for user {user_id}")
+        _warm_user_caches(user_id)
 
-        # Trigger MCP preloading for this user
-        try:
-            from chat.backend.agent.tools.mcp_preloader import preload_user_tools
-            preload_user_tools(user_id)
-            logger.info(f"Triggered MCP preload for user {user_id} on connection")
-        except Exception as e:
-            logger.debug(f"Failed to trigger MCP preload on connection: {e}")
-        
-        # Start deployment listener for this user
         if deployment_listener_task:
             deployment_listener_task.cancel()
             try:
@@ -129,16 +236,7 @@ async def handle_init(data, websocket, current_user_id, deployment_listener_task
             except asyncio.CancelledError:
                 pass
 
-        # Deployment listener removed
         logger.info(f"Started deployment listener for user {user_id}")
-
-        # Update user activity for MCP preloader
-        try:
-            from chat.backend.agent.tools.mcp_preloader import update_user_activity
-            update_user_activity(user_id)
-            logger.debug(f"Updated MCP preloader activity for user {user_id}")
-        except Exception as e:
-            logger.debug(f"Failed to update MCP preloader activity: {e}")
 
     return current_user_id, deployment_listener_task
 def process_attachments_and_append_to_question(question, attachments):
@@ -226,6 +324,7 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+    incident_id = incident_id or getattr(state, "incident_id", None)
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
@@ -275,20 +374,34 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 if len(text_to_save) > 20:  # Lower minimum to save smaller chunks
                     try:
                         from utils.db.connection_pool import db_pool
-                        from datetime import datetime
+                        from datetime import datetime, timezone
                         cleaned_text = clean_markdown(text_to_save)
-                        
+
                         # Only save if cleaned text has substantial content
                         if len(cleaned_text) > 20:  # Lower threshold
+                            now = datetime.now(timezone.utc)
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
+                                    # No RLS needed — incident_thoughts not RLS-protected
                                     cursor.execute(
                                         "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
                                         "VALUES (%s, %s, %s, %s)",
-                                        (incident_id, datetime.now(), cleaned_text, "analysis")
+                                        (incident_id, now, cleaned_text, "analysis")
                                     )
+                                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                                    cursor.execute(
+                                        "UPDATE incidents SET updated_at = %s WHERE id = %s",
+                                        (now, incident_id),
+                                    )
+                                    incident_touched = cursor.rowcount == 1
                                 conn.commit()
-                                logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                                if incident_touched:
+                                    logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                                else:
+                                    logger.warning(
+                                        "[BackgroundChat] Thought saved, but incidents.updated_at heartbeat touched 0 rows for incident %s — RLS context may be wrong",
+                                        incident_id,
+                                    )
                                 accumulated_thought.clear()
                                 if remaining:
                                     accumulated_thought.append(remaining)
@@ -296,6 +409,137 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                     except Exception as e:
                         logger.error(f"[BackgroundChat] Failed to save thought: {e}")
     
+    # Helper to incrementally save streaming chat messages for background chats.
+    # Same pattern as save_incident_thought but writes to chat_sessions.messages
+    # so the frontend's 2s polling can show partial responses.
+    is_background = getattr(state, 'is_background', False)
+    accumulated_chat_msg = []
+    last_chat_save_time = [time.time()]
+
+    def save_streaming_chat_message(content: str, force: bool = False):
+        """Incrementally save the assistant's streaming response to chat_sessions.messages."""
+        if not is_background or not session_id or session_id == 'unknown':
+            return
+
+        if content:
+            accumulated_chat_msg.append(content)
+
+        accumulated_text = "".join(accumulated_chat_msg)
+
+        if not accumulated_text:
+            return
+
+        current_time = time.time()
+        time_since_last = current_time - last_chat_save_time[0]
+
+        should_flush = force or time_since_last >= 1.5 or len(accumulated_text) >= 200
+        if not should_flush or (not force and len(accumulated_text) < 30):
+            return
+
+        try:
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Chatbot:StreamingSave]")
+                    cursor.execute(
+                        "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                        (session_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return
+
+                    messages = row[0] if row[0] else []
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+
+                    # Update existing streaming bot message or append a new one
+                    bot_msg = None
+                    for msg in reversed(messages):
+                        if msg.get("sender") == "bot" and msg.get("_streaming"):
+                            bot_msg = msg
+                            break
+
+                    if bot_msg:
+                        bot_msg["text"] = accumulated_text
+                    else:
+                        messages.append({
+                            "sender": "bot",
+                            "text": accumulated_text,
+                            "_streaming": True,
+                        })
+
+                    cursor.execute(
+                        "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s",
+                        (json.dumps(messages), datetime.now(), session_id),
+                    )
+                conn.commit()
+                last_chat_save_time[0] = current_time
+                logger.debug(f"[BackgroundChat] Saved streaming message for session {session_id}: {len(accumulated_text)} chars")
+        except Exception as e:
+            logger.error(f"[BackgroundChat] Failed to save streaming chat message: {e}")
+
+    def finalize_streaming_chat_message(remove: bool = False):
+        """Finalize streaming bot messages in chat_sessions.messages.
+
+        When *remove=False* (mid-stream), clear the ``_streaming`` flag so the
+        message is "committed" for live polling while a new streaming message
+        starts.
+
+        When *remove=True* (end of workflow), delete all ``_streaming``-flagged
+        messages entirely.  The authoritative UI messages are written by
+        ``_append_new_turn_ui_messages`` after the workflow completes, so any
+        remaining streaming copies must be removed to avoid duplicates.
+        """
+        if not is_background or not session_id or session_id == 'unknown':
+            return
+
+        try:
+            from utils.db.connection_pool import db_pool
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[Chatbot:StreamingFinalize]")
+                    cursor.execute(
+                        "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                        (session_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        return
+
+                    messages = row[0] if row[0] else []
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+
+                    modified = False
+                    if remove:
+                        original_len = len(messages)
+                        messages = [
+                            msg for msg in messages
+                            if not msg.get("_streaming")
+                        ]
+                        modified = len(messages) < original_len
+                    else:
+                        for msg in messages:
+                            if msg.get("_streaming"):
+                                del msg["_streaming"]
+                                modified = True
+
+                    if modified:
+                        cursor.execute(
+                            "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s",
+                            (json.dumps(messages), datetime.now(), session_id),
+                        )
+                        conn.commit()
+                        logger.debug(
+                            f"[BackgroundChat] Finalized streaming messages for session {session_id} "
+                            f"(remove={remove})"
+                        )
+        except Exception as e:
+            logger.error(f"[BackgroundChat] Failed to finalize streaming chat message: {e}")
+
     # Helper function to send messages via the appropriate sender
     async def send_via_appropriate_sender(message_data):
         nonlocal websocket_connected
@@ -369,13 +613,16 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                 await send_via_appropriate_sender(msg_response)
                                 # Save tokens incrementally to incident thoughts
                                 save_incident_thought(token_text, force=False)
-                    
+                                save_streaming_chat_message(token_text, force=False)
+
                     elif event_type == "values":
-                        # Final state update
-                        logger.debug(f"[STREAM DEBUG] Received values event")
-                        # Handle final state if needed
+                        # Stub: skip complete-state "values" events.
+                        # The real handler below would re-send content already streamed
+                        # via the "messages" event path, causing duplicates in the UI / DB.
+                        # Keep this branch first so the duplicate-send path is unreachable.
+                        logger.debug("[STREAM DEBUG] Received values event (skipped to avoid duplicate sends)")
                         continue
-                    
+
                     elif event_type == "messages":
                         try:
                             msg_chunk, _ = event_data
@@ -461,6 +708,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                                 await send_via_appropriate_sender(msg_response)
                                                 # Save to incident thoughts incrementally
                                                 save_incident_thought(current_chunk, force=False)
+                                                save_streaming_chat_message(current_chunk, force=False)
                                                 current_chunk = ""
                                     
                                     # Send any remaining content
@@ -479,6 +727,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                         logger.debug(f"[STREAM SEND] Sending final split chunk ({len(current_chunk)} chars)")
                                         await send_via_appropriate_sender(msg_response)
                                         save_incident_thought(current_chunk, force=False)
+                                        save_streaming_chat_message(current_chunk, force=False)
                     elif event_type == "values":
                         # Handle "values" events - complete messages from state updates
                         if hasattr(event_data, 'messages') and event_data.messages and websocket_connected:
@@ -534,6 +783,11 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                                             # Force save accumulated thought before starting new message
                                             save_incident_thought("", force=True)
                                             save_incident_thought(message.content, force=False)
+                                            # Finalize current streaming message and start fresh
+                                            save_streaming_chat_message("", force=True)
+                                            finalize_streaming_chat_message()
+                                            accumulated_chat_msg.clear()
+                                            save_streaming_chat_message(message.content, force=False)
                                 sent_message_count = current_message_count
 
                     elif event_type == "usage_update":
@@ -579,11 +833,16 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
         # Force save any remaining accumulated thought
         save_incident_thought("", force=True)
+
+        # Finalize streaming: remove temporary streaming messages before the
+        # authoritative UI messages are written by _append_new_turn_ui_messages
+        finalize_streaming_chat_message(remove=True)
         
         await send_end_status("completed")
         
     except asyncio.TimeoutError:
         logger.error(f"Workflow timeout after {workflow_timeout}s for session {session_id}")
+        finalize_streaming_chat_message(remove=True)
         if websocket_connected:
             timeout_msg = {
                 "type": "error",
@@ -596,6 +855,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
     except Exception as e:
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
+        finalize_streaming_chat_message(remove=True)
         if websocket_connected:
             error_msg = {
                 "type": "error",
@@ -611,7 +871,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         try:
             # Update API cost cache after workflow completion to capture new usage
             # This ensures that any LLM usage from this workflow is immediately reflected
-            asyncio.create_task(update_api_cost_cache_async(user_id))
+            _cost_update_task = asyncio.create_task(update_api_cost_cache_async(user_id))
+            _background_tasks.add(_cost_update_task)
+            _cost_update_task.add_done_callback(_background_tasks.discard)
             logger.debug(f"Triggered post-request API cost update for user {user_id}")
 
             is_cached, total_cost = get_cached_api_cost(user_id)
@@ -648,9 +910,36 @@ async def handle_connection(websocket) -> None:
     client_id = id(websocket)
     logger.info(f"New client connected. ID: {client_id}")
 
+    # Validate JWT token from handshake query string
+    token_payload = _validate_ws_token(websocket)
+    token_user_id = None
+    if token_payload:
+        token_user_id = token_payload.get("userId")
+        logger.info(f"WebSocket authenticated via token: user={token_user_id}")
+
+        if not token_user_id:
+            logger.warning("WebSocket token missing required userId claim")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "data": {"text": "Authentication failed: invalid token."}
+            }))
+            await websocket.close(code=1008, reason="Invalid authentication token")
+            return
+
+        # Eagerly warm caches for token-authenticated users (tracked-task pattern)
+        _warm_user_caches(token_user_id)
+    elif _INTERNAL_API_SECRET:
+        logger.warning(f"WebSocket connection {client_id} has no valid token (INTERNAL_API_SECRET is set)")
+        await websocket.send(json.dumps({
+            "type": "error",
+            "data": {"text": "Authentication failed: missing or invalid token."}
+        }))
+        await websocket.close(code=1008, reason="Missing or invalid authentication token")
+        return
+
     weaviate_client = None
     deployment_listener_task = None
-    current_user_id = None
+    current_user_id = token_user_id
     session_id = None       # Initialize to avoid UnboundLocalError in exception handler
     session_tasks = {}      # Track running workflow asyncio.Tasks per session
 
@@ -756,8 +1045,8 @@ async def handle_connection(websocket) -> None:
                     if cancelled_count > 0:
                         logger.info(f"Cancelled {cancelled_count} pending confirmation(s) for session {session_id}")
 
-                    # Retrieve the running task for this session
-                    running = session_tasks.get(session_id)
+                    # Retrieve the running task and its workflow for this session
+                    running, cancel_wf = session_tasks.get(session_id, (None, None))
 
                     logger.debug(f"Attempting to cancel running workflow task for session {session_id}")
 
@@ -772,34 +1061,31 @@ async def handle_connection(websocket) -> None:
                             logger.info(f"Workflow task for session {session_id} acknowledged cancellation")
 
                         # Consolidate any remaining message chunks into full messages
-                        if wf:
+                        if cancel_wf:
                             # Wait for any tool calls to complete before consolidating
-                            await wf._wait_for_ongoing_tool_calls()
+                            await cancel_wf._wait_for_ongoing_tool_calls()
 
                             # Collect any remaining tool messages before consolidation
                             # This adds them to the state so they are not lost
-                            wf._collect_remaining_tool_messages()
+                            cancel_wf._collect_remaining_tool_messages()
 
-                            wf._consolidate_message_chunks()
+                            cancel_wf._consolidate_message_chunks()
 
                             # Persist the consolidated context so the chat can be resumed later
-                            if wf._last_state:
+                            if cancel_wf._last_state:
                                 messages = (
-                                    wf._last_state.get('messages', [])
-                                    if hasattr(wf._last_state, 'get')
-                                    else getattr(wf._last_state, 'messages', [])
+                                    cancel_wf._last_state.get('messages', [])
+                                    if hasattr(cancel_wf._last_state, 'get')
+                                    else getattr(cancel_wf._last_state, 'messages', [])
                                 )
 
                                 if messages and session_id and user_id:
-                                    # Add a strong cancellation message directly to the context
-                                    # Using message with strong formatting to create a powerful interrupt signal
-                                    # This is marked as a human message so it appears as if the user is cancelling the request. It is not saved to the UI (messages) field only in the context (llm_context_history) field.
                                     interrupt_message = HumanMessage(
                                         content="[URGENT CANCELLATION] The previous request has been cancelled. **CRITICAL INSTRUCTION:** You MUST abandon the previous plan entirely. Acknowledge the cancellation internally and respond to the user's very latest message."
                                     )
                                     messages.append(interrupt_message)
 
-                                    tool_capture = getattr(wf.agent, 'tool_capture_instance', None)
+                                    tool_capture = getattr(cancel_wf.agent, 'tool_capture_instance', None)
                                     saved = LLMContextManager.save_context_history(
                                         session_id,
                                         user_id,
@@ -814,14 +1100,39 @@ async def handle_connection(websocket) -> None:
                                         logger.warning(
                                             f"Failed to save context after cancellation for session {session_id}"
                                         )
-                                    
-                                    # ALSO save UI messages after cancellation
-                                    ui_messages = wf._convert_to_ui_messages(messages, tool_capture)
-                                    ui_saved = wf._save_ui_messages(session_id, user_id, ui_messages, wf._ui_state)
+
+                                    # Append this turn's partial UI content so cancellation
+                                    # never overwrites history from prior turns.
+                                    history_prefix_len = getattr(cancel_wf, "_history_prefix_len", 0)
+                                    turn_langchain = messages[history_prefix_len:]
+                                    turn_ui_messages = cancel_wf._convert_to_ui_messages(turn_langchain, tool_capture)
+                                    ui_saved = cancel_wf._append_new_turn_ui_messages(
+                                        session_id, user_id, turn_ui_messages, cancel_wf._ui_state
+                                    )
                                     if ui_saved:
                                         logger.info(f"Successfully saved UI messages after cancellation for session {session_id}")
                                     else:
                                         logger.warning(f"Failed to save UI messages after cancellation for session {session_id}")
+
+                            elif cancel_wf._stream_text_by_id and session_id and user_id:
+                                # _last_state is None (cancelled before LangGraph committed
+                                # any state) but we streamed partial text to the frontend.
+                                # Save a partial bot message so it survives a refresh.
+                                partial_text = "".join(cancel_wf._stream_text_by_id.values())
+                                if partial_text.strip():
+                                    partial_ui = [{
+                                        'message_number': 1,
+                                        'text': partial_text,
+                                        'sender': 'bot',
+                                        'isCompleted': True,
+                                    }]
+                                    ui_saved = cancel_wf._append_new_turn_ui_messages(
+                                        session_id, user_id, partial_ui, cancel_wf._ui_state
+                                    )
+                                    if ui_saved:
+                                        logger.info(f"Saved partial streamed text ({len(partial_text)} chars) after early cancellation for session {session_id}")
+                                    else:
+                                        logger.warning(f"Failed to save partial streamed text after early cancellation for session {session_id}")
                 
                 # Send END status to frontend after cancellation cleanup
                 try:
@@ -847,8 +1158,21 @@ async def handle_connection(websocket) -> None:
             user_id = data.get('user_id')  # Extract user_id from the incoming data
             session_id = data.get('session_id')  # Extract session_id from the incoming data
 
-            # Server-side validation: reject unverified user_ids
-            if user_id and user_id != current_user_id:
+            # Server-side validation: token identity is authoritative when present.
+            if current_user_id:
+                if user_id and user_id != current_user_id:
+                    logger.warning(
+                        "Message rejected: token user %r does not match message user_id %r",
+                        current_user_id,
+                        user_id,
+                    )
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Authentication failed: user identity mismatch."}
+                    }))
+                    continue
+                user_id = current_user_id
+            elif user_id:
                 if not validate_user_exists(user_id):
                     logger.warning(f"Message rejected: unverified user_id {user_id!r}")
                     await websocket.send(json.dumps({
@@ -868,6 +1192,7 @@ async def handle_connection(websocket) -> None:
                     from utils.db.connection_pool import db_pool
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cur:
+                            set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:RBAC]")
                             cur.execute(
                                 "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
                                 (session_id, org_id),
@@ -875,9 +1200,8 @@ async def handle_connection(websocket) -> None:
                             row = cur.fetchone()
                     if row and row[0]:
                         _rbac_incident_id = str(row[0])
-                        from utils.auth.enforcer import get_enforcer
-                        enforcer = get_enforcer()
-                        if not enforcer.enforce(user_id, org_id, "incidents", "write"):
+                        from utils.auth.enforcer import enforce_with_reload
+                        if not enforce_with_reload(user_id, org_id, "incidents", "write"):
                             logger.warning(
                                 "RBAC denied: viewer user=%s tried to chat in incident session=%s",
                                 user_id, session_id,
@@ -890,10 +1214,10 @@ async def handle_connection(websocket) -> None:
                 except Exception as e:
                     logger.error("Error checking incident session RBAC: %s", e)
             
-            # Get connected providers from database instead of relying on frontend preferences
-            from utils.auth.stateless_auth import get_connected_providers
+            # Get verified providers (cloud + SkillRegistry-validated integrations)
+            from chat.background.rca_prompt_builder import get_user_providers
             if user_id:
-                provider_preference = get_connected_providers(user_id)
+                provider_preference = get_user_providers(user_id)
             else:
                 provider_preference = None
 
@@ -918,6 +1242,8 @@ async def handle_connection(websocket) -> None:
             mode_input = data.get('mode')    # Extract chat mode (agent / ask)
             attachments = data.get('attachments', []) # Extract file attachments if present
             trigger_rca_requested = data.get('trigger_rca') is True
+            raw_action_id = data.get('trigger_action')
+            trigger_action_id = raw_action_id if isinstance(raw_action_id, str) and raw_action_id else None
 
             mode = _normalize_mode(mode_input)
 
@@ -960,20 +1286,13 @@ async def handle_connection(websocket) -> None:
                     # Import and execute the tool
                     try:
                         from chat.backend.agent.tools.github_commit_tool import github_commit
-                        # set_user_context already imported at top of file
                         
-                        # Set user context for the tool
-                        class MockState:
-                            def __init__(self, session_id):
-                                self.session_id = session_id
-                        
-                        mock_state = MockState(session_id)
                         set_user_context(
                             user_id=user_id,
                             session_id=session_id,
                             provider_preference=provider_preference,
                             selected_project_id=selected_project_id,
-                            state=mock_state,
+                            state=_MockState(session_id),
                             mode=mode,
                         )
                         
@@ -1016,20 +1335,14 @@ async def handle_connection(websocket) -> None:
                     logger.info(f"Executing direct iac_tool call with params: {parameters}")
 
                     try:
-                        # set_user_context already imported at top of file
                         from chat.backend.agent.tools.iac_tool import run_iac_tool
 
-                        class MockState:
-                            def __init__(self, session_id):
-                                self.session_id = session_id
-
-                        mock_state = MockState(session_id)
                         set_user_context(
                             user_id=user_id,
                             session_id=session_id,
                             provider_preference=provider_preference,
                             selected_project_id=selected_project_id,
-                            state=mock_state,
+                            state=_MockState(session_id),
                             mode=mode,
                         )
 
@@ -1047,7 +1360,21 @@ async def handle_connection(websocket) -> None:
                             }))
                             continue
 
-                        result_payload = run_iac_tool(
+                        tool_call_id = f"direct-{uuid.uuid4().hex[:12]}"
+
+                        await websocket.send(json.dumps({
+                            "type": "tool_call",
+                            "data": {
+                                "tool_call_id": tool_call_id,
+                                "tool_name": "iac_tool",
+                                "input": json.dumps(parameters),
+                                "status": "running",
+                                "session_id": session_id
+                            }
+                        }))
+
+                        result_payload = await asyncio.to_thread(
+                            run_iac_tool,
                             action=action,
                             path=parameters.get('path'),
                             content=parameters.get('content'),
@@ -1055,14 +1382,15 @@ async def handle_connection(websocket) -> None:
                             vars=parameters.get('vars'),
                             auto_approve=parameters.get('auto_approve'),
                             user_id=user_id,
-                            session_id=session_id
+                            session_id=session_id,
                         )
 
                         await websocket.send(json.dumps({
                             "type": "tool_result",
                             "data": {
+                                "tool_call_id": tool_call_id,
                                 "tool_name": 'iac_tool',
-                                "result": result_payload,
+                                "output": result_payload,
                                 "session_id": session_id
                             }
                         }))
@@ -1219,6 +1547,20 @@ async def handle_connection(websocket) -> None:
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
             _incident_id = _rbac_incident_id
 
+            # Fetch org tool permissions for gate bypass
+            _permitted_tools = None
+            try:
+                with db_pool.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:perms]")
+                        cur.execute(
+                            "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                            (org_id,),
+                        )
+                        _permitted_tools = {row[0] for row in cur.fetchall()}
+            except Exception as e:
+                logger.warning("[Chatbot] Failed to fetch tool permissions: %s", e)
+
             state = State(
                 user_id=user_id,
                 session_id=session_id,
@@ -1232,21 +1574,22 @@ async def handle_connection(websocket) -> None:
                 model=model,
                 mode=mode,
                 trigger_rca_requested=bool(trigger_rca_requested),
+                trigger_action_id=trigger_action_id or None,
+                permitted_tools=_permitted_tools,
             )
 
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")
             logger.info(f"WebSocket sender initialized: {websocket_sender is not None}")
 
-            # IMMEDIATE SAVE: Save user message immediately when received
-            if session_id and user_id:
-                handle_immediate_save(session_id, user_id, question, messages_list)
-
             # Launch workflow processing as async task without blocking
             # Set UI state in workflow before processing so it gets saved
             wf._ui_state = ui_state
             
-            task = asyncio.create_task(process_workflow_async(wf, state, websocket, user_id))
-            session_tasks[effective_session_id] = task
+            task = asyncio.create_task(
+                process_workflow_async(wf, state, websocket, user_id, incident_id=_incident_id)
+            )
+            session_tasks[effective_session_id] = (task, wf)
+            task.add_done_callback(lambda _t, _sid=effective_session_id: session_tasks.pop(_sid, None))
 
             continue  # Immediately return to listening for next message
 
@@ -1285,6 +1628,10 @@ async def main():
 
     # Clean up old terraform files on startup
     cleanup_terraform_directory()
+
+    # Mark any investigations orphaned by a previous crash as failed
+    from chat.background.task import cleanup_orphaned_investigations
+    await asyncio.to_thread(cleanup_orphaned_investigations)
 
     # Start HTTP server (health check + internal API)
     http_server = await asyncio.start_server(handle_http_request, "0.0.0.0", HEALTH_PORT)

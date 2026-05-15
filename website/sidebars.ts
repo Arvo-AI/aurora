@@ -24,6 +24,7 @@ const sidebars: SidebarsConfig = {
         'configuration/environment',
         'configuration/vault',
         'configuration/storage',
+        'configuration/command-safety',
       ],
     },
     {
@@ -39,6 +40,11 @@ const sidebars: SidebarsConfig = {
       ],
     },
     {
+      type: 'doc',
+      id: 'multi-arch-images',
+      label: 'Multi-arch Images',
+    },
+    {
       type: 'category',
       label: 'Architecture',
       items: [
@@ -51,6 +57,7 @@ const sidebars: SidebarsConfig = {
       label: 'Integrations',
       items: [
         'integrations/connectors',
+        'integrations/mcp',
         'integrations/spinnaker',
         'integrations/llm-providers',
       ],

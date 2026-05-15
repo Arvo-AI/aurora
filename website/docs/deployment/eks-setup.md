@@ -126,19 +126,104 @@ kubectl get pods -n kube-system | grep ebs      # should be Running
 kubectl get storageclass                          # gp3 should be (default)
 ```
 
-## Step 3: Create an S3 Bucket
+## Step 3: Configure S3 Storage
 
-Aurora stores uploaded files in S3. Create a bucket and credentials:
+Aurora stores uploaded files in S3. Choose one of the two approaches below.
+
+### Option A: IRSA (recommended for EKS)
+
+IAM Roles for Service Accounts injects short-lived credentials into pods automatically — no static keys to manage or rotate.
 
 ```bash
-# Create bucket (name must be globally unique)
-aws s3 mb s3://aurora-storage-${AWS_ACCOUNT_ID} --region "$AWS_REGION"
+export AWS_REGION="us-east-1"
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AURORA_BUCKET="aurora-storage-${AWS_ACCOUNT_ID}"
+
+# 1. Create bucket
+aws s3 mb s3://$AURORA_BUCKET --region "$AWS_REGION"
+
+# 2. Create an IAM role for Aurora with S3 access
+#    (eksctl wires up the OIDC trust policy automatically)
+eksctl create iamserviceaccount \
+  --name aurora-irsa \
+  --namespace aurora-oss \
+  --cluster aurora-cluster \
+  --region "$AWS_REGION" \
+  --attach-policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess \
+  --approve --override-existing-serviceaccounts
+
+# 3. Get the role ARN
+ROLE_ARN=$(kubectl get sa aurora-irsa -n aurora-oss \
+  -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}')
+echo "Use this in your Helm values: $ROLE_ARN"
+```
+
+:::tip Least-privilege policy
+The command above uses `AmazonS3FullAccess` for simplicity. For production, create a scoped policy that only grants access to your specific bucket (see the [AWS connector README](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/aws_connector/README.md) for an example policy).
+:::
+
+**Update the IRSA trust policy** to cover all Aurora backend pods (server, chatbot, celery-worker, celery-beat):
+
+```bash
+OIDC_URL=$(aws eks describe-cluster --name aurora-cluster --region "$AWS_REGION" \
+  --query 'cluster.identity.oidc.issuer' --output text | sed 's|https://||')
+
+ROLE_NAME=$(echo $ROLE_ARN | cut -d'/' -f2)
+
+cat <<TRUST > /tmp/trust-policy.json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/${OIDC_URL}"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringLike": {
+        "${OIDC_URL}:sub": "system:serviceaccount:aurora-oss:*-aurora-oss-*",
+        "${OIDC_URL}:aud": "sts.amazonaws.com"
+      }
+    }
+  }]
+}
+TRUST
+
+aws iam update-assume-role-policy --role-name "$ROLE_NAME" \
+  --policy-document file:///tmp/trust-policy.json
+```
+
+Then in your `values.generated.yaml`:
+
+```yaml
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: "<ROLE_ARN from above>"
+
+config:
+  STORAGE_BUCKET: "aurora-storage-<ACCOUNT_ID>"
+  STORAGE_REGION: "us-east-1"
+
+secrets:
+  backend:
+    STORAGE_ACCESS_KEY: ""   # intentionally empty — IRSA provides credentials
+    STORAGE_SECRET_KEY: ""   # intentionally empty — IRSA provides credentials
+```
+
+### Option B: Static IAM credentials
+
+If you prefer static credentials (simpler setup, but keys must be rotated manually):
+
+```bash
+AURORA_BUCKET="aurora-storage-${AWS_ACCOUNT_ID}"
+
+# Create bucket
+aws s3 mb s3://$AURORA_BUCKET --region "$AWS_REGION"
 
 # Create an IAM user for Aurora
 aws iam create-user --user-name aurora-s3
 
 # Create a least-privilege policy scoped to the Aurora bucket only
-AURORA_BUCKET="aurora-storage-${AWS_ACCOUNT_ID}"
 aws iam put-user-policy --user-name aurora-s3 \
   --policy-name AuroraS3Access \
   --policy-document "{

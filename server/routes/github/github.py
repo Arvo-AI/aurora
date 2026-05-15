@@ -3,7 +3,6 @@ import requests
 import flask
 from flask import Blueprint, request, jsonify, Response
 import os
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 
 github_bp = Blueprint("github", __name__)
@@ -11,13 +10,10 @@ github_bp = Blueprint("github", __name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 GITHUB_TIMEOUT = 20
 
-@github_bp.route("/login", methods=["POST", "OPTIONS"])
+@github_bp.route("/login", methods=["POST"])
 @require_permission("connectors", "write")
 def github_login(user_id):
     """Handle GitHub OAuth login initiation and manual token storage"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         data = request.get_json()
         
@@ -107,13 +103,10 @@ def github_login(user_id):
         logging.error(f"Error in GitHub login: {e}", exc_info=True)
         return jsonify({"error": "Failed to process GitHub login"}), 500
 
-@github_bp.route("/status", methods=["GET", "OPTIONS"])
+@github_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def github_status(user_id):
     """Check GitHub connection status for a user"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
         
         # Check if user has GitHub credentials stored
@@ -132,15 +125,11 @@ def github_status(user_id):
         logging.error(f"Error checking GitHub status: {e}", exc_info=True)
         return jsonify({"connected": False, "error": "Failed to check GitHub status"}), 500
 
-@github_bp.route("/disconnect", methods=["POST", "OPTIONS"])
+@github_bp.route("/disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def github_disconnect(user_id):
     """Disconnect GitHub account for a user"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-    
     try:
-        
         # Remove GitHub credentials from database and Vault
         from utils.secrets.secret_ref_utils import delete_user_secret
         
@@ -209,12 +198,12 @@ def github_callback():
         access_token = token_data.get("access_token")
         
         if not access_token:
-            logging.error(f"No access token in GitHub response: {token_data}")
+            logging.error(f"No access token in GitHub response (keys: {list(token_data.keys())})")
             return flask.render_template("github_callback_error.html", 
                                         error="Invalid response from GitHub",
                                         frontend_url=FRONTEND_URL)
         
-        logging.info(f"Received access token: {access_token[:5]}...")
+        logging.info("Received GitHub access token")
         
         # Get user information to identify the user
         user_response = requests.get("https://api.github.com/user", 
@@ -278,14 +267,10 @@ def github_callback():
                                     error="An unexpected error occurred during GitHub authentication",
                                     frontend_url=FRONTEND_URL)
 
-@github_bp.route("/repos", methods=["GET", "OPTIONS"])
+@github_bp.route("/repos", methods=["GET"])
 @require_permission("connectors", "read")
 def get_github_repos(user_id):
     """Fetch repositories for an authenticated GitHub user"""
-    # Handle preflight OPTIONS request
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-        
     try:
         # Get the GitHub token from Authorization header
         auth_header = request.headers.get("Authorization", "")
@@ -385,13 +370,10 @@ def get_github_repos(user_id):
         logging.error(f"Error fetching GitHub repos: {e}", exc_info=True)
         return jsonify({"error": "Failed to fetch GitHub repositories"}), 500
 
-@github_bp.route("/token-info", methods=["GET", "OPTIONS"])
+@github_bp.route("/token-info", methods=["GET"])
 @require_permission("connectors", "read")
 def github_token_info(user_id):
     """Debug endpoint to check token information"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-        
     try:
         # Get the GitHub token from Authorization header
         auth_header = request.headers.get("Authorization", "")
@@ -447,13 +429,10 @@ def github_token_info(user_id):
         logging.error(f"Error in token info endpoint: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve token info"}), 500
 
-@github_bp.route("/download-repo", methods=["POST", "OPTIONS"])
+@github_bp.route("/download-repo", methods=["POST"])
 @require_permission("connectors", "read")
 def download_github_repo(user_id):
     """Download a GitHub repository as a zip file and return it"""
-    if request.method == 'OPTIONS':
-        return create_cors_response()
-        
     try:
         # Get request data
         data = request.get_json()

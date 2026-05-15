@@ -1,0 +1,78 @@
+# Aurora CODEOWNERS
+#
+# Merge gate for security-sensitive changes. Any PR touching paths below
+# requires approval from @Arvo-AI/security-reviewers before it can merge
+# to main. Enforced via branch protection (Require review from Code Owners).
+#
+# Rules to know:
+#   - Last matching pattern wins (standard CODEOWNERS semantics).
+#   - Keep this file ordered general -> specific.
+#   - Add a comment above any new rule explaining why it is security-sensitive.
+
+# Agent execution surface
+/server/chat/backend/agent/**                       @Arvo-AI/security-reviewers
+
+# Guardrails, input rails, command policies, RBAC
+/server/guardrails/**                               @Arvo-AI/security-reviewers
+/server/routes/command_policies.py                  @Arvo-AI/security-reviewers
+/server/utils/auth/**                               @Arvo-AI/security-reviewers
+/server/rbac_model.conf                             @Arvo-AI/security-reviewers
+/server/config/rate_limiting.py                     @Arvo-AI/security-reviewers
+/server/utils/log_sanitizer.py                      @Arvo-AI/security-reviewers
+
+# Auth / IAM / account management (server)
+/server/routes/auth_routes.py                       @Arvo-AI/security-reviewers
+/server/routes/account_management.py                @Arvo-AI/security-reviewers
+/server/routes/admin_routes.py                      @Arvo-AI/security-reviewers
+/server/routes/audit_routes.py                      @Arvo-AI/security-reviewers
+/server/routes/aws/auth.py                          @Arvo-AI/security-reviewers
+/server/routes/gcp/auth.py                          @Arvo-AI/security-reviewers
+/server/routes/ssh_keys/**                          @Arvo-AI/security-reviewers
+/server/routes/kubectl_token_routes.py              @Arvo-AI/security-reviewers
+/server/routes/mcp_token_routes.py                  @Arvo-AI/security-reviewers
+/server/connectors/**/auth*.py                      @Arvo-AI/security-reviewers
+
+# Auth / IAM (client)
+/client/src/app/api/auth/**                         @Arvo-AI/security-reviewers
+/client/src/app/api/ws-token/**                     @Arvo-AI/security-reviewers
+/client/src/app/api/user-tokens/**                  @Arvo-AI/security-reviewers
+/client/src/app/api/mcp/tokens/**                   @Arvo-AI/security-reviewers
+/client/src/app/api/ssh-keys/**                     @Arvo-AI/security-reviewers
+/client/src/app/api/org/command-policies/**         @Arvo-AI/security-reviewers
+/client/src/app/api/org/command-policy-**           @Arvo-AI/security-reviewers
+/client/src/app/api/audit-log/**                    @Arvo-AI/security-reviewers
+/client/src/app/api/connected-accounts/**           @Arvo-AI/security-reviewers
+
+# Container runtime
+/Dockerfile*                                        @Arvo-AI/security-reviewers
+/docker-compose*.yml                                @Arvo-AI/security-reviewers
+/docker-compose*.yaml                               @Arvo-AI/security-reviewers
+/server/Dockerfile*                                 @Arvo-AI/security-reviewers
+/client/Dockerfile                                  @Arvo-AI/security-reviewers
+/kubectl-agent/src/Dockerfile                       @Arvo-AI/security-reviewers
+
+# Kubernetes / Helm / deployment
+/deploy/**                                          @Arvo-AI/security-reviewers
+/kubectl-agent/chart/**                             @Arvo-AI/security-reviewers
+
+# Secrets / credentials / vault
+/server/utils/secrets/**                            @Arvo-AI/security-reviewers
+/config/vault/**                                    @Arvo-AI/security-reviewers
+/scripts/vault-*.sh                                 @Arvo-AI/security-reviewers
+/.env                                               @Arvo-AI/security-reviewers
+/.env.*                                             @Arvo-AI/security-reviewers
+/.gitleaks.toml                                     @Arvo-AI/security-reviewers
+
+# Webhooks (signature verification + webhook-secret endpoints)
+/server/utils/web/webhook_signature.py              @Arvo-AI/security-reviewers
+/client/src/app/api/**/webhook-url/**               @Arvo-AI/security-reviewers
+/client/src/app/api/**/webhook-secret/**            @Arvo-AI/security-reviewers
+
+# Public / integration-facing server routes (broad net)
+/server/routes/**                                   @Arvo-AI/security-reviewers
+
+# Supply chain: CI, linters, review config, and this file itself
+/.github/workflows/**                               @Arvo-AI/security-reviewers
+/.github/CODEOWNERS                                 @Arvo-AI/security-reviewers
+/.coderabbit.yaml                                   @Arvo-AI/security-reviewers
+/SECURITY.md                                        @Arvo-AI/security-reviewers

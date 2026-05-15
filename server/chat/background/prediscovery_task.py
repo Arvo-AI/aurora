@@ -15,26 +15,40 @@ logger = logging.getLogger(__name__)
 
 
 def _get_users_with_integrations() -> List[Dict[str, Any]]:
-    """Get all users who have at least one connected integration."""
+    """Get one enabled user per org who has at least one connected integration.
+
+    Iterates per-user to satisfy RLS on user_tokens / user_connections, skips
+    users with prediscovery_enabled=false, then dedups to one user per org.
+    """
     from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context, get_user_preference
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT DISTINCT u.id, u.org_id
-                    FROM users u
-                    WHERE u.org_id IS NOT NULL
-                      AND EXISTS (
-                          SELECT 1 FROM user_tokens ut
-                          WHERE ut.user_id = u.id AND ut.is_active = true
-                          UNION
-                          SELECT 1 FROM user_connections uc
-                          WHERE uc.user_id = u.id AND uc.status = 'active'
-                      )
-                    ORDER BY u.id
-                """)
-                return [{"user_id": row[0], "org_id": row[1]} for row in cur.fetchall()]
+                cur.execute("SELECT id, org_id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id")
+                all_users = cur.fetchall()
+
+                seen_orgs = set()
+                results = []
+                for user_id, org_id in all_users:
+                    if org_id in seen_orgs:
+                        continue
+                    if not get_user_preference(user_id, "prediscovery_enabled", True):
+                        continue
+                    set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]")
+                    cur.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM user_tokens ut WHERE ut.is_active = true
+                            UNION
+                            SELECT 1 FROM user_connections uc WHERE uc.status = 'active'
+                        )
+                    """)
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        seen_orgs.add(org_id)
+                        results.append({"user_id": user_id, "org_id": org_id})
+                return results
     except Exception as e:
         logger.error(f"[Prediscovery] Failed to get users: {e}")
         return []
@@ -185,23 +199,25 @@ def run_prediscovery(
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
+        task_id = self.request.id
+        trigger_metadata = {"source": "prediscovery", "trigger": trigger, "task_id": task_id}
         session_id = create_background_chat_session(
             user_id=user_id,
             title=f"Infrastructure Pre-Discovery ({trigger})",
-            trigger_metadata={"source": "prediscovery", "trigger": trigger},
+            trigger_metadata=trigger_metadata,
         )
 
         asyncio.run(_execute_background_chat(
             user_id=user_id,
             session_id=session_id,
             initial_message=prompt,
-            trigger_metadata={"source": "prediscovery", "trigger": trigger},
+            trigger_metadata=trigger_metadata,
             provider_preference=providers,
             mode="prediscovery",
         ))
 
         from chat.background.task import _update_session_status
-        _update_session_status(session_id, "completed")
+        _update_session_status(session_id, "completed", user_id=user_id)
 
         if org_id:
             _cleanup_old_discovery_chunks(org_id, before=run_started_at)
@@ -233,6 +249,9 @@ def _should_run_for_user(user_id: str) -> bool:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                from utils.auth.stateless_auth import set_rls_context
+                if not set_rls_context(cur, conn, user_id, log_prefix="[Prediscovery]"):
+                    return False
                 cur.execute("""
                     SELECT created_at FROM chat_sessions
                     WHERE user_id = %s

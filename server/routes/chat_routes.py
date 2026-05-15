@@ -6,7 +6,7 @@ from datetime import datetime
 from utils.db.db_utils import connect_to_db_as_user
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.web.limiter_ext import limiter
 
 
@@ -14,6 +14,7 @@ from utils.web.limiter_ext import limiter
 logging.basicConfig(level=logging.INFO)
 
 chat_bp = Blueprint('chat', __name__)
+_LOG_PREFIX = "[ChatRoutes]"
 
 # Maximum length for chat session titles (in characters)
 TITLE_MAX_LENGTH = 50
@@ -60,10 +61,7 @@ def get_chat_sessions(user_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
         if scope == 'org':
             cursor.execute("""
@@ -145,10 +143,7 @@ def create_chat_session(user_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
         # Insert new chat session
         cursor.execute("""
@@ -196,10 +191,7 @@ def get_chat_session(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
         # Any org member can read sessions in their org (not restricted to own user_id)
         cursor.execute("""
@@ -207,7 +199,8 @@ def get_chat_session(user_id, session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status,
                    user_id,
-                   incident_id
+                   incident_id,
+                   pending_turn
             FROM chat_sessions 
             WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
         """, (session_id, org_id))
@@ -284,6 +277,7 @@ def get_chat_session(user_id, session_id):
             'user_id': session_data[7],
             'is_own': session_data[7] == user_id,
             'incident_id': str(session_data[8]) if session_data[8] else None,
+            'pending_turn': session_data[9] if session_data[9] else None,
         }
         
         return jsonify(result), 200
@@ -291,6 +285,41 @@ def get_chat_session(user_id, session_id):
     except Exception as e:
         logging.error(f"Error fetching chat session: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch chat session'}), 500
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
+            conn.close()
+
+@chat_bp.route('/sessions/<session_id>/status', methods=['GET'])
+@limiter.exempt
+@require_permission("chat", "read")
+def get_chat_session_status(user_id, session_id):
+    """Lightweight endpoint returning only session status and message count."""
+    org_id = get_org_id_from_request()
+
+    try:
+        conn = connect_to_db_as_user()
+        cursor = conn.cursor()
+
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+
+        cursor.execute("""
+            SELECT COALESCE(status, 'active'),
+                   COALESCE(jsonb_array_length(messages), 0)
+            FROM chat_sessions
+            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
+        """, (session_id, org_id))
+
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'error': 'Chat session not found'}), 404
+
+        return jsonify({'status': row[0], 'message_count': row[1]}), 200
+
+    except Exception as e:
+        logging.error(f"Error fetching session status: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch session status'}), 500
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -312,10 +341,7 @@ def update_chat_session(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
         # Check if session exists and is not cancelled
         cursor.execute("""
@@ -423,10 +449,7 @@ def delete_chat_session(user_id, session_id):
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
         
-        # Set user context for RLS
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
         # Check if session exists
         cursor.execute("""
@@ -480,9 +503,7 @@ def delete_all_chat_sessions(user_id):
 
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        cursor.execute("SET myapp.current_user_id = %s;", (user_id,))
-        cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
-        conn.commit()
+        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
         if current_session_id:
             logging.info(f"Preserving session {current_session_id}, deleting all others")

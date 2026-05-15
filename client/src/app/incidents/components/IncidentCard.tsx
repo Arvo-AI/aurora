@@ -37,6 +37,13 @@ import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
+import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
+
+function sourceDisplayName(source: string): string {
+  const connector = connectorRegistry.get(source);
+  if (connector) return connector.name;
+  return source.charAt(0).toUpperCase() + source.slice(1);
+}
 
 interface IncidentCardProps {
   incident: Incident;
@@ -44,7 +51,6 @@ interface IncidentCardProps {
   showThoughts: boolean;
   onToggleThoughts: () => void;
   citations?: Citation[];
-  onExecutionStarted?: () => void;
   onRefresh?: () => void;
 }
 
@@ -99,7 +105,7 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
-export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onExecutionStarted, onRefresh }: IncidentCardProps) {
+export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
@@ -114,7 +120,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
-  const showSeverity = (alert.severity && alert.severity !== 'unknown') || incident.status === 'analyzed';
+  const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
+  const sourceIconSrc = alert.source === 'chat' ? null : `/${alert.source}.svg`;
 
   const handleResolveIncident = async () => {
     setResolvingIncident(true);
@@ -223,7 +230,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   // Recursively extract text content from React nodes for suggestion matching
   const extractTextFromNode = useCallback((node: React.ReactNode): string => {
     if (typeof node === 'string') return node;
-    if (Array.isArray(node)) return node.map(extractTextFromNode).join('');
+    if (Array.isArray(node)) return node.map((child) => extractTextFromNode(child)).join('');
     if (React.isValidElement(node) && node.props.children) {
       return extractTextFromNode(node.props.children);
     }
@@ -263,6 +270,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           const isFixType = matchingSuggestion?.type === 'fix';
           const canExecute = Boolean(matchingSuggestion?.command);
           const canShowAction = canWrite && (canExecute || isFixType);
+          const wasExecuted = Boolean(matchingSuggestion?.executedAt);
+          const execStatus = matchingSuggestion?.executionStatus;
 
           return (
             <li className="text-zinc-300 text-sm">
@@ -278,17 +287,39 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                       setSelectedSuggestion(matchingSuggestion);
                     }
                   }}
-                  className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${
+                  className={`inline-flex items-center justify-center rounded transition-colors align-middle ml-1.5 ${
                     isFixType
-                      ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                      : 'bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
+                      ? 'w-5 h-5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
+                      : wasExecuted
+                        ? execStatus === 'completed'
+                          ? 'h-5 gap-1 px-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
+                          : execStatus === 'failed'
+                            ? 'h-5 gap-1 px-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-400'
+                            : 'h-5 gap-1 px-1.5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
+                        : 'w-5 h-5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
                   }`}
                   title={isFixType
                     ? `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
-                    : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
+                    : wasExecuted
+                      ? `View output (${execStatus || 'executed'})`
+                      : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
                   }
                 >
-                  {isFixType ? <GitBranch className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                  {isFixType ? (
+                    <GitBranch className="w-3 h-3" />
+                  ) : wasExecuted ? (
+                    <>
+                      {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
+                      {execStatus === 'failed' && <AlertCircle className="w-3 h-3" />}
+                      {execStatus === 'in_progress' && <span className="w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
+                      {(execStatus === 'executed' || !execStatus) && <Play className="w-3 h-3" />}
+                      <span className="text-[10px] font-medium">
+                        {execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : execStatus === 'in_progress' ? 'Running' : 'Ran'}
+                      </span>
+                    </>
+                  ) : (
+                    <Play className="w-3 h-3" />
+                  )}
                 </button>
               )}
             </li>
@@ -319,13 +350,15 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               </Badge>
             )}
             <div className="flex items-center gap-2">
-              <Image 
-                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : alert.source === 'dynatrace' ? '/dynatrace.png' : `/${alert.source}.svg`}
-                alt={alert.source}
-                width={20}
-                height={20}
-                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
-              />
+              {sourceIconSrc && (
+                <Image 
+                  src={sourceIconSrc}
+                  alt={alert.source}
+                  width={20}
+                  height={20}
+                  className={`object-contain${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+                />
+              )}
               {isSafeUrl(alert.sourceUrl) ? (
                 <a 
                   href={alert.sourceUrl}
@@ -333,17 +366,19 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors"
                 >
-                  {alert.source.charAt(0).toUpperCase() + alert.source.slice(1)} Alert
+                  {sourceDisplayName(alert.source)} Alert
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                  {alert.source.charAt(0).toUpperCase() + alert.source.slice(1)} Alert
+                  {sourceDisplayName(alert.source)} Alert
                 </span>
               )}
             </div>
           </div>
-          <StatusPill status={incident.auroraStatus} />
+          <div className="flex items-center gap-3">
+            <StatusPill status={incident.auroraStatus} />
+          </div>
         </div>
 
         {/* Alert title */}
@@ -397,7 +432,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.alertUrl) && (
               <a 
-                href={alert.metadata.alertUrl}
+                href={alert.metadata?.alertUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-400 hover:text-blue-300"
@@ -407,7 +442,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.dashboardUrl) && (
               <a 
-                href={alert.metadata.dashboardUrl}
+                href={alert.metadata!.dashboardUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-400 hover:text-blue-300"
@@ -417,7 +452,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
             {isSafeUrl(alert.metadata?.runbookUrl) && (
               <a 
-                href={alert.metadata.runbookUrl}
+                href={alert.metadata!.runbookUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-green-400 hover:text-green-300"
@@ -758,7 +793,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         chatSessionId={incident.chatSessionId}
         isOpen={selectedSuggestion !== null}
         onClose={() => setSelectedSuggestion(null)}
-        onExecutionStarted={onExecutionStarted}
       />
 
       {/* Fix Suggestion Modal */}

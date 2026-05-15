@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 import logging
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 
 load_dotenv()
 logging.basicConfig(level=logging.DEBUG)
@@ -49,10 +50,7 @@ class PostgreSQLClient:
             # Use connection pool instead of creating new connections
             with db_pool.get_user_connection() as connection:
                 with connection.cursor() as cursor:
-                    # Set user + org context for RLS
-                    cursor.execute("SET myapp.current_user_id = %s;", (self.current_user_id,))
-                    if self.current_org_id:
-                        cursor.execute("SET myapp.current_org_id = %s;", (self.current_org_id,))
+                    set_rls_context(cursor, connection, self.current_user_id, log_prefix="[AgentDB]")
                     
                     # Execute the main query
                     if params:

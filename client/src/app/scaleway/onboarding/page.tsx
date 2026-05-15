@@ -9,10 +9,7 @@ import { Loader2, ExternalLink, AlertCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
-import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
-
-const backendUrl = getEnv('NEXT_PUBLIC_BACKEND_URL');
 
 export default function ScalewayOnboardingPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -59,11 +56,10 @@ export default function ScalewayOnboardingPage() {
       }
 
       // Connect to Scaleway
-      const response = await fetch(`${backendUrl}/scaleway_api/scaleway/connect`, {
+      const response = await fetch(`/api/proxy/scaleway/connect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-User-ID': userId,
         },
         body: JSON.stringify({
           accessKey,
@@ -71,7 +67,6 @@ export default function ScalewayOnboardingPage() {
           organizationId: organizationId || undefined,
           projectId: projectId || undefined,
         }),
-        credentials: 'include',
       });
 
       const data = await response.json();

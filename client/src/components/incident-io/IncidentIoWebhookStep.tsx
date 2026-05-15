@@ -1,0 +1,380 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { incidentIoService, IncidentIoWebhookUrlResponse } from "@/lib/services/incident-io";
+import { copyToClipboard } from "@/lib/utils";
+
+interface IncidentIoWebhookStepProps {
+  readonly onDisconnect: () => Promise<void>;
+  readonly loading: boolean;
+}
+
+function WebhookSecretField({
+  hasSecret,
+  value,
+  onChange,
+  onSave,
+  saving,
+}: {
+  readonly hasSecret: boolean;
+  readonly value: string;
+  readonly onChange: (v: string) => void;
+  readonly onSave: () => void;
+  readonly saving: boolean;
+}) {
+  return (
+    <div>
+      <Label htmlFor="webhook-secret" className="text-sm font-medium">
+        Webhook Signing Secret (recommended)
+      </Label>
+      {hasSecret && (
+        <div className="mt-1 mb-2">
+          <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+            <CheckCircle2 className="h-4 w-4" />
+            Signing secret configured — webhook signatures are being verified.
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            To update, paste a new secret below.
+          </p>
+        </div>
+      )}
+      {!hasSecret && (
+        <p className="text-xs text-muted-foreground mt-1 mb-2">
+          After creating the webhook endpoint in incident.io, copy the signing secret
+          (starts with <code className="bg-muted px-1 rounded">whsec_</code>) and paste it below.
+          When set, Aurora will cryptographically verify that incoming webhooks are genuine.
+          Without it, any request to your webhook URL will be accepted.
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Input
+          id="webhook-secret"
+          type="password"
+          placeholder="whsec_..."
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <Button
+          variant="outline"
+          onClick={onSave}
+          disabled={saving || !value.trim()}
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : hasSecret ? "Update" : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function WebhookConfig({
+  webhookData,
+  loadingWebhook,
+  hasWebhookSecret,
+  webhookSecret,
+  setWebhookSecret,
+  savingSecret,
+  onSaveSecret,
+  onCopyUrl,
+}: {
+  readonly webhookData: IncidentIoWebhookUrlResponse | null;
+  readonly loadingWebhook: boolean;
+  readonly hasWebhookSecret: boolean;
+  readonly webhookSecret: string;
+  readonly setWebhookSecret: (v: string) => void;
+  readonly savingSecret: boolean;
+  readonly onSaveSecret: () => void;
+  readonly onCopyUrl: () => void;
+}) {
+  if (loadingWebhook) {
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading webhook URL...
+      </div>
+    );
+  }
+
+  if (!webhookData) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Unable to load webhook URL. Please try refreshing.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label htmlFor="webhook-url" className="text-sm font-medium">Your Webhook URL</Label>
+        <div className="flex gap-2 mt-1">
+          <code id="webhook-url" className="flex-1 p-2 bg-muted rounded text-xs break-all">
+            {webhookData.webhookUrl}
+          </code>
+          <Button variant="outline" size="icon" onClick={onCopyUrl}>
+            <Copy className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <WebhookSecretField
+        hasSecret={hasWebhookSecret}
+        value={webhookSecret}
+        onChange={setWebhookSecret}
+        onSave={onSaveSecret}
+        saving={savingSecret}
+      />
+
+      <div className="bg-muted/50 rounded-lg p-4">
+        <p className="font-medium text-sm mb-3">Setup Instructions:</p>
+        <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
+          {webhookData.instructions.map((instruction) => (
+            <li key={instruction}>{instruction.replace(/^\d+\.\s*/, '')}</li>
+          ))}
+        </ol>
+      </div>
+
+      <a
+        href="https://docs.incident.io/api-reference/webhooks"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
+      >
+        View incident.io Webhook Documentation <ExternalLink className="h-3 w-3" />
+      </a>
+    </div>
+  );
+}
+
+export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebhookStepProps) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [webhookData, setWebhookData] = useState<IncidentIoWebhookUrlResponse | null>(null);
+  const [loadingWebhook, setLoadingWebhook] = useState(true);
+  const [rcaEnabled, setRcaEnabled] = useState(true);
+  const [postbackEnabled, setPostbackEnabled] = useState(false);
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [updatingRca, setUpdatingRca] = useState(false);
+  const [updatingPostback, setUpdatingPostback] = useState(false);
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [savingSecret, setSavingSecret] = useState(false);
+  const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadData = async () => {
+      setLoadingWebhook(true);
+      setLoadingSettings(true);
+
+      try {
+        const [webhookResponse, rcaSettings] = await Promise.all([
+          incidentIoService.getWebhookUrl(),
+          incidentIoService.getRcaSettings(),
+        ]);
+
+        if (isMounted) {
+          setWebhookData(webhookResponse);
+          if (webhookResponse) {
+            setHasWebhookSecret(webhookResponse.hasWebhookSecret);
+          }
+          if (rcaSettings) {
+            setRcaEnabled(rcaSettings.rcaEnabled);
+            setPostbackEnabled(rcaSettings.postbackEnabled);
+          }
+        }
+      } catch (_error) {
+        console.error("Failed to load incident.io settings:", _error);
+      } finally {
+        if (isMounted) {
+          setLoadingWebhook(false);
+          setLoadingSettings(false);
+        }
+      }
+    };
+
+    loadData();
+    return () => { isMounted = false; };
+  }, []);
+
+  const handleRcaToggle = async (enabled: boolean) => {
+    setUpdatingRca(true);
+    try {
+      const result = await incidentIoService.updateRcaSettings({ rcaEnabled: enabled });
+      if (result) {
+        setRcaEnabled(result.rcaEnabled);
+        setPostbackEnabled(result.postbackEnabled);
+        toast({
+          title: enabled ? "Automatic RCA Enabled" : "Automatic RCA Disabled",
+          description: enabled
+            ? "Aurora will automatically investigate new incidents from incident.io"
+            : "New incidents will be stored but not automatically investigated",
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update RCA settings. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to update settings", description: "Could not update RCA settings. Please try again.", variant: "destructive" });
+    } finally {
+      setUpdatingRca(false);
+    }
+  };
+
+  const handlePostbackToggle = async (enabled: boolean) => {
+    setUpdatingPostback(true);
+    try {
+      const result = await incidentIoService.updateRcaSettings({ postbackEnabled: enabled });
+      if (result) {
+        setPostbackEnabled(result.postbackEnabled);
+        toast({
+          title: enabled ? "Post-back Enabled" : "Post-back Disabled",
+          description: enabled
+            ? "RCA results will be posted to the incident.io timeline"
+            : "RCA results will only be available in Aurora",
+        });
+      } else {
+        toast({ title: "Failed to update settings", description: "Could not update post-back setting. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to update settings", description: "Could not update post-back setting. Please try again.", variant: "destructive" });
+    } finally {
+      setUpdatingPostback(false);
+    }
+  };
+
+  const copyWebhookUrl = async () => {
+    if (!webhookData?.webhookUrl) return;
+    try {
+      await copyToClipboard(webhookData.webhookUrl);
+      toast({ title: "Copied", description: "Webhook URL copied to clipboard" });
+    } catch (_error) {
+      toast({ title: "Copy failed", description: "Could not copy to clipboard.", variant: "destructive" });
+    }
+  };
+
+  const handleSaveWebhookSecret = async () => {
+    if (!webhookSecret.trim()) return;
+    setSavingSecret(true);
+    try {
+      const success = await incidentIoService.saveWebhookSecret(webhookSecret.trim());
+      if (success) {
+        toast({ title: "Webhook secret saved", description: "Webhook signatures will now be verified." });
+        setWebhookSecret("");
+        setHasWebhookSecret(true);
+      } else {
+        toast({ title: "Failed to save", description: "Could not save webhook secret. Please try again.", variant: "destructive" });
+      }
+    } catch (_error) {
+      toast({ title: "Failed to save", description: "Could not save webhook secret.", variant: "destructive" });
+    } finally {
+      setSavingSecret(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CheckCircle2 className="h-5 w-5 text-green-500" />
+          Connected to incident.io
+        </CardTitle>
+        <CardDescription>
+          Your incident.io account is connected. Configure webhooks to receive incident events.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => router.push("/incident-io/incidents")}>
+            View Incidents
+          </Button>
+        </div>
+
+        <div className="border-t pt-6">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="rca-toggle" className="text-base font-medium">
+                Automatic RCA
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                Automatically investigate new incidents with Aurora
+              </p>
+            </div>
+            {loadingSettings ? (
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            ) : (
+              <Switch
+                id="rca-toggle"
+                checked={rcaEnabled}
+                onCheckedChange={handleRcaToggle}
+                disabled={updatingRca}
+              />
+            )}
+          </div>
+        </div>
+
+        {rcaEnabled && (
+          <div className="border-t pt-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="postback-toggle" className="text-base font-medium">
+                  Post RCA to incident.io
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Automatically post RCA results back to the incident timeline
+                </p>
+              </div>
+              {loadingSettings ? (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              ) : (
+                <Switch
+                  id="postback-toggle"
+                  checked={postbackEnabled}
+                  onCheckedChange={handlePostbackToggle}
+                  disabled={updatingPostback}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="border-t pt-6">
+          <h3 className="font-medium mb-4">Webhook Configuration</h3>
+          <WebhookConfig
+            webhookData={webhookData}
+            loadingWebhook={loadingWebhook}
+            hasWebhookSecret={hasWebhookSecret}
+            webhookSecret={webhookSecret}
+            setWebhookSecret={setWebhookSecret}
+            savingSecret={savingSecret}
+            onSaveSecret={handleSaveWebhookSecret}
+            onCopyUrl={copyWebhookUrl}
+          />
+        </div>
+
+        <div className="border-t pt-6">
+          <Button
+            variant="destructive"
+            onClick={onDisconnect}
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Disconnecting...
+              </>
+            ) : (
+              "Disconnect incident.io"
+            )}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

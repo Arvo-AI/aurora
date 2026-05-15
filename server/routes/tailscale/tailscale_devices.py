@@ -12,6 +12,7 @@ import logging
 from flask import request, jsonify, g
 from routes.tailscale import tailscale_bp, require_tailscale
 from utils.auth.rbac_decorators import require_permission
+from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def list_devices(user_id):
         return jsonify({"devices": devices})
 
     except Exception as e:
-        logger.error(f"Error listing Tailscale devices: {e}", exc_info=True)
+        logger.error(f"Error listing Tailscale devices: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to list devices"}), 500
 
 
@@ -88,7 +89,7 @@ def device_detail(user_id, device_id: str):
         return jsonify({"device": device})
 
     except Exception as e:
-        logger.error(f"Error with Tailscale device {device_id}: {e}", exc_info=True)
+        logger.error(f"Error with Tailscale device {sanitize(device_id)}: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to process device request"}), 500
 
 
@@ -104,7 +105,7 @@ def authorize_device(user_id, device_id: str):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Device {device_id} authorized by user {g.user_id}")
+        logger.info(f"Device {sanitize(device_id)} authorized by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -112,7 +113,7 @@ def authorize_device(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error authorizing Tailscale device {device_id}: {e}", exc_info=True)
+        logger.error(f"Error authorizing Tailscale device {sanitize(device_id)}: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to authorize device"}), 500
 
 
@@ -141,7 +142,7 @@ def set_device_tags(user_id, device_id: str):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Tags set on device {device_id} by user {g.user_id}")
+        logger.info(f"Tags set on device {sanitize(device_id)} by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -149,7 +150,7 @@ def set_device_tags(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error setting Tailscale device tags: {e}", exc_info=True)
+        logger.error(f"Error setting Tailscale device tags: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to set device tags"}), 500
 
 
@@ -178,7 +179,7 @@ def set_device_routes(user_id, device_id: str):
         if not success:
             return jsonify({"error": error}), 400
 
-        logger.info(f"Routes set on device {device_id} by user {g.user_id}")
+        logger.info(f"Routes set on device {sanitize(device_id)} by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -186,7 +187,7 @@ def set_device_routes(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error setting Tailscale device routes: {e}", exc_info=True)
+        logger.error(f"Error setting Tailscale device routes: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to set device routes"}), 500
 
 
@@ -213,7 +214,7 @@ def set_device_key_expiry(user_id, device_id: str):
             return jsonify({"error": error}), 400
 
         status = "disabled" if key_expiry_disabled else "enabled"
-        logger.info(f"Key expiry {status} for device {device_id} by user {g.user_id}")
+        logger.info(f"Key expiry {status} for device {sanitize(device_id)} by user {sanitize(g.user_id)}")
 
         return jsonify({
             "success": True,
@@ -221,5 +222,5 @@ def set_device_key_expiry(user_id, device_id: str):
         })
 
     except Exception as e:
-        logger.error(f"Error setting Tailscale device key expiry: {e}", exc_info=True)
+        logger.error(f"Error setting Tailscale device key expiry: {sanitize(e)}", exc_info=True)
         return jsonify({"error": "Failed to set key expiry"}), 500

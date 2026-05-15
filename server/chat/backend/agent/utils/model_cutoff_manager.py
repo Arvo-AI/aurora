@@ -66,8 +66,8 @@ class ModelCutoffManager:
 
         # Google Models (via OpenRouter)
         google_models = {
-            "google/gemini-3-pro-preview": ModelInfo(
-                "gemini-3-pro-preview", "google", cutoff_date(2025, 4, 1), True, True
+            "google/gemini-3.1-pro-preview": ModelInfo(
+                "gemini-3.1-pro-preview", "google", cutoff_date(2025, 4, 1), True, True
             ),
         }
 

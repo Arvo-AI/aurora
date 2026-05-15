@@ -6,7 +6,6 @@ from flask import Blueprint, request, jsonify, session
 import flask
 import boto3
 from botocore.exceptions import ClientError
-from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
 from utils.logging.secure_logging import mask_credential_value
@@ -18,7 +17,7 @@ from utils.workspace.workspace_utils import (
 
 auth_bp = Blueprint("aws_auth_bp", __name__)
 
-@auth_bp.route('/get-credentials', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/get-credentials', methods=['POST'])
 @require_permission("connectors", "read")
 def aws_get_credentials(user_id):
     """Retrieve AWS credentials stored for the user."""
@@ -77,21 +76,18 @@ def aws_get_credentials(user_id):
         return jsonify({"error": "Failed to retrieve AWS credentials"}), 500
 
 
-@auth_bp.route('/auth', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/auth', methods=['POST'])
 @require_permission("connectors", "write")
 def auth(user_id):
     """
     AWS authentication endpoint using IAM role assumption.
-    
+
     Requires External ID that matches the workspace's External ID for security.
     Legacy flow without External ID is no longer supported.
     """
-    if flask.request.method == 'OPTIONS':
-        return create_cors_response()
-
     logging.info("=== AWS AUTH ENDPOINT STARTED ===")
     try:
-        data = flask.request.get_json()
+        data = flask.request.get_json(silent=True) or {}
         role_arn = data.get('role_arn')
         read_only_role_arn = data.get('read_only_role_arn') or data.get('readOnlyRoleArn')
         external_id = data.get('external_id')

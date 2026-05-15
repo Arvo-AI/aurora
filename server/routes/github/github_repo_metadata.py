@@ -59,6 +59,9 @@ def _update_metadata(user_id: str, repo_full_name: str, summary: str, status: st
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
+            from utils.auth.stateless_auth import set_rls_context
+            if not set_rls_context(cur, conn, user_id, log_prefix="[GitHubMetadata]"):
+                return
             cur.execute(
                 """UPDATE github_connected_repos
                    SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()

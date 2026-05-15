@@ -3,6 +3,7 @@
 import logging
 import time
 from datetime import timezone
+from functools import wraps
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -16,13 +17,15 @@ from connectors.confluence_connector.client import (
 )
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from connectors.confluence_connector.auth import refresh_access_token
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 postmortem_bp = Blueprint("postmortem", __name__)
+_LOG_PREFIX = "[Postmortem]"
 
 
 def _validate_uuid(value: str) -> bool:
@@ -41,6 +44,82 @@ def _format_timestamp(ts) -> Optional[str]:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     return ts.isoformat()
+
+
+def _create_version(
+    cursor, postmortem_id: str, org_id: str, user_id: str, content: str,
+    source: str = "manual", *, set_current: bool = True,
+) -> int:
+    """Insert a new version row for a postmortem atomically and return the version number.
+
+    When set_current=True (default), also advances the current_version_id pointer.
+    Snapshot versions (e.g. pre_edit) should pass set_current=False.
+    """
+    cursor.execute(
+        """INSERT INTO postmortem_versions
+           (postmortem_id, org_id, user_id, content, version_number, source)
+           VALUES (%s, %s, %s, %s,
+                   (SELECT COALESCE(MAX(version_number), 0) + 1
+                    FROM postmortem_versions WHERE postmortem_id = %s),
+                   %s)
+           RETURNING id, version_number""",
+        (postmortem_id, org_id, user_id, content, postmortem_id, source),
+    )
+    row = cursor.fetchone()
+    version_id, version_number = row[0], row[1]
+    if set_current:
+        cursor.execute(
+            "UPDATE postmortems SET current_version_id = %s WHERE id = %s",
+            (str(version_id), postmortem_id),
+        )
+    return version_number
+
+
+def with_incident_postmortem(require_postmortem=False):
+    """Decorator that validates incident_id, resolves org_id, opens DB, sets RLS.
+
+    Injects keyword args: org_id, conn, cursor, postmortem_id (if require_postmortem).
+    """
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(user_id, incident_id, *args, **kwargs):
+            if not _validate_uuid(incident_id):
+                return jsonify({"error": "Invalid incident ID"}), 400
+
+            org_id = get_org_id_from_request()
+
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+
+                        postmortem_id = None
+                        if require_postmortem:
+                            cursor.execute(
+                                """SELECT id FROM postmortems
+                                   WHERE incident_id = %s AND org_id = %s""",
+                                (incident_id, org_id),
+                            )
+                            row = cursor.fetchone()
+                            if not row:
+                                return jsonify({"error": "Postmortem not found"}), 404
+                            postmortem_id = str(row[0])
+
+                        return fn(
+                            user_id, incident_id, *args,
+                            org_id=org_id, conn=conn, cursor=cursor,
+                            postmortem_id=postmortem_id, **kwargs,
+                        )
+
+            except Exception as e:
+                logger.error(
+                    "%s %s failed for incident %s: %s",
+                    _LOG_PREFIX, fn.__name__, incident_id, e,
+                )
+                return jsonify({"error": f"Failed to {fn.__name__.replace('_', ' ')}"}), 500
+
+        return wrapper
+    return decorator
 
 
 def _refresh_confluence_credentials(user_id: str, creds: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -78,64 +157,55 @@ def _refresh_confluence_credentials(user_id: str, creds: Dict[str, Any]) -> Opti
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem", methods=["GET"])
 @require_permission("postmortems", "read")
-def get_postmortem(user_id, incident_id):
+@with_incident_postmortem(require_postmortem=False)
+def get_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
 
-    if not _validate_uuid(incident_id):
-        return jsonify({"error": "Invalid incident ID"}), 400
+    cursor.execute(
+        """SELECT id, incident_id, user_id, content, generated_at, updated_at,
+                  confluence_page_id, confluence_page_url, confluence_exported_at,
+                  jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at,
+                  notion_page_id, notion_page_url, notion_exported_at, notion_database_id,
+                  generation_session_id
+           FROM postmortems
+           WHERE incident_id = %s AND org_id = %s""",
+        (incident_id, org_id),
+    )
+    row = cursor.fetchone()
 
-    org_id = get_org_id_from_request()
+    if not row:
+        return jsonify({"error": "Postmortem not found"}), 404
 
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
-                cursor.execute(
-                    """SELECT id, incident_id, user_id, content, generated_at, updated_at,
-                              confluence_page_id, confluence_page_url, confluence_exported_at,
-                              jira_issue_id, jira_issue_key, jira_issue_url, jira_exported_at
-                       FROM postmortems
-                       WHERE incident_id = %s AND org_id = %s""",
-                    (incident_id, org_id),
-                )
-                row = cursor.fetchone()
+    # Row exists but content is NULL → generation in progress
+    if row[3] is None:
+        return jsonify({"status": "generating", "generationSessionId": row[17]}), 202
 
-        if not row:
-            return jsonify({"error": "Postmortem not found"}), 404
-
-        postmortem = {
-            "id": str(row[0]),
-            "incidentId": str(row[1]),
-            "userId": row[2],
-            "content": row[3],
-            "generatedAt": _format_timestamp(row[4]),
-            "updatedAt": _format_timestamp(row[5]),
-            "confluencePageId": row[6],
-            "confluencePageUrl": row[7],
-            "confluenceExportedAt": _format_timestamp(row[8]),
-            "jiraIssueId": row[9],
-            "jiraIssueKey": row[10],
-            "jiraIssueUrl": row[11],
-            "jiraExportedAt": _format_timestamp(row[12]),
-        }
-        return jsonify({"postmortem": postmortem})
-
-    except Exception as e:
-        logger.error(
-            "[POSTMORTEM] Failed to fetch postmortem for incident %s: %s",
-            incident_id,
-            e,
-        )
-        return jsonify({"error": "Failed to fetch postmortem"}), 500
+    postmortem = {
+        "id": str(row[0]),
+        "incidentId": str(row[1]),
+        "userId": row[2],
+        "content": row[3],
+        "generatedAt": _format_timestamp(row[4]),
+        "updatedAt": _format_timestamp(row[5]),
+        "confluencePageId": row[6],
+        "confluencePageUrl": row[7],
+        "confluenceExportedAt": _format_timestamp(row[8]),
+        "jiraIssueId": row[9],
+        "jiraIssueKey": row[10],
+        "jiraIssueUrl": row[11],
+        "jiraExportedAt": _format_timestamp(row[12]),
+        "notionPageId": row[13],
+        "notionPageUrl": row[14],
+        "notionExportedAt": _format_timestamp(row[15]),
+        "notionDatabaseId": row[16],
+        "generationSessionId": row[17],
+    }
+    return jsonify({"postmortem": postmortem})
 
 
 @postmortem_bp.route("/api/incidents/<incident_id>/postmortem", methods=["PATCH"])
 @require_permission("postmortems", "write")
-def update_postmortem(user_id, incident_id):
-
-    if not _validate_uuid(incident_id):
-        return jsonify({"error": "Invalid incident ID"}), 400
+@with_incident_postmortem(require_postmortem=True)
+def update_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
 
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -151,36 +221,148 @@ def update_postmortem(user_id, incident_id):
             {"error": "Content exceeds maximum length of 100000 characters"}
         ), 400
 
-    org_id = get_org_id_from_request()
+    # Snapshot the pre-edit content into version history
+    cursor.execute("SELECT content FROM postmortems WHERE id = %s", (postmortem_id,))
+    prev_row = cursor.fetchone()
+    if prev_row and prev_row[0]:
+        _create_version(cursor, postmortem_id, org_id, user_id, prev_row[0], source="pre_edit", set_current=False)
+
+    cursor.execute(
+        """UPDATE postmortems
+           SET content = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (content, postmortem_id),
+    )
+    conn.commit()
+
+    record_audit_event(org_id, user_id, "update_postmortem", "postmortem", incident_id, {}, request)
+    return jsonify({"success": True})
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions", methods=["GET"])
+@require_permission("postmortems", "read")
+@with_incident_postmortem(require_postmortem=False)
+def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
+    """List version history for a postmortem."""
+    cursor.execute(
+        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at, v.generation_session_id,
+                  p.current_version_id
+           FROM postmortem_versions v
+           JOIN postmortems p ON v.postmortem_id = p.id
+           WHERE p.incident_id = %s AND p.org_id = %s
+           ORDER BY v.version_number DESC""",
+        (incident_id, org_id),
+    )
+    rows = cursor.fetchall()
+
+    current_version_id = str(rows[0][6]) if rows and rows[0][6] else None
+
+    versions = [
+        {
+            "id": str(row[0]),
+            "versionNumber": row[1],
+            "source": row[2],
+            "userId": row[3],
+            "createdAt": _format_timestamp(row[4]),
+            "generationSessionId": str(row[5]) if row[5] else None,
+        }
+        for row in rows
+    ]
+    return jsonify({"versions": versions, "currentVersionId": current_version_id})
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions/<version_id>", methods=["GET"])
+@require_permission("postmortems", "read")
+@with_incident_postmortem(require_postmortem=False)
+def get_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
+    """Get a specific postmortem version content."""
+    if not _validate_uuid(version_id):
+        return jsonify({"error": "Invalid version ID"}), 400
+
+    cursor.execute(
+        """SELECT v.id, v.version_number, v.source, v.user_id, v.content, v.created_at
+           FROM postmortem_versions v
+           JOIN postmortems p ON v.postmortem_id = p.id
+           WHERE v.id = %s AND p.incident_id = %s AND p.org_id = %s""",
+        (version_id, incident_id, org_id),
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        return jsonify({"error": "Version not found"}), 404
+
+    return jsonify({
+        "version": {
+            "id": str(row[0]),
+            "versionNumber": row[1],
+            "source": row[2],
+            "userId": row[3],
+            "content": row[4],
+            "createdAt": _format_timestamp(row[5]),
+        }
+    })
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/versions/<version_id>/restore", methods=["POST"])
+@require_permission("postmortems", "write")
+@with_incident_postmortem(require_postmortem=True)
+def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
+    """Restore a previous postmortem version as the current content."""
+    if not _validate_uuid(version_id):
+        return jsonify({"error": "Invalid version ID"}), 400
+
+    cursor.execute(
+        """SELECT v.content
+           FROM postmortem_versions v
+           JOIN postmortems p ON v.postmortem_id = p.id
+           WHERE v.id = %s AND p.incident_id = %s AND p.org_id = %s""",
+        (version_id, incident_id, org_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({"error": "Version not found"}), 404
+
+    restored_content = row[0]
+
+    # Point to the restored version and update content
+    cursor.execute(
+        """UPDATE postmortems
+           SET content = %s, current_version_id = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (restored_content, version_id, postmortem_id),
+    )
+    conn.commit()
+
+    record_audit_event(org_id, user_id, "restore_postmortem_version", "postmortem", incident_id,
+                       {"version_id": version_id}, request)
+    return jsonify({"success": True, "content": restored_content})
+
+
+@postmortem_bp.route("/api/incidents/<incident_id>/postmortem/regenerate", methods=["POST"])
+@require_permission("postmortems", "write")
+def regenerate_postmortem(user_id, incident_id):
+    """Trigger postmortem generation (or regeneration) via the built-in action."""
+    if not _validate_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID"}), 400
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
-                cursor.execute(
-                    """UPDATE postmortems
-                       SET content = %s, updated_at = CURRENT_TIMESTAMP
-                       WHERE incident_id = %s AND org_id = %s""",
-                    (content, incident_id, org_id),
-                )
-                updated = cursor.rowcount
-                conn.commit()
+        from services.actions.postmortem_action import dispatch_postmortem_action
+        run_id = dispatch_postmortem_action(user_id, incident_id)
+        return jsonify({"success": True, "runId": run_id}), 202
 
-        if not updated:
-            return jsonify({"error": "Postmortem not found"}), 404
-
-        record_audit_event(org_id, user_id, "update_postmortem", "postmortem", incident_id, {}, request)
-        return jsonify({"success": True})
-
+    except ValueError as e:
+        if "Rate limited" in str(e):
+            return jsonify({"error": "Rate limited — try again later"}), 429
+        if "already running" in str(e):
+            return jsonify({"error": "Generation already in progress"}), 409
+        return jsonify({"error": "Unable to generate postmortem"}), 400
     except Exception as e:
         logger.error(
-            "[POSTMORTEM] Failed to update postmortem for incident %s: %s",
+            "[POSTMORTEM] Failed to regenerate postmortem for incident %s: %s",
             incident_id,
             e,
         )
-        return jsonify({"error": "Failed to update postmortem"}), 500
+        return jsonify({"error": "Failed to regenerate postmortem"}), 500
 
 
 @postmortem_bp.route(
@@ -209,9 +391,7 @@ def export_to_confluence(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT id, content FROM postmortems
                        WHERE incident_id = %s AND org_id = %s""",
@@ -221,7 +401,7 @@ def export_to_confluence(user_id, incident_id):
     except Exception as e:
         logger.error(
             "[POSTMORTEM] Failed to fetch postmortem for export, incident %s: %s",
-            incident_id,
+            sanitize(incident_id),
             e,
         )
         return jsonify({"error": "Failed to fetch postmortem"}), 500
@@ -303,7 +483,7 @@ def export_to_confluence(user_id, incident_id):
     if not page_id:
         logger.error(
             "[POSTMORTEM] Confluence export returned no page id for incident %s",
-            incident_id,
+            sanitize(incident_id),
         )
         return jsonify({"error": "Invalid response from Confluence"}), 502
 
@@ -311,9 +491,19 @@ def export_to_confluence(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                # Write to normalized exports table
+                cursor.execute(
+                    """INSERT INTO postmortem_exports
+                           (postmortem_id, org_id, destination, external_id, external_url, exported_at)
+                       VALUES (%s, %s, 'confluence', %s, %s, CURRENT_TIMESTAMP)
+                       ON CONFLICT (postmortem_id, destination)
+                       DO UPDATE SET external_id = EXCLUDED.external_id,
+                                     external_url = EXCLUDED.external_url,
+                                     exported_at = EXCLUDED.exported_at""",
+                    (str(postmortem_id), org_id, str(page_id), page_url),
+                )
+                # Keep legacy columns in sync
                 cursor.execute(
                     """UPDATE postmortems
                        SET confluence_page_id = %s,
@@ -336,6 +526,73 @@ def export_to_confluence(user_id, incident_id):
     return jsonify({"success": True, "pageUrl": page_url, "pageId": str(page_id)})
 
 
+@postmortem_bp.route(
+    "/api/incidents/<incident_id>/postmortem/export/notion", methods=["POST"]
+)
+@require_permission("postmortems", "write")
+def export_to_notion(user_id, incident_id):
+    """Export postmortem to a Notion database."""
+    if not _validate_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID"}), 400
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        data = {}
+
+    database_id = data.get("databaseId") or data.get("database_id")
+    if not database_id:
+        return jsonify({"error": "databaseId is required"}), 400
+
+    title_property = data.get("titleProperty") or data.get("title_property")
+    property_mapping = data.get("propertyMapping") or data.get("property_mapping")
+    action_items_db = (
+        data.get("actionItemsDatabaseId")
+        or data.get("action_items_database_id")
+    )
+
+    from chat.backend.agent.tools.notion import _export_postmortem_to_notion
+    from connectors.notion_connector.client import NotionAuthExpiredError
+
+    try:
+        result = _export_postmortem_to_notion(
+            user_id=user_id,
+            incident_id=incident_id,
+            database_id=database_id,
+            title_property=title_property,
+            property_mapping=property_mapping,
+            action_items_database_id=action_items_db,
+        )
+    except NotionAuthExpiredError:
+        return jsonify({
+            "code": "reauth_required",
+            "error": "Notion credentials expired — please reconnect",
+        }), 401
+    except ValueError as exc:
+        logger.warning(
+            "[POSTMORTEM] Notion export rejected for user %s: %s", user_id, exc
+        )
+        # Surface only the explicit message arg we raise in the helper; never
+        # echo the exception object directly so stack-trace-bearing values
+        # (from any downstream library) can't flow to the client.
+        safe_msg = (
+            exc.args[0]
+            if exc.args and isinstance(exc.args[0], str)
+            else "Invalid export request"
+        )
+        return jsonify({"error": safe_msg}), 400
+    except RuntimeError as exc:
+        logger.exception(
+            "[POSTMORTEM] Notion export partially failed for user %s: %s", user_id, exc
+        )
+        return jsonify({"error": "Notion page created but content write failed — check Notion and retry"}), 502
+    except Exception as exc:
+        logger.exception(
+            "[POSTMORTEM] Notion export failed for user %s: %s", user_id, exc
+        )
+        return jsonify({"error": "Failed to export to Notion"}), 502
+
+    return jsonify(result)
+
 
 @postmortem_bp.route("/api/postmortems", methods=["GET"])
 @require_permission("postmortems", "read")
@@ -352,14 +609,13 @@ def list_postmortems(user_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT p.id, p.incident_id, p.user_id, p.content, p.generated_at, p.updated_at,
                               p.confluence_page_id, p.confluence_page_url, p.confluence_exported_at,
                               i.alert_title,
-                              p.jira_issue_id, p.jira_issue_key, p.jira_issue_url, p.jira_exported_at
+                              p.jira_issue_id, p.jira_issue_key, p.jira_issue_url, p.jira_exported_at,
+                              p.notion_page_id, p.notion_page_url, p.notion_exported_at, p.notion_database_id
                        FROM postmortems p
                        LEFT JOIN incidents i ON p.incident_id = i.id
                        WHERE p.org_id = %s
@@ -385,6 +641,10 @@ def list_postmortems(user_id):
                 "jiraIssueKey": row[11],
                 "jiraIssueUrl": row[12],
                 "jiraExportedAt": _format_timestamp(row[13]),
+                "notionPageId": row[14],
+                "notionPageUrl": row[15],
+                "notionExportedAt": _format_timestamp(row[16]),
+                "notionDatabaseId": row[17],
             }
             postmortems.append(postmortem)
 
@@ -424,9 +684,7 @@ def export_to_jira(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
                     """SELECT id, content FROM postmortems
                        WHERE incident_id = %s AND org_id = %s""",
@@ -436,7 +694,7 @@ def export_to_jira(user_id, incident_id):
     except Exception as e:
         logger.error(
             "[POSTMORTEM] Failed to fetch postmortem for Jira export, incident %s: %s",
-            incident_id,
+            sanitize(incident_id),
             e,
         )
         return jsonify({"error": "Failed to fetch postmortem"}), 500
@@ -531,9 +789,20 @@ def export_to_jira(user_id, incident_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SET myapp.current_user_id = %s", (user_id,))
-                cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                conn.commit()
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                # Write to normalized exports table
+                cursor.execute(
+                    """INSERT INTO postmortem_exports
+                           (postmortem_id, org_id, destination, external_id, external_key, external_url, exported_at)
+                       VALUES (%s, %s, 'jira', %s, %s, %s, CURRENT_TIMESTAMP)
+                       ON CONFLICT (postmortem_id, destination)
+                       DO UPDATE SET external_id = EXCLUDED.external_id,
+                                     external_key = EXCLUDED.external_key,
+                                     external_url = EXCLUDED.external_url,
+                                     exported_at = EXCLUDED.exported_at""",
+                    (str(postmortem_id), org_id, str(parent_id), parent_key, parent_url),
+                )
+                # Keep legacy columns in sync
                 cursor.execute(
                     """UPDATE postmortems
                        SET jira_issue_id = %s,

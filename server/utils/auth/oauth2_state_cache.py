@@ -31,6 +31,7 @@ from typing import Dict, Optional, Any
 import redis
 
 from utils.cache.redis_client import get_redis_ssl_kwargs
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ def retrieve_oauth2_state(state: str) -> Optional[Dict[str, Any]]:
         value = results[0]
 
     if not value:
-        logger.warning(f"State token not found in Redis: {state[:10]}... (expired or invalid)")
+        logger.warning(f"State token not found in Redis: {sanitize(state)[:10]}... (expired or invalid)")
         return None
 
     try:

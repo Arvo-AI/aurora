@@ -85,11 +85,19 @@ def _resolve_repository(
 
     try:
         from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[GithubRCA:resolve]")
                 cur.execute(
-                    "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
-                    (user_id,),
+                    f"""SELECT DISTINCT ON (repo_full_name) repo_full_name
+                       FROM github_connected_repos
+                       WHERE {predicate}
+                       ORDER BY repo_full_name, updated_at DESC""",
+                    pred_params,
                 )
                 rows = cur.fetchall()
 

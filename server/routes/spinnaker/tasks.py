@@ -61,7 +61,7 @@ def _extract_execution_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_rca_prompt(payload: Dict[str, Any], user_id: Optional[str] = None) -> str:
+def _build_rca_prompt(payload: Dict[str, Any], user_id: Optional[str] = None) -> tuple[str, str]:
     """Build an RCA prompt from a deployment failure."""
     from chat.background.rca_prompt_builder import build_spinnaker_rca_prompt
     return build_spinnaker_rca_prompt(payload, user_id=user_id)
@@ -247,7 +247,7 @@ def process_spinnaker_deployment(
                                (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
                                 severity, status, started_at, alert_metadata)
                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                               ON CONFLICT (source_type, source_alert_id, user_id) DO UPDATE
+                               ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                                SET updated_at = CURRENT_TIMESTAMP,
                                    alert_metadata = EXCLUDED.alert_metadata
                                RETURNING id""",
@@ -288,6 +288,7 @@ def process_spinnaker_deployment(
                             broadcast_incident_update_to_user_connections(
                                 user_id,
                                 {"type": "incident_update", "incident_id": str(incident_id), "source": "spinnaker"},
+                                org_id=org_id,
                             )
                         except Exception as e:
                             logger.warning("%s SSE notify failed: %s", log_prefix, e)
@@ -341,13 +342,14 @@ def _trigger_rca(
                 },
                 incident_id=str(incident_id),
             )
-            rca_prompt = _build_rca_prompt(payload, user_id=user_id)
+            rca_prompt, rail_text = _build_rca_prompt(payload, user_id=user_id)
             task = run_background_chat.delay(
                 user_id=user_id,
                 session_id=session_id,
                 initial_message=rca_prompt,
                 trigger_metadata={"source": "spinnaker", "status": status},
                 incident_id=str(incident_id),
+                rail_text=rail_text,
             )
             cursor.execute(
                 "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
