@@ -1176,7 +1176,7 @@ async def _execute_background_chat(
         # user input and would produce false positives. Callers pass rail_text
         # for that case; fall back to initial_message to preserve legacy
         # semantics for triggers that forward a raw user question.
-        rail_question = rail_text if rail_text else initial_message
+        rail_question = rail_text if rail_text is not None else initial_message
 
         # State.incident_id is read-only context for downstream nodes (triage
         # uses it to look up prior findings, prompt_builder for RCA scaffolding).
