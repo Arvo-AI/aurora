@@ -659,10 +659,3 @@ def initialize_app():
 
 # Always run initialization when module is imported (for Gunicorn and direct execution)
 initialize_app()
-
-if __name__ == "__main__":
-    # Development mode: run Flask's built-in server
-    # Port configurable via FLASK_PORT env var (set in .env file)
-    # Note: Default is 5080 to avoid conflict with macOS AirPlay Receiver (port 5000)
-    port = int(os.getenv("FLASK_PORT"))
-    app.run(host="0.0.0.0", port=port, debug=False)
