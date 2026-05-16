@@ -461,7 +461,8 @@ def run_background_chat(
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
-                        if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                        rls_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                        if not rls_org_id:
                             logger.error("[BackgroundChat] Cannot resolve org_id for user %s, skipping incident linking", user_id)
                             raise ValueError(f"Missing org_id for user {user_id}")
                     # Ensure chat_sessions.incident_id is set (single source of truth)
@@ -536,7 +537,7 @@ def run_background_chat(
                                 """INSERT INTO incident_lifecycle_events
                                    (incident_id, user_id, org_id, event_type, new_value)
                                    VALUES (%s, %s, %s, %s, %s)""",
-                                (incident_id, user_id, None, 'rca_started', 'running')
+                                (incident_id, user_id, rls_org_id, 'rca_started', 'running')
                             )
                             conn.commit()
                             logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
@@ -2222,12 +2223,14 @@ def create_background_chat_session(
 def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
     """Write an rca_error lifecycle event, wrapped in a savepoint to avoid aborting the caller."""
     try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
         cursor.execute("SAVEPOINT sp_rca_err")
         cursor.execute(
             """INSERT INTO incident_lifecycle_events
                (incident_id, user_id, org_id, event_type, new_value)
                VALUES (%s, %s, %s, %s, %s)""",
-            (incident_id, user_id, None, 'rca_error', 'error')
+            (incident_id, user_id, org_id, 'rca_error', 'error')
         )
         cursor.execute("RELEASE SAVEPOINT sp_rca_err")
     except Exception as e:

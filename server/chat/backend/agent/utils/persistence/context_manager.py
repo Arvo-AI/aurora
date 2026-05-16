@@ -175,11 +175,12 @@ class ContextManager:
             with db_pool.get_user_connection() as conn:
                 cursor = conn.cursor()
                 from utils.auth.stateless_auth import set_rls_context
-                if not set_rls_context(cursor, conn, user_id, log_prefix="[ContextManager]"):
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[ContextManager]")
+                if not org_id:
                     return False
                 
                 result = self._upsert_session(
-                    cursor, conn, session_id, user_id,
+                    cursor, conn, session_id, user_id, org_id,
                     json.dumps(serialized_messages), datetime.now(),
                 )
                 if result is not None:
@@ -239,7 +240,7 @@ class ContextManager:
         return serialized
 
     @staticmethod
-    def _upsert_session(cursor, conn, session_id, user_id, context_json, now):
+    def _upsert_session(cursor, conn, session_id, user_id, org_id, context_json, now) -> "bool | None":
         """Try UPDATE, then INSERT if the session doesn't exist. Returns bool or None (updated OK, continue)."""
         cursor.execute("""
             UPDATE chat_sessions 
@@ -261,9 +262,9 @@ class ContextManager:
         try:
             logger.info(f"Session {session_id} not found - creating it automatically")
             cursor.execute("""
-                INSERT INTO chat_sessions (id, user_id, title, messages, ui_state, llm_context_history, created_at, updated_at, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (session_id, user_id, "New Chat", json.dumps([]), json.dumps({}), context_json, now, now, True))
+                INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, llm_context_history, created_at, updated_at, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (session_id, user_id, org_id, "New Chat", json.dumps([]), json.dumps({}), context_json, now, now, True))
             conn.commit()
             logger.info(f"Auto-created session {session_id} and saved context")
             return True
