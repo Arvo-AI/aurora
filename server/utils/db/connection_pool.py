@@ -45,7 +45,7 @@ class DatabaseConnectionPool:
             if pg_sslrootcert:
                 self.db_params['sslrootcert'] = pg_sslrootcert
 
-        # Keep max low: 5 services × 10 = 50, well under PostgreSQL's default max_connections (100).
+        # Keep max low: 5 services x 10 = 50, well under PostgreSQL's default max_connections (100).
         self.min_connections = 1
         self.max_connections = 10
 

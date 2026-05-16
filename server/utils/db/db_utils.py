@@ -126,6 +126,7 @@ def initialize_tables():
 
             if not lock_acquired:
                 logging.info("Advisory lock held by another worker, skipping init (already in progress).")
+                cursor.close()
                 return
 
             # Define table creation scripts.
