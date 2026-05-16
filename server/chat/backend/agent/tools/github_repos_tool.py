@@ -12,7 +12,7 @@ from utils.auth.github_auth_router import (
     get_any_auth_for_user,
 )
 from utils.auth.github_auth_mode import is_oauth_enabled
-from utils.auth.stateless_auth import get_credentials_from_db
+from utils.auth.token_management import get_token_data
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +23,9 @@ class GetConnectedReposArgs(BaseModel):
 
 
 def _user_has_oauth(user_id: str) -> bool:
-    """True if the user has a stored OAuth access token.
-
-    Raises whatever ``get_credentials_from_db`` raises so the caller can
-    surface a "credential lookup failed" error instead of silently
-    classifying every OAuth-backed repo as unusable.
-    """
     if not is_oauth_enabled():
         return False
-    creds = get_credentials_from_db(user_id, "github")
+    creds = get_token_data(user_id, "github")
     return bool(creds and creds.get("access_token"))
 
 

@@ -94,8 +94,15 @@ export function useGitHubStatus(userId: string | null) {
 
   useEffect(() => {
     if (!userId) return;
+    const allowedOrigins = new Set<string>();
+    allowedOrigins.add(window.location.origin);
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+    if (backendUrl) {
+      try { allowedOrigins.add(new URL(backendUrl).origin); } catch { /* ignore */ }
+    }
     const handleProviderChange = () => { checkStatus(); };
     const handleAuthMessage = (event: MessageEvent) => {
+      if (!allowedOrigins.has(event.origin)) return;
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') {
         checkStatus();

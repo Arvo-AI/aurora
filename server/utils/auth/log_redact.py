@@ -9,12 +9,13 @@ response).
 
 Patterns scrubbed
 -----------------
-* ``ghs_[A-Za-z0-9]+``       — GitHub App installation tokens
+* ``ghs_[A-Za-z0-9]+`` — GitHub App installation tokens
   (e.g. ``ghs_AAA111ZZZ222BBB333``)
-* ``eyJ[A-Za-z0-9_=-]{20,}`` — JSON Web Tokens. Every JWT header is
-  base64url-encoded JSON starting with ``{``, which always encodes to
-  the prefix ``eyJ``. The 20-char minimum tail keeps the pattern from
-  matching short non-JWT identifiers that happen to start with ``eyJ``.
+* JSON Web Tokens. Every JWT header is base64url-encoded JSON starting
+  with ``{``, which always encodes to the prefix ``eyJ``. The pattern
+  requires one or two dot-separated segments after the header
+  (``header.payload`` or ``header.payload.signature``) so the full
+  bearer is redacted, not just the predictable header.
 
 Both substrings are replaced by the literal marker ``***REDACTED***``.
 

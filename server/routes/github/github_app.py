@@ -70,14 +70,6 @@ _APP_NOT_CONFIGURED = "GitHub App not configured"
 
 
 def _orgs_owning_install(installation_id: int) -> set[str | None]:
-    """Return the distinct ``org_id`` values currently linked to an install.
-
-    Used to keep install discovery / claim org-scoped: a user can only
-    see and claim installations that are either unbound on Aurora's side
-    or already bound to a member of their own org. NULL ``org_id`` rows
-    are treated as their own "no org" bucket so they never leak across
-    real orgs by accident.
-    """
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -606,9 +598,6 @@ def github_app_discover_installations(user_id):
 
     requesting_org_id = get_org_id_for_user(user_id)
     if not requesting_org_id:
-        # Users without an org_id can't safely be scoped against cross-tenant
-        # leakage; refuse rather than fall back to the old single-tenant
-        # behaviour.
         return jsonify({
             "error": "install discovery requires a user with an org context",
             "code": "MISSING_ORG_CONTEXT",
@@ -664,9 +653,6 @@ def github_app_discover_installations(user_id):
                         next_url = url_part[1:-1]
                     break
 
-    # Org-scoped bookkeeping: drop installs already linked to the user
-    # (no point re-claiming) AND any install bound to a different org so
-    # one tenant cannot see another tenant's account_login.
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -700,7 +686,9 @@ def github_app_discover_installations(user_id):
         if inst_id in already_linked_to_user:
             continue
         owning_orgs = bindings.get(inst_id, set())
-        if owning_orgs and requesting_org_id not in owning_orgs:
+        if not owning_orgs:
+            continue
+        if requesting_org_id not in owning_orgs:
             continue
         account = inst.get("account") or {}
         out.append(
@@ -720,18 +708,7 @@ def github_app_discover_installations(user_id):
 )
 @require_permission("connectors", "write")
 def github_app_claim_installation(user_id, installation_id):
-    """Link an existing App installation to the current Aurora user.
-
-    Counterpart to ``/app/discover-installations`` — the user picks one
-    from the discovery list and explicitly asserts ownership. We verify
-    the installation exists via ``/app/installations/{id}`` before
-    INSERTing so a guess at a random installation_id can't succeed.
-
-    Org-scoped: the install may already be linked to teammates in the
-    same Aurora org (shared install). Claim is refused only when the
-    install is bound to users in a DIFFERENT org — that protects
-    multi-tenant deployments without breaking shared-team installs.
-    """
+    """Link an existing App installation to the current Aurora user."""
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
@@ -898,9 +875,6 @@ def github_app_unlink_installation(user_id, installation_id):
                 )
                 deleted = cur.rowcount
 
-                # Drop the auth binding from this user's repos so subsequent
-                # tool calls + status checks don't keep treating them as
-                # App-authenticated through a now-removed install.
                 set_rls_context(
                     cur, conn, user_id,
                     log_prefix="[GITHUB-APP-UNLINK]",
@@ -1088,11 +1062,6 @@ def github_disconnect(user_id):
                 )
                 soft_deleted_installs = cur.rowcount
 
-                # Also null github_connected_repos.installation_id for the
-                # installs we just soft-deleted so the auth router and
-                # github_repos_tool stop treating those repos as App-bound.
-                # github_connected_repos is RLS-protected, so set the user's
-                # org context before the UPDATE.
                 if linked_installs:
                     set_rls_context(
                         cur, conn, user_id,
@@ -1115,17 +1084,16 @@ def github_disconnect(user_id):
         return jsonify({"error": "Failed to disconnect"}), 500
 
     oauth_removed = False
-    if is_oauth_enabled():
-        try:
-            from utils.secrets.secret_ref_utils import delete_user_secret
+    try:
+        from utils.secrets.secret_ref_utils import delete_user_secret
 
-            success, _ = delete_user_secret(user_id, "github")
-            oauth_removed = bool(success)
-        except Exception as exc:
-            logger.warning(
-                "[GITHUB-DISCONNECT] OAuth credential delete failed user=%s: %s",
-                user_id, exc,
-            )
+        success, _ = delete_user_secret(user_id, "github")
+        oauth_removed = bool(success)
+    except Exception as exc:
+        logger.warning(
+            "[GITHUB-DISCONNECT] OAuth credential delete failed user=%s: %s",
+            user_id, exc,
+        )
 
     logger.info(
         "[GITHUB-DISCONNECT] user=%s soft_deleted_installs=%d "

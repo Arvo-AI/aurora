@@ -39,14 +39,18 @@ def get_repo_selections(user_id):
 
     The ``auth_method`` field mirrors the routing decision that
     :func:`utils.auth.github_auth_router.get_auth_for_user_repo` would
-    make for each repo, computed inline by joining
-    ``github_installations``:
+    make for each repo:
 
     - ``"app"`` when the repo row has a non-NULL ``installation_id`` AND
       the joined installation row exists with ``suspended_at IS NULL``.
-    - ``None`` otherwise.
+    - ``"oauth"`` when no active App install is present but the row's
+      owner has a stored OAuth ``access_token``.
+    - ``None`` when neither path can resolve.
     """
     try:
+        from utils.auth.github_auth_mode import is_oauth_enabled
+        from utils.auth.token_management import get_token_data
+
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
@@ -56,6 +60,7 @@ def get_repo_selections(user_id):
                               r.repo_full_name, r.repo_id, r.default_branch,
                               r.is_private, r.metadata_summary, r.metadata_status,
                               r.repo_data, r.created_at, r.installation_id,
+                              r.user_id,
                               (i.installation_id IS NOT NULL
                                   AND i.suspended_at IS NULL)
                                   AS has_active_installation
@@ -71,14 +76,33 @@ def get_repo_selections(user_id):
                 )
                 rows = cur.fetchall()
 
+        oauth_enabled = is_oauth_enabled()
+        oauth_owner_cache: dict[str, bool] = {}
+
+        def _owner_has_oauth(owner_id: str) -> bool:
+            if not oauth_enabled or not owner_id:
+                return False
+            if owner_id not in oauth_owner_cache:
+                try:
+                    creds = get_token_data(owner_id, "github")
+                except Exception:
+                    creds = None
+                oauth_owner_cache[owner_id] = bool(
+                    creds and creds.get("access_token")
+                )
+            return oauth_owner_cache[owner_id]
+
         repos = []
         for r in rows:
             installation_id = r[8]
-            has_active_installation = r[9]
-            auth_method = (
-                "app" if installation_id is not None and has_active_installation
-                else None
-            )
+            row_owner = r[9]
+            has_active_installation = r[10]
+            if installation_id is not None and has_active_installation:
+                auth_method: str | None = "app"
+            elif _owner_has_oauth(row_owner):
+                auth_method = "oauth"
+            else:
+                auth_method = None
             repos.append({
                 "repo_full_name": r[0],
                 "repo_id": r[1],
@@ -93,7 +117,7 @@ def get_repo_selections(user_id):
             })
         return jsonify({"repositories": repos})
     except Exception as e:
-        logger.error(f"Error getting repo selections: {e}", exc_info=True)
+        logger.exception(f"Error getting repo selections: {e}")
         return jsonify({"error": "Failed to get repository selections"}), 500
 
 
@@ -104,8 +128,10 @@ def save_repo_selections(user_id):
     try:
         data = request.get_json()
         repositories = data.get("repositories") if data else None
-        if not isinstance(repositories, list) or not repositories:
-            return jsonify({"error": "repositories array is required"}), 400
+        if not isinstance(repositories, list):
+            return jsonify({"error": "repositories must be an array"}), 400
+        if not all(isinstance(r, dict) for r in repositories):
+            return jsonify({"error": "every repositories entry must be an object"}), 400
 
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
@@ -133,15 +159,20 @@ def save_repo_selections(user_id):
                     incoming.add(full_name)
 
                     owner_id = existing.get(full_name, user_id)
+                    payload_install_id = repo.get("installation_id")
+                    if not isinstance(payload_install_id, int):
+                        payload_install_id = None
                     cur.execute(
                         """INSERT INTO github_connected_repos
                                (user_id, org_id, repo_full_name, repo_id, default_branch,
-                                is_private, repo_data, metadata_status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
+                                is_private, installation_id, repo_data, metadata_status)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
                            ON CONFLICT (user_id, repo_full_name) DO UPDATE SET
                                repo_data = EXCLUDED.repo_data,
                                default_branch = EXCLUDED.default_branch,
                                is_private = EXCLUDED.is_private,
+                               installation_id = COALESCE(EXCLUDED.installation_id,
+                                                          github_connected_repos.installation_id),
                                updated_at = NOW()""",
                         (
                             owner_id,
@@ -150,6 +181,7 @@ def save_repo_selections(user_id):
                             repo.get("id"),
                             repo.get("default_branch"),
                             repo.get("private", False),
+                            payload_install_id,
                             json.dumps(repo),
                         ),
                     )
@@ -157,10 +189,6 @@ def save_repo_selections(user_id):
                         existing[full_name] = user_id
                         newly_added.append(full_name)
 
-                if not incoming:
-                    return jsonify({"error": "No valid repositories in request (all missing full_name)"}), 400
-
-                # Delete deselected repos, targeting the row's original owner
                 removed = set(existing.keys()) - incoming
                 for repo_name in removed:
                     owner_id = existing[repo_name]

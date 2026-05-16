@@ -406,8 +406,8 @@ def _get_github_connected(user_id: str) -> bool:
         if _lookup_any_active_installation(user_id) is not None:
             return True
         if is_oauth_enabled():
-            from utils.auth.stateless_auth import get_credentials_from_db
-            creds = get_credentials_from_db(user_id, "github")
+            from utils.auth.token_management import get_token_data
+            creds = get_token_data(user_id, "github")
             if creds and creds.get("access_token"):
                 return True
         return False

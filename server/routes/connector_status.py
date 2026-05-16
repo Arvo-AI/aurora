@@ -297,8 +297,8 @@ def _check_github(user_id: str, app_runtime_ready: bool) -> Dict[str, Any]:
 
     if is_oauth_enabled():
         try:
-            from utils.auth.stateless_auth import get_credentials_from_db
-            creds = get_credentials_from_db(user_id, "github")
+            from utils.auth.token_management import get_token_data
+            creds = get_token_data(user_id, "github")
             if creds and creds.get("access_token"):
                 return {"connected": True}
         except Exception as exc:
@@ -735,9 +735,10 @@ PROVIDER_CHECKERS = {
     "jira": _check_jira,
     "slack": _check_slack,
     "google_chat": _check_google_chat,
-    # github is checked via the (user_id, org_id) special-case branch
-    # in _run_check — uses ``user_github_installations`` instead of
-    # ``user_tokens`` since the App migration removed OAuth-token storage.
+    # github is checked via the (user_id, org_id) special-case branch in
+    # _run_check. _check_github inspects user_github_installations for App
+    # mode and falls back to user_tokens (via get_token_data) when
+    # GITHUB_AUTH_MODE is "oauth" or "hybrid".
     "bitbucket": _check_bitbucket,
     "thousandeyes": _check_thousandeyes,
     "scaleway": _check_scaleway,

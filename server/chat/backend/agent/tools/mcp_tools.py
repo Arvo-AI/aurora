@@ -1047,7 +1047,9 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
                 get_any_auth_for_user(user_id)
                 available_servers.append("github")
             except NoGitHubAuthError:
-                pass
+                logging.debug(
+                    "User %s has no GitHub auth (App or OAuth); skipping GitHub MCP", user_id
+                )
             except Exception as exc:
                 logging.warning(
                     "GitHub App auth probe failed for user %s: %s", user_id, exc
