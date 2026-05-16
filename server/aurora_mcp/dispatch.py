@@ -93,7 +93,7 @@ def _build_request_kwargs(
     return kwargs
 
 
-async def _do_search_tools(
+def _do_search_tools(
     user_id: str,
     query: str,
     category: Optional[str],
@@ -196,7 +196,7 @@ def register_dispatch_tools(
         Results that need a connector you haven't connected appear as "not
         connected" and won't be callable until you connect them in Aurora.
         """
-        return await _do_search_tools(_user_id(), query, category, connector, limit)
+        return _do_search_tools(_user_id(), query, category, connector, limit)
 
     @mcp.tool()
     async def call_tool(name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

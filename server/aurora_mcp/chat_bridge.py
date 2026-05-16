@@ -126,6 +126,86 @@ async def _poll_once(
     return page, msgs, status, last_seq
 
 
+async def _prepare_session(
+    api_call: ApiCall,
+    sid: Optional[str],
+    message: str,
+    mode: str,
+    poll_only: bool,
+) -> Tuple[Optional[str], int, Optional[Dict[str, Any]]]:
+    """Create session and post the user message as needed.
+
+    Returns (sid, last_seq, error_envelope). When error_envelope is non-None
+    the caller should return it immediately.
+    """
+    if poll_only:
+        return sid, 0, None
+
+    if not sid:
+        try:
+            sid = await _create_session(api_call)
+        except Exception as exc:
+            logger.exception("chat_with_aurora: create_session failed")
+            return None, 0, {"status": "error", "error": f"Failed to create chat session: {exc}"}
+        if not sid:
+            return None, 0, {"status": "error", "error": "Failed to create chat session"}
+
+    if not message:
+        return sid, 0, None
+
+    try:
+        posted_seq = await _post_message(api_call, sid, message, mode)
+    except Exception as exc:
+        logger.exception("chat_with_aurora: post_message failed (session=%s)", sid)
+        return sid, 0, {"session_id": sid, "status": "error",
+                        "error": f"Failed to post chat message: {exc}"}
+    if posted_seq is None:
+        return sid, 0, {"session_id": sid, "status": "error",
+                        "error": "Failed to post chat message"}
+    return sid, posted_seq, None
+
+
+async def _poll_step(
+    api_call: ApiCall, sid: str, last_seq: int,
+) -> Optional[Tuple[Dict[str, Any], List[Dict[str, Any]], str, int]]:
+    """One poll iteration. Returns None on transient error so the caller retries."""
+    try:
+        return await _poll_once(api_call, sid, last_seq)
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning("chat_with_aurora poll timed out, retrying (session=%s)", sid)
+        return None
+    except Exception as exc:
+        logger.warning(
+            "chat_with_aurora poll raised %s, retrying (session=%s): %s",
+            type(exc).__name__, sid, exc,
+        )
+        return None
+
+
+async def _poll_for_terminal(
+    api_call: ApiCall, sid: str, last_seq: int,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Drive the poll loop until a terminal status or the deadline."""
+    deadline = time.monotonic() + _POLL_TOTAL_SECONDS
+    interval = _POLL_INTERVAL_INITIAL
+    latest_partial: Optional[str] = None
+
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)  # NOSONAR S7484: cross-process HTTP poll, no in-process signal to wait on.
+        interval = min(interval * 2, _POLL_INTERVAL_MAX)
+
+        step = await _poll_step(api_call, sid, last_seq)
+        if step is None:
+            continue
+        page, msgs, status, last_seq = step
+        latest_partial = _latest_assistant_text(msgs, latest_partial)
+        terminal = _terminal_result(status, sid, page, latest_partial)
+        if terminal is not None:
+            return terminal, latest_partial
+
+    return None, latest_partial
+
+
 async def chat_with_aurora(
     api_call: ApiCall,
     *,
@@ -149,58 +229,15 @@ async def chat_with_aurora(
     if err is not None:
         return err
 
-    sid = session_id
-    last_seq = 0
+    sid, last_seq, prep_err = await _prepare_session(
+        api_call, session_id, message, mode, poll_only,
+    )
+    if prep_err is not None:
+        return prep_err
 
-    if not poll_only:
-        if not sid:
-            try:
-                sid = await _create_session(api_call)
-            except Exception as exc:
-                logger.exception("chat_with_aurora: create_session failed")
-                return {"status": "error", "error": f"Failed to create chat session: {exc}"}
-            if not sid:
-                return {"status": "error", "error": "Failed to create chat session"}
-        if message:
-            try:
-                posted_seq = await _post_message(api_call, sid, message, mode)
-            except Exception as exc:
-                logger.exception("chat_with_aurora: post_message failed (session=%s)", sid)
-                return {"session_id": sid, "status": "error",
-                        "error": f"Failed to post chat message: {exc}"}
-            if posted_seq is None:
-                return {"session_id": sid, "status": "error",
-                        "error": "Failed to post chat message"}
-            last_seq = posted_seq
-
-    deadline = time.monotonic() + _POLL_TOTAL_SECONDS
-    interval = _POLL_INTERVAL_INITIAL
-    latest_partial: Optional[str] = None
-
-    while time.monotonic() < deadline:
-        await asyncio.sleep(interval)  # NOSONAR S7484: cross-process HTTP poll, no in-process signal to wait on.
-        interval = min(interval * 2, _POLL_INTERVAL_MAX)
-
-        try:
-            page, msgs, status, last_seq = await _poll_once(api_call, sid, last_seq)
-        except (asyncio.TimeoutError, TimeoutError):
-            # Backend slow / httpx read timeout. Don't drop session_id —
-            # let the loop retry until our wall-time deadline expires.
-            logger.warning("chat_with_aurora poll timed out, retrying (session=%s)", sid)
-            continue
-        except Exception as exc:
-            # Retry on transient upstream errors; the in_progress envelope
-            # below catches persistent ones after the deadline.
-            logger.warning(
-                "chat_with_aurora poll raised %s, retrying (session=%s): %s",
-                type(exc).__name__, sid, exc,
-            )
-            continue
-        latest_partial = _latest_assistant_text(msgs, latest_partial)
-
-        terminal = _terminal_result(status, sid, page, latest_partial)
-        if terminal is not None:
-            return terminal
+    terminal, latest_partial = await _poll_for_terminal(api_call, sid, last_seq)
+    if terminal is not None:
+        return terminal
 
     return {
         "session_id": sid,

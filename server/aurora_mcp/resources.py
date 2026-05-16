@@ -38,7 +38,7 @@ def _shape_skill_entry(skill_id: str, meta: Any, connected: bool) -> Dict[str, A
     }
 
 
-async def _do_catalog_skills(user_id: str) -> Dict[str, Any]:
+def _do_catalog_skills(user_id: str) -> Dict[str, Any]:
     try:
         from chat.backend.agent.skills.registry import SkillRegistry
 
@@ -129,7 +129,7 @@ def register_resources(
     @mcp.resource("aurora://catalog/skills")
     async def catalog_skills() -> Dict[str, Any]:
         """Available skills (from the skill registry) with connection status for this user."""
-        return await _do_catalog_skills(_user_id())
+        return _do_catalog_skills(_user_id())
 
     @mcp.resource("aurora://incidents/recent")
     async def incidents_recent() -> Dict[str, Any]:
