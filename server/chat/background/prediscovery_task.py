@@ -214,6 +214,7 @@ def run_prediscovery(
             trigger_metadata=trigger_metadata,
             provider_preference=providers,
             mode="prediscovery",
+            rail_text="",
         ))
 
         from chat.background.task import _update_session_status

@@ -1028,7 +1028,7 @@ class Workflow:
         self._history_prefix_len = history_prefix_len
 
         # --- Input rail: check user message for prompt injection ---
-        from guardrails.input_rail import check_input
+        from guardrails.input_rail import check_input, InputRailResult
         last_msg = input_state.messages[-1] if input_state.messages else None
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
             # Skip persistence for scaffold messages (background prompts, not user input)
@@ -1041,7 +1041,12 @@ class Workflow:
                 getattr(input_state, "question", None),
                 last_msg.content,
             )
-            rail_result = await check_input(msg_text)
+            # Skip rail when there is no untrusted text to evaluate (e.g.
+            # prediscovery prompts are entirely system-authored).
+            if not msg_text:
+                rail_result = InputRailResult(blocked=False)
+            else:
+                rail_result = await check_input(msg_text)
             if rail_result.blocked:
                 emit_block_event(
                     user_id=getattr(input_state, "user_id", "") or "",
