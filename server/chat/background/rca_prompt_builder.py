@@ -435,3 +435,46 @@ def build_rca_prompt(
     rail_text = _extract_rail_text_from_payload(payload)
 
     return prompt, rail_text
+
+
+def build_victorops_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> tuple[str, str]:
+    """Build RCA prompt from a Splunk On-Call (VictorOps) webhook payload."""
+    incident_number = payload.get("INCIDENT_NUMBER", "unknown")
+    incident_title = (
+        payload.get("INCIDENT_DISPLAY_NAME")
+        or payload.get("ENTITY_DISPLAY_NAME")
+        or payload.get("ENTITY_ID")
+        or "Untitled Incident"
+    )
+    alert_phase = payload.get("CURRENT_ALERT_PHASE", "TRIGGERED")
+    service_name = payload.get("SERVICE") or payload.get("MONITORING_TOOL") or "unknown"
+    state_message = payload.get("STATE_MESSAGE", "")
+    incident_url = payload.get("INCIDENT_URL", "")
+    entity_id = payload.get("ENTITY_ID", "")
+    routing_key = payload.get("ROUTING_KEY", "")
+
+    alert_details = {
+        "title": f"#{incident_number}: {incident_title}",
+        "status": alert_phase,
+        "message": state_message,
+        "labels": {
+            "incident_number": str(incident_number),
+            "alert_phase": alert_phase,
+            "service": service_name,
+        },
+        "incident_url": incident_url,
+        "incident_id": entity_id,
+    }
+
+    if routing_key:
+        alert_details["labels"]["routing_key"] = routing_key
+    if ack_user := payload.get("ACK_USER"):
+        alert_details["labels"]["acknowledged_by"] = ack_user
+    if monitoring_tool := payload.get("MONITORING_TOOL"):
+        alert_details["labels"]["monitoring_tool"] = monitoring_tool
+
+    return build_rca_prompt("victorops", alert_details, providers, user_id)

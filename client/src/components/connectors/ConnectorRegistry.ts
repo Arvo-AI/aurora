@@ -160,6 +160,28 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "opensearch",
+      name: "OpenSearch",
+      description: "Connect your OpenSearch cluster to search logs and traces during incident RCA. Aurora queries your logs to find error patterns correlated with alerts.",
+      iconPath: "/opensearch.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Observability",
+      path: "/opensearch/auth",
+      storageKey: "isOpenSearchConnected",
+    });
+
+    this.register({
+      id: "victorops",
+      name: "Splunk On-Call",
+      description: "Connect Splunk On-Call (VictorOps) to receive real-time incident alerts. Automatically trigger AI-powered RCA when incidents fire.",
+      iconPath: "/victorops.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Incident Management",
+      path: "/victorops/auth",
+      storageKey: "isVictorOpsConnected",
+    });
+
+    this.register({
       id: "opsgenie",
       name: "OpsGenie / JSM",
       description: "Connect OpsGenie or Jira Service Management for alert tracking and on-call schedules",
