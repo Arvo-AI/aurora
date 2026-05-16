@@ -401,7 +401,7 @@ def run_discovery_for_user(user_id, connected_providers):
         if tmpdir:
             try:
                 shutil.rmtree(tmpdir, ignore_errors=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[Discovery] Failed to clean up temp dir %s (ignored): %s", tmpdir, e)
 
     return summary

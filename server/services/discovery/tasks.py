@@ -293,6 +293,61 @@ def _task_belongs_to_user(task_info, user_id):
     return str(kwargs.get("user_id", "")) == str(user_id)
 
 
+def _get_sa_project_ids(token_data, user_id):
+    """Return project IDs from a service-account GCP token."""
+    accessible = token_data.get("accessible_projects") or []
+    project_ids = [
+        p.get("project_id") or p.get("projectId")
+        for p in accessible
+        if isinstance(p, dict)
+    ]
+    project_ids = [pid for pid in project_ids if pid]
+    if not project_ids:
+        default = token_data.get("default_project_id")
+        if default:
+            project_ids = [default]
+    logger.info("[Discovery] Found %d GCP projects (SA) for user %s", len(project_ids), user_id)
+    return project_ids, None
+
+
+def _get_oauth_project_ids(user_id):
+    """Return project IDs via the Cloud Resource Manager API (OAuth path).
+
+    Proactively refreshes the access token before use so a near-expired token
+    doesn't cause the enumeration call to fail.
+
+    Returns:
+        Tuple of (project_ids: list[str], credential_error: str | None).
+    """
+    from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
+
+    refreshed = _refresh_gcp(user_id, "gcp")
+    if refreshed is None:
+        err = "GCP token refresh failed: Reauthentication is needed. Please reconnect your GCP account."
+        logger.warning("[Discovery] %s (user=%s)", err, user_id)
+        return [], err
+
+    from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
+    from connectors.gcp_connector.billing import has_active_billing
+
+    credentials = get_credentials(refreshed)
+    projects = get_project_list(credentials)
+
+    project_ids = []
+    for p in projects:
+        pid = p.get("projectId")
+        if not pid:
+            continue
+        try:
+            if has_active_billing(pid, credentials):
+                project_ids.append(pid)
+        except Exception:
+            project_ids.append(pid)
+
+    logger.info("[Discovery] Found %d GCP projects (OAuth) for user %s", len(project_ids), user_id)
+    return project_ids, None
+
+
 def _get_all_gcp_project_ids(user_id):
     """Get all GCP project IDs accessible to the user.
 
@@ -311,7 +366,6 @@ def _get_all_gcp_project_ids(user_id):
         from connectors.gcp_connector.auth.service_accounts import (
             get_gcp_auth_type, GCP_AUTH_TYPE_SA,
         )
-        from connectors.gcp_connector.billing import has_active_billing
 
         token_data = get_token_data(user_id, "gcp")
         if not token_data:
@@ -319,62 +373,83 @@ def _get_all_gcp_project_ids(user_id):
             return [], None
 
         if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-            # SA connections store the project list at connection time.
-            accessible = token_data.get("accessible_projects") or []
-            project_ids = [
-                p.get("project_id") or p.get("projectId")
-                for p in accessible
-                if isinstance(p, dict)
-            ]
-            project_ids = [pid for pid in project_ids if pid]
-            if not project_ids:
-                # Fall back to the single default project stored on the token.
-                default = token_data.get("default_project_id")
-                if default:
-                    project_ids = [default]
-            logger.info("[Discovery] Found %d GCP projects (SA) for user %s", len(project_ids), user_id)
-            return project_ids, None
+            return _get_sa_project_ids(token_data, user_id)
 
-        # OAuth path — proactively refresh the access token before use so that
-        # a near-expired token doesn't cause the enumeration call to fail. If
-        # the refresh itself fails (dead refresh token, revoked consent, etc.)
-        # we surface the error string so it feeds into the credential failure
-        # tracker rather than being silently swallowed by get_credentials().
-        from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
-
-        refreshed = _refresh_gcp(user_id, "gcp")
-        if refreshed is None:
-            # Refresh failed — refresh token is dead or missing. Return a
-            # recognisable error string so _handle_provider_errors can count
-            # this as a credential failure and eventually auto-disconnect.
-            err = "GCP token refresh failed: Reauthentication is needed. Please reconnect your GCP account."
-            logger.warning("[Discovery] %s (user=%s)", err, user_id)
-            return [], err
-
-        # Enumerate via Cloud Resource Manager API.
-        # Pass the already-refreshed token data directly — avoids a second
-        # Vault round-trip that get_credentials_from_db would otherwise make.
-        from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
-
-        credentials = get_credentials(refreshed)
-        projects = get_project_list(credentials)
-
-        project_ids = []
-        for p in projects:
-            pid = p.get("projectId")
-            if not pid:
-                continue
-            try:
-                if has_active_billing(pid, credentials):
-                    project_ids.append(pid)
-            except Exception:
-                project_ids.append(pid)
-
-        logger.info("[Discovery] Found %d GCP projects (OAuth) for user %s", len(project_ids), user_id)
-        return project_ids, None
+        return _get_oauth_project_ids(user_id)
     except Exception as e:
         logger.error("[Discovery] Failed to enumerate GCP projects for user %s: %s", user_id, e)
         return [], str(e)
+
+
+def _resolve_gcp_provider(user_id, org_id, providers, get_owner):
+    """Resolve GCP project IDs for the org and update *providers* in-place.
+
+    Fetches the token owner, waits for post-auth setup, then fills
+    ``providers["gcp"]`` with the resolved project list.  If no projects are
+    found the "gcp" key is removed from *providers* and any credential error
+    is forwarded to the failure tracker.
+
+    Returns the resolved owner_id so callers can use it for error tracking.
+    """
+    from utils.auth.stateless_auth import get_user_preference
+
+    owner_id = get_owner(user_id, "gcp")
+    _wait_for_gcp_post_auth(owner_id)
+    gcp_project_ids, gcp_cred_error = _get_all_gcp_project_ids(owner_id)
+
+    if gcp_project_ids:
+        providers["gcp"] = {"project_ids": gcp_project_ids}
+        return owner_id
+
+    root_project = get_user_preference(owner_id, "gcp_root_project")
+    if root_project:
+        providers["gcp"] = {"project_ids": [root_project]}
+        return owner_id
+
+    del providers["gcp"]
+    if gcp_cred_error:
+        _handle_provider_errors(owner_id, "gcp", [gcp_cred_error])
+    logger.warning(
+        "[Discovery Task] No GCP projects for org=%s owner=%s — skipping GCP",
+        org_id, owner_id,
+    )
+    return owner_id
+
+
+def _track_provider_errors_for_org(user_id, providers, provider_errors, get_owner):
+    """Update per-provider failure counters after a discovery run.
+
+    Always iterates all providers so a clean run resets prior failure counts.
+    Uses the credential owner's ID for consistent Redis key namespacing.
+    """
+    for pname in providers:
+        tracking_id = get_owner(user_id, pname)
+        _handle_provider_errors(tracking_id, pname, provider_errors.get(pname, []))
+
+
+def _process_org(org_id, org_info, get_owner, run_discovery):
+    """Run discovery for a single org and return its result dict.
+
+    Returns None when the org has no usable providers and should be skipped.
+    """
+    user_id = org_info["rep"]
+    providers = org_info["providers"]
+
+    if "gcp" in providers:
+        _resolve_gcp_provider(user_id, org_id, providers, get_owner)
+
+    if not providers:
+        logger.info("[Discovery Task] No valid providers for org=%s, skipping", org_id)
+        return None
+
+    summary = run_discovery(user_id, providers)
+    summary["org_id"] = org_id
+    logger.info(
+        "[Discovery Task] Org %s (rep=%s): %d nodes discovered",
+        org_id, user_id, summary.get("phase1_nodes", 0),
+    )
+    _track_provider_errors_for_org(user_id, providers, summary.get("provider_errors", {}), get_owner)
+    return summary
 
 
 @celery_app.task(name="services.discovery.tasks.run_full_discovery", bind=True, max_retries=0)
@@ -422,57 +497,12 @@ def run_full_discovery(self):
 
         results = []
         for org_id, org_info in orgs.items():
-            user_id = org_info["rep"]
-            providers = org_info["providers"]
             try:
-                if "gcp" in providers:
-                    # Resolve the GCP credential owner so token refresh and
-                    # Vault reads go against the correct row.
-                    owner_id = _get_owner(user_id, "gcp")
-                    _wait_for_gcp_post_auth(owner_id)
-                    gcp_project_ids, gcp_cred_error = _get_all_gcp_project_ids(owner_id)
-                    if gcp_project_ids:
-                        providers["gcp"] = {"project_ids": gcp_project_ids}
-                    else:
-                        from utils.auth.stateless_auth import get_user_preference
-                        root_project = get_user_preference(owner_id, "gcp_root_project")
-                        if root_project:
-                            providers["gcp"] = {"project_ids": [root_project]}
-                        else:
-                            del providers["gcp"]
-                            if gcp_cred_error:
-                                _handle_provider_errors(owner_id, "gcp", [gcp_cred_error])
-                            logger.warning(
-                                "[Discovery Task] No GCP projects for org=%s owner=%s — skipping GCP",
-                                org_id, owner_id,
-                            )
-
-                if not providers:
-                    logger.info("[Discovery Task] No valid providers for org=%s, skipping", org_id)
-                    continue
-
-                summary = run_discovery_for_user(user_id, providers)
-                summary["org_id"] = org_id
-                results.append(summary)
-                logger.info(
-                    "[Discovery Task] Org %s (rep=%s): %d nodes discovered",
-                    org_id, user_id, summary.get("phase1_nodes", 0),
-                )
-
-                # Use provider_errors from the summary — accurately tagged at
-                # the source, no string matching. Always iterate all providers
-                # so that a clean run resets any prior failure counter.
-                provider_errors = summary.get("provider_errors", {})
-                for pname in providers:
-                    # Always resolve to the credential owner so that the Redis
-                    # key namespace is consistent: failures and resets both use
-                    # tracking_id, preventing a clean run from resetting under
-                    # the wrong (representative) user_id.
-                    tracking_id = _get_owner(user_id, pname)
-                    pname_errors = provider_errors.get(pname, [])
-                    _handle_provider_errors(tracking_id, pname, pname_errors)
-
+                result = _process_org(org_id, org_info, _get_owner, run_discovery_for_user)
+                if result is not None:
+                    results.append(result)
             except Exception:
+                user_id = org_info["rep"]
                 logger.exception("[Discovery Task] Failed for org=%s rep=%s", org_id, user_id)
                 results.append({"org_id": org_id, "user_id": user_id, "error": "see logs"})
 

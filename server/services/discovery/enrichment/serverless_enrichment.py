@@ -402,6 +402,47 @@ def _fetch_raw_env_vars(node, aws_account_envs, _any_aws_env, gcp_env, gcp_defau
     return None
 
 
+def _process_serverless_node(node, aws_account_envs, _any_aws_env, gcp_env, gcp_default_project):
+    """Fetch and parse env-var dependencies for a single serverless node.
+
+    Returns:
+        (name, parsed_deps, error_msg) where:
+            - name is None when the node should be skipped entirely.
+            - parsed_deps is a list (possibly empty) of dependency dicts.
+            - error_msg is a non-None string when an error should be recorded.
+    """
+    name = node.get("name", "")
+    provider = node.get("provider", "")
+    if not name:
+        return None, [], None
+
+    try:
+        raw_env_vars = _fetch_raw_env_vars(
+            node, aws_account_envs, _any_aws_env, gcp_env, gcp_default_project
+        )
+    except ValueError as e:
+        return name, [], str(e)
+    except Exception as e:
+        msg = f"Failed to fetch env vars for {provider}/{name}: {e}"
+        logger.warning(msg)
+        return name, [], msg
+
+    if raw_env_vars is None:
+        return None, [], None
+
+    if not raw_env_vars:
+        logger.debug("No environment variables found for %s/%s", provider, name)
+        return name, [], None
+
+    parsed_deps = _extract_dependencies_from_env(raw_env_vars)
+    if parsed_deps:
+        logger.info(
+            "Extracted %d dependency hints from %s/%s",
+            len(parsed_deps), provider, name,
+        )
+    return name, parsed_deps, None
+
+
 def enrich(user_id, serverless_nodes, credentials_by_provider, provider_envs=None):
     """Extract environment variable dependency hints from serverless functions.
 
@@ -426,8 +467,6 @@ def enrich(user_id, serverless_nodes, credentials_by_provider, provider_envs=Non
             - env_vars: Dict mapping service name to its parsed dependencies.
             - errors: List of error message strings.
     """
-    errors = []
-    env_vars_result = {}
     if provider_envs is None:
         provider_envs = {}
 
@@ -450,42 +489,16 @@ def enrich(user_id, serverless_nodes, credentials_by_provider, provider_envs=Non
     gcp_project_ids = gcp_creds.get("project_ids") or []
     gcp_default_project = gcp_project_ids[0] if gcp_project_ids else gcp_creds.get("project_id", "")
 
+    errors = []
+    env_vars_result = {}
     for node in serverless_nodes:
-        name = node.get("name", "")
-        provider = node.get("provider", "")
-        if not name:
-            continue
-
-        try:
-            raw_env_vars = _fetch_raw_env_vars(
-                node, aws_account_envs, _any_aws_env, gcp_env, gcp_default_project
-            )
-        except ValueError as e:
-            errors.append(str(e))
-            continue
-        except Exception as e:
-            msg = f"Failed to fetch env vars for {provider}/{name}: {e}"
-            logger.warning(msg)
-            errors.append(msg)
-            continue
-
-        if raw_env_vars is None:
-            continue
-
-        if not raw_env_vars:
-            logger.debug("No environment variables found for %s/%s", provider, name)
-            continue
-
-        # Parse dependencies from env vars (values are NOT stored)
-        parsed_deps = _extract_dependencies_from_env(raw_env_vars)
-        if parsed_deps:
-            env_vars_result[name] = {
-                "parsed_dependencies": parsed_deps,
-            }
-            logger.info(
-                "Extracted %d dependency hints from %s/%s",
-                len(parsed_deps), provider, name,
-            )
+        name, parsed_deps, error_msg = _process_serverless_node(
+            node, aws_account_envs, _any_aws_env, gcp_env, gcp_default_project
+        )
+        if error_msg:
+            errors.append(error_msg)
+        if name and parsed_deps:
+            env_vars_result[name] = {"parsed_dependencies": parsed_deps}
 
     logger.info(
         "Serverless enrichment complete for user %s: %d services with dependencies, %d errors",
