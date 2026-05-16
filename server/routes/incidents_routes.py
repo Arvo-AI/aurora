@@ -56,12 +56,15 @@ def _parse_suggestion_id(suggestion_id: str) -> Optional[int]:
 def _build_source_url(source_type: str, user_id: str) -> str:
     """Build platform URL from user's integration settings."""
     try:
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
-                    "SELECT client_id FROM user_tokens WHERE user_id=%s AND provider=%s",
-                    (user_id, source_type),
+                    f"SELECT client_id FROM user_tokens WHERE {predicate} AND provider=%s LIMIT 1",
+                    (*pred_params, source_type),
                 )
                 row = cursor.fetchone()
                 client_id = row[0] if row else None
@@ -801,9 +804,23 @@ def get_incident(user_id, incident_id: str):
                     usage_params = None
 
                     if all_session_ids:
+                        # Match parent sessions + child sub-agent sessions ({parent}::sa_N).
+                        # Children use a prefix range scan per parent (index-friendly,
+                        # immune to wildcards in session_id). Upper bound replaces the
+                        # trailing `:` with `;` — the smallest string strictly greater
+                        # than every `{sid}::*`.
                         placeholders = ",".join(["%s"] * len(all_session_ids))
-                        session_where = f"session_id IN ({placeholders})"
-                        session_params = tuple(all_session_ids)
+                        range_clauses = " OR ".join(
+                            ["(session_id >= %s AND session_id < %s)"] * len(all_session_ids)
+                        )
+                        session_where = (
+                            f"(session_id IN ({placeholders}) OR ({range_clauses}))"
+                        )
+                        range_params: list = []
+                        for sid in all_session_ids:
+                            range_params.append(f"{sid}::")
+                            range_params.append(f"{sid}:;")
+                        session_params = tuple(all_session_ids) + tuple(range_params)
 
                         cursor.execute(
                             f"""
@@ -1090,20 +1107,22 @@ def update_incident(user_id, incident_id: str):
                     conn.commit()
                     _record_audit_event(org_id or "", user_id, f"incident_{event_type}", "incident", incident_id, {"from": previous_status, "to": data["status"]}, request)
 
-                # Trigger postmortem generation only on transition to resolved
+                # Trigger on_incident actions for the "resolved" event
                 if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
-                        from chat.background.postmortem_generator import generate_postmortem
-                        generate_postmortem.delay(incident_id, user_id, org_id)
+                        from services.actions.executor import dispatch_on_incident_actions
+                        from services.actions.system_actions import seed_system_actions
+                        if org_id:
+                            seed_system_actions(org_id, user_id)
+                        dispatch_on_incident_actions(user_id, incident_id, timing="resolved")
                         logger.info(
-                            "[INCIDENTS] Triggered postmortem generation for resolved incident %s",
+                            "[INCIDENTS] Dispatched on-resolved actions for incident %s",
                             sanitize(incident_id),
                         )
-                    except Exception as pm_exc:
+                    except Exception:
                         logger.warning(
-                            "[INCIDENTS] Failed to trigger postmortem generation for incident %s: %s",
+                            "[INCIDENTS] on-resolved actions failed for %s",
                             sanitize(incident_id),
-                            pm_exc,
                         )
 
                 logger.info(

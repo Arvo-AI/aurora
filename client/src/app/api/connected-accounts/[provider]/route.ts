@@ -24,7 +24,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -454,6 +454,26 @@ export async function DELETE(
         console.error('Backend error disconnecting incident.io:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect incident.io' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for Sentry
+    if (provider === 'sentry') {
+      const response = await fetch(`${API_BASE_URL}/sentry/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting Sentry:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Sentry' },
           { status: response.status }
         )
       }

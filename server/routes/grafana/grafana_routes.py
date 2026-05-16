@@ -22,12 +22,15 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
     Returns (row_exists, is_active).
     """
     try:
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:has_row]")
                 cursor.execute(
-                    "SELECT is_active FROM user_tokens WHERE user_id = %s AND provider = 'grafana' LIMIT 1",
-                    (user_id,),
+                    f"SELECT is_active FROM user_tokens WHERE {predicate} AND provider = 'grafana' ORDER BY is_active DESC LIMIT 1",
+                    (*pred_params,),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -41,13 +44,16 @@ def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
 def _set_grafana_active(user_id: str, active: bool) -> bool:
     """Flip is_active on the existing Grafana user_tokens row."""
     try:
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[GRAFANA:set_active]")
                 cursor.execute(
-                    "UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
-                    "WHERE user_id = %s AND provider = 'grafana'",
-                    (active, user_id),
+                    f"UPDATE user_tokens SET is_active = %s, timestamp = CURRENT_TIMESTAMP "
+                    f"WHERE {predicate} AND provider = 'grafana'",
+                    (active, *pred_params),
                 )
                 updated = cursor.rowcount > 0
             conn.commit()
@@ -220,18 +226,23 @@ def get_alerts(user_id):
 @grafana_bp.route("/alerts/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
-    """Get the webhook URL that should be configured in Grafana."""
-    # Use ngrok URL for development if available, otherwise use backend URL
+    """Get the webhook URL that should be configured in Grafana.
+
+    When credentials are org-shared, returns the URL belonging to the token
+    owner so org members see the same webhook URL without needing their own row.
+    """
+    from utils.secrets.secret_ref_utils import get_token_owner_id
+    webhook_owner_id = get_token_owner_id(user_id, "grafana")
+
     ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
 
-    # For development, prefer ngrok URL if available
     if ngrok_url and backend_url.startswith("http://localhost"):
         base_url = ngrok_url
     else:
         base_url = backend_url
 
-    webhook_url = f"{base_url}/grafana/alerts/webhook/{user_id}"
+    webhook_url = f"{base_url}/grafana/alerts/webhook/{webhook_owner_id}"
 
     return jsonify({
         "webhookUrl": webhook_url,

@@ -65,7 +65,7 @@ _BARE_BASENAME_ALLOWED = frozenset({
     "awk", "gawk", "mawk", "nawk",
     "perl", "php", "python", "python2", "python3",
     "vim", "rvim", "vimdiff",
-    "nc", "ncat",
+    "nc", "ncat", "netcat",
 })
 
 

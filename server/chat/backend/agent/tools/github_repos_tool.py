@@ -53,20 +53,34 @@ def get_connected_repos(**kwargs) -> str:
     try:
         from utils.db.connection_pool import db_pool
         from utils.auth.stateless_auth import set_rls_context
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[GithubRepos:list]")
+                # Predicate from utils.db.org_scope.org_read_predicate uses
+                # table-unqualified column names (e.g. "user_id"), so the
+                # outer SELECT mirrors that by referencing
+                # github_connected_repos via the alias "r" and joining
+                # github_installations as "i" inside a subquery to keep
+                # predicate column references unambiguous.
                 cur.execute(
-                    """SELECT r.repo_full_name, r.default_branch, r.is_private,
-                              r.metadata_summary, r.metadata_status, r.installation_id,
+                    f"""SELECT DISTINCT ON (r.repo_full_name)
+                              r.repo_full_name, r.default_branch, r.is_private,
+                              r.metadata_summary, r.metadata_status,
+                              r.installation_id,
                               (i.installation_id IS NOT NULL
                                   AND i.suspended_at IS NULL) AS has_active_installation
-                       FROM github_connected_repos r
+                       FROM (
+                           SELECT *
+                             FROM github_connected_repos
+                            WHERE {predicate}
+                       ) r
                        LEFT JOIN github_installations i
                               ON i.installation_id = r.installation_id
-                       WHERE r.user_id = %s
-                       ORDER BY r.repo_full_name""",
-                    (user_id,),
+                       ORDER BY r.repo_full_name, r.updated_at DESC""",
+                    pred_params,
                 )
                 rows = cur.fetchall()
 
@@ -95,5 +109,5 @@ def get_connected_repos(**kwargs) -> str:
             })
         return json.dumps({"repos": repos})
     except Exception as e:
-        logger.error(f"Error fetching connected repos: {e}", exc_info=True)
+        logger.exception(f"Error fetching connected repos: {e}")
         return json.dumps({"error": f"Failed to fetch connected repos: {e}"})

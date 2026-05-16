@@ -8,6 +8,7 @@ function-scope to keep tests fully isolated.
 
 from __future__ import annotations
 
+import importlib.util as _importlib_util
 import os
 import sys
 from collections.abc import Iterator
@@ -17,6 +18,48 @@ from unittest.mock import MagicMock
 
 import pytest
 
+_server_dir = os.path.join(os.path.dirname(__file__), os.pardir)
+if os.path.abspath(_server_dir) not in sys.path:
+    sys.path.insert(0, os.path.abspath(_server_dir))
+
+# POSTGRES_* must be set before any test module imports utils.db.db_utils
+# (directly or transitively via utils.auth.*, utils.secrets.*, etc.) --
+# db_utils reads these env vars eagerly at import time. Values are inert
+# placeholders; tests stub the connection pool and never dial Postgres.
+os.environ.setdefault("POSTGRES_DB", "aurora_test")
+os.environ.setdefault("POSTGRES_USER", "test_user")
+os.environ.setdefault("POSTGRES_PASSWORD", "test_pw")  # noqa: S105
+os.environ.setdefault("POSTGRES_HOST", "localhost")
+os.environ.setdefault("POSTGRES_PORT", "5432")
+
+# Stub heavy third-party packages so source modules import in a lightweight
+# test env. Only stub when the real package isn't installed — some tests
+# (e.g. test_input_rail.py) need real classes like BaseChatModel / AIMessage.
+# psycopg2 and cryptography are intentionally NOT stubbed: db_session and
+# the GitHub App fixtures below skip cleanly when those are absent, but
+# stubbing them with MagicMock would silently mask real failures.
+_OPTIONAL_PACKAGES = (
+    "neo4j", "casbin", "casbin_sqlalchemy_adapter", "sqlalchemy",
+    "hvac", "redis", "celery", "weaviate", "flask_socketio",
+    "flask_cors", "langchain", "langgraph", "requests", "tiktoken",
+    "dotenv", "flask",
+    "langchain_core", "langchain_core.tools", "langchain_core.language_models",
+    "langchain_core.language_models.chat_models",
+    "langchain_anthropic", "langchain_openai", "langchain_google_genai",
+    "kubernetes", "kubernetes.client", "kubernetes.client.rest",
+    "kubernetes.config", "kubernetes.stream",
+)
+
+for _pkg in _OPTIONAL_PACKAGES:
+    if _pkg in sys.modules:
+        continue
+    try:
+        spec = _importlib_util.find_spec(_pkg)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None:
+        sys.modules[_pkg] = MagicMock()
+
 try:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -25,31 +68,6 @@ except ImportError:  # pragma: no cover — host envs without cryptography
     serialization = None  # type: ignore[assignment]
     rsa = None  # type: ignore[assignment]
     _cryptography_available = False
-
-import importlib.util as _importlib_util
-
-# Compatibility shim for pre-existing tests/services/correlation/ tests that
-# import Aurora services whose third-party deps may be absent on host envs.
-# Only install the MagicMock when the real package isn't on the import path —
-# sys.modules.setdefault would mask a real-but-not-yet-imported package.
-for _stub_pkg in (
-    "neo4j",
-    "casbin",
-    "casbin_sqlalchemy_adapter",
-    "sqlalchemy",
-    "hvac",
-    "redis",
-    "celery",
-    "weaviate",
-    "flask_socketio",
-    "flask_cors",
-    "langchain",
-    "langgraph",
-):
-    if _stub_pkg in sys.modules:
-        continue
-    if _importlib_util.find_spec(_stub_pkg) is None:
-        sys.modules[_stub_pkg] = MagicMock()
 
 try:
     import psycopg2 as _psycopg2
@@ -63,7 +81,7 @@ except ImportError:  # pragma: no cover — host envs without responses installe
 
 try:
     from connectors.github_connector.config import GitHubAppConfig as _GitHubAppConfig
-except ImportError:  # pragma: no cover — Task 3 not yet landed
+except ImportError:  # pragma: no cover
     _GitHubAppConfig = None  # type: ignore[assignment]
 
 

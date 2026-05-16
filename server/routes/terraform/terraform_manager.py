@@ -1283,13 +1283,9 @@ class TerraformManager:
             "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
             "http_proxy", "https_proxy", "no_proxy",
             "TMPDIR", "TMP", "TEMP",
+            "TF_CLI_CONFIG_FILE",
         }
         env = {k: v for k, v in os.environ.items() if k in _TERRAFORM_ENV_ALLOWLIST}
-
-        # Inject per-instance .terraformrc path (avoids mutating os.environ)
-        terraformrc = getattr(self, "_terraformrc_path", None)
-        if terraformrc:
-            env["TF_CLI_CONFIG_FILE"] = terraformrc
         
         # Add cloud provider credentials if authenticator is available
         if self.authenticator:
@@ -1360,119 +1356,9 @@ class TerraformManager:
         return env
 
     def _create_terraform_network_config(self) -> None:
-        """Create Terraform configuration file for maximum performance and reliability.
-
-        Stores the path in ``self._terraformrc_path`` so that
-        :meth:`_get_terraform_env` can inject it into subprocess
-        environments without mutating ``os.environ``.
-        """
-        try:
-            # Test DNS resolution first
-            self._test_network_connectivity()
-            
-            # Create .terraformrc file in working directory for network optimization
-            terraformrc_path = os.path.join(self.working_dir, ".terraformrc")
-            
-            terraformrc_content = """# Terraform Network Configuration for Maximum Performance and Reliability
-
-# Use direct downloads with performance optimization
-provider_installation {
-  direct {
-    exclude = []
-  }
-}
-
-# Plugin cache to avoid re-downloading (critical for performance)
-plugin_cache_dir = "/tmp/terraform-plugin-cache"
-
-# Performance optimizations
-disable_checkpoint = true
-disable_checkpoint_signature = true
-
-# Network performance settings
-provider_installation_direct_network_timeout = 300
-provider_installation_direct_parallelism = 10
-
-# Allow plugin cache optimizations that may break dependency lock files
-# This significantly speeds up subsequent runs
-plugin_cache_may_break_dependency_lock_file = true
-"""
-            
-            with open(terraformrc_path, 'w') as f:
-                f.write(terraformrc_content)
-            
-            # Create plugin cache directory with proper permissions
-            cache_dir = "/tmp/terraform-plugin-cache"
-            os.makedirs(cache_dir, exist_ok=True)
-            os.chmod(cache_dir, 0o750)  # Ensure proper permissions
-            
-            # Store path so _get_terraform_env can inject it per-subprocess
-            self._terraformrc_path = terraformrc_path
-            
-            logger.info(f"Created Terraform network configuration at {terraformrc_path} (direct downloads only)")
-            
-        except Exception as e:
-            logger.warning(f"Failed to create Terraform network config (proceeding anyway): {e}")
-
-    def _test_network_connectivity(self) -> None:
-        """Test basic network connectivity to HashiCorp registry."""
-        try:
-            import socket
-            import urllib.request
-            
-            # Test DNS resolution for registry.terraform.io
-            try:
-                socket.gethostbyname('registry.terraform.io')
-                logger.info(" DNS resolution successful for registry.terraform.io")
-            except socket.gaierror as e:
-                logger.warning(f" DNS resolution failed for registry.terraform.io: {e}")
-                # Try to resolve 8.8.8.8 to check if DNS is working at all
-                try:
-                    socket.gethostbyname('8.8.8.8')
-                    logger.info("Basic DNS is working, registry.terraform.io might be temporarily unavailable")
-                except:
-                    logger.error("DNS resolution completely broken - network issues detected")
-            
-            # Test HTTP connectivity to registry (with timeout)
-            try:
-                req = urllib.request.Request('https://registry.terraform.io/v1/providers/hashicorp/aws')
-                req.add_header('User-Agent', 'Terraform/1.0')
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    if response.status == 200:
-                        logger.info(" HTTP connectivity successful to Terraform registry")
-            except Exception as e:
-                logger.warning(f" HTTP connectivity test failed: {e}")
-                
-        except Exception as e:
-            logger.warning(f"Network connectivity test failed: {e}")
-
-    def _verify_terraform_registry_access(self) -> bool:
-        """Verify that we can access the Terraform registry before attempting init."""
-        try:
-            import urllib.request
-            import socket
-            
-            # Quick connectivity test to registry.terraform.io
-            socket.setdefaulttimeout(30)  # 30 second timeout
-            
-            logger.info("Testing connectivity to Terraform registry...")
-            
-            # Test with a simple HEAD request to the main registry endpoint
-            req = urllib.request.Request('https://registry.terraform.io/v1/providers/hashicorp/aws')
-            req.add_header('User-Agent', 'Aurora-Terraform/1.0')
-            req.get_method = lambda: 'HEAD'  # Use HEAD to minimize data transfer
-            
-            with urllib.request.urlopen(req, timeout=60) as response:
-                if response.status == 200:
-                    logger.info(" Terraform registry is accessible")
-                    return True
-                else:
-                    logger.warning(f" Terraform registry returned status {response.status}")
-                    return False
-                    
-        except Exception as e:
-            logger.warning(f" Cannot reach Terraform registry: {e}")
-            return False
+        """No-op: Terraform config is baked into the image at /etc/terraform.rc
+        and picked up via TF_CLI_CONFIG_FILE environment variable."""
+        pass
 
     def _fallback_terraform_init(self, env: dict) -> bool:
         """Fallback init method for when registry access fails."""

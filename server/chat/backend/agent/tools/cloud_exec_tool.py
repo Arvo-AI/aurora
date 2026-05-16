@@ -13,6 +13,14 @@ from typing import Dict, Any, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
+# Home directory for isolated subprocess environments.
+# Terminal pods (Dockerfile-user-terminal) create 'appuser' at /home/appuser.
+# The server container (Dockerfile) creates 'app' at /home/app.
+# In local dev (no pod isolation), use the actual process home so cloud CLIs
+# can write config/cache files (.kube, .azure, .config/gcloud, etc.).
+_POD_ISOLATION = os.getenv("ENABLE_POD_ISOLATION", "true") == "true"
+_ISOLATED_HOME = "/home/appuser" if _POD_ISOLATION else str(Path.home())
+
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
@@ -130,12 +138,12 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "AZURE_CLIENT_ID": str(client_id),
             "AZURE_CLIENT_SECRET": str(client_secret),
             "AZURE_TENANT_ID": str(tenant_id),
-            "AZURE_CONFIG_DIR": "/home/appuser/.azure",  # Ensure Azure CLI uses correct config directory
+            "AZURE_CONFIG_DIR": f"{_ISOLATED_HOME}/.azure",
         }
         
         # Store auth command for chaining with user commands (NEVER log the secret!)
@@ -240,7 +248,8 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 external_id=external_id,
                 workspace_id=ws["id"],
                 region=selected_region or "us-east-1",
-                session_policy=session_policy
+                session_policy=session_policy,
+                user_id=user_id,
             )
 
             aws_credentials = {
@@ -276,7 +285,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "AWS_ACCESS_KEY_ID": str(access_key_id),
             "AWS_SECRET_ACCESS_KEY": str(secret_access_key),
@@ -413,6 +422,7 @@ def setup_aws_environments_all_accounts(user_id: str):
                 workspace_id=ws["id"],
                 region=region,
                 session_policy=session_policy,
+                user_id=user_id,
             )
         except Exception as e:
             logger.error("Failed to assume role for account %s: %s", account_id, e)
@@ -515,7 +525,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
 
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
@@ -617,7 +627,9 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
                         }
                         if project_id:
                             updated_storage["projectId"] = project_id
-                        store_tokens_in_db(user_id, updated_storage, 'ovh')
+                        from utils.secrets.secret_ref_utils import get_token_owner_id
+                        owner_id = get_token_owner_id(user_id, "ovh")
+                        store_tokens_in_db(owner_id, updated_storage, 'ovh')
                         logger.info("Successfully refreshed OVH access token")
                     else:
                         logger.error(f"Failed to refresh OVH token: {refresh_response.status_code}")
@@ -644,7 +656,7 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "OVH_ACCESS_TOKEN": access_token,
             "OVH_ENDPOINT": ovh_endpoint,
@@ -698,7 +710,7 @@ def setup_scaleway_environment_isolated(user_id: str, selected_project_id: str |
         # SCW_DEFAULT_REGION, SCW_DEFAULT_ZONE
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "SCW_ACCESS_KEY": access_key,
             "SCW_SECRET_KEY": secret_key,

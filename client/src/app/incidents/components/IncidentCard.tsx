@@ -376,7 +376,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               )}
             </div>
           </div>
-          <StatusPill status={incident.auroraStatus} />
+          <div className="flex items-center gap-3">
+            <StatusPill status={incident.auroraStatus} />
+          </div>
         </div>
 
         {/* Alert title */}

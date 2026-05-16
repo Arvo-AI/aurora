@@ -84,7 +84,8 @@ class STSAssumeRoleClient:
         external_id: str,
         workspace_id: str,
         duration_seconds: int = 3600,
-        session_policy: Optional[str] = None
+        session_policy: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Assume a workspace role with ExternalId and return cached credentials.
@@ -115,7 +116,7 @@ class STSAssumeRoleClient:
         # SECURITY: Validate that external_id matches the workspace's expected external_id
         # This prevents attackers from using incorrect External IDs
         from utils.workspace.workspace_utils import get_workspace_by_id
-        workspace = get_workspace_by_id(workspace_id)
+        workspace = get_workspace_by_id(workspace_id, user_id=user_id)
         if not workspace:
             raise ValueError(f"Workspace {workspace_id} not found")
         
@@ -397,7 +398,8 @@ def assume_workspace_role(
     workspace_id: str,
     duration_seconds: int = 3600,
     region: str = "us-east-1",
-    session_policy: Optional[str] = None
+    session_policy: Optional[str] = None,
+    user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Convenience function to assume a workspace role.
@@ -409,12 +411,13 @@ def assume_workspace_role(
         duration_seconds: Session duration
         region: AWS region
         session_policy: Optional session policy JSON to restrict permissions
+        user_id: User identifier (required in Celery/background context for RLS)
 
     Returns:
         AWS credentials dictionary
     """
     client = get_sts_client(region)
-    return client.assume_workspace_role(role_arn, external_id, workspace_id, duration_seconds, session_policy)
+    return client.assume_workspace_role(role_arn, external_id, workspace_id, duration_seconds, session_policy, user_id=user_id)
 
 
 def create_workspace_session(

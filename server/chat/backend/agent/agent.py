@@ -8,6 +8,7 @@ from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
@@ -15,19 +16,50 @@ from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, asse
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 import time
 import asyncio
+from datetime import datetime, timezone
+from typing import Optional
 
 # Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
 # because features like Gemini thinking only work with their native SDK.
 _DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
 
 
+def _extract_reasoning_from_delta(delta: dict) -> tuple:
+    """Extract reasoning text from an OpenRouter streaming delta.
+
+    Returns (reasoning_text, has_reasoning_details) where has_reasoning_details
+    indicates the delta carried a reasoning_details array regardless of whether
+    any text was extractable.
+    """
+    reasoning = delta.get("reasoning") or ""
+    reasoning_details = delta.get("reasoning_details")
+    has_reasoning_details = bool(reasoning_details) and isinstance(reasoning_details, list)
+
+    if has_reasoning_details:
+        parts = [
+            detail.get("text", "")
+            for detail in reasoning_details
+            if isinstance(detail, dict) and detail.get("text")
+        ]
+        if parts:
+            reasoning = (reasoning + "".join(parts)) if reasoning else "".join(parts)
+
+    return reasoning, has_reasoning_details
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass that captures OpenRouter reasoning fields.
 
-    OpenRouter returns reasoning content in delta.reasoning / delta.reasoning_details,
-    but LangChain's _convert_delta_to_message_chunk ignores these fields. This subclass
-    captures them and puts reasoning into additional_kwargs["reasoning_content"] so that
-    workflow.py's streaming code can forward it to the ThoughtsPanel.
+    OpenRouter returns reasoning content in delta.reasoning and/or
+    delta.reasoning_details, but LangChain's _convert_delta_to_message_chunk
+    ignores these fields. This subclass captures them into
+    additional_kwargs["reasoning_content"] so workflow.py can separate reasoning
+    from user-visible output.
+
+    For Google models via OpenRouter, reasoning arrives in reasoning_details
+    (array of objects with .text) rather than the plain reasoning string field.
+    When reasoning_details is present, the chunk's content should be treated as
+    reasoning — not streamed to the user as normal output.
     """
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
@@ -35,11 +67,18 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         if result is None:
             return None
         choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
-        if choices:
-            delta = choices[0].get("delta") or {}
-            reasoning = delta.get("reasoning")
-            if reasoning and hasattr(result.message, "additional_kwargs"):
-                result.message.additional_kwargs["reasoning_content"] = reasoning
+        if not choices:
+            return result
+
+        delta = choices[0].get("delta") or {}
+        reasoning, has_reasoning_details = _extract_reasoning_from_delta(delta)
+
+        if reasoning and hasattr(result.message, "additional_kwargs"):
+            result.message.additional_kwargs["reasoning_content"] = reasoning
+
+        if (reasoning or has_reasoning_details) and not delta.get("content"):
+            result.message.content = ""
+
         return result
 
 class Agent:
@@ -67,6 +106,11 @@ class Agent:
         logging.debug(f"WEBSOCKET DEBUG: Updated Agent websocket_sender to {self.websocket_sender}")
     def _cleanup_terraform_files(self, user_id: str = None, session_id: str = None):
         """Clean up terraform files to prevent conflicts and reduce context size."""
+        # Sub-agent sessions (id format: "{parent}::sa_*") are read-only and never
+        # produce terraform files — skip cleanup so we don't trigger path validation
+        # errors on the "::" separator.
+        if session_id and "::" in session_id:
+            return
         try:
             from chat.backend.agent.tools.iac.iac_write_tool import get_terraform_directory
             
@@ -194,7 +238,14 @@ class Agent:
         except Exception as e:
             logging.exception(f"Error fetching session files from storage: {e}")
 
-    async def agentic_tool_flow(self, state: State) -> State:
+    async def agentic_tool_flow(
+        self,
+        state: State,
+        *,
+        system_prompt_override: Optional[str] = None,
+        tool_subset: Optional[list[StructuredTool]] = None,
+        max_turns: Optional[int] = None,
+    ) -> State:
         """Execute cloud tools using the agentic workflow with streaming callbacks."""
         
         # ------------------------------------------------------------------
@@ -296,9 +347,13 @@ class Agent:
 
             # Assemble final system prompt from segments
             system_prompt_text = assemble_system_prompt(segments)
-            
+            if system_prompt_override is not None:
+                system_prompt_text = system_prompt_override
+
             # Get cloud tools
             tools = get_cloud_tools()
+            if tool_subset is not None:
+                tools = tool_subset
             
             
             prompt_text = ''
@@ -314,7 +369,10 @@ class Agent:
             if not self._prompt_references_zip(prompt_text, getattr(state, 'attachments', [])):
                 tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file', 'rag_index_zip')]
 
-            # Register canonicalized prefix + tools with cache middleware
+            # Register canonicalized prefix + tools with cache middleware.
+            # Skip for sub-agents: their `system_prompt_override` (the role brief)
+            # is not built from `segments`, so registering with `segments=segments`
+            # would poison the lead's prefix cache with a mismatched prompt.
             try:
                 pcm = PrefixCacheManager.get_instance()
                 provider = None
@@ -324,9 +382,9 @@ class Agent:
                     provider = pref[0]
                 elif isinstance(pref, str):
                     provider = pref
-                
-                # Only register cache if provider is set
-                if provider:
+
+                # Only register cache if provider is set AND we're the lead agent
+                if provider and system_prompt_override is None:
                     provider = provider.lower()
                     tenant_id = getattr(state, 'user_id', None) or "public"
                     # Register segmented cache breakpoints: tools, system_invariant, provider_constraints, regional_rules, ephemeral
@@ -498,6 +556,7 @@ class Agent:
 
                 # Enable reasoning via OpenRouter's unified reasoning param
                 openrouter_model_kwargs = {}
+                is_background = getattr(state, "is_background", False)
                 if detected_provider == "openai":
                     from chat.backend.agent.providers.openai_provider import OpenAIProvider
                     native = model_name.split("/", 1)[-1] if "/" in model_name else model_name
@@ -505,8 +564,13 @@ class Agent:
                         openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
                         logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
                 elif detected_provider == "google":
-                    openrouter_model_kwargs["extra_body"] = {"reasoning": {"effort": "high"}}
-                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter")
+                    # OpenRouter path only. Direct Google SDK uses structured
+                    # thinking blocks filtered by include_thinking=False downstream.
+                    reasoning_cfg = {"effort": "high"}
+                    if not is_background:
+                        reasoning_cfg["exclude"] = True
+                    openrouter_model_kwargs["extra_body"] = {"reasoning": reasoning_cfg}
+                    logging.info(f"Enabled reasoning effort=high for {openrouter_model_name} via OpenRouter (exclude={not is_background})")
 
                 streaming_llm = _ReasoningChatOpenAI(
                     model=openrouter_model_name,
@@ -526,8 +590,15 @@ class Agent:
             # ContextSafetyMiddleware is a lightweight safety net that also injects
             # correlated RCA context updates into background sessions.
             middlewares = [ContextTrimMiddleware(model_name=model_name)]
-            if getattr(state, "trigger_rca_requested", False):
-                middlewares.insert(0, _ForceToolChoice("trigger_rca"))
+            tool_choice_provider = detected_provider if _use_direct else "openrouter"
+            if getattr(state, "trigger_action_id", None):
+                middlewares.insert(
+                    0, _ForceToolChoice("trigger_action", provider=tool_choice_provider)
+                )
+            elif getattr(state, "trigger_rca_requested", False):
+                middlewares.insert(
+                    0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider)
+                )
 
             agent_graph = create_agent(
                 model=streaming_llm,
@@ -539,8 +610,23 @@ class Agent:
       
             try:         
                 # Get recursion limit from environment variable (required)
-                max_iterations = int(os.environ["AGENT_RECURSION_LIMIT"])
-                
+                env_limit = int(os.environ["AGENT_RECURSION_LIMIT"])
+                max_iterations = env_limit
+                if max_turns is not None:
+                    if max_turns <= 0:
+                        raise ValueError("max_turns must be a positive integer")
+                    # max_turns is logical ReAct turns (LLM call + tool node = 1 turn).
+                    # LangGraph counts each super-step toward recursion_limit, so we
+                    # need ~2x + a small buffer for the terminal write_findings call.
+                    requested = max_turns * 2 + 2
+                    max_iterations = min(requested, env_limit)
+                    if requested > env_limit:
+                        logging.info(
+                            "agent: max_turns=%d wants recursion_limit=%d but "
+                            "AGENT_RECURSION_LIMIT=%d caps it — sub-agent will be throttled",
+                            max_turns, requested, env_limit,
+                        )
+
                 # Prepare chat history for the agent - handle LangChain message objects
                 chat_history = []
                 
@@ -796,6 +882,75 @@ class Agent:
                                     output = chunk_data.get("output")
                                     if output and hasattr(output, 'tool_calls') and output.tool_calls:
                                         logging.debug(f"Detected {len(output.tool_calls)} tool calls at model end")
+                                        # Mirror tool calls into the locally-bound tool_capture so
+                                        # sub-agents (whose tool_capture isn't reachable from the
+                                        # parent workflow's _process_tool_calls_from_chunk) still
+                                        # build a per-sub-agent tool_history. Lead-agent flows
+                                        # already populate via workflow.py — duplicates are
+                                        # deduped by tool_call_id in _extract_tool_call_history.
+                                        if tool_capture is not None:
+                                            for tc in output.tool_calls:
+                                                try:
+                                                    tc_id = tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None)
+                                                    tc_name = tc.get('name') if isinstance(tc, dict) else getattr(tc, 'name', None)
+                                                    tc_args = tc.get('args') if isinstance(tc, dict) else getattr(tc, 'args', {})
+                                                    if not tc_id or not tc_name or tc_args is None:
+                                                        continue
+                                                    # Register into current_tool_calls so the
+                                                    # cloud_tools wrapper can match this call
+                                                    # on completion and fire capture_tool_end.
+                                                    # Without this, sub-agent execution_steps
+                                                    # rows stay status='running' forever.
+                                                    try:
+                                                        tool_capture.capture_tool_start(tc_name, tc_args, tool_call_id=tc_id)
+                                                    except Exception:
+                                                        logging.debug("agent: capture_tool_start mirror failed", exc_info=True)
+                                                    if not hasattr(tool_capture, 'tool_history'):
+                                                        continue
+                                                    tool_capture.tool_history.append({
+                                                        "tool_call_id": tc_id,
+                                                        "tool_name": tc_name,
+                                                        "input": tc_args,
+                                                        "output_excerpt": "",
+                                                        "is_error": False,
+                                                        "started_at": datetime.now(timezone.utc).isoformat(),
+                                                        "completed_at": None,
+                                                    })
+                                                except Exception:
+                                                    logging.debug("agent: tool_history mirror failed", exc_info=True)
+                                elif event_type == "on_tool_end":
+                                    # Update the matching tool_history entry with output excerpt.
+                                    if tool_capture is not None and hasattr(tool_capture, 'tool_history'):
+                                        try:
+                                            data = event.get("data", {}) or {}
+                                            output = data.get("output")
+                                            # The ToolMessage returned by the tool carries the
+                                            # tool_call_id that matches the AIMessage tool call
+                                            # (and therefore the entry stored at on_chat_model_end).
+                                            # event.run_id is the per-node LangGraph UUID, not the
+                                            # model-generated tool_call_id, so it never matches.
+                                            tc_id = (
+                                                getattr(output, 'tool_call_id', None)
+                                                or (output.get('tool_call_id') if isinstance(output, dict) else None)
+                                                or (data.get("input", {}) or {}).get("tool_call_id")
+                                                or event.get("run_id")
+                                            )
+                                            output_str = ""
+                                            is_error = False
+                                            if output is not None:
+                                                content = getattr(output, 'content', output)
+                                                output_str = content if isinstance(content, str) else str(content)
+                                                is_error = bool(getattr(output, 'is_error', False) or getattr(output, 'status', '') == 'error')
+                                            # Find matching entry by tool_call_id (last write wins)
+                                            for entry in reversed(tool_capture.tool_history):
+                                                entry_id = entry.get("tool_call_id")
+                                                if entry_id and tc_id and entry_id == tc_id and not entry.get("completed_at"):
+                                                    entry["output_excerpt"] = output_str[:1000]
+                                                    entry["is_error"] = is_error
+                                                    entry["completed_at"] = datetime.now(timezone.utc).isoformat()
+                                                    break
+                                        except Exception:
+                                            logging.debug("agent: on_tool_end update failed", exc_info=True)
                                 
                                 # Capture final state from chain end events
                                 elif event_type == "on_chain_end" and event_name == "LangGraph":

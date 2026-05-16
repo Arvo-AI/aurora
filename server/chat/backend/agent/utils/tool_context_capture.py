@@ -51,6 +51,18 @@ class InternalToolMessage(ToolMessage):
 
 logger = logging.getLogger(__name__)
 
+# Bound tool output excerpts retained for rca_findings.tool_call_history JSONB.
+_OUTPUT_EXCERPT_MAX_CHARS = 1000
+
+
+def _build_excerpt(output: Optional[str]) -> str:
+    if not output:
+        return ""
+    s = str(output)
+    if len(s) > _OUTPUT_EXCERPT_MAX_CHARS:
+        return s[:_OUTPUT_EXCERPT_MAX_CHARS] + "...[truncated]"
+    return s
+
 # --------------------------------------------------------------------------------------
 # Token counting utility (delegates to LLMUsageTracker for context management only)
 # --------------------------------------------------------------------------------------
@@ -74,6 +86,10 @@ class ToolContextCapture:
                 logger.warning(f"Failed to resolve org_id for user {user_id}, execution-step persistence disabled: {e}")
         self._persist_steps = bool(self.incident_id and self.org_id)
         self.current_tool_calls = {}  # Track ongoing tool calls
+        # Append-only audit log of completed tool calls. current_tool_calls is GC'd
+        # after 60s of staleness, so consumers that run later (e.g. orchestrator
+        # sub-agents that finish after 2+ minutes) cannot rely on it for history.
+        self.tool_history: list = []
         self.collected_tool_messages = []  # Store tool messages for batch addition
         self.tool_execution_signatures = set()  # Track unique tool executions to prevent duplicates
         # Map message content to correct tool_call_id (survives LangGraph mutations)
@@ -195,7 +211,7 @@ class ToolContextCapture:
                     normalized_existing_input = str(call_info['input'])
                 existing_signature = f"{call_info['tool_name']}_{normalized_existing_input}"
                 if existing_signature == tool_signature:
-                    time_diff = (datetime.now() - call_info['start_time']).total_seconds()
+                    time_diff = (datetime.now(timezone.utc) - call_info['start_time']).total_seconds()
                     if time_diff < 30:
                         if "step_id" not in call_info:
                             call_info["step_id"] = self._record_step_start(
@@ -211,7 +227,7 @@ class ToolContextCapture:
         self.current_tool_calls[tool_call_id] = {
             "tool_name": tool_name,
             "input": tool_input,
-            "start_time": datetime.now(),
+            "start_time": datetime.now(timezone.utc),
             "call_id": tool_call_id,
             "signature": tool_signature,
             "step_id": self._record_step_start(tool_name, tool_input, tool_call_id=tool_call_id),
@@ -230,8 +246,55 @@ class ToolContextCapture:
             return
             
         tool_info = self.current_tool_calls[tool_call_id]
+        # Compute excerpt outside the lock — pure string processing, no shared state.
+        output_excerpt = _build_excerpt(output)
+        # Mirror _record_step_end's payload-shape classification so the history
+        # entry (and downstream rca_findings.tool_call_history) matches the
+        # execution_steps row's status.
+        is_err_bool = bool(is_error) or self._output_indicates_error(output)
+        completed_at_iso = datetime.now(timezone.utc).isoformat()
         tool_name = tool_info["tool_name"]
         tool_input = tool_info["input"]
+
+        # Mutate shared dict + append-only history under the lock to avoid races
+        # with concurrent sub-agents.
+        with self.lock:
+            tool_info["output_excerpt"] = output_excerpt
+            tool_info["is_error"] = is_err_bool
+            tool_info["completed_at"] = completed_at_iso
+
+            start_time = tool_info.get("start_time")
+            try:
+                # Idempotent: agent.py's on_chat_model_end may have already pre-populated
+                # an empty stub for this tool_call_id. Update it in place if present so
+                # the extractor doesn't see two rows per call.
+                started_iso = start_time.isoformat() if start_time else None
+                updated = False
+                for existing in reversed(self.tool_history):
+                    if existing.get("tool_call_id") == tool_call_id and not existing.get("completed_at"):
+                        existing["tool_name"] = tool_name
+                        existing["input"] = tool_input
+                        existing["output_excerpt"] = output_excerpt
+                        existing["is_error"] = is_err_bool
+                        if started_iso and not existing.get("started_at"):
+                            existing["started_at"] = started_iso
+                        existing["completed_at"] = completed_at_iso
+                        updated = True
+                        break
+                if not updated:
+                    if len(self.tool_history) >= 256:
+                        self.tool_history.pop(0)
+                    self.tool_history.append({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "input": tool_input,
+                        "output_excerpt": output_excerpt,
+                        "is_error": is_err_bool,
+                        "started_at": started_iso,
+                        "completed_at": completed_at_iso,
+                    })
+            except Exception:
+                logger.debug("tool_history append failed", exc_info=True)
         run_id = tool_info.get("run_id")  # Get the run_id from the tool info
         
         self._record_step_end(tool_info.get("step_id"), output, is_error)

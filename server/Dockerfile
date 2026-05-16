@@ -1,4 +1,15 @@
 # ============================================
+# Build GitHub MCP Server from source (pinned)
+# ============================================
+FROM golang:1.25-bookworm AS github-mcp-build
+
+ARG GITHUB_MCP_VERSION=v1.0.3
+RUN git clone --depth 1 --branch ${GITHUB_MCP_VERSION} \
+        https://github.com/github/github-mcp-server.git /src
+WORKDIR /src
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /github-mcp-server ./cmd/github-mcp-server
+
+# ============================================
 # Base Stage - Common dependencies
 # ============================================
 FROM python:3.12-slim AS base
@@ -64,6 +75,71 @@ RUN ARCH=$(uname -m) && \
     unzip terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip && \
     mv terraform /usr/local/bin/ && \
     rm terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip
+
+# Build Terraform provider filesystem mirror for all supported providers.
+# Each provider is a separate layer so Docker caches them independently.
+RUN mkdir -p /opt/terraform-providers /tmp/_mirror-src
+
+RUN cd /tmp/_mirror-src && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "ovh/ovh"\n      version = ">= 0.36.0"\n    }\n  }\n}\n' \
+      > main.tf && \
+    terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
+    rm main.tf
+
+RUN cd /tmp/_mirror-src && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "scaleway/scaleway"\n      version = ">= 2.0"\n    }\n  }\n}\n' \
+      > main.tf && \
+    terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
+    rm main.tf
+
+RUN cd /tmp/_mirror-src && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/google"\n      version = "~> 4.0"\n    }\n  }\n}\n' \
+      > main.tf && \
+    terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
+    rm main.tf
+
+RUN cd /tmp/_mirror-src && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/azurerm"\n      version = "~> 3.0"\n    }\n  }\n}\n' \
+      > main.tf && \
+    terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
+    rm main.tf
+
+RUN cd /tmp/_mirror-src && \
+    printf 'terraform {\n  required_providers {\n    p = {\n      source = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n' \
+      > main.tf && \
+    terraform providers mirror -platform=linux_$(dpkg --print-architecture) /opt/terraform-providers && \
+    rm -rf /tmp/_mirror-src
+
+# Configure Terraform to use local mirror with network fallback
+RUN cat > /etc/terraform.rc <<'EOF'
+provider_installation {
+  filesystem_mirror {
+    path = "/opt/terraform-providers"
+  }
+  direct {}
+}
+
+plugin_cache_dir = "/app/terraform_workdir/.plugin-cache"
+
+disable_checkpoint = true
+disable_checkpoint_signature = true
+plugin_cache_may_break_dependency_lock_file = true
+EOF
+
+# Airgapped variant: mirror only, no network fallback
+RUN cat > /etc/terraform-airgapped.rc <<'EOF'
+provider_installation {
+  filesystem_mirror {
+    path = "/opt/terraform-providers"
+  }
+}
+
+plugin_cache_dir = "/app/terraform_workdir/.plugin-cache"
+
+disable_checkpoint = true
+disable_checkpoint_signature = true
+plugin_cache_may_break_dependency_lock_file = true
+EOF
 
 # Install Google Cloud SDK
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
@@ -134,6 +210,9 @@ RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy GitHub MCP Server binary from build stage
+COPY --from=github-mcp-build /github-mcp-server /usr/local/bin/github-mcp-server
 
 # Install kubectl for orchestrator to manage terminal pods
 RUN ARCH=$(uname -m) && \

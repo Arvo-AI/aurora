@@ -193,7 +193,20 @@ config:
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
-  
+
+  # --- Multi-agent RCA orchestrator ---
+  # When "true" (default), a lead orchestrator triages each background RCA and
+  # may fan out parallel read-only sub-agents. When "false", background RCA
+  # falls back to the legacy single-agent path. Operational kill-switch: set
+  # to "false" and restart celery workers to fully revert.
+  ORCHESTRATOR_ENABLED: "true"
+  # Triage + synthesis brain. Required when ORCHESTRATOR_ENABLED=true.
+  # Provider/model format (e.g. anthropic/claude-sonnet-4.6).
+  RCA_ORCHESTRATOR_MODEL: ""
+  # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
+  # Needs reliable tool-calling.
+  RCA_SUBAGENT_MODEL: ""
+
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"

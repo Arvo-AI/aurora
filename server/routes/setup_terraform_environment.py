@@ -271,23 +271,8 @@ def setup_ovh_terraform_environment_isolated(user_id: str):
             return False, None, None
 
         # Get user's OVH root project (service_name in OVH API terms)
-        from utils.db.db_utils import connect_to_db_as_user
-        project_id = None
-        try:
-            conn = connect_to_db_as_user()
-            with conn.cursor() as cur:
-                from utils.auth.stateless_auth import set_rls_context
-                set_rls_context(cur, conn, user_id, log_prefix="[Terraform]")
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'ovh_root_project';",
-                    (user_id,)
-                )
-                row = cur.fetchone()
-                if row:
-                    project_id = row[0]
-            conn.close()
-        except Exception as e:
-            logger.warning(f"Could not fetch OVH root project preference: {e}")
+        from utils.auth.stateless_auth import get_user_preference
+        project_id = get_user_preference(user_id, 'ovh_root_project')
 
         if not project_id:
             logger.warning("No OVH root project set - Terraform may need project_id variable")
@@ -364,13 +349,10 @@ def setup_scaleway_terraform_environment_isolated(user_id: str):
                     project_id = row[2]  # subscription_name = default_project_id
                 
                 # Get user's Scaleway root project preference if set
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'scaleway_root_project';",
-                    (user_id,)
-                )
-                pref_row = cur.fetchone()
-                if pref_row and pref_row[0]:
-                    project_id = pref_row[0]  # Override with user preference
+                from utils.auth.stateless_auth import get_user_preference
+                scaleway_pref = get_user_preference(user_id, 'scaleway_root_project')
+                if scaleway_pref:
+                    project_id = scaleway_pref  # Override with preference
         except Exception as e:
             logger.warning(f"Could not fetch Scaleway credentials from database: {e}")
         finally:

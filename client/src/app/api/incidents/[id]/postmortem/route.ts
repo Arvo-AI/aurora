@@ -47,7 +47,7 @@ export async function GET(
       }
 
       const data = await response.json();
-      return NextResponse.json(data);
+      return NextResponse.json(data, { status: response.status });
     } catch (fetchError: unknown) {
       clearTimeout(timeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {

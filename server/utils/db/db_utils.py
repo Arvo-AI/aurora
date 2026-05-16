@@ -313,7 +313,7 @@ def initialize_tables():
                         session_data JSONB,
                         last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         is_active BOOLEAN DEFAULT true,
-                        UNIQUE(user_id, provider)
+                        UNIQUE NULLS NOT DISTINCT (org_id, provider)
                     );
                 """,
                 "github_connected_repos": """
@@ -625,6 +625,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_user_id ON newrelic_events(user_id, received_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
+                """,
+                "sentry_events": """
+                    CREATE TABLE IF NOT EXISTS sentry_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        issue_id VARCHAR(255),
+                        issue_title TEXT,
+                        level VARCHAR(50),
+                        project_slug VARCHAR(255),
+                        resource VARCHAR(50),
+                        action VARCHAR(50),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_sentry_events_org_issue_action
+                        ON sentry_events(org_id, issue_id, action) WHERE issue_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_user_id ON sentry_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_resource ON sentry_events(resource);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_project ON sentry_events(project_slug);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_received_at ON sentry_events(received_at DESC);
                 """,
                 "netdata_alerts": """
                     CREATE TABLE IF NOT EXISTS netdata_verification_tokens (
@@ -1095,6 +1118,19 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
                         ON org_command_policies(org_id);
                 """,
+                "org_tool_permissions": """
+                    CREATE TABLE IF NOT EXISTS org_tool_permissions (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        tool_key VARCHAR(100) NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT false,
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, tool_key)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_otp_org
+                        ON org_tool_permissions(org_id);
+                """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1178,7 +1214,9 @@ def initialize_tables():
                         notion_page_id TEXT,
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
-                        notion_database_id TEXT
+                        notion_database_id TEXT,
+                        generation_session_id VARCHAR(255),
+                        current_version_id UUID
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
@@ -1201,6 +1239,37 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_incident ON incident_lifecycle_events(incident_id, created_at);
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_user ON incident_lifecycle_events(user_id, created_at DESC);
                 """,
+                "rca_findings": """
+                    CREATE TABLE IF NOT EXISTS rca_findings (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        agent_id VARCHAR(64) NOT NULL,
+                        role_name VARCHAR(128) NOT NULL,
+                        purpose TEXT NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'running',
+                        wave INTEGER NOT NULL DEFAULT 1,
+                        storage_uri TEXT,
+                        current_action TEXT,
+                        self_assessed_strength VARCHAR(20),
+                        tools_used JSONB DEFAULT '[]'::jsonb,
+                        citations JSONB DEFAULT '[]'::jsonb,
+                        follow_ups_suggested JSONB DEFAULT '[]'::jsonb,
+                        tool_call_history JSONB DEFAULT '[]'::jsonb,
+                        child_session_id VARCHAR(255),
+                        error_message TEXT,
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        org_id VARCHAR(255),
+                        user_id VARCHAR(255) NOT NULL
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_rca_findings_incident_agent
+                    ON rca_findings(incident_id, agent_id);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_incident_status
+                    ON rca_findings(incident_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
+                    ON rca_findings(org_id, started_at DESC);
+                """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -1217,6 +1286,44 @@ def initialize_tables():
 
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
+                """,
+                "actions": """
+                    CREATE TABLE IF NOT EXISTS actions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        description TEXT,
+                        instructions TEXT NOT NULL,
+                        trigger_type VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        trigger_config JSONB DEFAULT '{}',
+                        mode VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        enabled BOOLEAN NOT NULL DEFAULT true,
+                        is_system BOOLEAN NOT NULL DEFAULT false,
+                        system_key VARCHAR(100),
+                        default_instructions TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_actions_org ON actions(org_id);
+                    CREATE INDEX IF NOT EXISTS idx_actions_trigger ON actions(org_id, trigger_type, enabled);
+                """,
+                "action_runs": """
+                    CREATE TABLE IF NOT EXISTS action_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        action_id UUID NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        chat_session_id VARCHAR(255),
+                        incident_id UUID,
+                        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                        trigger_context JSONB DEFAULT '{}',
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        error TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
+                    CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
             }
 
@@ -1258,6 +1365,7 @@ def initialize_tables():
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
             rls_tables.append("newrelic_events")
+            rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
 
             # Add monitoring tables
@@ -1293,6 +1401,11 @@ def initialize_tables():
             # column is still populated on insert for future RLS migration.
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("org_tool_permissions")
+            rls_tables.append("rca_findings")
+            rls_tables.append("actions")
+            rls_tables.append("action_runs")
+            rls_tables.append("postmortem_versions")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1409,6 +1522,18 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: add system action columns to actions table
+            try:
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false;")
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS system_key VARCHAR(100);")
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS default_instructions TEXT;")
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_system_key ON actions(org_id, system_key) WHERE system_key IS NOT NULL;")
+                conn.commit()
+                logging.info("Ensured system action columns exist on actions table.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for actions system columns: {e}")
+
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
                 cursor.execute(
@@ -1499,6 +1624,95 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding stateless columns to user_tokens: {e}")
+                conn.rollback()
+
+            # Migration: replace per-user unique constraint with per-org unique constraint on
+            # user_tokens so that an org shares one credential row per provider.
+            try:
+                # Step 1: collect secret_refs of rows that will be removed by deduplication
+                # so their Vault entries can be cleaned up before the rows are deleted.
+                orphaned_refs = []
+                try:
+                    cursor.execute("""
+                        SELECT secret_ref FROM user_tokens
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY org_id, provider
+                                           ORDER BY COALESCE(last_activity, timestamp) DESC
+                                       ) AS rn
+                                FROM user_tokens
+                            ) ranked
+                            WHERE rn > 1
+                        ) AND secret_ref IS NOT NULL
+                    """)
+                    orphaned_refs = [row[0] for row in cursor.fetchall() if row[0]]
+                except Exception as e:
+                    logging.warning(f"Could not collect orphaned secret_refs before dedup: {e}")
+
+                # Step 2: delete orphaned Vault secrets before removing DB rows
+                if orphaned_refs:
+                    try:
+                        from utils.secrets.secret_ref_utils import SecretRefManager
+                        sm = SecretRefManager()
+                        for ref in orphaned_refs:
+                            try:
+                                sm.delete_secret(ref)
+                            except Exception as ref_err:
+                                logging.warning(f"Failed to delete orphaned Vault secret: {ref_err}")
+                        logging.info(
+                            "Cleaned up %d orphaned Vault secret(s) before deduplication.",
+                            len(orphaned_refs),
+                        )
+                    except Exception as e:
+                        logging.warning(f"Could not clean up orphaned Vault secrets: {e}")
+
+                # Step 3: dedup rows and swap the unique constraint.
+                # NULLS NOT DISTINCT (PG ≥ 15) makes (NULL, provider) a unique key, so
+                # the dedup runs over ALL rows — not only those with a non-NULL org_id.
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        DELETE FROM user_tokens
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY org_id, provider
+                                           ORDER BY COALESCE(last_activity, timestamp) DESC
+                                       ) AS rn
+                                FROM user_tokens
+                            ) ranked
+                            WHERE rn > 1
+                        );
+
+                        -- Drop the old per-user constraint if it still exists
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_tokens_user_id_provider_key'
+                              AND conrelid = 'user_tokens'::regclass
+                        ) THEN
+                            ALTER TABLE user_tokens DROP CONSTRAINT user_tokens_user_id_provider_key;
+                        END IF;
+
+                        -- Add the new per-org constraint if it doesn't exist yet.
+                        -- NULLS NOT DISTINCT ensures (NULL, provider) is also unique.
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_tokens_org_id_provider_key'
+                              AND conrelid = 'user_tokens'::regclass
+                        ) THEN
+                            ALTER TABLE user_tokens ADD CONSTRAINT user_tokens_org_id_provider_key
+                                UNIQUE NULLS NOT DISTINCT (org_id, provider);
+                        END IF;
+                    END
+                    $$;
+                """)
+                logging.info("Migrated user_tokens unique constraint to (org_id, provider).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error migrating user_tokens unique constraint: {e}")
                 conn.rollback()
 
             # Migration: Add ui_state column to chat_sessions if it doesn't exist
@@ -1969,7 +2183,9 @@ def initialize_tables():
                         notion_page_id TEXT,
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
-                        notion_database_id TEXT
+                        notion_database_id TEXT,
+                        generation_session_id VARCHAR(255),
+                        current_version_id UUID
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
@@ -2100,6 +2316,43 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error backfilling postmortem_exports: {e}")
                 conn.rollback()
+
+            # Create postmortem_versions table for version history
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS postmortem_versions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        postmortem_id UUID NOT NULL REFERENCES postmortems(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT NOT NULL,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        source VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        generation_session_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_versions_postmortem
+                        ON postmortem_versions(postmortem_id, version_number DESC);
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_versions_org
+                        ON postmortem_versions(org_id);
+                """)
+                logging.info("Created postmortem_versions table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating postmortem_versions table: {e}")
+                conn.rollback()
+
+            # Migrations: postmortem columns for existing deployments
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS current_version_id UUID;
+                    ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for postmortem columns: {e}")
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
             # columns to incidents table.

@@ -48,7 +48,7 @@ _DESTRUCTIVE_MCP_TOOLS = {
     "merge_pull_request", "update_pull_request_branch", "fork_repository",
     "add_issue_comment", "add_comment_to_pending_review", "add_project_item",
     "delete_file", "delete_pending_review", "cancel_workflow_run",
-    "rerun_workflow", "rerun_workflow_failed_jobs", "assign_copilot_to_issue",
+    "rerun_workflow_run", "rerun_failed_jobs", "assign_copilot_to_issue",
     "request_copilot_review", "update_issue", "update_project_item_field_value",
     "close_pull_request_review", "manage_pull_request_review",
 }
@@ -117,8 +117,8 @@ class RealMCPServerManager:
             #     "description": "Azure MCP Server"
             # },
             "github": {
-                "command": ["docker", "run", "-i", "--rm"],
-                "description": "GitHub Official MCP Server (Docker)"
+                "command": ["github-mcp-server", "stdio"],
+                "description": "GitHub Official MCP Server"
             },
             "context7": {
                 "command": ["npx", "-y", "@upstash/context7-mcp"],
@@ -222,10 +222,8 @@ class RealMCPServerManager:
                 python_cmd = shutil.which("python") or "/usr/local/bin/python"
                 cmd = [python_cmd, "-m", "awslabs.aws_api_mcp_server.server"]
             elif server_type == "github":
-                # Official GitHub MCP Server via Docker
-                # Command is built dynamically below to include the token
-                docker_cmd = shutil.which("docker") or "/usr/bin/docker"
-                # Get GitHub token from credentials
+                # Official GitHub MCP Server - native binary baked into the image
+                github_binary = shutil.which("github-mcp-server") or "/usr/local/bin/github-mcp-server"
                 github_token = ""
                 if user_credentials and "github" in user_credentials:
                     github_token = str(user_credentials["github"].get("access_token", ""))
@@ -234,16 +232,8 @@ class RealMCPServerManager:
                     logging.error(" GitHub token is required for GitHub MCP server")
                     return None
                 
-                # Build Docker command with token passed via -e flag
-                # Using GITHUB_TOOLSETS=all to enable all 60+ tools
-                cmd = [
-                    docker_cmd, "run", "-i", "--rm",
-                    "-e", f"GITHUB_PERSONAL_ACCESS_TOKEN={github_token}",
-                    "-e", "GITHUB_TOOLSETS=all",
-                    "ghcr.io/github/github-mcp-server"
-                ]
-                
-                logging.info(" GitHub MCP server command prepared (Docker with all toolsets)")
+                cmd = [github_binary, "stdio"]
+                logging.info(" GitHub MCP server command prepared (native binary, all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
@@ -302,11 +292,11 @@ output = json
                     env["AWS_SHARED_CREDENTIALS_FILE"] = credentials_file
                     env["AWS_CONFIG_FILE"] = config_file
                     
-                # GitHub credentials are passed via Docker -e flag in the command itself
-                # (handled above when building the docker command)
+                # GitHub credentials passed as env vars to the native binary
                 elif server_type == "github":
-                    # Token already passed in Docker command args, nothing to add to env
-                    pass
+                    if "github" in user_credentials:
+                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = str(user_credentials["github"].get("access_token", ""))
+                        env["GITHUB_TOOLSETS"] = "all"
 
             
             # Offload the blocking Popen spawn to a worker thread so we don't
@@ -326,8 +316,7 @@ output = json
             )
 
             # Give the process a moment to start
-            # Docker containers need more time, especially on first run (image pull)
-            startup_wait = 2.0 if server_type == "github" else 0.5
+            startup_wait = 0.5
             await asyncio.sleep(startup_wait)
             
             # Check if process started successfully
@@ -1243,7 +1232,7 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Generate consistent tool_call_id for start/completion matching
                 import hashlib
                 import json
-                tool_name = f"mcp_{original_tool_name}"
+                tool_name = f"mcp_{server_type}_{original_tool_name}"
                 # Use JSON serialization with sorted keys for deterministic hashing
                 signature = f"{tool_name}_{json.dumps(kwargs, sort_keys=True, default=str)}"
                 # Use longer hash (16 chars) to reduce collision risk

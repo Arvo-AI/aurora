@@ -304,11 +304,11 @@ def delete_connected_account(user_id, target_user_id, provider):
                 list_active_connections,
                 delete_connection_secret,
             )
-            
+
             active = list_active_connections(user_id)
             if not active:
                 logging.info("No active AWS connections found for user %s", user_id)
-            
+
             for conn in active:
                 acc_id = conn["account_id"]
                 _ok = delete_connection_secret(user_id, "aws", acc_id)
@@ -318,18 +318,39 @@ def delete_connected_account(user_id, target_user_id, provider):
                 except Exception:
                     pass
                 deletion_ok = deletion_ok and _ok
-            
+
+            # Clean up Memgraph discovery nodes for AWS before returning.
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            except Exception as e:
+                logging.warning(
+                    "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
+                    user_id, e,
+                )
+
             record_audit_event(org_id or "", user_id, "disconnect_provider", "connected_account", provider,
                                {"provider": provider}, request)
             return jsonify({"success": True, "message": "AWS connection(s) removed"}), 200
-        
+
+        # Clean up Memgraph discovery nodes for all other providers that reach this
+        # generic path (GCP, Azure, and any provider that uses Vault-backed tokens).
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, provider_lc)
+        except Exception as e:
+            logging.warning(
+                "Failed to delete Memgraph nodes for user=%s provider=%s: %s",
+                user_id, provider_lc, e,
+            )
+
         # Idempotent behaviour: If there were no credentials stored in the first place
         # treat the request as successfully processed. This prevents unnecessary 404
         # errors that bubble up to the frontend when a user disconnects a provider
         # that was never connected (common after manual DB cleanup).
         if deleted == 0 and deletion_ok:
             return jsonify({"success": True, "message": "No tokens found for provider – nothing to delete"}), 200
-        
+
         if not deletion_ok:
             record_audit_event(org_id or "", user_id, "disconnect_provider", "connected_account", provider,
                                {"provider": provider, "partial": True}, request)

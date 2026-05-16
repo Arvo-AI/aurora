@@ -1,14 +1,29 @@
 "use client";
 
 import React, { useState } from "react";
-import { Message } from "../../app/chat/types";
-import { MarkdownRenderer } from "../ui/markdown-renderer";
+import { DISPATCH_SUBAGENT_TOOL_NAME, Message, ToolCall } from "@/app/chat/types";
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { Copy, Check } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/utils";
 
 // Import the tool call widget router (routes to custom widgets)
-import ToolCallWidget from "../tool-calls/ToolCallWidget";
+import ToolCallWidget from "@/components/tool-calls/ToolCallWidget";
+import DispatchGroupWidget from "@/components/chat/dispatch-group-widget";
+
+// Hoisted to keep the JSX render below from nesting more than 4 levels deep.
+function applyToolCallUpdate(
+  message: Message,
+  toolCallId: string,
+  updates: Partial<ToolCall>,
+): Message {
+  return {
+    ...message,
+    toolCalls: message.toolCalls?.map((tc) =>
+      tc.id === toolCallId ? { ...tc, ...updates } : tc,
+    ),
+  };
+}
 
 interface MessageItemProps {
   message: Message;
@@ -18,9 +33,11 @@ interface MessageItemProps {
   userId?: string;
   allMessages?: Message[];
   messageIndex?: number;
+  incidentId?: string;
+  onSelectSubAgent?: (agentId: string, childSessionId: string) => void;
 }
 
-export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sessionId, userId, allMessages, messageIndex }: MessageItemProps) => {
+export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sessionId, userId, allMessages, messageIndex, incidentId, onSelectSubAgent }: MessageItemProps) => {
   const [copied, setCopied] = useState(false);
 
   // Helper to sort tool calls by timestamp
@@ -130,31 +147,40 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
         </div>
       )}
       
-      {/* Tool Calls - routed through ToolCallWidget for custom widgets */}
-      {!!sortedToolCalls.length && (
-        <div className="mt-3 space-y-2">
-          {sortedToolCalls
-            .filter(toolCall => toolCall.tool_name !== 'unknown' || (toolCall.input && toolCall.input !== '{}' && JSON.stringify(toolCall.input) !== '{}'))
-            .map((toolCall, index) => (
-            <ToolCallWidget 
-              key={toolCall.id || `tool-${index}`}
-              tool={toolCall}
-              sendRaw={sendRaw}
-              sessionId={sessionId}
-              userId={userId}
-              onToolUpdate={(updates) => {
-                // Update this specific tool call in the message
-                onUpdateMessage?.(message.id, (msg) => ({
-                  ...msg,
-                  toolCalls: msg.toolCalls?.map(tc => 
-                    tc.id === toolCall.id ? { ...tc, ...updates } : tc
-                  )
-                }));
-              }}
-            />
-          ))}
-        </div>
-      )}
+      {/* Tool Calls - routed through ToolCallWidget for custom widgets.
+          dispatch_subagent calls are grouped into a single widget. */}
+      {!!sortedToolCalls.length && (() => {
+        const filtered = sortedToolCalls.filter(toolCall => toolCall.tool_name !== 'unknown' || (toolCall.input && toolCall.input !== '{}' && JSON.stringify(toolCall.input) !== '{}'));
+        const dispatchCalls = filtered.filter(tc => tc.tool_name === DISPATCH_SUBAGENT_TOOL_NAME);
+        const otherCalls = filtered.filter(tc => tc.tool_name !== DISPATCH_SUBAGENT_TOOL_NAME);
+        return (
+          <div className="mt-3 space-y-2">
+            {otherCalls.map((toolCall, index) => (
+              <ToolCallWidget
+                key={toolCall.id || `tool-${index}`}
+                tool={toolCall}
+                sendRaw={sendRaw}
+                sessionId={sessionId}
+                userId={userId}
+                onToolUpdate={(updates) => {
+                  if (!toolCall.id) return;
+                  // Update this specific tool call in the message
+                  onUpdateMessage?.(message.id, (msg) =>
+                    applyToolCallUpdate(msg, toolCall.id, updates),
+                  );
+                }}
+              />
+            ))}
+            {dispatchCalls.length > 0 && (
+              <DispatchGroupWidget
+                toolCalls={dispatchCalls}
+                incidentId={incidentId}
+                onSelectSubAgent={onSelectSubAgent}
+              />
+            )}
+          </div>
+        );
+      })()}
 
       {/* Copy button - only on the last bot message in a group */}
       {message.sender === "bot" && !message.isStreaming && isLastBotMessage && (

@@ -205,6 +205,7 @@ _OPEN_PREFIXES = (
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
     "/newrelic/webhook/",
+    "/sentry/webhook/",
     "/pagerduty/webhook/",
     "/opsgenie/webhook/",
     "/jenkins/webhook/",
@@ -331,7 +332,11 @@ app.register_blueprint(org_bp)
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
 
-# --- GitHub Integration Routes (App-only; OAuth removed in feat/github-app-only) ---
+# --- Tool Permissions Routes ---
+from routes.tool_permissions import tool_permissions_bp
+app.register_blueprint(tool_permissions_bp)
+
+# --- GitHub Integration Routes (App-first, OAuth gated by GITHUB_AUTH_MODE) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
 from routes.github.github_webhook import github_webhook_bp
@@ -429,6 +434,11 @@ from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
 import routes.newrelic.tasks  # noqa: F401
 
+# --- Sentry Integration Routes ---
+from routes.sentry import bp as sentry_bp  # noqa: F401
+app.register_blueprint(sentry_bp, url_prefix="/sentry")
+from routes.sentry import tasks as _sentry_tasks  # noqa: F401
+
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
@@ -485,6 +495,11 @@ from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 app.register_blueprint(incident_feedback_bp)
+from routes.incidents_findings import findings_bp
+app.register_blueprint(findings_bp)
+
+from routes.actions import actions_bp
+app.register_blueprint(actions_bp, url_prefix="/api/actions")
 
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)

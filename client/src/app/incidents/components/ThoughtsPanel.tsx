@@ -1,12 +1,31 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type ChangeEvent } from 'react';
+import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { MessageSquare, Send } from 'lucide-react';
 import { StreamingThought, Incident, ChatSession, incidentsService } from '@/lib/services/incidents';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import SubAgentInvestigationsSection from '@/app/incidents/components/SubAgentInvestigationsSection';
 
 // Maximum length for short titles in incident chat tabs
 const TITLE_SHORT_MAX_LENGTH = 15;
+
+const PANEL_WIDTH_STORAGE_KEY = 'thoughts-panel-width';
+export const PANEL_WIDTH_DEFAULT = 400;
+const PANEL_WIDTH_MIN = 320;
+const PANEL_WIDTH_MAX_RATIO = 0.8;
+
+function readStoredPanelWidth(): number {
+  if (typeof window === 'undefined') return PANEL_WIDTH_DEFAULT;
+  const raw = window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY);
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= PANEL_WIDTH_MIN ? parsed : PANEL_WIDTH_DEFAULT;
+}
+
+function clampPanelWidth(value: number): number {
+  if (typeof window === 'undefined') return Math.max(PANEL_WIDTH_MIN, value);
+  const max = Math.max(PANEL_WIDTH_MIN, Math.floor(window.innerWidth * PANEL_WIDTH_MAX_RATIO));
+  return Math.max(PANEL_WIDTH_MIN, Math.min(value, max));
+}
 
 interface ChatMessage {
   id: string;
@@ -19,6 +38,7 @@ interface ThoughtsPanelProps {
   incident: Incident;
   isVisible: boolean;
   canInteract?: boolean;
+  onWidthChange?: (width: number) => void;
 }
 
 /**
@@ -60,7 +80,7 @@ function stripIncidentPrefix(title: string): string {
   return title.replace(/^Incident:\s*/i, '');
 }
 
-export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true }: ThoughtsPanelProps) {
+export default function ThoughtsPanel({ thoughts, incident, isVisible, canInteract = true, onWidthChange }: ThoughtsPanelProps) {
   // 'thoughts' or session ID
   const [activeTab, setActiveTab] = useState<string>('thoughts');
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(
@@ -70,7 +90,55 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [pollingSessionId, setPollingSessionId] = useState<string | null>(null);
+  const [hasSubAgentFindings, setHasSubAgentFindings] = useState(false);
+  const [panelWidth, setPanelWidth] = useState<number>(PANEL_WIDTH_DEFAULT);
+  const panelWidthRef = useRef<number>(PANEL_WIDTH_DEFAULT);
   const pollStartRef = useRef<number>(0);
+  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    panelWidthRef.current = panelWidth;
+  }, [panelWidth]);
+
+  useEffect(() => {
+    setPanelWidth(clampPanelWidth(readStoredPanelWidth()));
+  }, []);
+
+  useEffect(() => {
+    onWidthChange?.(panelWidth);
+  }, [panelWidth, onWidthChange]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onWindowResize = () => setPanelWidth((w) => clampPanelWidth(w));
+    window.addEventListener('resize', onWindowResize);
+    return () => window.removeEventListener('resize', onWindowResize);
+  }, []);
+
+  const handleResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizeStateRef.current = { startX: e.clientX, startWidth: panelWidthRef.current };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: PointerEvent) => {
+      const state = resizeStateRef.current;
+      if (!state) return;
+      setPanelWidth(clampPanelWidth(state.startWidth + (state.startX - ev.clientX)));
+    };
+    const cleanup = () => {
+      resizeStateRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', cleanup);
+      window.removeEventListener('pointercancel', cleanup);
+      try { window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(panelWidthRef.current)); } catch { /* ignore quota errors */ }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', cleanup);
+    window.addEventListener('pointercancel', cleanup);
+  }, []);
 
   const failSession = useCallback((sid: string) => {
     setChatSessions((prev: ChatSession[]) => prev.map((s: ChatSession) =>
@@ -390,7 +458,17 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
   if (!isVisible) return null;
 
   return (
-    <div className="fixed top-[49px] right-0 h-[calc(100vh-49px)] w-[400px] bg-background z-20 border-l border-zinc-800/50 flex flex-col">
+    <div
+      className="fixed top-[49px] right-0 h-[calc(100vh-49px)] bg-background z-20 border-l border-zinc-800/50 flex flex-col"
+      style={{ width: panelWidth }}
+    >
+      <div
+        role="separator"
+        aria-label="Resize thoughts panel"
+        aria-orientation="vertical"
+        onPointerDown={handleResizeStart}
+        className="absolute left-0 top-0 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-orange-500/40 transition-colors z-30"
+      />
       {/* Tab Bar */}
       <div className="flex items-center border-b border-zinc-800/50 bg-zinc-900/50 px-2 h-10 shrink-0 overflow-x-auto">
         {/* Thoughts tab */}
@@ -445,9 +523,14 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                   </div>
                 </div>
               )}
-              {thoughts.length === 0 && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
+              {thoughts.length === 0 && !hasSubAgentFindings && incident.auroraStatus !== 'running' && incident.auroraStatus !== 'summarizing' && (
                 <p className="text-center text-zinc-500 text-sm py-8">No investigation thoughts yet</p>
               )}
+              <SubAgentInvestigationsSection
+                incidentId={incident.id}
+                isActive={incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing'}
+                onHasFindings={setHasSubAgentFindings}
+              />
             </div>
           </div>
 

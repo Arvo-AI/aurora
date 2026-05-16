@@ -38,6 +38,7 @@ from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
 from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
 from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
+from .trigger_action_tool import trigger_action, TriggerActionArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -138,6 +139,11 @@ from .newrelic_tool import (
     query_newrelic,
     is_newrelic_connected,
     QueryNewRelicArgs,
+)
+from .sentry_tool import (
+    query_sentry,
+    is_sentry_connected,
+    QuerySentryArgs,
 )
 from .thousandeyes_tool import (
     thousandeyes_list_tests,
@@ -1299,6 +1305,37 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Only include trigger_rca when the user explicitly requested it via the UI button
     if state_context and getattr(state_context, 'trigger_rca_requested', False):
         tool_functions.append((trigger_rca, "trigger_rca"))
+
+    # Only include trigger_action when the user explicitly used /action command
+    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
+    if _action_id:
+        tool_functions.append((trigger_action, "trigger_action"))
+
+    # Postmortem tools (always available)
+    try:
+        from .postmortem_tool import get_postmortem, save_postmortem
+        tool_functions.append((get_postmortem, "get_postmortem"))
+        tool_functions.append((save_postmortem, "save_postmortem"))
+    except ImportError:
+        logger.warning("Postmortem tools not available — import failed")
+
+    # Slack tools (if Slack connected)
+    try:
+        from .slack_tool import (
+            list_slack_channels,
+            get_channel_history,
+            get_thread_replies,
+            is_slack_connected,
+        )
+        if user_id and is_slack_connected(user_id):
+            tool_functions.append((list_slack_channels, "list_slack_channels"))
+            tool_functions.append((get_channel_history, "get_channel_history"))
+            tool_functions.append((get_thread_replies, "get_thread_replies"))
+            logging.info(f"Added Slack tools for user {user_id}")
+        else:
+            logging.debug(f"Slack tools not added - user {user_id} not connected")
+    except Exception as e:
+        logging.warning(f"Failed to add Slack tools: {e}")
     
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1459,6 +1496,78 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "severity (optional: critical/high/medium/low)."
                 ),
                 args_schema=TriggerRCAArgs,
+            )
+        elif name == 'trigger_action':
+            pinned_id = _action_id
+            def _pinned_trigger(action_id: str = "", _pid=pinned_id, _fn=final_func, **kw):
+                return _fn(action_id=_pid, **kw)
+            tool = StructuredTool.from_function(
+                func=_pinned_trigger,
+                name=name,
+                description=(
+                    "Trigger an Aurora Action to run as a background task. "
+                    f"Call with action_id=\"{pinned_id}\"."
+                ),
+                args_schema=TriggerActionArgs,
+            )
+        elif name == 'get_postmortem':
+            from .postmortem_tool import GetPostmortemArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Read the current postmortem document for an incident. "
+                    "Returns the markdown content or indicates no postmortem exists yet. "
+                    "Use this before regenerating to get the prior version as context."
+                ),
+                args_schema=GetPostmortemArgs,
+            )
+        elif name == 'save_postmortem':
+            from .postmortem_tool import SavePostmortemArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Save or update a postmortem document for an incident. "
+                    "Creates a new version each time. Content should be complete "
+                    "structured markdown (Summary, Timeline, Root Cause, Impact, etc.)."
+                ),
+                args_schema=SavePostmortemArgs,
+            )
+        elif name == 'list_slack_channels':
+            from .slack_tool import ListSlackChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List Slack channels accessible to the bot. Returns channel names, "
+                    "topics, purposes, and member counts. Use to discover relevant channels "
+                    "before fetching message history."
+                ),
+                args_schema=ListSlackChannelsArgs,
+            )
+        elif name == 'get_channel_history':
+            from .slack_tool import GetChannelHistoryArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Fetch messages from a Slack channel within a time window. "
+                    "Use oldest/latest (ISO 8601) to scope messages to the incident timeframe. "
+                    "Returns message text, timestamps, user IDs, and thread info."
+                ),
+                args_schema=GetChannelHistoryArgs,
+            )
+        elif name == 'get_thread_replies':
+            from .slack_tool import GetThreadRepliesArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Fetch replies in a Slack thread. Use when a message has reply_count > 0 "
+                    "and the thread looks relevant to the incident investigation."
+                ),
+                args_schema=GetThreadRepliesArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
@@ -1731,6 +1840,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryNewRelicArgs,
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
+
+    # Add Sentry tool if connected
+    if user_id and is_sentry_connected(user_id):
+        context_wrapped_sentry = with_user_context(query_sentry)
+        notification_wrapped_sentry = with_completion_notification(context_wrapped_sentry)
+        final_sentry_func = wrap_func_with_capture(notification_wrapped_sentry, "query_sentry") if tool_capture else notification_wrapped_sentry
+
+        tools.append(StructuredTool.from_function(
+            func=final_sentry_func,
+            name="query_sentry",
+            description=(
+                "Query Sentry for error tracking data: issues, full event stacktraces, projects, or Discover-style event searches. "
+                "resource_type must be one of 'issues', 'issue_detail', 'issue_event', 'projects', 'events'. "
+                "For 'issues' and 'events', the query is a Sentry search expression (e.g. 'is:unresolved level:error environment:production'). "
+                "For 'issue_detail' and 'issue_event', the query MUST be the numeric Sentry issue id. "
+                "Examples: query_sentry(resource_type='issues', query='is:unresolved level:error', stats_period='24h') "
+                "or query_sentry(resource_type='issue_event', query='1234567890') for full stacktrace + breadcrumbs "
+                "or query_sentry(resource_type='projects') to list projects."
+            ),
+            args_schema=QuerySentryArgs,
+        ))
+        logging.info(f"Added Sentry tool for user {user_id}")
 
     # --- OpsGenie / JSM Operations tool ---
     if user_id and is_opsgenie_connected(user_id):
