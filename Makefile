@@ -46,7 +46,7 @@ help:
 	@echo ""
 	@echo "Kubernetes Deployment:"
 	@echo "  make deploy-build      - Build and push images for K8s deployment (reads values.generated.yaml)"
-	@echo "  make deploy            - Run deploy-build then deploy with Helm"
+	@echo "  make deploy            - Verify image signatures and deploy with Helm (run deploy-build first, or use prebuilt images)"
 
 rebuild-server:
 	@echo "Stopping aurora-server container..."
@@ -172,6 +172,7 @@ prod-prebuilt:
 	echo "Pulling prebuilt images from GHCR (tag: $$TAG)..."; \
 	docker pull ghcr.io/arvo-ai/aurora-server:$$TAG; \
 	docker pull ghcr.io/arvo-ai/aurora-frontend:$$TAG; \
+	./scripts/cosign-verify.sh ghcr.io/arvo-ai/aurora-server:$$TAG ghcr.io/arvo-ai/aurora-frontend:$$TAG; \
 	echo "Tagging images for docker compose..."; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_server:latest; \
 	docker tag ghcr.io/arvo-ai/aurora-server:$$TAG aurora_celery-worker:latest; \
@@ -182,7 +183,7 @@ prod-prebuilt:
 	@echo "Starting Aurora in production mode (prebuilt images)..."
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
 	@docker network rm aurora_default 2>/dev/null || true
-	@docker compose -f docker-compose.prod-local.yml up -d
+	@docker compose -f docker-compose.prod-local.yml up --no-build -d
 	@echo ""
 	@echo "✓ Aurora is starting! Services will be available at:"
 	@echo "  - Frontend: $$(v=$$(grep -E '^FRONTEND_URL=' .env | cut -d= -f2- | tr -d '\"'); echo $${v:-http://localhost:3000})"
@@ -334,10 +335,33 @@ deploy-build:
 	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
 		docker buildx imagetools inspect $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA; \
 	fi; \
+	echo "Signing images with Cosign..."; \
+	SERVER_DIGEST=$$(docker buildx imagetools inspect --raw $$IMAGE_REGISTRY/aurora-server:$$GIT_SHA | sha256sum | awk '{print "sha256:"$$1}'); \
+	FRONTEND_DIGEST=$$(docker buildx imagetools inspect --raw $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA | sha256sum | awk '{print "sha256:"$$1}'); \
+	cosign sign --yes $$IMAGE_REGISTRY/aurora-server@$$SERVER_DIGEST; \
+	cosign sign --yes $$IMAGE_REGISTRY/aurora-frontend@$$FRONTEND_DIGEST; \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		TERMINAL_DIGEST=$$(docker buildx imagetools inspect --raw $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA | sha256sum | awk '{print "sha256:"$$1}'); \
+		cosign sign --yes $$IMAGE_REGISTRY/aurora-terminal@$$TERMINAL_DIGEST; \
+	fi; \
+	echo "All images signed successfully"; \
 	echo "Updating values.generated.yaml with new tag..."; \
 	yq -i ".image.tag = \"$$GIT_SHA\"" deploy/helm/aurora/values.generated.yaml
 
-deploy: deploy-build
+deploy:
+	@if [ ! -f deploy/helm/aurora/values.generated.yaml ]; then \
+		echo "Error: values.generated.yaml not found. Copy values.yaml to values.generated.yaml and configure it."; \
+		exit 1; \
+	fi
+	@set -e; \
+	IMAGE_REGISTRY=$$(yq '.image.registry' deploy/helm/aurora/values.generated.yaml); \
+	GIT_SHA=$$(yq '.image.tag' deploy/helm/aurora/values.generated.yaml); \
+	IMAGES="$$IMAGE_REGISTRY/aurora-server:$$GIT_SHA $$IMAGE_REGISTRY/aurora-frontend:$$GIT_SHA"; \
+	ENABLE_POD_ISOLATION=$$(yq '.config.ENABLE_POD_ISOLATION' deploy/helm/aurora/values.generated.yaml); \
+	if [ "$$ENABLE_POD_ISOLATION" = "true" ]; then \
+		IMAGES="$$IMAGES $$IMAGE_REGISTRY/aurora-terminal:$$GIT_SHA"; \
+	fi; \
+	./scripts/cosign-verify.sh $$IMAGES
 	@echo "Deploying to Kubernetes with Helm..."
 	@helm upgrade --install aurora-oss ./deploy/helm/aurora \
 		--namespace aurora --create-namespace \
