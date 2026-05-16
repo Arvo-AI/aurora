@@ -18,15 +18,52 @@ _INTERNAL_ERROR: Dict[str, Any] = {
 }
 
 
+def _mcp_covered_skills() -> frozenset:
+    """Connectors that have at least one MCP-callable tool (Tier 2 or 3).
+
+    Used to flag connectors (e.g. AWS) that show as connected in /api/connectors/status
+    but have no surface in any MCP tier — so the LLM knows to fall back to
+    chat_with_aurora instead of asking for a non-existent tool.
+    """
+    from .registry import DISPATCH_ALLOWLIST, TIER2_TOOLS
+    skills = set()
+    for entry in DISPATCH_ALLOWLIST:
+        skills.update(s.lower() for s in entry.enabling_skills)
+    for spec in TIER2_TOOLS:
+        skills.update(s.lower() for s in spec.enabling_skills)
+    return frozenset(skills)
+
+
+def _annotate_connector_coverage(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Add mcp_tools_available to each connector entry in /api/connectors/status."""
+    if not isinstance(payload, dict):
+        return payload
+    connectors = payload.get("connectors")
+    if not isinstance(connectors, dict):
+        return payload
+    covered = _mcp_covered_skills()
+    for cid, info in connectors.items():
+        if isinstance(info, dict):
+            info["mcp_tools_available"] = cid.lower() in covered
+    return payload
+
+
 async def _do_catalog_connectors(api_call: ApiCall) -> Dict[str, Any]:
     try:
+        data = await api_call("GET", "/api/connectors/status")
         return truncate_payload(
-            await api_call("GET", "/api/connectors/status"),
+            _annotate_connector_coverage(data),
             tool_name="catalog/connectors",
         )
     except Exception:
         logger.exception("catalog/connectors failed")
         return dict(_INTERNAL_ERROR)
+
+
+def _do_whoami(user_id: str, org_id: str) -> Dict[str, Any]:
+    """Identity the MCP bearer token resolves to. Useful for clients to
+    sanity-check 'why can't I see X' issues without a backend round-trip."""
+    return {"user_id": user_id, "org_id": org_id}
 
 
 def _shape_skill_entry(skill_id: str, meta: Any, connected: bool) -> Dict[str, Any]:
@@ -121,10 +158,27 @@ def register_resources(
         user_id, _ = resolve_token(token)
         return user_id
 
+    def _identity() -> tuple:
+        token = get_token()
+        return resolve_token(token)
+
     @mcp.resource("aurora://catalog/connectors")
     async def catalog_connectors() -> Dict[str, Any]:
-        """List of the user's connected providers and their status."""
+        """List of the user's connected providers, each annotated with
+        mcp_tools_available so clients can tell connect-only providers
+        (e.g. AWS) from ones with a real MCP surface."""
         return await _do_catalog_connectors(api_call)
+
+    @mcp.resource("aurora://whoami")
+    async def whoami() -> Dict[str, Any]:
+        """The user_id and org_id the bearer token resolves to.
+
+        Use this to debug 'why can't I see X' — if the user_id or org_id
+        doesn't match what you expect, your token is bound to a different
+        identity than the data you're trying to read.
+        """
+        uid, oid = _identity()
+        return _do_whoami(uid, oid)
 
     @mcp.resource("aurora://catalog/skills")
     async def catalog_skills() -> Dict[str, Any]:

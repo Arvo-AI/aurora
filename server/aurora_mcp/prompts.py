@@ -22,8 +22,9 @@ def register_prompts(mcp) -> None:
         """Analyze the blast radius of a failing service."""
         return (
             f"Analyze the blast radius for service '{service_name}'.\n"
-            f"1. Use chat_with_aurora('what depends on {service_name}?')\n"
-            f"2. list_incidents to check for active incidents on affected services\n"
+            f"1. call_tool('graph_service_impact', {{'name': '{service_name}'}}) "
+            f"to get downstream dependents\n"
+            f"2. list_incidents to check for active incidents on the affected services\n"
             f"3. Summarize: which services are at risk, estimated user impact,"
             f" mitigation steps"
         )
