@@ -524,11 +524,11 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         project_ids = [p.get('projectId') for p in projects]
         if selected_project_id in project_ids:
             target_project_id = selected_project_id
-            logger.info(f"Using user-selected project for queries: {selected_project_id}")
+            logger.info("Using user-selected project for queries")
         else:
-            logger.info(f"Selected project {selected_project_id} not accessible. Using root project: {root_project_id}")
+            logger.info("Selected project not accessible; falling back to root project")
     else:
-        logger.info(f"No project selected, using root project for queries: {root_project_id}")
+        logger.info("No project selected, using root project for queries")
     
     # First, check if the service account exists
     try:
@@ -575,10 +575,7 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
             "service_account_email": sa_email,
         }
     except HttpError as e:
-        logger.error(f"Failed to generate access token: {e}")
-        logger.error(f"Service account: {sa_email}")
-        logger.error(f"Root project ID: {root_project_id}")
-        logger.error(f"Target project ID: {target_project_id}")
+        logger.error("Failed to generate access token for service account (status=%s)", e.resp.status if hasattr(e, 'resp') else 'unknown')
         raise
 
 

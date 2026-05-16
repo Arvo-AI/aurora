@@ -39,18 +39,18 @@ def run_cli_json_command(cmd, env=None, timeout=DEFAULT_TIMEOUT):
                 "CLI command failed (exit %d): %s — cmd: %s",
                 result.returncode,
                 result.stderr.strip(),
-                " ".join(cmd),
+                cmd[0],
             )
             return None
         return json.loads(result.stdout)
     except subprocess.TimeoutExpired:
-        logger.warning("CLI command timed out after %ds: %s", timeout, " ".join(cmd))
+        logger.warning("CLI command timed out after %ds: %s", timeout, cmd[0])
         return None
     except json.JSONDecodeError as e:
         logger.warning("Failed to parse CLI JSON output: %s", e)
         return None
     except FileNotFoundError:
-        logger.error("CLI tool not found for command: %s", cmd[0])
+        logger.error("CLI tool not found: %s", cmd[0])
         return None
 
 
