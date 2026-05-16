@@ -543,11 +543,14 @@ RATE_LIMIT_HEADERS_ENABLED=true
 
 ## Docker Compose Files
 
-| File | Purpose |
-|------|---------|
-| `docker-compose.yaml` | Development stack |
-| `docker-compose.prod-local.yml` | Production-like testing and deployment |
+| File | Purpose | Gunicorn mode |
+|------|---------|---------------|
+| `docker-compose.yaml` | Development stack | `--reload` (auto-restart on code changes) |
+| `docker-compose.prod-local.yml` | Production-like local deployment | `--preload` (load app before forking workers) |
+| `docker-compose.airtight.yml` | Air-gapped deployment from pre-built images | `--preload` |
+
+All three files read `GUNICORN_WORKERS`, `GUNICORN_THREADS`, `CELERY_CONCURRENCY`, `DB_POOL_MIN`, and `DB_POOL_MAX` from the `.env` file. Set them there to tune concurrency across all environments.
 
 :::warning Keep Docker Compose Files in Sync
-When adding new environment variables, update both Docker Compose files to ensure consistency.
+When adding new environment variables, update all three Docker Compose files to ensure consistency.
 :::
