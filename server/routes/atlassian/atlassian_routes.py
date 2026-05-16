@@ -70,10 +70,10 @@ def _refresh_credentials(user_id: str, creds: Dict[str, Any], provider: str) -> 
     return updated
 
 
-def _validate_confluence(access_token: str, base_url: str, auth_type: str, cloud_id: Optional[str], email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _validate_confluence(access_token: str, base_url: str, auth_type: str, cloud_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Validate Confluence credentials and return user info."""
     base_url = normalize_confluence_base_url(base_url)
-    client = ConfluenceClient(base_url, access_token, auth_type=auth_type, cloud_id=cloud_id, email=email)
+    client = ConfluenceClient(base_url, access_token, auth_type=auth_type, cloud_id=cloud_id)
     try:
         payload = client.get_current_user()
         return payload
@@ -145,9 +145,8 @@ def connect(user_id):
                 results[product] = {"connected": False, "error": f"baseUrl and patToken required for {product}"}
                 continue
 
-            pat_email = data.get(f"{product}Email") or data.get("patEmail")
             if product == "confluence":
-                user_payload = _validate_confluence(pat_token, base_url, "pat", None, email=pat_email)
+                user_payload = _validate_confluence(pat_token, base_url, "pat", None)
             elif product == "jsm_ops":
                 cloud_id = data.get("cloudId")
                 if not cloud_id:
@@ -176,8 +175,6 @@ def connect(user_id):
                     "base_url": base_url.rstrip("/"),
                     "pat_token": pat_token,
                 }
-                if pat_email:
-                    token_payload["email"] = pat_email
                 store_tokens_in_db(user_id, token_payload, product)
                 results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
 
@@ -329,9 +326,8 @@ def status(user_id):
             result[product] = {"connected": False}
             continue
 
-        stored_email = creds.get("email") if auth_type == "pat" else None
         if product == "confluence":
-            user_payload = _validate_confluence(token, base_url, auth_type, cloud_id, email=stored_email)
+            user_payload = _validate_confluence(token, base_url, auth_type, cloud_id)
         elif product == "jsm_ops":
             user_payload = _validate_jsm_ops(token, cloud_id)
         else:
