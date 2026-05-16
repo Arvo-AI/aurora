@@ -79,6 +79,7 @@ celery_app.conf.update(
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
+        'routes.victorops.tasks',
         'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
         'routes.sentry.tasks',
@@ -169,6 +170,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.victorops.tasks  # noqa: F401
+    logging.info("Splunk On-Call (VictorOps) tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import VictorOps tasks: {e}")
 
 try:
     import routes.opsgenie.tasks  # noqa: F401

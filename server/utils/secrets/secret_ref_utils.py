@@ -47,6 +47,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "pagerduty", # PagerDuty connector tokens
     "opsgenie",  # OpsGenie connector tokens
     "splunk",    # Splunk connector tokens
+    "opensearch", # OpenSearch connector tokens
     "ovh",      # OVH Cloud
     "scaleway", # Scaleway Cloud
     "tailscale", # Tailscale VPN
@@ -70,6 +71,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
     "incidentio",  # incident.io connector tokens
+    "victorops",   # Splunk On-Call (VictorOps) connector tokens
 }
 
 

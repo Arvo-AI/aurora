@@ -199,7 +199,9 @@ class ConfluenceClient:
         auth_type: str = "oauth",
         timeout: int = 30,
         cloud_id: Optional[str] = None,
+        email: Optional[str] = None,
     ):
+        import base64 as _base64
         self.base_url = normalize_confluence_base_url(base_url)
         self.cloud_id = cloud_id
         self.auth_type = auth_type
@@ -217,8 +219,17 @@ class ConfluenceClient:
         )
         self.access_token = access_token
         self.timeout = timeout
+
+        # Atlassian Cloud API tokens require Basic auth (email:token).
+        # Data Center PATs use Bearer tokens.
+        if auth_type == "pat" and email and is_confluence_cloud_url(base_url):
+            creds = _base64.b64encode(f"{email}:{access_token}".encode()).decode()
+            auth_header = f"Basic {creds}"
+        else:
+            auth_header = f"Bearer {access_token}"
+
         self.headers = {
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": auth_header,
             "Accept": "application/json",
         }
         if auth_type not in {"oauth", "pat"}:
