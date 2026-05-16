@@ -65,6 +65,8 @@ github_app_bp = Blueprint("github_app", __name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL") or ""
 GITHUB_TIMEOUT = 20
 GITHUB_RECONCILE_TIMEOUT = 3
+_GH_JSON_MEDIA_TYPE = "application/vnd.github+json"
+_APP_NOT_CONFIGURED = "GitHub App not configured"
 
 
 def _is_single_tenant() -> bool:
@@ -219,7 +221,7 @@ def _reconcile_user_installations(user_id: str) -> None:
 
         headers = {
             "Authorization": f"Bearer {app_jwt}",
-            "Accept": "application/vnd.github+json",
+            "Accept": _GH_JSON_MEDIA_TYPE,
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
@@ -301,7 +303,7 @@ def github_app_install_url(user_id):
         logger.error(
             "[GITHUB-APP-INSTALL] slug not configured (NEXT_PUBLIC_GITHUB_APP_SLUG missing)"
         )
-        return jsonify({"error": "GitHub App not configured"}), 503
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
     try:
         signed_state = _sign_install_state(user_id)
@@ -361,7 +363,7 @@ def github_app_install_callback():
     try:
         app_jwt = mint_app_jwt()
     except GitHubAppJWTError as exc:
-        logger.error(
+        logger.exception(
             "[GITHUB-APP-CALLBACK] JWT mint failed: %s", type(exc).__name__
         )
         return _render_error(_ERROR_NOT_CONFIGURED)
@@ -369,13 +371,13 @@ def github_app_install_callback():
     api_url = f"https://api.github.com/app/installations/{installation_id}"
     headers = {
         "Authorization": f"Bearer {app_jwt}",
-        "Accept": "application/vnd.github+json",
+        "Accept": _GH_JSON_MEDIA_TYPE,
         "X-GitHub-Api-Version": "2022-11-28",
     }
     try:
         resp = requests.get(api_url, headers=headers, timeout=GITHUB_TIMEOUT)
     except requests.RequestException as exc:
-        logger.error(
+        logger.exception(
             "[GITHUB-APP-CALLBACK] GitHub API request failed: %s",
             type(exc).__name__,
         )
@@ -398,8 +400,8 @@ def github_app_install_callback():
 
     try:
         data = resp.json()
-    except (ValueError, json.JSONDecodeError) as exc:
-        logger.error(
+    except ValueError as exc:
+        logger.exception(
             "[GITHUB-APP-CALLBACK] GitHub response not JSON: %s",
             type(exc).__name__,
         )
@@ -591,7 +593,7 @@ def github_app_discover_installations(user_id):
     asserts ownership (no implicit auto-link).
     """
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
-        return jsonify({"error": "GitHub App not configured"}), 503
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
     if not _is_single_tenant():
         return jsonify({
@@ -603,11 +605,11 @@ def github_app_discover_installations(user_id):
         app_jwt = mint_app_jwt()
     except GitHubAppJWTError:
         logger.exception("[GITHUB-APP-DISCOVER] JWT mint failed")
-        return jsonify({"error": "GitHub App not configured"}), 503
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
     headers = {
         "Authorization": f"Bearer {app_jwt}",
-        "Accept": "application/vnd.github+json",
+        "Accept": _GH_JSON_MEDIA_TYPE,
         "X-GitHub-Api-Version": "2022-11-28",
     }
     next_url = "https://api.github.com/app/installations?per_page=100"
@@ -685,7 +687,7 @@ def github_app_discover_installations(user_id):
 
 
 @github_app_bp.route(
-    "/app/installations/<int:installation_id>/claim", methods=["POST", "OPTIONS"]
+    "/app/installations/<int:installation_id>/claim", methods=["POST"]
 )
 @require_permission("connectors", "write")
 def github_app_claim_installation(user_id, installation_id):
@@ -702,7 +704,7 @@ def github_app_claim_installation(user_id, installation_id):
     proper proof-of-control exchange is wired in.
     """
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
-        return jsonify({"error": "GitHub App not configured"}), 503
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
     if not _is_single_tenant():
         return jsonify({
@@ -714,14 +716,14 @@ def github_app_claim_installation(user_id, installation_id):
         app_jwt = mint_app_jwt()
     except GitHubAppJWTError:
         logger.exception("[GITHUB-APP-CLAIM] JWT mint failed")
-        return jsonify({"error": "GitHub App not configured"}), 503
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
     try:
         resp = requests.get(
             f"https://api.github.com/app/installations/{installation_id}",
             headers={
                 "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
+                "Accept": _GH_JSON_MEDIA_TYPE,
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=GITHUB_TIMEOUT,
@@ -823,7 +825,7 @@ def github_app_claim_installation(user_id, installation_id):
 
 
 @github_app_bp.route(
-    "/app/installations/<int:installation_id>", methods=["DELETE", "OPTIONS"]
+    "/app/installations/<int:installation_id>", methods=["DELETE"]
 )
 @require_permission("connectors", "write")
 def github_app_unlink_installation(user_id, installation_id):
@@ -976,7 +978,7 @@ def github_disconnect(user_id):
         if app_jwt:
             headers = {
                 "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
+                "Accept": _GH_JSON_MEDIA_TYPE,
                 "X-GitHub-Api-Version": "2022-11-28",
             }
             for iid in linked_installs:
@@ -1016,9 +1018,9 @@ def github_disconnect(user_id):
                 soft_deleted_installs = cur.rowcount
                 conn.commit()
     except Exception as exc:
-        logger.error(
+        logger.exception(
             "[GITHUB-DISCONNECT] DB soft-delete failed user=%s: %s",
-            user_id, exc, exc_info=True,
+            user_id, exc,
         )
         return jsonify({"error": "Failed to disconnect"}), 500
 

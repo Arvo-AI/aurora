@@ -796,8 +796,19 @@ export default function GitHubProviderIntegration() {
     <>
       {/* Header */}
       <div
+        role="button"
+        tabIndex={githubStatus.isAuthenticated ? 0 : -1}
+        aria-expanded={expanded}
+        aria-disabled={!githubStatus.isAuthenticated}
         className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
         onClick={() => { if (githubStatus.isAuthenticated) setExpanded(!expanded); }}
+        onKeyDown={(e) => {
+          if (!githubStatus.isAuthenticated) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded(!expanded);
+          }
+        }}
       >
         <div className="flex items-center gap-3">
           <div className="w-6 h-6 relative flex-shrink-0">

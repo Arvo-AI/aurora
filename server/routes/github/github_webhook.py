@@ -106,7 +106,7 @@ def github_webhook():
         # Misconfiguration on our side, not the sender's fault. Return
         # 503 so GitHub retries instead of giving up on the delivery.
         duration_ms = int((time.monotonic() - start) * 1000)
-        logger.error(
+        logger.exception(
             "gh_webhook_event=secret_unavailable delivery_id=- event_type=- "
             "duration_ms=%d error_class=%s",
             duration_ms,
@@ -200,7 +200,7 @@ def github_webhook():
                             candidate = inst.get("id")
                             if isinstance(candidate, int):
                                 installation_id = candidate
-                except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                except (TypeError, ValueError) as exc:
                     logger.warning(
                         "gh_webhook_event=payload_unparseable delivery_id=%s "
                         "event_type=%s error_class=%s",

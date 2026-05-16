@@ -243,7 +243,7 @@ class RealMCPServerManager:
                     "ghcr.io/github/github-mcp-server"
                 ]
                 
-                logging.info(f" GitHub MCP server command prepared (Docker with all toolsets)")
+                logging.info(" GitHub MCP server command prepared (Docker with all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform

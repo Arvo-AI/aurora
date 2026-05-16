@@ -120,7 +120,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
         try:
             auth = get_auth_for_user_repo(user_id, repo_full_name)
         except NoGitHubAuthError as exc:
-            logger.error(
+            logger.exception(
                 "No GitHub auth available for user %s repo %s: %s",
                 user_id, repo_full_name, exc,
             )

@@ -29,6 +29,7 @@ import os
 import re
 import time
 from typing import Any
+from urllib.parse import quote
 import requests
 from flask import Blueprint, jsonify, request
 
@@ -38,7 +39,7 @@ from flask import Blueprint, jsonify, request
 # downstream ``api.github.com`` URL — which is what Sonar's S7044
 # (server-side request forgery) rule is concerned about for user-
 # controlled URL components.
-_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
+_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}$")
 from utils.auth.github_app_token import (
     GitHubAppInstallationSuspended,
     GitHubAppTokenError,
@@ -387,11 +388,14 @@ def get_user_branches(user_id, repo_full_name):
             "Accept": "application/vnd.github.v3+json",
         }
 
+        owner, repo = repo_full_name.split("/", 1)
+        encoded_path = f"{quote(owner, safe='')}/{quote(repo, safe='')}"
+
         all_branches = []
         page = 1
         while True:
             response = requests.get(
-                f"https://api.github.com/repos/{repo_full_name}/branches",
+                f"https://api.github.com/repos/{encoded_path}/branches",
                 headers=headers,
                 params={"per_page": _PER_PAGE, "page": page},
                 timeout=_GITHUB_TIMEOUT,

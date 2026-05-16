@@ -165,6 +165,13 @@ def _extract_installation_block(payload: dict[str, Any]) -> tuple[int, dict[str,
     return installation_id, installation, account_login or ""
 
 
+_MARK_DELIVERY_PROCESSED_SQL = (
+    "UPDATE webhook_deliveries "
+    "SET status = 'processed', processed_at = NOW() "
+    "WHERE delivery_id = %s"
+)
+
+
 def _handle_installation_event(
     payload: dict[str, Any],
     action: str | None,
@@ -239,9 +246,7 @@ def _handle_installation_event(
                     ),
                 )
                 cur.execute(
-                    """UPDATE webhook_deliveries
-                       SET status = 'processed', processed_at = NOW()
-                       WHERE delivery_id = %s""",
+                    _MARK_DELIVERY_PROCESSED_SQL,
                     (delivery_id,),
                 )
             conn.commit()
@@ -310,9 +315,7 @@ def _handle_installation_event(
                     "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                 )
                 cur.execute(
-                    """UPDATE webhook_deliveries
-                       SET status = 'processed', processed_at = NOW()
-                       WHERE delivery_id = %s""",
+                    _MARK_DELIVERY_PROCESSED_SQL,
                     (delivery_id,),
                 )
             conn.commit()
@@ -351,9 +354,7 @@ def _handle_installation_event(
                 cur.execute(sql, (installation_id,))
                 rows_updated = cur.rowcount
                 cur.execute(
-                    """UPDATE webhook_deliveries
-                       SET status = 'processed', processed_at = NOW()
-                       WHERE delivery_id = %s""",
+                    _MARK_DELIVERY_PROCESSED_SQL,
                     (delivery_id,),
                 )
             conn.commit()
@@ -385,9 +386,7 @@ def _handle_installation_event(
                 )
                 rows_updated = cur.rowcount
                 cur.execute(
-                    """UPDATE webhook_deliveries
-                       SET status = 'processed', processed_at = NOW()
-                       WHERE delivery_id = %s""",
+                    _MARK_DELIVERY_PROCESSED_SQL,
                     (delivery_id,),
                 )
             conn.commit()
@@ -524,9 +523,7 @@ def _handle_installation_repositories_event(
                     "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                 )
                 cur.execute(
-                    """UPDATE webhook_deliveries
-                       SET status = 'processed', processed_at = NOW()
-                       WHERE delivery_id = %s""",
+                    _MARK_DELIVERY_PROCESSED_SQL,
                     (delivery_id,),
                 )
             conn.commit()
@@ -909,7 +906,7 @@ def dispatch_github_webhook(
             payload = json.loads(payload_json_str)
         except json.JSONDecodeError as exc:
             duration_ms = int((time.monotonic() - start) * 1000)
-            logger.error(
+            logger.exception(
                 "gh_webhook_handler=dispatch event_type=%s delivery_id=%s "
                 "status=failed duration_ms=%d error_class=%s reason=invalid_json",
                 event_type,

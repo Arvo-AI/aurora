@@ -60,6 +60,7 @@
                     try {
                         targetOrigin = new URL(configured).origin;
                     } catch (urlErr) {
+                        console.warn('github_callback_success: bad frontend_url, skip postMessage', urlErr);
                         targetOrigin = '';
                     }
                 }
@@ -70,7 +71,9 @@
                     );
                 }
             }
-        } catch (e) { /* opener navigated away */ }
+        } catch (e) {
+            console.warn('github_callback_success: postMessage failed (opener likely navigated away)', e);
+        }
         setTimeout(function() { window.close(); }, 250);
     </script>
 </body>

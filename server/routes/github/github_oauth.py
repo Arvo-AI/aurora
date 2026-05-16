@@ -25,7 +25,7 @@ from urllib.parse import urlencode
 import flask
 import requests
 from flask import Blueprint, jsonify, request
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from utils.auth.github_auth_mode import (
     is_oauth_enabled,
@@ -42,6 +42,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "")
 GITHUB_TIMEOUT = 20
 _OAUTH_STATE_SALT = "aurora.github.oauth.state.v1"
 _OAUTH_STATE_TTL_SEC = 10 * 60
+_CALLBACK_ERROR_TEMPLATE = "github_callback_error.html"
 
 
 def _state_serializer() -> URLSafeTimedSerializer:
@@ -58,7 +59,7 @@ def _sign_state(user_id: str) -> str:
 def _verify_state(state: str) -> str | None:
     try:
         payload = _state_serializer().loads(state, max_age=_OAUTH_STATE_TTL_SEC)
-    except (BadSignature, SignatureExpired):
+    except BadSignature:
         return None
     if not isinstance(payload, dict):
         return None
@@ -151,7 +152,7 @@ def github_login(user_id):
     )
 
 
-@github_oauth_bp.route("/callback", methods=["GET", "POST"])
+@github_oauth_bp.route("/callback", methods=["GET"])
 def github_callback():
     """Exchange the OAuth code for a user access token and store it.
 
@@ -161,7 +162,7 @@ def github_callback():
     """
     if not is_oauth_enabled():
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="GitHub OAuth is disabled in this deployment",
             frontend_url=FRONTEND_URL,
         )
@@ -170,7 +171,7 @@ def github_callback():
     if not code:
         logger.error("[GITHUB-OAUTH] callback hit with no code")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="No authorization code provided",
             frontend_url=FRONTEND_URL,
         )
@@ -178,7 +179,7 @@ def github_callback():
     if not oauth_credentials_configured():
         logger.error("[GITHUB-OAUTH] callback hit with unconfigured client credentials")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="GitHub integration is not properly configured",
             frontend_url=FRONTEND_URL,
         )
@@ -200,7 +201,7 @@ def github_callback():
     except requests.RequestException:
         logger.exception("[GITHUB-OAUTH] token exchange request failed")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Failed to reach GitHub during token exchange",
             frontend_url=FRONTEND_URL,
         )
@@ -211,7 +212,7 @@ def github_callback():
             token_response.status_code,
         )
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Failed to authenticate with GitHub",
             frontend_url=FRONTEND_URL,
         )
@@ -221,7 +222,7 @@ def github_callback():
     if not access_token:
         logger.error("[GITHUB-OAUTH] no access_token in token response")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Invalid response from GitHub",
             frontend_url=FRONTEND_URL,
         )
@@ -235,7 +236,7 @@ def github_callback():
     except requests.RequestException:
         logger.exception("[GITHUB-OAUTH] user info request failed")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Failed to fetch user information from GitHub",
             frontend_url=FRONTEND_URL,
         )
@@ -246,7 +247,7 @@ def github_callback():
             user_response.status_code,
         )
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Failed to fetch user information",
             frontend_url=FRONTEND_URL,
         )
@@ -259,7 +260,7 @@ def github_callback():
     if not raw_state:
         logger.error("[GITHUB-OAUTH] callback missing state")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Missing state parameter",
             frontend_url=FRONTEND_URL,
         )
@@ -268,7 +269,7 @@ def github_callback():
     if not aurora_user_id:
         logger.error("[GITHUB-OAUTH] callback state failed signature/expiry check")
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Invalid or expired state parameter",
             frontend_url=FRONTEND_URL,
         )
@@ -292,7 +293,7 @@ def github_callback():
             "[GITHUB-OAUTH] failed to persist token for user=%s", safe_user
         )
         return flask.render_template(
-            "github_callback_error.html",
+            _CALLBACK_ERROR_TEMPLATE,
             error="Failed to persist credentials",
             frontend_url=FRONTEND_URL,
         )

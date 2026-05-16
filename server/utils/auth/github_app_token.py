@@ -90,7 +90,7 @@ _REFRESH_BUFFER_SECONDS = 60
 # Pattern used to redact token-like substrings from any response body
 # we include in error messages. GitHub installation tokens start with
 # ``ghs_`` followed by alphanumeric/underscore characters.
-_TOKEN_PATTERN = re.compile(r"ghs_[A-Za-z0-9_]+")
+_TOKEN_PATTERN = re.compile(r"ghs_\w+")
 
 # Module-level state. ``_token_cache`` mutations happen under a per-
 # installation lock; ``_per_installation_locks`` mutations happen under
