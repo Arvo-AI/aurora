@@ -1862,12 +1862,16 @@ class Workflow:
                 # never match the real prior user message. Net effect: the
                 # user's question persisted twice and message_number got a
                 # gap (1 → 3 → 4) once finalize wiped the streaming row.
-                existing = [m for m in existing if not m.get('_streaming')]
+                existing = [
+                    m for m in existing
+                    if not (isinstance(m, dict) and m.get('_streaming'))
+                ]
 
                 to_append = list(turn_ui_messages)
                 if (
                     to_append
                     and existing
+                    and isinstance(existing[-1], dict)
                     and to_append[0].get('sender') == 'user'
                     and existing[-1].get('sender') == 'user'
                     and (existing[-1].get('text') or '') == (to_append[0].get('text') or '')

@@ -18,6 +18,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import unquote
 
 import httpx
 import psycopg2
@@ -233,9 +234,12 @@ async def _api(
     # Defense-in-depth: httpx.URL collapses `..` segments, so an unencoded
     # path traversal would escape the intended prefix even though the path
     # "starts with /". Callers must URL-encode user input (see
-    # urllib.parse.quote in tools_gated/dispatch); reject anything that still
-    # contains a parent-segment so a single missed call site can't leak.
-    if "/.." in path or path.endswith("/..") or "%2e%2e" in path.lower():
+    # urllib.parse.quote in tools_gated/dispatch); reject anything whose
+    # *decoded* form still resolves to a parent segment so mixed encodings
+    # like `/.%2e/admin` or `/%2e./admin` can't slip through a single
+    # missed call site.
+    decoded = unquote(path)
+    if any(seg == ".." for seg in decoded.split("/")):
         raise ValueError("Path contains parent-directory segments")
     token = _get_token()
     user_id, org_id = _resolve_token(token)
@@ -380,8 +384,10 @@ if __name__ == "__main__":
                 finally:
                     pool.putconn(conn)
                 return JSONResponse({"status": "ok"})
-            except Exception as e:
-                return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+            except Exception:
+                # Don't leak postgres error text to unauthenticated callers.
+                logger.exception("healthz: db check failed")
+                return JSONResponse({"status": "error"}, status_code=503)
 
         app.routes.append(Route("/healthz", _healthz, methods=["GET"]))
         return app

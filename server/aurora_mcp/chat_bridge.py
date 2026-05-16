@@ -154,13 +154,23 @@ async def chat_with_aurora(
 
     if not poll_only:
         if not sid:
-            sid = await _create_session(api_call)
+            try:
+                sid = await _create_session(api_call)
+            except Exception as exc:
+                logger.exception("chat_with_aurora: create_session failed")
+                return {"status": "error", "error": f"Failed to create chat session: {exc}"}
             if not sid:
-                return {"error": "Failed to create chat session"}
+                return {"status": "error", "error": "Failed to create chat session"}
         if message:
-            posted_seq = await _post_message(api_call, sid, message, mode)
+            try:
+                posted_seq = await _post_message(api_call, sid, message, mode)
+            except Exception as exc:
+                logger.exception("chat_with_aurora: post_message failed (session=%s)", sid)
+                return {"session_id": sid, "status": "error",
+                        "error": f"Failed to post chat message: {exc}"}
             if posted_seq is None:
-                return {"error": "Failed to post chat message", "session_id": sid}
+                return {"session_id": sid, "status": "error",
+                        "error": "Failed to post chat message"}
             last_seq = posted_seq
 
     deadline = time.monotonic() + _POLL_TOTAL_SECONDS
@@ -177,6 +187,14 @@ async def chat_with_aurora(
             # Backend slow / httpx read timeout. Don't drop session_id —
             # let the loop retry until our wall-time deadline expires.
             logger.warning("chat_with_aurora poll timed out, retrying (session=%s)", sid)
+            continue
+        except Exception as exc:
+            # Retry on transient upstream errors; the in_progress envelope
+            # below catches persistent ones after the deadline.
+            logger.warning(
+                "chat_with_aurora poll raised %s, retrying (session=%s): %s",
+                type(exc).__name__, sid, exc,
+            )
             continue
         latest_partial = _latest_assistant_text(msgs, latest_partial)
 

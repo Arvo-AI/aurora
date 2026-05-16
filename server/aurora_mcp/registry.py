@@ -489,7 +489,10 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         path="/api/incidents/{incident_id}",
         enabling_skills=(),
         path_args=("incident_id",),
-        body_keys=("status", "summary", "severity", "title"),
+        # Mirrors the PATCH route in routes/incidents_routes.py — severity/title
+        # are NOT accepted there and would be silently dropped (or trip the
+        # "No valid fields to update" 400 if sent alone).
+        body_keys=("status", "auroraStatus", "summary", "activeTab"),
     ),
     DispatchEntry(
         name="incident_list_recent_unlinked",
@@ -517,7 +520,9 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         path="/api/incidents/{target_incident_id}/merge-alert",
         enabling_skills=(),
         path_args=("target_incident_id",),
-        body_keys=("alert_id", "source_incident_id"),
+        # The route only reads `sourceIncidentId` (camelCase) from the body.
+        # `alert_id` and snake_case `source_incident_id` would be ignored.
+        body_keys=("sourceIncidentId",),
     ),
     DispatchEntry(
         name="incident_suggestion_apply",
