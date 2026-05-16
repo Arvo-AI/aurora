@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -162,16 +163,21 @@ async def chat_with_aurora(
                 return {"error": "Failed to post chat message", "session_id": sid}
             last_seq = posted_seq
 
-    elapsed = 0.0
+    deadline = time.monotonic() + _POLL_TOTAL_SECONDS
     interval = _POLL_INTERVAL_INITIAL
     latest_partial: Optional[str] = None
 
-    while elapsed < _POLL_TOTAL_SECONDS:
+    while time.monotonic() < deadline:
         await asyncio.sleep(interval)  # NOSONAR S7484: cross-process HTTP poll, no in-process signal to wait on.
-        elapsed += interval
         interval = min(interval * 2, _POLL_INTERVAL_MAX)
 
-        page, msgs, status, last_seq = await _poll_once(api_call, sid, last_seq)
+        try:
+            page, msgs, status, last_seq = await _poll_once(api_call, sid, last_seq)
+        except (asyncio.TimeoutError, TimeoutError):
+            # Backend slow / httpx read timeout. Don't drop session_id —
+            # let the loop retry until our wall-time deadline expires.
+            logger.warning("chat_with_aurora poll timed out, retrying (session=%s)", sid)
+            continue
         latest_partial = _latest_assistant_text(msgs, latest_partial)
 
         terminal = _terminal_result(status, sid, page, latest_partial)

@@ -1359,6 +1359,13 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             incident_id=None,  # Don't trigger RCA workflow - this is a Q&A chat
             send_notifications=False,  # No notifications for Q&A
             mode=mode,  # Pass mode for execution capability
+            # `full_message` wraps `question` in <context>/<user_message> tags
+            # for the LLM. State.question (used by immediate_save and the
+            # input rail) must be the bare user text so the persistence-layer
+            # dedup matches the pre-seeded user row from
+            # create_background_chat_session — otherwise the question lands
+            # in chat_sessions.messages 2–3 times per turn.
+            rail_text=question,
         )
 
         logger.info(

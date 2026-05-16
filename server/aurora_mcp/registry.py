@@ -633,26 +633,39 @@ _BANNED_NAME_FRAGMENTS: Tuple[str, ...] = (
     "terraform",
     "iac_apply",
     "iac_destroy",
-    "kubectl_apply",
-    "kubectl_delete",
-    "kubectl_exec",
+    # kubectl_get* is the only read-safe kubectl verb; everything else mutates.
+    # Enforced by the kubectl_ prefix rule in assert_allowlist_safe.
     "terminal_exec",
     "cloud_exec",
     "tailscale_ssh",
     "cloudflare_action",
     "cloudflare_waf",
     "cloudflare_dns_write",
+    "shell_exec",
+    "shell_run",
+    "shell_command",
 )
 
 
+def _is_banned_kubectl(name: str) -> bool:
+    """Any kubectl_ tool except kubectl_get* is banned (apply, delete, exec,
+    patch, scale, rollout, drain, cordon, taint, …)."""
+    return name.startswith("kubectl_") and not name.startswith("kubectl_get")
+
+
 def assert_allowlist_safe() -> None:
-    """Raise if DISPATCH_ALLOWLIST contains a banned name or write path.
+    """Raise if DISPATCH_ALLOWLIST contains a banned name.
 
     Called once at import time so any accidental inclusion of an infra-write
     tool fails loudly at startup rather than at request time.
     """
     for entry in DISPATCH_ALLOWLIST:
         lname = entry.name.lower()
+        if _is_banned_kubectl(lname):
+            raise RuntimeError(
+                f"DISPATCH_ALLOWLIST contains banned kubectl write tool "
+                f"'{entry.name}'. Only kubectl_get* is read-safe."
+            )
         for frag in _BANNED_NAME_FRAGMENTS:
             if frag in lname:
                 raise RuntimeError(
@@ -660,11 +673,6 @@ def assert_allowlist_safe() -> None:
                     f"(matched fragment '{frag}'). Infra-write tools must not "
                     f"be reachable from MCP. See server/aurora_mcp/registry.py."
                 )
-        # Reject obviously dangerous methods + paths combinations.
-        if entry.method.upper() == "DELETE" and "/apply" in entry.path:
-            raise RuntimeError(
-                f"DISPATCH_ALLOWLIST contains suspicious entry '{entry.name}'."
-            )
 
 
 assert_allowlist_safe()
@@ -737,8 +745,14 @@ def _entry_matches_search(
         return False
     if conn and conn not in {s.lower() for s in entry.enabling_skills}:
         return False
-    if q and q not in entry.name.lower() and q not in entry.description.lower():
-        return False
+    if q:
+        # Tool names use underscores; humans type spaces. Match either by
+        # normalizing both sides to underscores before substring-checking.
+        q_norm = q.replace(" ", "_")
+        name_norm = entry.name.lower()
+        desc_norm = entry.description.lower().replace(" ", "_")
+        if q_norm not in name_norm and q_norm not in desc_norm:
+            return False
     if user_id is not None and not dispatch_entry_visible(entry, user_id):
         return False
     return True

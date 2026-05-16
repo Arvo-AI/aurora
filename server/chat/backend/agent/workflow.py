@@ -1852,6 +1852,18 @@ class Workflow:
                 if not isinstance(existing, list):
                     existing = []
 
+                # Drop mid-stream `_streaming` rows before computing dedup and
+                # the merged write-back. Those rows are appended by
+                # save_streaming_chat_message during token streaming and
+                # removed seconds later by finalize_streaming_chat_message —
+                # but in background-task ordering they're still present here
+                # and would mask the seeded user row from
+                # create_background_chat_session, causing the dedup below to
+                # never match the real prior user message. Net effect: the
+                # user's question persisted twice and message_number got a
+                # gap (1 → 3 → 4) once finalize wiped the streaming row.
+                existing = [m for m in existing if not m.get('_streaming')]
+
                 to_append = list(turn_ui_messages)
                 if (
                     to_append

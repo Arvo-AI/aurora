@@ -55,13 +55,18 @@ async def _do_catalog_skills(user_id: str) -> Dict[str, Any]:
 
 
 def _slim_incident_row(i: Dict[str, Any]) -> Dict[str, Any]:
+    # /api/incidents returns the camelCase shape from _format_incident_response
+    # in routes/incidents_routes.py — title/service are nested under `alert`,
+    # timestamps are camelCase. Fall back to snake_case keys for forward
+    # compatibility if the API shape ever flattens.
+    alert = i.get("alert") if isinstance(i.get("alert"), dict) else {}
     return {
         "id": i.get("id"),
-        "title": i.get("alert_title") or i.get("title"),
-        "status": i.get("aurora_status") or i.get("status"),
+        "title": alert.get("title") or i.get("alert_title") or i.get("title"),
+        "status": i.get("auroraStatus") or i.get("aurora_status") or i.get("status"),
         "severity": i.get("severity"),
-        "service": i.get("alert_service"),
-        "created_at": i.get("created_at"),
+        "service": alert.get("service") or i.get("alert_service"),
+        "created_at": i.get("createdAt") or i.get("created_at"),
     }
 
 

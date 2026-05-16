@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from .registry import GatedToolSpec, TIER2_TOOLS, _check_skill_connected
 from .response import truncate_payload
@@ -204,7 +205,7 @@ async def _do_query_jira(
         if not issue_key:
             return {"error": "issue_key_required"}
         return truncate_payload(
-            await api_call("GET", f"/jira/issue/{issue_key}"),
+            await api_call("GET", f"/jira/issue/{quote(issue_key, safe='')}"),
             tool_name="query_jira",
         )
     return {"error": "invalid_action", "valid_actions": ["search", "get_issue"]}
@@ -225,7 +226,7 @@ async def _do_query_notion(
         if not db_id:
             return {"error": "db_id_required"}
         return truncate_payload(
-            await api_call("GET", f"/notion/databases/{db_id}"),
+            await api_call("GET", f"/notion/databases/{quote(db_id, safe='')}"),
             tool_name="query_notion",
         )
     return {
@@ -248,7 +249,7 @@ async def _bitbucket_action(
         if not workspace:
             return {"error": "workspace_required"}
         return truncate_payload(
-            await api_call("GET", f"/bitbucket/repos/{workspace}"),
+            await api_call("GET", f"/bitbucket/repos/{quote(workspace, safe='')}"),
             tool_name="query_bitbucket",
         )
     if action in ("list_branches", "list_prs"):
@@ -256,7 +257,10 @@ async def _bitbucket_action(
             return {"error": "workspace_and_repo_slug_required"}
         sub = "branches" if action == "list_branches" else "pull-requests"
         return truncate_payload(
-            await api_call("GET", f"/bitbucket/{sub}/{workspace}/{repo_slug}"),
+            await api_call(
+                "GET",
+                f"/bitbucket/{sub}/{quote(workspace, safe='')}/{quote(repo_slug, safe='')}",
+            ),
             tool_name="query_bitbucket",
         )
     return None

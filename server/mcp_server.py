@@ -78,6 +78,28 @@ _last_used_cache: Dict[str, float] = {}
 _TOKEN_READ_TTL = 60.0
 _token_read_cache: Dict[str, tuple] = {}
 
+# Hard ceiling on both caches. The TTL only controls re-reads, not eviction;
+# without a bound, rotated/expired tokens would accumulate forever. We never
+# expect more than a few hundred distinct active MCP tokens per process.
+_TOKEN_CACHE_MAX = 1024
+
+
+def _prune_token_caches() -> None:
+    """Evict the oldest entries once either cache exceeds _TOKEN_CACHE_MAX.
+
+    Both caches are keyed by token; we drop the bottom half (by recency) so
+    pruning is amortized O(N/2) per insert rather than O(1) per insert.
+    """
+    if len(_token_read_cache) > _TOKEN_CACHE_MAX:
+        # _token_read_cache value tuple = (resolved_at_monotonic, user_id, org_id)
+        cutoff = sorted(_token_read_cache.items(), key=lambda kv: kv[1][0])
+        for tok, _ in cutoff[: len(cutoff) // 2]:
+            _token_read_cache.pop(tok, None)
+    if len(_last_used_cache) > _TOKEN_CACHE_MAX:
+        cutoff = sorted(_last_used_cache.items(), key=lambda kv: kv[1])
+        for tok, _ in cutoff[: len(cutoff) // 2]:
+            _last_used_cache.pop(tok, None)
+
 
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
@@ -138,6 +160,7 @@ def _resolve_token(token: str) -> Tuple[str, str]:
         conn.commit()
         ok = True
         _token_read_cache[token] = (now, row[0], row[1])
+        _prune_token_caches()
         return row[0], row[1]
     finally:
         if not ok:
@@ -205,8 +228,15 @@ async def _api(
     Default request timeout is 30s (configured on the shared httpx client).
     Callers that need a different deadline wrap with `async with asyncio.timeout(N)`.
     """
-    if not path.startswith("/"):
+    if not path.startswith("/") or path.startswith("//"):
         raise ValueError(f"Path must be a relative path starting with /: {path}")
+    # Defense-in-depth: httpx.URL collapses `..` segments, so an unencoded
+    # path traversal would escape the intended prefix even though the path
+    # "starts with /". Callers must URL-encode user input (see
+    # urllib.parse.quote in tools_gated/dispatch); reject anything that still
+    # contains a parent-segment so a single missed call site can't leak.
+    if "/.." in path or path.endswith("/..") or "%2e%2e" in path.lower():
+        raise ValueError("Path contains parent-directory segments")
     token = _get_token()
     user_id, org_id = _resolve_token(token)
     headers = {"X-User-ID": user_id, "X-Org-ID": org_id}
