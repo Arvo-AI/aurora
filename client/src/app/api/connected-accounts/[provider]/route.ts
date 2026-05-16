@@ -25,7 +25,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry', 'victorops', 'opensearch'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -500,6 +500,46 @@ export async function DELETE(
         console.error('Backend error disconnecting BigPanda:', errorText)
         return NextResponse.json(
           { error: 'Failed to disconnect BigPanda' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for OpenSearch
+    if (provider === 'opensearch') {
+      const response = await fetch(`${API_BASE_URL}/opensearch/disconnect`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting OpenSearch:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect OpenSearch' },
+          { status: response.status }
+        )
+      }
+
+      const data = await response.json()
+      return NextResponse.json(data)
+    }
+
+    // Special handling for VictorOps (Splunk On-Call)
+    if (provider === 'victorops') {
+      const response = await fetch(`${API_BASE_URL}/victorops`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend error disconnecting VictorOps:', errorText)
+        return NextResponse.json(
+          { error: 'Failed to disconnect Splunk On-Call' },
           { status: response.status }
         )
       }

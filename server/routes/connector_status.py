@@ -544,6 +544,24 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
             return {"connected": False}
 
 
+def _check_opensearch(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Check OpenSearch credentials — credential-existence only (validated at connect time)."""
+    if creds.get("endpoint") and creds.get("username") and creds.get("password"):
+        return {"connected": True, "endpoint": creds.get("endpoint")}
+    return {"connected": False}
+
+
+def _check_victorops(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Check Splunk On-Call (VictorOps) credentials — no live API call.
+
+    Credentials are validated at connect time; here we just confirm they
+    are present so the connected-accounts endpoint returns quickly.
+    """
+    if creds.get("api_id") and creds.get("api_key"):
+        return {"connected": True}
+    return {"connected": False}
+
+
 def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validate OpsGenie / JSM Operations credentials."""
     auth_type = creds.get("auth_type", "opsgenie")
@@ -774,6 +792,8 @@ PROVIDER_CHECKERS = {
     "notion": _check_notion,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "victorops": _check_victorops,
+    "opensearch": _check_opensearch,
     "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
