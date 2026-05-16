@@ -44,7 +44,6 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [alsoConnectSibling, setAlsoConnectSibling] = useState(false);
   const [patUrl, setPatUrl] = useState("");
-  const [patEmail, setPatEmail] = useState("");
   const [patToken, setPatToken] = useState("");
   const [isPatConnecting, setIsPatConnecting] = useState(false);
   const [jiraMode, setJiraMode] = useState<"full" | "comment_only">("comment_only");
@@ -128,18 +127,14 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
     } finally { setIsConnecting(false); }
   };
 
-  const isCloudUrl = (url: string) => url.toLowerCase().includes(".atlassian.net");
-
   const handlePatConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!patUrl || !patToken) return;
-    if (isCloudUrl(patUrl) && !patEmail) return;
     setIsPatConnecting(true);
     try {
       const payload: Record<string, unknown> = { products: [product.key], authType: "pat" as const };
       payload[`${product.key}BaseUrl`] = patUrl;
       payload[`${product.key}PatToken`] = patToken;
-      if (patEmail) payload[`${product.key}Email`] = patEmail;
       await atlassianService.connect(payload as unknown as Parameters<typeof atlassianService.connect>[0]);
       await loadStatus();
       toast({ title: `${product.name} connected via PAT` });
@@ -410,26 +405,9 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   <Label htmlFor={`${product.key}PatUrl`} className="text-xs">Base URL</Label>
                   <Input id={`${product.key}PatUrl`} type="url" placeholder={product.patUrlPlaceholder} value={patUrl} onChange={(e) => setPatUrl(e.target.value)} required className="h-9" />
                 </div>
-                {isCloudUrl(patUrl) && (
-                  <div className="space-y-1.5">
-                    <Label htmlFor={`${product.key}Email`} className="text-xs">Atlassian Account Email</Label>
-                    <Input id={`${product.key}Email`} type="email" placeholder="your-email@example.com" value={patEmail} onChange={(e) => setPatEmail(e.target.value)} required className="h-9" />
-                    <p className="text-[11px] text-muted-foreground">Required for Atlassian Cloud API tokens</p>
-                  </div>
-                )}
                 <div className="space-y-1.5">
-                  <Label htmlFor={`${product.key}PatToken`} className="text-xs">
-                    {isCloudUrl(patUrl) ? "API Token" : "Personal Access Token"}
-                  </Label>
-                  <Input id={`${product.key}PatToken`} type="password" placeholder={isCloudUrl(patUrl) ? "Your Atlassian API token" : `Your ${product.name} PAT`} value={patToken} onChange={(e) => setPatToken(e.target.value)} required className="h-9" />
-                  {isCloudUrl(patUrl) && (
-                    <p className="text-[11px] text-muted-foreground">
-                      Generate at{" "}
-                      <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="text-[#2684FF] hover:underline">
-                        id.atlassian.com → API tokens
-                      </a>
-                    </p>
-                  )}
+                  <Label htmlFor={`${product.key}PatToken`} className="text-xs">Personal Access Token</Label>
+                  <Input id={`${product.key}PatToken`} type="password" placeholder={`Your ${product.name} PAT`} value={patToken} onChange={(e) => setPatToken(e.target.value)} required className="h-9" />
                 </div>
                 <Button type="submit" variant="outline" disabled={isPatConnecting} className="w-full">
                   {isPatConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
