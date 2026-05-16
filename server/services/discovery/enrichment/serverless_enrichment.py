@@ -231,17 +231,68 @@ def _extract_dependencies_from_env(env_vars):
 # ---------------------------------------------------------------------------
 
 
-def _build_aws_env(credentials):
-    """Build environment dict for AWS CLI calls."""
-    env = os.environ.copy()
+def _extract_account_id_from_arn(arn):
+    """Extract the AWS account ID from a Lambda ARN.
+
+    ARN format: arn:aws:lambda:<region>:<account-id>:function:<name>
+    Returns the account ID string, or None if the ARN is unparseable.
+    """
+    if not arn or not arn.startswith("arn:aws"):
+        return None
+    parts = arn.split(":")
+    return parts[4] if len(parts) >= 5 and parts[4] else None
+
+
+def _build_aws_account_envs(credentials):
+    """Build a dict mapping account_id -> subprocess env for multi-account AWS.
+
+    For single-account credentials, returns {None: env} so callers can use
+    the same lookup pattern regardless of the auth mode.
+
+    Uses ``isolated_env`` from each account entry when available (already
+    built by setup_aws_environments_all_accounts), otherwise constructs one
+    from the credential keys.
+    """
     aws_creds = credentials.get("aws", {})
+
+    if aws_creds.get("_multi_account"):
+        account_envs = aws_creds.get("_account_envs") or []
+        result = {}
+        for acct in account_envs:
+            acct_id = acct.get("account_id")
+            # Prefer the ready-made isolated_env (already minimal, built by
+            # setup_aws_environments_all_accounts). Fall back to constructing a
+            # minimal env from the credential keys — never copy os.environ so
+            # that server-side secrets are not leaked into subprocess calls.
+            if acct.get("isolated_env"):
+                env = dict(acct["isolated_env"])
+            else:
+                raw = acct.get("credentials", {})
+                env = {"PATH": os.environ.get("PATH", "")}
+                if raw.get("accessKeyId"):
+                    env["AWS_ACCESS_KEY_ID"] = raw["accessKeyId"]
+                if raw.get("secretAccessKey"):
+                    env["AWS_SECRET_ACCESS_KEY"] = raw["secretAccessKey"]
+                if raw.get("sessionToken"):
+                    env["AWS_SESSION_TOKEN"] = raw["sessionToken"]
+                if acct.get("region"):
+                    env["AWS_DEFAULT_REGION"] = acct["region"]
+            if acct_id:
+                result[acct_id] = env
+        return result
+
+    # Single-account: key by None so callers always do env_map.get(acct_id, fallback).
+    # Build a minimal env — never copy os.environ wholesale.
+    env = {"PATH": os.environ.get("PATH", "")}
     if aws_creds.get("access_key_id"):
         env["AWS_ACCESS_KEY_ID"] = aws_creds["access_key_id"]
     if aws_creds.get("secret_access_key"):
         env["AWS_SECRET_ACCESS_KEY"] = aws_creds["secret_access_key"]
+    if aws_creds.get("session_token"):
+        env["AWS_SESSION_TOKEN"] = aws_creds["session_token"]
     if aws_creds.get("region"):
         env["AWS_DEFAULT_REGION"] = aws_creds["region"]
-    return env
+    return {None: env}
 
 
 def _fetch_lambda_env_vars(function_name, aws_env):
@@ -260,7 +311,7 @@ def _fetch_lambda_env_vars(function_name, aws_env):
     return data.get("Environment", {}).get("Variables", {})
 
 
-def _fetch_cloud_run_env_vars(service_name, region):
+def _fetch_cloud_run_env_vars(service_name, region, project, gcp_env=None):
     """Fetch environment variables for a GCP Cloud Run service.
 
     Returns a dict of env var key -> value, or empty dict on failure.
@@ -268,9 +319,10 @@ def _fetch_cloud_run_env_vars(service_name, region):
     cmd = [
         "gcloud", "run", "services", "describe", service_name,
         f"--region={region}",
+        f"--project={project}",
         "--format=json",
     ]
-    data = run_cli_json_command(cmd)
+    data = run_cli_json_command(cmd, env=gcp_env)
     if data is None:
         return {}
 
@@ -283,16 +335,17 @@ def _fetch_cloud_run_env_vars(service_name, region):
         return {}
 
 
-def _fetch_cloud_function_env_vars(function_name):
+def _fetch_cloud_function_env_vars(function_name, project, gcp_env=None):
     """Fetch environment variables for a GCP Cloud Function.
 
     Returns a dict of env var key -> value, or empty dict on failure.
     """
     cmd = [
         "gcloud", "functions", "describe", function_name,
+        f"--project={project}",
         "--format=json",
     ]
-    data = run_cli_json_command(cmd)
+    data = run_cli_json_command(cmd, env=gcp_env)
     if data is None:
         return {}
 
@@ -305,7 +358,7 @@ def _fetch_cloud_function_env_vars(function_name):
     return env_vars or {}
 
 
-def enrich(user_id, serverless_nodes, credentials_by_provider):
+def enrich(user_id, serverless_nodes, credentials_by_provider, provider_envs=None):
     """Extract environment variable dependency hints from serverless functions.
 
     For each serverless function discovered in Phase 1, fetches its
@@ -320,6 +373,9 @@ def enrich(user_id, serverless_nodes, credentials_by_provider):
             optionally ``region`` fields.
         credentials_by_provider: Dict mapping provider name to credentials
             dict. Expected keys: ``aws``, ``gcp``, ``azure``.
+        provider_envs: Optional dict mapping provider name to the isolated
+            subprocess env dict built during Phase 1 (used for GCP gcloud
+            auth). When omitted, GCP enrichment runs without explicit auth.
 
     Returns:
         Dict with keys:
@@ -328,19 +384,35 @@ def enrich(user_id, serverless_nodes, credentials_by_provider):
     """
     errors = []
     env_vars_result = {}
+    if provider_envs is None:
+        provider_envs = {}
 
     logger.info(
         "Starting serverless enrichment for user %s (%d functions)",
         user_id, len(serverless_nodes),
     )
 
-    aws_env = _build_aws_env(credentials_by_provider) if credentials_by_provider.get("aws") else None
+    # Build per-account AWS env map. For single-account this is {None: env};
+    # for multi-account it is {account_id: env, ...} so each Lambda gets
+    # credentials scoped to the account that owns it.
+    aws_account_envs = _build_aws_account_envs(credentials_by_provider) if credentials_by_provider.get("aws") else {}
+    # Sentinel: any non-None env from the map (used for "has any AWS creds" check)
+    _any_aws_env = next(iter(aws_account_envs.values()), None) if aws_account_envs else None
+
+    # GCP: extract the isolated subprocess env and a default project ID for
+    # gcloud commands that require --project (Cloud Run describe, Functions describe).
+    gcp_env = provider_envs.get("gcp")
+    gcp_creds = credentials_by_provider.get("gcp", {})
+    gcp_project_ids = gcp_creds.get("project_ids") or []
+    gcp_default_project = gcp_project_ids[0] if gcp_project_ids else gcp_creds.get("project_id", "")
 
     for node in serverless_nodes:
         provider = node.get("provider", "")
         name = node.get("name", "")
         sub_type = node.get("sub_type", "")
         region = node.get("region", "")
+        # Prefer node-level project metadata; fall back to the first project from credentials
+        project = node.get("metadata", {}).get("project_id") or gcp_default_project
 
         if not name:
             continue
@@ -349,15 +421,21 @@ def enrich(user_id, serverless_nodes, credentials_by_provider):
 
         try:
             if provider == "gcp" and sub_type == "cloud_run":
-                raw_env_vars = _fetch_cloud_run_env_vars(name, region)
+                raw_env_vars = _fetch_cloud_run_env_vars(name, region, project, gcp_env)
 
             elif provider == "gcp" and sub_type == "cloud_function":
-                raw_env_vars = _fetch_cloud_function_env_vars(name)
+                raw_env_vars = _fetch_cloud_function_env_vars(name, project, gcp_env)
 
             elif provider == "aws" and sub_type == "lambda":
-                if aws_env is None:
+                if _any_aws_env is None:
                     errors.append(f"No AWS credentials for Lambda function {name}")
                     continue
+                # Route to the account that owns this function using its ARN.
+                # Falls back to the first available account when the ARN is
+                # absent or belongs to an account not in the credential set.
+                node_arn = node.get("cloud_resource_id", "")
+                acct_id = _extract_account_id_from_arn(node_arn)
+                aws_env = aws_account_envs.get(acct_id) or _any_aws_env
                 raw_env_vars = _fetch_lambda_env_vars(name, aws_env)
 
             elif provider == "azure":

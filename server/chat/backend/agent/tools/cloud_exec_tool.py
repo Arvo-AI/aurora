@@ -516,6 +516,16 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         cloudsdk_config_dir = f"/tmp/.gcloud-{user_id}"
         try:
             os.makedirs(cloudsdk_config_dir, exist_ok=True)
+            # Write a minimal properties file so gcloud sees an active account.
+            # Without this, gcloud config config-helper (called by
+            # gke-gcloud-auth-plugin on every kubectl invocation) exits with
+            # "You do not currently have an active account selected" even when
+            # GOOGLE_OAUTH_ACCESS_TOKEN is set, because gcloud still validates
+            # that core/account is populated before resolving the token.
+            properties_path = os.path.join(cloudsdk_config_dir, "properties")
+            account_identity = sa_email if sa_email else "aurora-discovery@local"
+            with open(properties_path, "w") as _pf:
+                _pf.write(f"[core]\naccount = {account_identity}\n")
         except OSError as mkdir_err:
             logger.warning(
                 "GCP isolated env: could not create per-user CLOUDSDK_CONFIG dir (error_type=%s) — falling back to shared path",

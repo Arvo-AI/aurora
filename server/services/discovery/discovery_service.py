@@ -164,7 +164,10 @@ def run_discovery_for_user(user_id, connected_providers):
             e.g. {"gcp": {"project_id": "..."}, "aws": {"access_key_id": "..."}}
 
     Returns:
-        Summary dict with counts and timing.
+        Summary dict with counts, timing, and a ``provider_errors`` key that
+        maps each provider name to its list of error strings. This allows
+        callers to do accurate per-provider failure tracking without guessing
+        from error message text.
     """
     start_time = time.time()
     summary = {
@@ -175,6 +178,7 @@ def run_discovery_for_user(user_id, connected_providers):
         "phase2_relationships": 0,
         "phase3_edges": 0,
         "errors": [],
+        "provider_errors": {},
     }
 
     # =====================================================================
@@ -227,12 +231,14 @@ def run_discovery_for_user(user_id, connected_providers):
 
                 if errors:
                     summary["errors"].extend(errors)
+                    summary["provider_errors"].setdefault(provider_name, []).extend(errors)
 
                 logger.info(f"[Discovery] Phase 1 {provider_name}: {len(nodes)} nodes, {len(relationships)} relationships")
             except Exception as e:
                 error_msg = f"Phase 1 {provider_name} failed: {str(e)}"
                 logger.error(f"[Discovery] {error_msg}")
                 summary["errors"].append(error_msg)
+                summary["provider_errors"].setdefault(provider_name, []).append(error_msg)
 
     # Write Phase 1 nodes to Memgraph
     summary["phase1_nodes"] = write_services(user_id, all_nodes)
@@ -254,7 +260,10 @@ def run_discovery_for_user(user_id, connected_providers):
     k8s_clusters = [n for n in all_nodes if n.get("resource_type") == "kubernetes_cluster" and n.get("provider") != "kubectl"]
     if k8s_clusters:
         try:
-            k8s_result = kubernetes_enrichment.enrich(user_id, k8s_clusters, connected_providers)
+            k8s_result = kubernetes_enrichment.enrich(
+                user_id, k8s_clusters, connected_providers,
+                provider_envs={p: env for p, (env, _) in provider_envs.items() if env is not None},
+            )
             k8s_nodes = k8s_result.get("nodes", [])
             k8s_rels = k8s_result.get("relationships", [])
             if k8s_nodes:
@@ -264,6 +273,17 @@ def run_discovery_for_user(user_id, connected_providers):
                 summary["phase2_relationships"] += write_dependencies(user_id, k8s_rels)
             if k8s_result.get("errors"):
                 summary["errors"].extend(k8s_result["errors"])
+                # K8s clusters can belong to any provider — attribute errors to
+                # the provider of each cluster rather than a single fixed name.
+                for err in k8s_result["errors"]:
+                    for pname in ("gcp", "aws", "azure"):
+                        if pname in connected_providers and pname in err.lower():
+                            summary["provider_errors"].setdefault(pname, []).append(err)
+                            break
+            stale = k8s_result.get("stale_clusters", [])
+            if stale:
+                logger.warning("[Discovery] Stale K8s clusters for user %s: %s", user_id, stale)
+                summary.setdefault("stale_clusters", []).extend(stale)
             logger.info(f"[Discovery] Phase 2 K8s: {len(k8s_nodes)} nodes, {len(k8s_rels)} relationships")
         except Exception as e:
             logger.error(f"[Discovery] Phase 2 K8s enrichment failed: {e}")
@@ -283,24 +303,43 @@ def run_discovery_for_user(user_id, connected_providers):
             enrichment_data.update(result.get("enrichment_data", {}))
             if result.get("errors"):
                 summary["errors"].extend(result["errors"])
+                summary["provider_errors"].setdefault(provider_name, []).extend(result["errors"])
             logger.info(f"[Discovery] Phase 2 {provider_name.upper()} enrichment complete")
         except Exception as e:
             label = provider_name.upper()
             logger.error(f"[Discovery] Phase 2 {label} enrichment failed: {e}")
-            summary["errors"].append(f"{label} enrichment failed: {str(e)}")
+            error_msg = f"{label} enrichment failed: {str(e)}"
+            summary["errors"].append(error_msg)
+            summary["provider_errors"].setdefault(provider_name, []).append(error_msg)
 
     # Serverless enrichment
     serverless_nodes = [n for n in all_nodes if n.get("resource_type") == "serverless_function"]
     if serverless_nodes:
         try:
-            serverless_result = serverless_enrichment.enrich(user_id, serverless_nodes, connected_providers)
+            # Pass provider_envs so GCP gcloud calls get the isolated auth env
+            serverless_result = serverless_enrichment.enrich(
+                user_id, serverless_nodes, connected_providers,
+                provider_envs={p: env for p, (env, _) in provider_envs.items() if env is not None},
+            )
             enrichment_data["env_vars"] = serverless_result.get("env_vars", {})
             if serverless_result.get("errors"):
                 summary["errors"].extend(serverless_result["errors"])
+                # Serverless errors are already provider-prefixed (e.g. "aws/fn-name")
+                # so we can attribute them accurately.
+                for err in serverless_result["errors"]:
+                    for pname in ("gcp", "aws", "azure"):
+                        if pname in connected_providers and pname in err.lower():
+                            summary["provider_errors"].setdefault(pname, []).append(err)
+                            break
             logger.info(f"[Discovery] Phase 2 Serverless enrichment complete")
         except Exception as e:
             logger.error(f"[Discovery] Phase 2 Serverless enrichment failed: {e}")
-            summary["errors"].append(f"Serverless enrichment failed: {str(e)}")
+            error_msg = f"Serverless enrichment failed: {str(e)}"
+            summary["errors"].append(error_msg)
+            # Attribute to all serverless-capable providers connected for this user
+            for pname in ("gcp", "aws", "azure"):
+                if pname in connected_providers:
+                    summary["provider_errors"].setdefault(pname, []).append(error_msg)
 
     # Add GCP relationships for Phase 3 inference
     if gcp_relationships_raw:

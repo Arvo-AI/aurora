@@ -37,13 +37,13 @@ KUBECTL_COMMANDS = {
 # =========================================================================
 
 
-def _run_json_command(args, timeout=KUBECTL_TIMEOUT):
+def _run_json_command(args, timeout=KUBECTL_TIMEOUT, env=None):
     """Run a CLI command expecting JSON output.
 
     Returns:
         Tuple of (parsed_json, error_string_or_None).
     """
-    stdout, error = run_cli_command(args, timeout=timeout)
+    stdout, error = run_cli_command(args, timeout=timeout, env=env)
     if error:
         return None, error
     if not stdout:
@@ -59,7 +59,7 @@ def _run_json_command(args, timeout=KUBECTL_TIMEOUT):
 # =========================================================================
 
 
-def _get_cluster_credentials(cluster, provider_credentials):
+def _get_cluster_credentials(cluster, provider_credentials, provider_envs=None):
     """Authenticate kubectl to a cluster using the appropriate cloud CLI.
 
     Args:
@@ -67,27 +67,44 @@ def _get_cluster_credentials(cluster, provider_credentials):
                  cloud_resource_id.
         provider_credentials: Dict of provider credentials (may include
                               project, resource_group, etc.).
+        provider_envs: Optional dict mapping provider name to the isolated
+                       subprocess env dict built during Phase 1.
 
     Returns:
         Error string or None on success.
     """
+    if provider_envs is None:
+        provider_envs = {}
+
     provider = cluster.get("provider", "").lower()
     cluster_name = cluster.get("name", "")
     region = cluster.get("region", "")
     zone = cluster.get("zone", "")
 
     if provider == "gcp":
-        project = provider_credentials.get("project") or cluster.get("project", "")
+        # Resolve project: prefer node-level metadata set during Phase 1 asset
+        # discovery, then fall back to the first project from credentials.
+        gcp_creds = provider_credentials.get("gcp", provider_credentials)
+        project = (
+            cluster.get("metadata", {}).get("project_id")
+            or cluster.get("project", "")
+            or gcp_creds.get("project")
+            or (gcp_creds.get("project_ids") or [None])[0]
+        )
         location = zone or region
         if not location:
             return f"GKE cluster {cluster_name}: missing zone/region"
+
         args = [
             "gcloud", "container", "clusters", "get-credentials",
             cluster_name,
             "--zone", location,
-            "--project", project,
         ]
-        _, error = run_cli_command(args, timeout=CREDENTIALS_TIMEOUT)
+        if project:
+            args.extend(["--project", project])
+
+        gcp_env = provider_envs.get("gcp")
+        _, error = run_cli_command(args, env=gcp_env, timeout=CREDENTIALS_TIMEOUT)
         return error
 
     elif provider == "aws":
@@ -98,7 +115,16 @@ def _get_cluster_credentials(cluster, provider_credentials):
             "--name", cluster_name,
             "--region", region,
         ]
-        _, error = run_cli_command(args, timeout=CREDENTIALS_TIMEOUT)
+        # For multi-account setups, route to the account that owns this cluster
+        # using the account ID embedded in the EKS cluster ARN.
+        multi_envs = provider_envs.get("_aws_multi", {})
+        aws_env = provider_envs.get("aws")
+        if multi_envs:
+            arn = cluster.get("cloud_resource_id", "")
+            parts = arn.split(":") if arn.startswith("arn:aws") else []
+            acct_id = parts[4] if len(parts) >= 5 and parts[4] else None
+            aws_env = multi_envs.get(acct_id, aws_env)
+        _, error = run_cli_command(args, env=aws_env, timeout=CREDENTIALS_TIMEOUT)
         return error
 
     elif provider == "azure":
@@ -112,7 +138,8 @@ def _get_cluster_credentials(cluster, provider_credentials):
             "--resource-group", resource_group,
             "--overwrite-existing",
         ]
-        _, error = run_cli_command(args, timeout=CREDENTIALS_TIMEOUT)
+        azure_env = provider_envs.get("azure")
+        _, error = run_cli_command(args, env=azure_env, timeout=CREDENTIALS_TIMEOUT)
         return error
 
     else:
@@ -405,15 +432,38 @@ def _build_relationships(ingress_backends, service_nodes, workload_nodes, cluste
 # =========================================================================
 
 
-def _discover_cluster(cluster, provider_credentials):
+_STALE_CLUSTER_FRAGMENTS = (
+    # EKS cluster deleted from AWS
+    "ResourceNotFoundException",
+    "No cluster found for name",
+    # GKE cluster deleted or project removed
+    "NOT_FOUND",
+    "cluster not found",
+    # AKS cluster deleted
+    "ResourceNotFound",
+    "(ResourceNotFound)",
+)
+
+
+def _is_stale_cluster_error(error_msg: str) -> bool:
+    """Return True when error_msg indicates the cluster no longer exists."""
+    lower = error_msg.lower()
+    return any(frag.lower() in lower for frag in _STALE_CLUSTER_FRAGMENTS)
+
+
+def _discover_cluster(cluster, provider_credentials, provider_envs=None):
     """Discover internal resources for a single Kubernetes cluster.
 
     Args:
         cluster: Cluster dict from Phase 1.
         provider_credentials: Provider credential dict.
+        provider_envs: Optional dict mapping provider name to the isolated
+                       subprocess env dict built during Phase 1.
 
     Returns:
-        Tuple of (nodes_list, relationships_list, errors_list).
+        Tuple of (nodes_list, relationships_list, errors_list, stale_bool).
+        stale_bool is True when the cluster was not found in the cloud provider
+        and the caller should consider removing the connection record.
     """
     cluster_name = cluster.get("name", "unknown")
     nodes = []
@@ -422,18 +472,39 @@ def _discover_cluster(cluster, provider_credentials):
 
     # Step 1: Authenticate kubectl to this cluster
     logger.info(f"K8s enrichment: getting credentials for cluster {cluster_name}")
-    cred_error = _get_cluster_credentials(cluster, provider_credentials)
+    cred_error = _get_cluster_credentials(cluster, provider_credentials, provider_envs)
     if cred_error:
+        if _is_stale_cluster_error(cred_error):
+            logger.warning(
+                "K8s enrichment: cluster %s no longer exists in cloud provider — skipping",
+                cluster_name,
+            )
+            return nodes, relationships, [], True
         error_msg = f"Failed to get credentials for cluster {cluster_name}: {cred_error}"
         logger.warning(error_msg)
         errors.append(error_msg)
-        return nodes, relationships, errors
+        return nodes, relationships, errors, False
 
-    # Step 2: Fetch all resource types via kubectl
+    # Step 2: Fetch all resource types via kubectl.
+    # The provider env must be forwarded so gke-gcloud-auth-plugin (invoked by
+    # kubectl on every call) can authenticate using CLOUDSDK_AUTH_ACCESS_TOKEN
+    # and CLOUDSDK_CONFIG rather than looking for a gcloud account that doesn't
+    # exist in the container's default shell.
+    provider = cluster.get("provider", "").lower()
+    kubectl_env = provider_envs.get(provider)
+    # For multi-account EKS, pick the account-specific env so the AWS IAM
+    # authenticator uses the right credentials on every kubectl call.
+    if provider == "aws" and provider_envs.get("_aws_multi"):
+        multi_envs = provider_envs["_aws_multi"]
+        arn = cluster.get("cloud_resource_id", "")
+        parts = arn.split(":") if arn.startswith("arn:aws") else []
+        acct_id = parts[4] if len(parts) >= 5 and parts[4] else None
+        kubectl_env = multi_envs.get(acct_id, kubectl_env)
+
     raw_resources = {}
     for resource_kind, cmd in KUBECTL_COMMANDS.items():
         logger.info(f"K8s enrichment: fetching {resource_kind} from cluster {cluster_name}")
-        data, error = _run_json_command(cmd)
+        data, error = _run_json_command(cmd, env=kubectl_env)
         if error:
             error_msg = (
                 f"Failed to fetch {resource_kind} from cluster "
@@ -486,7 +557,7 @@ def _discover_cluster(cluster, provider_credentials):
         f"{len(nodes)} nodes, {len(relationships)} edges"
     )
 
-    return nodes, relationships, errors
+    return nodes, relationships, errors, False
 
 
 # =========================================================================
@@ -494,7 +565,7 @@ def _discover_cluster(cluster, provider_credentials):
 # =========================================================================
 
 
-def enrich(user_id, clusters, provider_credentials):
+def enrich(user_id, clusters, provider_credentials, provider_envs=None):
     """Enrich discovered Kubernetes clusters with internal resource details.
 
     Runs after Phase 1 discovers K8s clusters. For each cluster, authenticates
@@ -511,20 +582,30 @@ def enrich(user_id, clusters, provider_credentials):
             - cloud_resource_id: Original resource ID.
         provider_credentials: Dict of provider-specific credentials
             (project, resource_group, etc.).
+        provider_envs: Optional dict mapping provider name to the isolated
+            subprocess env dict built during Phase 1. When provided, GKE/EKS/AKS
+            credential commands run with the correct per-user auth context instead
+            of the shared container environment.
 
     Returns:
         Dict with keys:
             - nodes: List of discovered K8s resource node dicts.
             - relationships: List of dependency edge dicts.
             - errors: List of error message strings.
+            - stale_clusters: List of cluster names that no longer exist in the
+              cloud provider (caller can use this to clean up stale records).
     """
     all_nodes = []
     all_relationships = []
     all_errors = []
+    stale_clusters = []
+
+    if provider_envs is None:
+        provider_envs = {}
 
     if not clusters:
         logger.info("K8s enrichment: no clusters to enrich")
-        return {"nodes": [], "relationships": [], "errors": []}
+        return {"nodes": [], "relationships": [], "errors": [], "stale_clusters": []}
 
     logger.info(
         f"K8s enrichment: enriching {len(clusters)} clusters for user {user_id}"
@@ -533,9 +614,12 @@ def enrich(user_id, clusters, provider_credentials):
     for cluster in clusters:
         cluster_name = cluster.get("name", "unknown")
         try:
-            nodes, relationships, errors = _discover_cluster(
-                cluster, provider_credentials
+            nodes, relationships, errors, is_stale = _discover_cluster(
+                cluster, provider_credentials, provider_envs
             )
+            if is_stale:
+                stale_clusters.append(cluster_name)
+                continue
             all_nodes.extend(nodes)
             all_relationships.extend(relationships)
             all_errors.extend(errors)
@@ -546,14 +630,21 @@ def enrich(user_id, clusters, provider_credentials):
             logger.exception(error_msg)
             all_errors.append(error_msg)
 
+    if stale_clusters:
+        logger.warning(
+            "K8s enrichment: %d stale cluster(s) skipped for user %s: %s",
+            len(stale_clusters), user_id, stale_clusters,
+        )
+
     logger.info(
         f"K8s enrichment complete for user {user_id}: "
         f"{len(all_nodes)} nodes, {len(all_relationships)} relationships, "
-        f"{len(all_errors)} errors"
+        f"{len(all_errors)} errors, {len(stale_clusters)} stale"
     )
 
     return {
         "nodes": all_nodes,
         "relationships": all_relationships,
         "errors": all_errors,
+        "stale_clusters": stale_clusters,
     }

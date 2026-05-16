@@ -13,10 +13,11 @@ SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'k
 
 
 def _query_connected_providers(cur, user_id=None, conn=None):
-    """Query distinct (user_id, provider) pairs from active connections.
+    """Query active cloud provider connections.
 
-    If user_id is given, returns just the provider names for that user.
-    Otherwise returns (user_id, provider) rows for all users.
+    If user_id is given, returns just the provider name strings for that user.
+    Otherwise returns (user_id, org_id, provider) rows for all users so the
+    caller can deduplicate at the org level.
     Requires conn for cross-org queries to set RLS context per-org.
 
     Includes org_id fallback so org-shared connections (e.g. AWS accounts
@@ -28,17 +29,18 @@ def _query_connected_providers(cur, user_id=None, conn=None):
         if conn:
             set_rls_context(cur, conn, user_id, log_prefix="[Discovery]")
         cur.execute("""
-            SELECT DISTINCT provider FROM (
-                SELECT provider FROM user_connections
-                WHERE (user_id = %s OR org_id = %s) AND status = 'active' AND provider IN %s
-                UNION
-                SELECT provider FROM user_tokens
-                WHERE (user_id = %s OR org_id = %s) AND is_active = true AND provider IN %s
-            ) AS connected
-        """, (user_id, org_id, SUPPORTED_PROVIDERS, user_id, org_id, SUPPORTED_PROVIDERS))
+                SELECT DISTINCT provider FROM (
+                    SELECT provider FROM user_connections
+                    WHERE (user_id = %s OR (org_id = %s AND %s IS NOT NULL)) AND status = 'active' AND provider IN %s
+                    UNION
+                    SELECT provider FROM user_tokens
+                    WHERE (user_id = %s OR (org_id = %s AND %s IS NOT NULL)) AND is_active = true AND provider IN %s
+                ) AS connected
+            """, (user_id, org_id, org_id, SUPPORTED_PROVIDERS, user_id, org_id, org_id, SUPPORTED_PROVIDERS))
         return [row[0] for row in cur.fetchall()]
     else:
-        # No RLS needed — cross-org loop sets RLS per user
+        # No RLS needed — cross-org loop sets RLS per user.
+        # Returns (user_id, org_id, provider) so callers can group by org.
         cur.execute(
             "SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL"
         )
@@ -59,7 +61,7 @@ def _query_connected_providers(cur, user_id=None, conn=None):
                 ) AS connected
             """, (uid, org_id, SUPPORTED_PROVIDERS, uid, org_id, SUPPORTED_PROVIDERS))
             for row in cur.fetchall():
-                results.append((uid, row[0]))
+                results.append((uid, org_id, row[0]))
         return results
 
 
@@ -72,6 +74,167 @@ def _clear_discovery_lock(user_id):
             redis_client.delete(f"discovery:running:{user_id}")
     except Exception as e:
         logger.debug(f"[Discovery] Failed to clear lock for user {user_id}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Credential failure tracking
+# ---------------------------------------------------------------------------
+
+# Number of consecutive all-error runs before a provider connection is
+# auto-marked inactive and the user is notified.
+_CREDENTIAL_FAIL_THRESHOLD = 3
+# Redis TTL for the failure counter — 7 days. If a user fixes credentials and
+# a successful run resets the counter, stale keys expire on their own.
+_CREDENTIAL_FAIL_TTL_SECONDS = 7 * 24 * 3600
+
+# Error substrings that indicate a credential/auth problem rather than a
+# transient infrastructure error. Only these trigger the failure counter so
+# that intermittent network blips don't accumulate toward auto-disconnect.
+_CREDENTIAL_ERROR_FRAGMENTS = (
+    # AWS STS / IAM
+    "UnrecognizedClientException",
+    "InvalidClientTokenId",
+    "ExpiredTokenException",
+    "AccessDenied",
+    "not authorized to assume role",
+    "is not authorized to perform",
+    "The security token included in the request is invalid",
+    # GCP OAuth
+    "Reauthentication is needed",
+    "invalid_grant",
+    "Token has been expired or revoked",
+    "UNAUTHENTICATED",
+    # Azure
+    "AADSTS",
+    "ClientAuthenticationError",
+    "Invalid client secret",
+)
+
+# Substrings that, if present, override the fragment match above.
+# These are errors whose text happens to contain a credential-like fragment
+# but are actually billing/feature-tier or configuration issues — not bad tokens.
+_CREDENTIAL_ERROR_EXCLUSIONS = (
+    # GCP Asset Inventory relationship queries require SCC premium; the response
+    # body contains "UNAUTHENTICATED" but the OAuth token itself is valid.
+    "premium customers",
+    "scc premium",
+    "relationship is only supported",
+    # AWS Resource Explorer not enabled — the account is fine, just missing the index.
+    "not authorized to create indexes",
+)
+
+
+def _is_credential_error(error_msg: str) -> bool:
+    """Return True when error_msg looks like an auth/credential failure."""
+    lower = error_msg.lower()
+    if any(excl in lower for excl in _CREDENTIAL_ERROR_EXCLUSIONS):
+        return False
+    return any(frag.lower() in lower for frag in _CREDENTIAL_ERROR_FRAGMENTS)
+
+
+def _record_provider_failure(user_id: str, provider: str) -> int:
+    """Increment the consecutive-failure counter for (user_id, provider).
+
+    Returns the updated count, or 0 if Redis is unavailable.
+    """
+    try:
+        from utils.cache.redis_client import get_redis_client
+        redis_client = get_redis_client()
+        if not redis_client:
+            return 0
+        key = f"discovery:cred_fail:{user_id}:{provider}"
+        count = redis_client.incr(key)
+        redis_client.expire(key, _CREDENTIAL_FAIL_TTL_SECONDS)
+        return count
+    except Exception as e:
+        logger.debug("[Discovery] Failed to record provider failure for user %s provider %s: %s", user_id, provider, e)
+        return 0
+
+
+def _reset_provider_failure(user_id: str, provider: str) -> None:
+    """Clear the consecutive-failure counter after a successful run."""
+    try:
+        from utils.cache.redis_client import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.delete(f"discovery:cred_fail:{user_id}:{provider}")
+    except Exception as e:
+        logger.debug("[Discovery] Failed to reset provider failure for user %s provider %s: %s", user_id, provider, e)
+
+
+def _mark_provider_inactive(user_id: str, provider: str) -> None:
+    """Mark all active connections for (user_id, provider) as inactive.
+
+    Covers both user_connections (AWS/kubectl/OVH/Scaleway/Tailscale) and
+    user_tokens (GCP/Azure and other OAuth-backed providers).
+    """
+    from utils.db.db_utils import connect_to_db_as_admin
+    from utils.auth.stateless_auth import set_rls_context
+    from datetime import datetime, timezone
+
+    conn = None
+    try:
+        conn = connect_to_db_as_admin()
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[Discovery:AutoDisconnect]")
+            cur.execute(
+                """
+                UPDATE user_connections
+                SET status = 'inactive', last_verified_at = %s
+                WHERE user_id = %s AND provider = %s AND status = 'active'
+                """,
+                (datetime.now(timezone.utc), user_id, provider),
+            )
+            connections_updated = cur.rowcount
+            cur.execute(
+                """
+                UPDATE user_tokens
+                SET is_active = false, updated_at = %s
+                WHERE user_id = %s AND provider = %s AND is_active = true
+                """,
+                (datetime.now(timezone.utc), user_id, provider),
+            )
+            tokens_updated = cur.rowcount
+        conn.commit()
+        logger.warning(
+            "[Discovery] Auto-disconnected user=%s provider=%s after %d consecutive credential failures "
+            "(connections=%d tokens=%d)",
+            user_id, provider, _CREDENTIAL_FAIL_THRESHOLD, connections_updated, tokens_updated,
+        )
+    except Exception as e:
+        logger.error("[Discovery] Failed to auto-disconnect user=%s provider=%s: %s", user_id, provider, e)
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+
+def _handle_provider_errors(user_id: str, provider: str, errors: list) -> None:
+    """Evaluate errors from a single provider run and update failure tracking.
+
+    If all errors for this provider look like credential failures and the
+    consecutive failure count reaches the threshold, the connection is marked
+    inactive so it stops being scanned every hour.
+    """
+    if not errors:
+        _reset_provider_failure(user_id, provider)
+        return
+
+    all_credential_errors = all(_is_credential_error(e) for e in errors)
+    if not all_credential_errors:
+        # Mixed or transient errors — don't accumulate toward auto-disconnect,
+        # but also don't reset a legitimate credential-failure streak.
+        return
+
+    count = _record_provider_failure(user_id, provider)
+    logger.warning(
+        "[Discovery] Credential failure #%d/%d for user=%s provider=%s",
+        count, _CREDENTIAL_FAIL_THRESHOLD, user_id, provider,
+    )
+    if count >= _CREDENTIAL_FAIL_THRESHOLD:
+        _mark_provider_inactive(user_id, provider)
+        _reset_provider_failure(user_id, provider)
 
 
 def _wait_for_gcp_post_auth(user_id, timeout=300, poll_interval=10):
@@ -127,23 +290,69 @@ def _task_belongs_to_user(task_info, user_id):
 def _get_all_gcp_project_ids(user_id):
     """Get all GCP project IDs accessible to the user.
 
-    Uses the user's OAuth credentials to enumerate projects via the
-    Cloud Resource Manager API.
+    Handles both OAuth and service-account auth types.
+    - OAuth: enumerates projects via the Cloud Resource Manager API.
+    - Service account: reads the accessible_projects list stored at
+      connection time (no extra API call required).
+
+    Returns:
+        Tuple of (project_ids: list[str], credential_error: str | None).
+        credential_error is set when a known auth failure prevented enumeration
+        so the caller can feed it into _handle_provider_errors.
     """
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
+        from utils.auth.token_management import get_token_data
+        from connectors.gcp_connector.auth.service_accounts import (
+            get_gcp_auth_type, GCP_AUTH_TYPE_SA,
+        )
         from connectors.gcp_connector.billing import has_active_billing
 
-        token_data = get_credentials_from_db(user_id, 'gcp')
+        token_data = get_token_data(user_id, "gcp")
         if not token_data:
             logger.warning("[Discovery] No GCP credentials found for user %s", user_id)
-            return []
+            return [], None
 
-        credentials = get_credentials(token_data)
+        if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+            # SA connections store the project list at connection time.
+            accessible = token_data.get("accessible_projects") or []
+            project_ids = [
+                p.get("project_id") or p.get("projectId")
+                for p in accessible
+                if isinstance(p, dict)
+            ]
+            project_ids = [pid for pid in project_ids if pid]
+            if not project_ids:
+                # Fall back to the single default project stored on the token.
+                default = token_data.get("default_project_id")
+                if default:
+                    project_ids = [default]
+            logger.info("[Discovery] Found %d GCP projects (SA) for user %s: %s", len(project_ids), user_id, project_ids)
+            return project_ids, None
+
+        # OAuth path — proactively refresh the access token before use so that
+        # a near-expired token doesn't cause the enumeration call to fail. If
+        # the refresh itself fails (dead refresh token, revoked consent, etc.)
+        # we surface the error string so it feeds into the credential failure
+        # tracker rather than being silently swallowed by get_credentials().
+        from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
+
+        refreshed = _refresh_gcp(user_id, "gcp")
+        if refreshed is None:
+            # Refresh failed — refresh token is dead or missing. Return a
+            # recognisable error string so _handle_provider_errors can count
+            # this as a credential failure and eventually auto-disconnect.
+            err = "GCP token refresh failed: Reauthentication is needed. Please reconnect your GCP account."
+            logger.warning("[Discovery] %s (user=%s)", err, user_id)
+            return [], err
+
+        # Enumerate via Cloud Resource Manager API.
+        # Pass the already-refreshed token data directly — avoids a second
+        # Vault round-trip that get_credentials_from_db would otherwise make.
+        from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
+
+        credentials = get_credentials(refreshed)
         projects = get_project_list(credentials)
 
-        # Only include projects with active billing (same filter as post-auth)
         project_ids = []
         for p in projects:
             pid = p.get("projectId")
@@ -153,24 +362,30 @@ def _get_all_gcp_project_ids(user_id):
                 if has_active_billing(pid, credentials):
                     project_ids.append(pid)
             except Exception:
-                # If billing check fails, include the project anyway
                 project_ids.append(pid)
 
-        logger.info("[Discovery] Found %d GCP projects for user %s: %s", len(project_ids), user_id, project_ids)
-        return project_ids
+        logger.info("[Discovery] Found %d GCP projects (OAuth) for user %s: %s", len(project_ids), user_id, project_ids)
+        return project_ids, None
     except Exception as e:
         logger.error("[Discovery] Failed to enumerate GCP projects for user %s: %s", user_id, e)
-        return []
+        return [], str(e)
 
 
 @celery_app.task(name="services.discovery.tasks.run_full_discovery", bind=True, max_retries=0)
 def run_full_discovery(self):
-    """Run full infrastructure discovery for all users with connected cloud providers.
+    """Run full infrastructure discovery for all orgs with connected cloud providers.
 
     Scheduled by Celery beat to run every hour.
     Can also be triggered on-demand via POST /api/graph/discover.
+
+    Runs once per org rather than once per user. All org members share the
+    same cloud connectors, so running discovery N times for N members would
+    produce identical results at N× the cost and latency.  The credential
+    owner for each provider is used as the representative so that Vault
+    lookups and STS/OAuth refreshes resolve against the correct stored token.
     """
     from utils.db.db_utils import connect_to_db_as_admin
+    from utils.secrets.secret_ref_utils import get_token_owner_id as _get_owner
     from services.discovery.discovery_service import run_discovery_for_user
 
     logger.info("[Discovery Task] Starting full discovery run")
@@ -183,29 +398,82 @@ def run_full_discovery(self):
         conn.close()
 
         if not rows:
-            logger.info("[Discovery Task] No users with connected cloud providers")
+            logger.info("[Discovery Task] No orgs with connected cloud providers")
             return {"status": "no_users", "users_processed": 0}
 
-        # Group by user — providers fetch their own credentials at runtime
-        users = {}
-        for user_id, provider in rows:
-            users.setdefault(user_id, {})[provider] = {}
+        # Deduplicate by org: collect the union of active providers per org and
+        # keep one representative user (the first encountered, which is
+        # consistent within a run since _query_connected_providers iterates
+        # users in a stable order).  Provider credential lookups use the token
+        # owner at runtime, so the representative just needs to belong to the org.
+        orgs: dict = {}  # org_id -> {"rep": user_id, "providers": {provider: {}}}
+        for user_id, org_id, provider in rows:
+            if org_id not in orgs:
+                orgs[org_id] = {"rep": user_id, "providers": {}}
+            orgs[org_id]["providers"][provider] = {}
 
-        logger.info(f"[Discovery Task] Processing {len(users)} users")
+        logger.info("[Discovery Task] Processing %d org(s)", len(orgs))
 
         results = []
-        for user_id, providers in users.items():
+        for org_id, org_info in orgs.items():
+            user_id = org_info["rep"]
+            providers = org_info["providers"]
             try:
+                if "gcp" in providers:
+                    # Resolve the GCP credential owner so token refresh and
+                    # Vault reads go against the correct row.
+                    owner_id = _get_owner(user_id, "gcp")
+                    _wait_for_gcp_post_auth(owner_id)
+                    gcp_project_ids, gcp_cred_error = _get_all_gcp_project_ids(owner_id)
+                    if gcp_project_ids:
+                        providers["gcp"] = {"project_ids": gcp_project_ids}
+                    else:
+                        from utils.auth.stateless_auth import get_user_preference
+                        root_project = get_user_preference(owner_id, "gcp_root_project")
+                        if root_project:
+                            providers["gcp"] = {"project_ids": [root_project]}
+                        else:
+                            del providers["gcp"]
+                            if gcp_cred_error:
+                                _handle_provider_errors(owner_id, "gcp", [gcp_cred_error])
+                            logger.warning(
+                                "[Discovery Task] No GCP projects for org=%s owner=%s — skipping GCP",
+                                org_id, owner_id,
+                            )
+
+                if not providers:
+                    logger.info("[Discovery Task] No valid providers for org=%s, skipping", org_id)
+                    continue
+
                 summary = run_discovery_for_user(user_id, providers)
+                summary["org_id"] = org_id
                 results.append(summary)
-                logger.info(f"[Discovery Task] User {user_id}: {summary.get('phase1_nodes', 0)} nodes discovered")
+                logger.info(
+                    "[Discovery Task] Org %s (rep=%s): %d nodes discovered",
+                    org_id, user_id, summary.get("phase1_nodes", 0),
+                )
+
+                # Use provider_errors from the summary — accurately tagged at
+                # the source, no string matching. Always iterate all providers
+                # so that a clean run resets any prior failure counter.
+                provider_errors = summary.get("provider_errors", {})
+                for pname in providers:
+                    # Always resolve to the credential owner so that the Redis
+                    # key namespace is consistent: failures and resets both use
+                    # tracking_id, preventing a clean run from resetting under
+                    # the wrong (representative) user_id.
+                    tracking_id = _get_owner(user_id, pname)
+                    pname_errors = provider_errors.get(pname, [])
+                    _handle_provider_errors(tracking_id, pname, pname_errors)
+
             except Exception as e:
-                logger.error(f"[Discovery Task] Failed for user {user_id}: {e}")
-                results.append({"user_id": user_id, "error": str(e)})
+                logger.error("[Discovery Task] Failed for org=%s rep=%s: %s", org_id, user_id, e)
+                results.append({"org_id": org_id, "user_id": user_id, "error": str(e)})
 
         return {
             "status": "completed",
-            "users_processed": len(users),
+            "orgs_processed": len(orgs),
+            "users_processed": len(orgs),  # kept for backwards-compat with callers reading this key
             "results": results,
         }
 
@@ -275,7 +543,7 @@ def run_user_discovery(self, user_id):
             _wait_for_gcp_post_auth(user_id)
 
             # Fetch ALL project IDs so discovery covers every project, not just root
-            gcp_project_ids = _get_all_gcp_project_ids(user_id)
+            gcp_project_ids, _ = _get_all_gcp_project_ids(user_id)
             if gcp_project_ids:
                 providers["gcp"] = {"project_ids": gcp_project_ids}
             elif root_project:
@@ -312,7 +580,9 @@ def mark_stale_services(self):
         rows = _query_connected_providers(cur, conn=conn)
         cur.close()
         conn.close()
-        user_ids = list({row[0] for row in rows})
+        # Deduplicate by org: one representative user per org is sufficient
+        # since graph data is written per org credential owner.
+        user_ids = list({org_id: user_id for user_id, org_id, _provider in rows}.values())
 
         client = get_memgraph_client()
         total_marked = 0
