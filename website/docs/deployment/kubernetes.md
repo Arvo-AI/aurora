@@ -580,6 +580,61 @@ If logs show `Permission denied` on `env-config.js`, ensure the Dockerfile sets 
 kubectl logs -n aurora-oss deploy/aurora-oss-frontend --tail=10
 ```
 
+## Autoscaling {#autoscaling}
+
+The Helm chart includes optional Horizontal Pod Autoscalers (HPA) for the API server and Celery workers. Disabled by default.
+
+### Enable autoscaling
+
+In your `values.yaml` or `values.generated.yaml`:
+
+```yaml
+autoscaling:
+  server:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70          # scale up when average CPU exceeds 70%
+    targetMemory: 80       # optional — also scale on memory
+  celeryWorker:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70
+```
+
+When `autoscaling.server.enabled` is `true`, the HPA manages the server replica count and the `replicaCounts.server` value is ignored. Same for Celery workers.
+
+### Scaling math
+
+Each pod handles `GUNICORN_WORKERS x GUNICORN_THREADS` parallel requests (default: 2 x 4 = 8). With HPA:
+
+| Pods | Parallel requests | DB connections (max) |
+|------|-------------------|---------------------|
+| 2 (min) | 16 | 40 |
+| 4 | 32 | 80 |
+| 6 (max) | 48 | 120 |
+
+Make sure your PostgreSQL `max_connections` can handle `pods x DB_POOL_MAX`. The default PostgreSQL `max_connections` is 100; increase it for larger deployments.
+
+### Per-pod concurrency tuning
+
+Set these in `config:` to tune each pod's capacity:
+
+```yaml
+config:
+  GUNICORN_WORKERS: "4"    # 1 per vCPU
+  GUNICORN_THREADS: "4"    # threads per worker
+  DB_POOL_MAX: "20"        # >= workers x threads
+  CELERY_CONCURRENCY: "4"  # parallel Celery tasks per pod
+```
+
+See [Environment Variables — Concurrency](../configuration/environment#concurrency--connection-pool) for details.
+
+### Scale-down behavior
+
+The HPA uses conservative scale-down: 5-minute stabilization window, removing 1 pod at a time every 2 minutes. This prevents flapping during bursty traffic.
+
 ## Configuration Reference
 
 ### Object Storage

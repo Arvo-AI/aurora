@@ -44,6 +44,36 @@ POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 ```
 
+## Concurrency & Connection Pool
+
+Tuning parameters for gunicorn, Celery, and the database connection pool. Defaults work for small deployments; increase for higher concurrency.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GUNICORN_WORKERS` | `2` | Number of gunicorn worker processes |
+| `GUNICORN_THREADS` | `4` | Threads per gunicorn worker (total parallel requests = workers x threads) |
+| `CELERY_CONCURRENCY` | `4` | Number of concurrent Celery task workers |
+| `DB_POOL_MIN` | `2` | Minimum database connections kept open per process |
+| `DB_POOL_MAX` | `20` | Maximum database connections per process (must be >= workers x threads) |
+
+```bash
+GUNICORN_WORKERS=2
+GUNICORN_THREADS=4
+CELERY_CONCURRENCY=4
+DB_POOL_MIN=2
+DB_POOL_MAX=20
+```
+
+For higher concurrency, scale these together. Example for a 4-vCPU pod:
+```bash
+GUNICORN_WORKERS=4
+GUNICORN_THREADS=8
+DB_POOL_MAX=40
+CELERY_CONCURRENCY=8
+```
+
+On Kubernetes, prefer horizontal pod autoscaling over large per-pod thread counts. See the [Kubernetes deployment guide](../deployment/kubernetes#autoscaling) for HPA configuration.
+
 ## Redis
 
 Redis connection for Celery task queue and caching.

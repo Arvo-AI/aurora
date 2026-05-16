@@ -78,6 +78,22 @@ image:
   #   - name: regcred
 
 # ------------------------------------------------------------------------------
+# Autoscaling (HPA)
+# ------------------------------------------------------------------------------
+autoscaling:
+  server:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70
+    targetMemory:         # optional — set to e.g. 80 to also scale on memory
+  celeryWorker:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70
+
+# ------------------------------------------------------------------------------
 # Replica counts per service
 # ------------------------------------------------------------------------------
 replicaCounts:
