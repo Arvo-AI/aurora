@@ -645,9 +645,24 @@ def list_api_routes():
 # ============================================================================
 
 def initialize_app():
-    # Initialize database
-    ensure_database_exists()
-    initialize_tables()
+    # Acquire a session-level advisory lock so that concurrent gunicorn workers
+    # serialise DDL (CREATE TABLE / ALTER TABLE) instead of deadlocking.
+    from utils.db.db_utils import connect_to_db_as_admin
+    conn = connect_to_db_as_admin()
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(42)")
+        conn.autocommit = False
+        try:
+            ensure_database_exists()
+            initialize_tables()
+        finally:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(42)")
+    finally:
+        conn.close()
 
     # Initialize Casbin RBAC enforcer (seeds default policies on first run)
     try:

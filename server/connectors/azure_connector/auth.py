@@ -21,12 +21,17 @@ AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 
 AZURE_SCOPES = [f"api://{AZURE_CLIENT_ID}/obo_flow"]
 
-# Initialize MSAL app for OAuth flows
-msal_app = ConfidentialClientApplication(
-    AZURE_CLIENT_ID,
-    authority=AZURE_AUTHORITY,
-    client_credential=AZURE_CLIENT_SECRET
-)
+_msal_app = None
+
+def _get_msal_app():
+    global _msal_app
+    if _msal_app is None:
+        _msal_app = ConfidentialClientApplication(
+            AZURE_CLIENT_ID,
+            authority=AZURE_AUTHORITY,
+            client_credential=AZURE_CLIENT_SECRET
+        )
+    return _msal_app
 
 def azure_login(data=None):
     """Handle Azure login with service principal credentials."""
@@ -181,7 +186,7 @@ def azure_callback():
             raise ValueError("Azure auth flow not found in session. Session may have expired.")
 
         # Exchange authorization code for access token
-        azure_result = msal_app.acquire_token_by_auth_code_flow(azure_flow, request.args)
+        azure_result = _get_msal_app().acquire_token_by_auth_code_flow(azure_flow, request.args)
         if "error" in azure_result:
             raise ValueError(f"Token acquisition failed: {azure_result['error_description']}")
 
