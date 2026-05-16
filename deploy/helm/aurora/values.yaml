@@ -187,6 +187,13 @@ config:
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
 
+  # --- Concurrency & Pool Sizing ---
+  GUNICORN_WORKERS: "2"
+  GUNICORN_THREADS: "4"
+  CELERY_CONCURRENCY: "4"
+  DB_POOL_MIN: "2"
+  DB_POOL_MAX: "20"
+
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
   AURORA_SETUP_CACHE_TTL: "3600"

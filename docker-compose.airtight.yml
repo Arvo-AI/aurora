@@ -165,7 +165,7 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-    command: ["gunicorn", "main_compute:app", "--bind", "0.0.0.0:${FLASK_PORT:-5080}", "-k", "gthread", "--threads", "8", "--workers", "2", "--timeout", "300", "--preload"]
+    command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-4} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
@@ -237,7 +237,7 @@ services:
     command: >
       celery -A celery_config worker
         --loglevel=info
-        --concurrency=2
+        --concurrency=${CELERY_CONCURRENCY:-4}
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker

@@ -191,9 +191,6 @@ def get_connected_accounts(user_id, target_user_id):
             if result.get("connected"):
                 accounts["onprem"] = {"isConnected": True, "name": "Instances SSH Access", "displayText": "VM SSH Access"}
 
-        cursor.close()
-        conn.close()
-
         return jsonify({"accounts": accounts})
 
     except Exception as e:
@@ -219,21 +216,23 @@ def delete_connected_account(user_id, target_user_id, provider):
 
         # Get secret_ref BEFORE deleting to clear cache properly
         secret_ref = None
+        conn = None
         try:
             conn = connect_to_db_as_admin()
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
-            cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
-                (user_id, org_id, provider)
-            )
-            result = cursor.fetchone()
-            if result:
-                secret_ref = result[0]
-            cursor.close()
-            conn.close()
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
+                cursor.execute(
+                    "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                    (user_id, org_id, provider)
+                )
+                result = cursor.fetchone()
+                if result:
+                    secret_ref = result[0]
         except Exception as e:
             logging.warning(f"Failed to get secret_ref before deletion: {e}")
+        finally:
+            if conn:
+                conn.close()
         
         provider_lc = provider.lower()
         deletion_ok = True
@@ -245,18 +244,17 @@ def delete_connected_account(user_id, target_user_id, provider):
         else:
             # For providers that don't use Vault, delete from DB directly
             conn = connect_to_db_as_admin()
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
-
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
-                (user_id, org_id, provider)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-
-            cursor.close()
-            conn.close()
+            try:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
+                    cursor.execute(
+                        "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                        (user_id, org_id, provider)
+                    )
+                    deleted = cursor.rowcount
+                conn.commit()
+            finally:
+                conn.close()
 
         # --------------------------------------------------
         # Clear caching layers after token deletion
@@ -271,21 +269,23 @@ def delete_connected_account(user_id, target_user_id, provider):
                 logging.warning(f"Failed to clear GCP caches for user {user_id}: {e}")
             
             # Clear GCP root project preference
+            conn = None
             try:
                 conn = connect_to_db_as_admin()
-                cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
-                cursor.execute(
-                    "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
-                    (user_id, org_id)
-                )
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
+                    cursor.execute(
+                        "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
+                        (user_id, org_id)
+                    )
+                    if cursor.rowcount > 0:
+                        logging.info(f"Cleared GCP root project preference for user {user_id}")
                 conn.commit()
-                if cursor.rowcount > 0:
-                    logging.info(f"Cleared GCP root project preference for user {user_id}")
-                cursor.close()
-                conn.close()
             except Exception as e:
                 logging.warning(f"Failed to clear GCP root project preference for user {user_id}: {e}")
+            finally:
+                if conn:
+                    conn.close()
         
         # 2) Clear Redis secret cache for this secret_ref (if present)
         if secret_ref:
