@@ -166,33 +166,37 @@ def _mark_provider_inactive(user_id: str, provider: str) -> None:
     """Mark all active connections for (user_id, provider) as inactive.
 
     Covers both user_connections (AWS/kubectl/OVH/Scaleway/Tailscale) and
-    user_tokens (GCP/Azure and other OAuth-backed providers).
+    user_tokens (GCP/Azure and other OAuth-backed providers).  Deactivates
+    both user-scoped and org-scoped rows so org-shared connections are also
+    cleaned up.
     """
     from utils.db.db_utils import connect_to_db_as_admin
     from utils.auth.stateless_auth import set_rls_context
     from datetime import datetime, timezone
 
+    org_id = get_org_id_for_user(user_id)
     conn = None
     try:
         conn = connect_to_db_as_admin()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[Discovery:AutoDisconnect]")
+            now = datetime.now(timezone.utc)
             cur.execute(
                 """
                 UPDATE user_connections
                 SET status = 'inactive', last_verified_at = %s
-                WHERE user_id = %s AND provider = %s AND status = 'active'
+                WHERE (user_id = %s OR org_id = %s) AND provider = %s AND status = 'active'
                 """,
-                (datetime.now(timezone.utc), user_id, provider),
+                (now, user_id, org_id, provider),
             )
             connections_updated = cur.rowcount
             cur.execute(
                 """
                 UPDATE user_tokens
                 SET is_active = false, updated_at = %s
-                WHERE user_id = %s AND provider = %s AND is_active = true
+                WHERE (user_id = %s OR org_id = %s) AND provider = %s AND is_active = true
                 """,
-                (datetime.now(timezone.utc), user_id, provider),
+                (now, user_id, org_id, provider),
             )
             tokens_updated = cur.rowcount
         conn.commit()
@@ -201,8 +205,8 @@ def _mark_provider_inactive(user_id: str, provider: str) -> None:
             "(connections=%d tokens=%d)",
             user_id, provider, _CREDENTIAL_FAIL_THRESHOLD, connections_updated, tokens_updated,
         )
-    except Exception as e:
-        logger.error("[Discovery] Failed to auto-disconnect user=%s provider=%s: %s", user_id, provider, e)
+    except Exception:
+        logger.exception("[Discovery] Failed to auto-disconnect user=%s provider=%s", user_id, provider)
         if conn:
             conn.rollback()
     finally:
@@ -223,8 +227,10 @@ def _handle_provider_errors(user_id: str, provider: str, errors: list) -> None:
 
     all_credential_errors = all(_is_credential_error(e) for e in errors)
     if not all_credential_errors:
-        # Mixed or transient errors — don't accumulate toward auto-disconnect,
-        # but also don't reset a legitimate credential-failure streak.
+        # Any non-credential run breaks the consecutive credential-failure streak
+        # so that a pattern of credential → transient → credential → credential
+        # does not accumulate toward auto-disconnect.
+        _reset_provider_failure(user_id, provider)
         return
 
     count = _record_provider_failure(user_id, provider)
@@ -326,7 +332,7 @@ def _get_all_gcp_project_ids(user_id):
                 default = token_data.get("default_project_id")
                 if default:
                     project_ids = [default]
-            logger.info("[Discovery] Found %d GCP projects (SA) for user %s: %s", len(project_ids), user_id, project_ids)
+            logger.info("[Discovery] Found %d GCP projects (SA) for user %s", len(project_ids), user_id)
             return project_ids, None
 
         # OAuth path — proactively refresh the access token before use so that
@@ -364,7 +370,7 @@ def _get_all_gcp_project_ids(user_id):
             except Exception:
                 project_ids.append(pid)
 
-        logger.info("[Discovery] Found %d GCP projects (OAuth) for user %s: %s", len(project_ids), user_id, project_ids)
+        logger.info("[Discovery] Found %d GCP projects (OAuth) for user %s", len(project_ids), user_id)
         return project_ids, None
     except Exception as e:
         logger.error("[Discovery] Failed to enumerate GCP projects for user %s: %s", user_id, e)
@@ -466,9 +472,9 @@ def run_full_discovery(self):
                     pname_errors = provider_errors.get(pname, [])
                     _handle_provider_errors(tracking_id, pname, pname_errors)
 
-            except Exception as e:
-                logger.error("[Discovery Task] Failed for org=%s rep=%s: %s", org_id, user_id, e)
-                results.append({"org_id": org_id, "user_id": user_id, "error": str(e)})
+            except Exception:
+                logger.exception("[Discovery Task] Failed for org=%s rep=%s", org_id, user_id)
+                results.append({"org_id": org_id, "user_id": user_id, "error": "see logs"})
 
         return {
             "status": "completed",

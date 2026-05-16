@@ -509,13 +509,12 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
         auth_method = "service_account" if is_sa_mode else "impersonated"
 
-        # Per-user gcloud config directory so concurrent users don't race on
-        # the same gcloud config/cache files and leak auth state between
-        # sessions. A user_id in Aurora is a UUID, which is already safe to
-        # embed in a filesystem path.
-        cloudsdk_config_dir = f"/tmp/.gcloud-{user_id}"
+        # Use an ephemeral temp directory for CLOUDSDK_CONFIG so no per-user
+        # on-disk gcloud state persists across invocations.  Each call gets its
+        # own directory; the OS reclaims it when the process exits (or earlier
+        # when the caller explicitly calls shutil.rmtree on _gcloud_tmpdir).
+        cloudsdk_config_dir = tempfile.mkdtemp(prefix=f".gcloud-{user_id}-")
         try:
-            os.makedirs(cloudsdk_config_dir, exist_ok=True)
             # Write a minimal properties file so gcloud sees an active account.
             # Without this, gcloud config config-helper (called by
             # gke-gcloud-auth-plugin on every kubectl invocation) exits with
@@ -524,14 +523,14 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             # that core/account is populated before resolving the token.
             properties_path = os.path.join(cloudsdk_config_dir, "properties")
             account_identity = sa_email if sa_email else "aurora-discovery@local"
-            with open(properties_path, "w") as _pf:
+            fd = os.open(properties_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as _pf:
                 _pf.write(f"[core]\naccount = {account_identity}\n")
         except OSError as mkdir_err:
             logger.warning(
-                "GCP isolated env: could not create per-user CLOUDSDK_CONFIG dir (error_type=%s) — falling back to shared path",
+                "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s) — falling back to shared path",
                 type(mkdir_err).__name__,
             )
-            cloudsdk_config_dir = "/tmp/.gcloud"
 
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
@@ -541,6 +540,8 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
             "GOOGLE_CLOUD_PROJECT": project_id,
             "CLOUDSDK_CONFIG": cloudsdk_config_dir,
+            # Expose the temp dir path so callers can clean up after use.
+            "_gcloud_tmpdir": cloudsdk_config_dir,
         }
         if is_sa_mode:
             # Point gcloud at a concrete ADC source so it doesn't fall through

@@ -273,13 +273,29 @@ def run_discovery_for_user(user_id, connected_providers):
                 summary["phase2_relationships"] += write_dependencies(user_id, k8s_rels)
             if k8s_result.get("errors"):
                 summary["errors"].extend(k8s_result["errors"])
-                # K8s clusters can belong to any provider — attribute errors to
-                # the provider of each cluster rather than a single fixed name.
+                # Attribute each error to its provider via the structured "provider"
+                # field when available; fall back to substring matching only as a
+                # last resort so misattribution is minimised.
                 for err in k8s_result["errors"]:
-                    for pname in ("gcp", "aws", "azure"):
-                        if pname in connected_providers and pname in err.lower():
-                            summary["provider_errors"].setdefault(pname, []).append(err)
-                            break
+                    attributed = False
+                    if isinstance(err, dict):
+                        pname = err.get("provider")
+                        if pname and pname in connected_providers:
+                            summary["provider_errors"].setdefault(pname, []).append(
+                                err.get("message", err)
+                            )
+                            attributed = True
+                    if not attributed:
+                        err_str = err if isinstance(err, str) else str(err)
+                        for pname in ("gcp", "aws", "azure"):
+                            if pname in connected_providers and pname in err_str.lower():
+                                summary["provider_errors"].setdefault(pname, []).append(err_str)
+                                attributed = True
+                                break
+                        if not attributed:
+                            summary.setdefault("unknown_provider_errors", []).append(
+                                err if isinstance(err, str) else str(err)
+                            )
             stale = k8s_result.get("stale_clusters", [])
             if stale:
                 logger.warning("[Discovery] Stale K8s clusters for user %s: %s", user_id, stale)
@@ -324,22 +340,27 @@ def run_discovery_for_user(user_id, connected_providers):
             enrichment_data["env_vars"] = serverless_result.get("env_vars", {})
             if serverless_result.get("errors"):
                 summary["errors"].extend(serverless_result["errors"])
-                # Serverless errors are already provider-prefixed (e.g. "aws/fn-name")
-                # so we can attribute them accurately.
+                # Serverless errors are provider-prefixed (e.g. "aws/fn-name"),
+                # attribute via substring match against the error string.
                 for err in serverless_result["errors"]:
+                    err_str = err if isinstance(err, str) else str(err)
                     for pname in ("gcp", "aws", "azure"):
-                        if pname in connected_providers and pname in err.lower():
-                            summary["provider_errors"].setdefault(pname, []).append(err)
+                        if pname in connected_providers and pname in err_str.lower():
+                            summary["provider_errors"].setdefault(pname, []).append(err_str)
                             break
             logger.info(f"[Discovery] Phase 2 Serverless enrichment complete")
         except Exception as e:
             logger.error(f"[Discovery] Phase 2 Serverless enrichment failed: {e}")
             error_msg = f"Serverless enrichment failed: {str(e)}"
             summary["errors"].append(error_msg)
-            # Attribute to all serverless-capable providers connected for this user
-            for pname in ("gcp", "aws", "azure"):
-                if pname in connected_providers:
-                    summary["provider_errors"].setdefault(pname, []).append(error_msg)
+            # Attribute only to providers actually present in this serverless run.
+            affected_providers = {
+                n.get("provider")
+                for n in serverless_nodes
+                if n.get("provider") in connected_providers
+            }
+            for pname in affected_providers:
+                summary["provider_errors"].setdefault(pname, []).append(error_msg)
 
     # Add GCP relationships for Phase 3 inference
     if gcp_relationships_raw:
@@ -372,4 +393,15 @@ def run_discovery_for_user(user_id, connected_providers):
         f"{total_nodes} nodes, {total_edges} edges, "
         f"{len(summary['errors'])} errors, {elapsed:.1f}s"
     )
+
+    # Clean up any ephemeral gcloud temp directories created during this run.
+    import shutil
+    for _pname, (env, _) in provider_envs.items():
+        tmpdir = env.get("_gcloud_tmpdir") if isinstance(env, dict) else None
+        if tmpdir:
+            try:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                pass
+
     return summary
