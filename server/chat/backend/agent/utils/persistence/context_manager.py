@@ -245,16 +245,16 @@ class ContextManager:
         cursor.execute("""
             UPDATE chat_sessions 
             SET llm_context_history = %s, updated_at = %s
-            WHERE id = %s AND user_id = %s
-        """, (context_json, now, session_id, user_id))
+            WHERE id = %s
+        """, (context_json, now, session_id))
 
         if cursor.rowcount > 0:
             return None
 
         cursor.execute("""
             SELECT COUNT(*) FROM chat_sessions 
-            WHERE id = %s AND user_id = %s AND is_active = true
-        """, (session_id, user_id))
+            WHERE id = %s AND is_active = true
+        """, (session_id,))
         if cursor.fetchone()[0] > 0:
             logger.error(f"Failed to update context for existing session {session_id}")
             return False

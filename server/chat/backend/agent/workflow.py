@@ -269,8 +269,8 @@ class Workflow:
                     return False
                 cursor.execute("""
                     SELECT messages FROM chat_sessions 
-                    WHERE id = %s AND user_id = %s AND is_active = true
-                """, (input_state.session_id, input_state.user_id))
+                    WHERE id = %s AND is_active = true
+                """, (input_state.session_id,))
                 
                 result = cursor.fetchone()
                 if result and result[0]:
@@ -785,8 +785,8 @@ class Workflow:
                                   i.aurora_status, i.source_type, cs.messages
                            FROM chat_sessions cs
                            JOIN incidents i ON i.id = cs.incident_id
-                           WHERE cs.id = %s AND cs.user_id = %s AND cs.incident_id IS NOT NULL""",
-                        (session_id, user_id),
+                           WHERE cs.id = %s AND cs.incident_id IS NOT NULL""",
+                        (session_id,),
                     )
                     row = cursor.fetchone()
                     if row:
@@ -1792,15 +1792,15 @@ class Workflow:
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET messages = %s, ui_state = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
-                    """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id, user_id))
+                        WHERE id = %s
+                    """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id))
                 else:
                     # Fallback to only updating messages if no UI state provided
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET messages = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
-                    """, (json.dumps(ui_messages), datetime.now(), session_id, user_id))
+                        WHERE id = %s
+                    """, (json.dumps(ui_messages), datetime.now(), session_id))
                 
                 if cursor.rowcount > 0:
                     conn.commit()
@@ -1838,8 +1838,8 @@ class Workflow:
                     return False
 
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
-                    (session_id, user_id),
+                    "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                    (session_id,),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -1874,18 +1874,18 @@ class Workflow:
                         """
                         UPDATE chat_sessions
                         SET messages = %s, ui_state = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s
                         """,
-                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id, user_id),
+                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id),
                     )
                 else:
                     cursor.execute(
                         """
                         UPDATE chat_sessions
                         SET messages = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s
                         """,
-                        (json.dumps(merged), datetime.now(), session_id, user_id),
+                        (json.dumps(merged), datetime.now(), session_id),
                     )
                 conn.commit()
                 logger.info(

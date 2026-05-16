@@ -180,9 +180,9 @@ def _ensure_llm_context_history(
                     """
                     SELECT llm_context_history, messages
                     FROM chat_sessions
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s
                     """,
-                    (session_id, user_id),
+                    (session_id,),
                 )
                 row = cursor.fetchone()
 
@@ -1831,8 +1831,8 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                 with conn.cursor() as cursor:
                     set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCANotifSummary]")
                     cursor.execute(
-                        "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
-                        (session_id, user_id)
+                        "SELECT messages FROM chat_sessions WHERE id = %s",
+                        (session_id,)
                     )
                     row = cursor.fetchone()
                     
@@ -1955,8 +1955,8 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SlackResponse]")
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
-                    (session_id, user_id)
+                    "SELECT messages FROM chat_sessions WHERE id = %s",
+                    (session_id,)
                 )
                 row = cursor.fetchone()
                 
@@ -2078,8 +2078,8 @@ def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadat
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GoogleChatResponse]")
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
-                    (session_id, user_id)
+                    "SELECT messages FROM chat_sessions WHERE id = %s",
+                    (session_id,)
                 )
                 row = cursor.fetchone()
 
