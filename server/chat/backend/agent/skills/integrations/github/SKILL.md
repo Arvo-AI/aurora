@@ -56,14 +56,15 @@ Connected account: {username}
 - All MCP tools require `owner` and `repo` parameters (split from 'owner/repo').
 
 ### RCA Investigation Workflow
-Code changes are the most common root cause of incidents.
-Investigate GitHub BEFORE deep-diving into infrastructure.
+Code changes are a common root cause of incidents. Investigate GitHub early in the process.
+
+**Important: Merged does not always mean deployed.** Many teams have separate CI (build) and CD (deploy) steps. When concluding that a commit caused an incident, check whether it was actually deployed. If deployment status cannot be confirmed, qualify your conclusion (e.g. "this commit is the likely cause if it was deployed").
 
 **Step 1 — Discover repos:**
 `get_connected_repos()` — returns all connected repos with descriptions.
 Read the descriptions to pick the repo most relevant to the alert.
 
-**Step 2 — Check deployments (did something just ship?):**
+**Step 2 — Check deployments (did something ship?):**
 `github_rca(repo='owner/repo', action='deployment_check', incident_time='<ISO8601>')`
 Finds failed workflow runs and runs completed within 2 hours of the incident.
 
@@ -88,3 +89,4 @@ Suggests a fix stored for user review. User can approve, then `github_apply_fix`
 - Use `time_window_hours` (default 24) to widen/narrow the search.
 - Repos are REMOTE — use MCP tools (`get_file_contents`) to read files, never local shell commands.
 - Look for: config changes, k8s manifests, Terraform, dependency updates.
+- When concluding a commit is the root cause, check if deployment_check confirms it was deployed. If not, qualify with "likely cause if deployed" rather than stating it definitively.
