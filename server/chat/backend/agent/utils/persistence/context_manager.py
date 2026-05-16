@@ -240,7 +240,7 @@ class ContextManager:
         return serialized
 
     @staticmethod
-    def _upsert_session(cursor, conn, session_id, user_id, org_id, context_json, now):
+    def _upsert_session(cursor, conn, session_id, user_id, org_id, context_json, now) -> "bool | None":
         """Try UPDATE, then INSERT if the session doesn't exist. Returns bool or None (updated OK, continue)."""
         cursor.execute("""
             UPDATE chat_sessions 
