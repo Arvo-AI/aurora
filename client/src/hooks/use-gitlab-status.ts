@@ -52,7 +52,11 @@ export function useGitLabStatus() {
   useEffect(() => {
     const handleProviderChange = () => { checkStatus(); };
     window.addEventListener('providerStateChanged', handleProviderChange);
-    return () => { window.removeEventListener('providerStateChanged', handleProviderChange); };
+    window.addEventListener('gitlabStateChanged', handleProviderChange);
+    return () => {
+      window.removeEventListener('providerStateChanged', handleProviderChange);
+      window.removeEventListener('gitlabStateChanged', handleProviderChange);
+    };
   }, [checkStatus]);
 
   return { ...status, refresh: checkStatus };

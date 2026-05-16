@@ -102,6 +102,7 @@ export default function GitLabConnectPage() {
         setIsAuthenticated(true);
         setConnectedUsername(result.username || null);
         window.dispatchEvent(new Event("providerStateChanged"));
+        window.dispatchEvent(new Event("gitlabStateChanged"));
         refresh();
         const projects = await fetchProjects();
         setConnectedProjects(projects);
@@ -125,6 +126,7 @@ export default function GitLabConnectPage() {
       setConnectedUsername(null);
       setConnectedProjects([]);
       window.dispatchEvent(new Event("providerStateChanged"));
+      window.dispatchEvent(new Event("gitlabStateChanged"));
       toast({ title: "Disconnected", description: "GitLab has been disconnected" });
       refresh();
     } catch {
