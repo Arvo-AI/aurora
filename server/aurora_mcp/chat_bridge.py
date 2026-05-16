@@ -144,9 +144,9 @@ async def _prepare_session(
     if not sid:
         try:
             sid = await _create_session(api_call)
-        except Exception as exc:
+        except Exception:
             logger.exception("chat_with_aurora: create_session failed")
-            return None, 0, {"status": "error", "error": f"Failed to create chat session: {exc}"}
+            return None, 0, {"status": "error", "error": "Failed to create chat session"}
         if not sid:
             return None, 0, {"status": "error", "error": "Failed to create chat session"}
 
@@ -155,10 +155,10 @@ async def _prepare_session(
 
     try:
         posted_seq = await _post_message(api_call, sid, message, mode)
-    except Exception as exc:
+    except Exception:
         logger.exception("chat_with_aurora: post_message failed (session=%s)", sid)
         return sid, 0, {"session_id": sid, "status": "error",
-                        "error": f"Failed to post chat message: {exc}"}
+                        "error": "Failed to post chat message"}
     if posted_seq is None:
         return sid, 0, {"session_id": sid, "status": "error",
                         "error": "Failed to post chat message"}
@@ -168,12 +168,19 @@ async def _prepare_session(
 async def _poll_step(
     api_call: ApiCall, sid: str, last_seq: int,
 ) -> Optional[Tuple[Dict[str, Any], List[Dict[str, Any]], str, int]]:
-    """One poll iteration. Returns None on transient error so the caller retries."""
+    """One poll iteration. Returns None on transient error so the caller retries.
+
+    Re-raises ValueError because `_api()` raises it for deterministic upstream
+    HTTP errors (4xx/5xx). Retrying those just burns the poll budget on a known
+    failure — surface them to the caller as a permanent error instead.
+    """
     try:
         return await _poll_once(api_call, sid, last_seq)
     except (asyncio.TimeoutError, TimeoutError):
         logger.warning("chat_with_aurora poll timed out, retrying (session=%s)", sid)
         return None
+    except ValueError:
+        raise
     except Exception as exc:
         logger.warning(
             "chat_with_aurora poll raised %s, retrying (session=%s): %s",
@@ -235,7 +242,14 @@ async def chat_with_aurora(
     if prep_err is not None:
         return prep_err
 
-    terminal, latest_partial = await _poll_for_terminal(api_call, sid, last_seq)
+    try:
+        terminal, latest_partial = await _poll_for_terminal(api_call, sid, last_seq)
+    except ValueError:
+        # Deterministic upstream HTTP error from _api() (4xx/5xx). Surface as
+        # a stable error envelope rather than burning the poll budget retrying.
+        logger.exception("chat_with_aurora poll surfaced deterministic upstream error (session=%s)", sid)
+        return {"session_id": sid, "status": "error",
+                "error": "Failed to poll chat session"}
     if terminal is not None:
         return terminal
 

@@ -809,8 +809,8 @@ def _check_skill_connected(skill_id: str, user_id: str) -> bool:
         return bool(is_connected)
     except Exception:
         logger.warning(
-            "skill connection check failed for skill_id=%s user_id=%s",
-            skill_id, user_id, exc_info=True,
+            "skill connection check failed for skill_id=%s",
+            skill_id, exc_info=True,
         )
         return False
 
