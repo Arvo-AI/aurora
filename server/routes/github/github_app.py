@@ -69,16 +69,25 @@ _GH_JSON_MEDIA_TYPE = "application/vnd.github+json"
 _APP_NOT_CONFIGURED = "GitHub App not configured"
 
 
-def _is_single_tenant() -> bool:
-    """Return True when this Aurora deployment is single-tenant.
+def _orgs_owning_install(installation_id: int) -> set[str | None]:
+    """Return the distinct ``org_id`` values currently linked to an install.
 
-    Multi-tenant operators MUST set ``AURORA_SINGLE_TENANT=false`` so that
-    cross-tenant install discovery/claim is refused. Default is True to
-    match the long-standing self-hosted Aurora deployment shape.
+    Used to keep install discovery / claim org-scoped: a user can only
+    see and claim installations that are either unbound on Aurora's side
+    or already bound to a member of their own org. NULL ``org_id`` rows
+    are treated as their own "no org" bucket so they never leak across
+    real orgs by accident.
     """
-    return os.getenv("AURORA_SINGLE_TENANT", "true").strip().lower() not in (
-        "false", "0", "no", "off"
-    )
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT org_id
+                     FROM user_github_installations
+                    WHERE installation_id = %s
+                      AND disconnected_at IS NULL""",
+                (installation_id,),
+            )
+            return {row[0] for row in cur.fetchall()}
 
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
 # allow 30 minutes to absorb account-creation, 2FA, OAuth-grant, popup-block
@@ -595,10 +604,14 @@ def github_app_discover_installations(user_id):
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
-    if not _is_single_tenant():
+    requesting_org_id = get_org_id_for_user(user_id)
+    if not requesting_org_id:
+        # Users without an org_id can't safely be scoped against cross-tenant
+        # leakage; refuse rather than fall back to the old single-tenant
+        # behaviour.
         return jsonify({
-            "error": "install discovery is disabled in multi-tenant deployments",
-            "code": "MULTI_TENANT_DISCOVERY_DISABLED",
+            "error": "install discovery requires a user with an org context",
+            "code": "MISSING_ORG_CONTEXT",
         }), 403
 
     try:
@@ -651,9 +664,20 @@ def github_app_discover_installations(user_id):
                         next_url = url_part[1:-1]
                     break
 
+    # Org-scoped bookkeeping: drop installs already linked to the user
+    # (no point re-claiming) AND any install bound to a different org so
+    # one tenant cannot see another tenant's account_login.
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT installation_id, org_id
+                         FROM user_github_installations
+                        WHERE disconnected_at IS NULL""",
+                )
+                bindings: dict[int, set[str | None]] = {}
+                for inst_id, bound_org in cur.fetchall():
+                    bindings.setdefault(inst_id, set()).add(bound_org)
                 cur.execute(
                     """SELECT installation_id
                          FROM user_github_installations
@@ -661,7 +685,7 @@ def github_app_discover_installations(user_id):
                           AND disconnected_at IS NULL""",
                     (user_id,),
                 )
-                already_linked = {r[0] for r in cur.fetchall()}
+                already_linked_to_user = {r[0] for r in cur.fetchall()}
     except Exception:
         logger.exception("[GITHUB-APP-DISCOVER] DB read failed")
         return jsonify({"error": "Failed to check existing links"}), 500
@@ -671,7 +695,12 @@ def github_app_discover_installations(user_id):
         if not isinstance(inst, dict):
             continue
         inst_id = inst.get("id")
-        if not isinstance(inst_id, int) or inst_id in already_linked:
+        if not isinstance(inst_id, int):
+            continue
+        if inst_id in already_linked_to_user:
+            continue
+        owning_orgs = bindings.get(inst_id, set())
+        if owning_orgs and requesting_org_id not in owning_orgs:
             continue
         account = inst.get("account") or {}
         out.append(
@@ -698,18 +727,31 @@ def github_app_claim_installation(user_id, installation_id):
     the installation exists via ``/app/installations/{id}`` before
     INSERTing so a guess at a random installation_id can't succeed.
 
-    Single-tenant deployments are safe by construction (one Aurora user
-    == one operator). Multi-tenant deployments must set
-    ``AURORA_SINGLE_TENANT=false`` to refuse claim entirely until a
-    proper proof-of-control exchange is wired in.
+    Org-scoped: the install may already be linked to teammates in the
+    same Aurora org (shared install). Claim is refused only when the
+    install is bound to users in a DIFFERENT org — that protects
+    multi-tenant deployments without breaking shared-team installs.
     """
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return jsonify({"error": _APP_NOT_CONFIGURED}), 503
 
-    if not _is_single_tenant():
+    requesting_org_id = get_org_id_for_user(user_id)
+    if not requesting_org_id:
         return jsonify({
-            "error": "install claim is disabled in multi-tenant deployments",
-            "code": "MULTI_TENANT_CLAIM_DISABLED",
+            "error": "install claim requires a user with an org context",
+            "code": "MISSING_ORG_CONTEXT",
+        }), 403
+
+    owning_orgs = _orgs_owning_install(installation_id)
+    foreign_orgs = owning_orgs - {requesting_org_id}
+    if foreign_orgs:
+        logger.warning(
+            "[GITHUB-APP-CLAIM] cross-org claim refused user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({
+            "error": "install is already linked to a different organization",
+            "code": "CROSS_ORG_CLAIM_REFUSED",
         }), 403
 
     try:
