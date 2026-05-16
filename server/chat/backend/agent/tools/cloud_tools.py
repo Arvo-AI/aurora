@@ -1342,7 +1342,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Process Aurora native tools
     for func, name in tool_functions:
         # Apply forced context wrapper for critical tools that should never have parameters mixed up
-        if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix', 'gitlab']:
+        if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix']:
             context_wrapped = with_forced_context(func)
             logging.info(f"Applied with_forced_context decorator to {name}")
         else:
@@ -1410,24 +1410,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),
                 args_schema=GitHubFixArgs
-            )
-        elif name == 'gitlab':
-            tool = StructuredTool.from_function(
-                func=final_func,
-                name=name,
-                description=(
-                    "Unified GitLab tool for all GitLab operations. "
-                    "Actions: 'list_projects' (discover connected projects), "
-                    "'deployment_check' (CI/CD pipelines), 'commits' (recent commits with timeline correlation), "
-                    "'diff' (file changes for a commit — needs commit_sha), "
-                    "'merge_requests' (merged MRs in time window), "
-                    "'suggest_fix' (propose a code fix for review), "
-                    "'apply_fix' (create MR from approved suggestion — needs suggestion_id), "
-                    "'commit_terraform' (push Terraform files — needs repo, commit_message). "
-                    "Pass repo='namespace/project' to target a specific project. "
-                    "Pass incident_time (ISO 8601) for automatic time window correlation."
-                ),
-                args_schema=GitLabToolArgs
             )
         elif name == 'jenkins_rca':
             tool = StructuredTool.from_function(

@@ -48,6 +48,16 @@ TOOL_REGISTRY = {
     "notion_export_postmortem": {"connector": "notion", "label": "Export postmortem", "tier": "Write", "default": True},
     # Spinnaker
     "spinnaker_rca": {"connector": "spinnaker", "label": "Trigger deployment pipeline", "tier": "Destructive"},
+    # GitLab — Tier 1: Suggest (default ON)
+    "gitlab:suggest_fix": {"connector": "gitlab", "label": "Suggest code fix", "tier": "Suggest", "default": True},
+    # GitLab — Tier 2: Branch & MR (default ON)
+    "gitlab:create_branch": {"connector": "gitlab", "label": "Create branch", "tier": "Branch & MR", "default": True},
+    "gitlab:push_files": {"connector": "gitlab", "label": "Push file changes to branch", "tier": "Branch & MR", "default": True},
+    "gitlab:create_merge_request": {"connector": "gitlab", "label": "Create merge request", "tier": "Branch & MR", "default": True},
+    # GitLab — Tier 3: IaC (default ON)
+    "gitlab:commit_terraform": {"connector": "gitlab", "label": "Commit Terraform files & open MR", "tier": "IaC", "default": True},
+    # GitLab — Tier 4: Destructive (default OFF)
+    "gitlab:delete_branch": {"connector": "gitlab", "label": "Delete branch", "tier": "Destructive"},
 }
 
 

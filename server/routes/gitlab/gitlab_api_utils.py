@@ -35,7 +35,8 @@ def gitlab_api_request(
     params: Optional[Dict] = None,
     json_body: Optional[Dict] = None,
     timeout: int = GITLAB_TIMEOUT,
-) -> Dict[str, Any]:
+    raw_response: bool = False,
+):
     """
     Make a GitLab API request using org-level credentials.
 
@@ -46,9 +47,10 @@ def gitlab_api_request(
         params: Query parameters
         json_body: JSON body for POST/PUT
         timeout: Request timeout
+        raw_response: If True, return response text as a string instead of parsed JSON
 
     Returns:
-        Dict with either parsed response or error key
+        Dict with either parsed response or error key, or str if raw_response=True
     """
     creds = get_gitlab_credentials(user_id)
     if not creds or not creds.get("access_token"):
@@ -76,6 +78,9 @@ def gitlab_api_request(
 
         if resp.status_code == 204:
             return {"success": True}
+
+        if raw_response:
+            return resp.text
 
         return resp.json()
     except requests.RequestException as e:

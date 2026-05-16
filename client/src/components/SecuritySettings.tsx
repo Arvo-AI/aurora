@@ -18,6 +18,7 @@ import Image from "next/image";
 
 const CONNECTOR_ICONS: Record<string, string> = {
   github: "/github-mark.svg",
+  gitlab: "/gitlab.svg",
   bitbucket: "/bitbucket.svg",
   terraform: "/terraform-icon-svgrepo-com.svg",
   notion: "/notion.svg",

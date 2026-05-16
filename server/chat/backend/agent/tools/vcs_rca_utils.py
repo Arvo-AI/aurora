@@ -46,6 +46,7 @@ def resolve_repository(
             # GitLab paths can be multi-segment (group/subgroup/project)
             if not explicit_repo.strip() or explicit_repo.startswith("/") or explicit_repo.endswith("/"):
                 logger.warning("Suspicious %s repo path: %s", provider, explicit_repo)
+                return None, f"invalid repo path: '{explicit_repo}' (must not start or end with '/')"
             return explicit_repo, "explicit parameter"
 
     try:
@@ -156,10 +157,11 @@ def get_connected_repos_for_provider(user_id: str, provider: str) -> str:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix=f"[{provider.title()}Repos:list]")
                 cur.execute(
-                    """SELECT repo_full_name, default_branch, is_private, metadata_summary, metadata_status
+                    """SELECT DISTINCT ON (repo_full_name)
+                              repo_full_name, default_branch, is_private, metadata_summary, metadata_status
                        FROM connected_repos
                        WHERE provider = %s
-                       ORDER BY repo_full_name""",
+                       ORDER BY repo_full_name, updated_at DESC""",
                     (provider,),
                 )
                 rows = cur.fetchall()

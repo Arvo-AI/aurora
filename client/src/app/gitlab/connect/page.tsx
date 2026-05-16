@@ -23,7 +23,7 @@ interface ConnectedProject {
 export default function GitLabConnectPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const { baseUrl, refresh } = useGitLabStatus(null);
+  const { baseUrl, refresh } = useGitLabStatus();
 
   const [tokenInput, setTokenInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("https://gitlab.com");

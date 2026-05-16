@@ -23,6 +23,7 @@ from urllib.parse import quote
 from pydantic import BaseModel, Field
 
 from routes.gitlab.gitlab_api_utils import gitlab_api_request, build_error_response, build_success_response, is_gitlab_connected
+from utils.auth.command_gate import gate_action
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from .vcs_rca_utils import resolve_repository, calculate_time_windows, get_connected_repos_for_provider, generate_correlation_hints
@@ -274,6 +275,13 @@ def _action_suggest_fix(
     if not file_path or not suggested_content or not fix_description or not root_cause_summary:
         return build_error_response("file_path, suggested_content, fix_description, and root_cause_summary are all required")
 
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:suggest_fix",
+        summary=f"Suggest fix for {file_path}: {fix_description[:80]}",
+    ).allowed:
+        return build_error_response("Operation cancelled by user")
+
     project_path, source = _resolve_repository(user_id, repo)
     if not project_path:
         return build_error_response(f"Could not resolve project: {source}")
@@ -281,7 +289,7 @@ def _action_suggest_fix(
     encoded_project = quote(project_path, safe="")
     encoded_file = quote(file_path, safe="")
     params = {"ref": branch} if branch else {}
-    resp = gitlab_api_request("GET", f"/projects/{encoded_project}/repository/files/{encoded_file}/raw", user_id, params=params)
+    resp = gitlab_api_request("GET", f"/projects/{encoded_project}/repository/files/{encoded_file}/raw", user_id, params=params, raw_response=True)
     original_content = resp if isinstance(resp, str) else None
 
     final_commit_message = commit_message or f"fix: {fix_description[:100]}"
@@ -389,6 +397,13 @@ def _action_apply_fix(
     incident_short = suggestion.get("incident_id", "unknown")[:8]
     branch_name = f"fix/aurora-{incident_short}-{int(time.time())}"
 
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:create_branch",
+        summary=f"Create branch '{branch_name}' from '{base_branch}' in {project_path}",
+    ).allowed:
+        return build_error_response("Branch creation cancelled by user")
+
     resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/branches", user_id,
                               json_body={"branch": branch_name, "ref": base_branch})
     if isinstance(resp, dict) and "error" in resp:
@@ -398,6 +413,13 @@ def _action_apply_fix(
     file_check = gitlab_api_request("GET", f"/projects/{encoded_project}/repository/files/{encoded_file}", user_id,
                                     params={"ref": branch_name})
     action_type = "update" if (isinstance(file_check, dict) and "error" not in file_check) else "create"
+
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:push_files",
+        summary=f"Push fix to '{file_path}' on branch '{branch_name}'",
+    ).allowed:
+        return build_error_response("File push cancelled by user", branch_created=branch_name)
 
     commit_resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/commits", user_id,
                                      json_body={"branch": branch_name, "commit_message": commit_msg,
@@ -416,6 +438,14 @@ def _action_apply_fix(
         f"### Description\n{suggestion.get('description', 'No description')}\n\n"
         f"### File Changed\n- `{file_path}`\n\n---\n*Created by Aurora from an RCA fix suggestion.*"
     )
+
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:create_merge_request",
+        summary=f"Create MR '{mr_title}' targeting '{base_branch}' in {project_path}",
+    ).allowed:
+        return build_error_response("Merge request creation cancelled by user", branch_created=branch_name)
+
     mr_resp = gitlab_api_request("POST", f"/projects/{encoded_project}/merge_requests", user_id,
                                  json_body={"source_branch": branch_name, "target_branch": base_branch,
                                             "title": mr_title, "description": mr_body})
@@ -458,6 +488,13 @@ def _action_commit_terraform(
     if not commit_message:
         return build_error_response("commit_message is required for commit_terraform")
 
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:commit_terraform",
+        summary=f"Commit Terraform files to {repo}: {commit_message}",
+    ).allowed:
+        return build_error_response("Operation cancelled by user")
+
     try:
         terraform_dir = None
         if session_id == 'current':
@@ -484,7 +521,7 @@ def _action_commit_terraform(
                         terraform_dir = str(max(session_dirs, key=lambda x: x.stat().st_mtime))
 
         if not terraform_dir or not Path(terraform_dir).exists():
-            return json.dumps({"status": "error", "error": "No Terraform files found to commit"})
+            return build_error_response("No Terraform files found to commit")
 
         terraform_files = []
         encoded_project = quote(repo, safe="")
@@ -505,14 +542,14 @@ def _action_commit_terraform(
                 terraform_files.append({"action": action, "file_path": file_path, "content": f.read()})
 
         if not terraform_files:
-            return json.dumps({"status": "error", "error": "No .tf files found in terraform directory"})
+            return build_error_response("No .tf files found in terraform directory")
 
         # Create a feature branch for the Terraform commit (never push directly to default)
         iac_branch = f"iac/aurora-{session_id or 'manual'}-{int(time.time())}"
         branch_resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/branches", user_id,
                                          json_body={"branch": iac_branch, "ref": target_branch_resolved})
         if isinstance(branch_resp, dict) and "error" in branch_resp:
-            return json.dumps({"status": "error", "error": f"Failed to create branch: {branch_resp['error']}"})
+            return build_error_response(f"Failed to create branch: {branch_resp['error']}")
 
         resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/commits", user_id,
                                   json_body={"branch": iac_branch, "commit_message": commit_message, "actions": terraform_files})
@@ -526,24 +563,30 @@ def _action_commit_terraform(
                     iac_branch,
                     exc_info=True,
                 )
-            return json.dumps({"status": "error", "error": f"GitLab commit failed: {resp['error']}"})
+            return build_error_response(f"GitLab commit failed: {resp['error']}", branch_created=iac_branch)
 
         # Open a Merge Request for review
         mr_resp = gitlab_api_request("POST", f"/projects/{encoded_project}/merge_requests", user_id,
                                      json_body={"source_branch": iac_branch, "target_branch": target_branch_resolved,
                                                 "title": f"IaC: {commit_message}", "description": f"Aurora-generated Terraform commit with {len(terraform_files)} file(s)."})
-        mr_url = mr_resp.get("web_url", "") if isinstance(mr_resp, dict) and "error" not in mr_resp else ""
+        if isinstance(mr_resp, dict) and "error" in mr_resp:
+            return build_error_response(
+                f"Committed files but failed to create MR: {mr_resp['error']}",
+                commit_sha=resp.get("id", ""), commit_url=resp.get("web_url", ""),
+                branch=iac_branch,
+                files_committed=[f["file_path"] for f in terraform_files],
+            )
+        mr_url = mr_resp.get("web_url", "") if isinstance(mr_resp, dict) else ""
 
-        return json.dumps({
-            "status": "success",
-            "message": f"Committed {len(terraform_files)} Terraform files and opened MR to {repo}/{target_branch_resolved}",
-            "commit_sha": resp.get("id", ""), "commit_url": resp.get("web_url", ""),
-            "mr_url": mr_url, "branch": iac_branch,
-            "files_committed": [f["file_path"] for f in terraform_files],
-        })
+        return build_success_response(
+            message=f"Committed {len(terraform_files)} Terraform files and opened MR to {repo}/{target_branch_resolved}",
+            commit_sha=resp.get("id", ""), commit_url=resp.get("web_url", ""),
+            mr_url=mr_url, branch=iac_branch,
+            files_committed=[f["file_path"] for f in terraform_files],
+        )
     except Exception as e:
         logger.error("Error in commit_terraform: %s", e, exc_info=True)
-        return json.dumps({"status": "error", "error": f"GitLab commit failed: {str(e)}"})
+        return build_error_response(f"GitLab commit failed: {str(e)}")
 
 
 # ---------------------------------------------------------------------------

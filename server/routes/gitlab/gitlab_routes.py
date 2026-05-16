@@ -295,6 +295,11 @@ def gitlab_status(user_id):
 def gitlab_disconnect(user_id):
     """Remove the org-level GitLab token and all connected projects."""
     try:
+        delete_success = delete_user_secret(user_id, "gitlab")
+        if not delete_success:
+            logger.error("Failed to delete GitLab secret for user %s", user_id)
+            return jsonify({"error": "Failed to disconnect GitLab"}), 500
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[gitlab:disconnect]")
@@ -304,7 +309,6 @@ def gitlab_disconnect(user_id):
                 )
                 conn.commit()
 
-        delete_user_secret(user_id, "gitlab")
         logger.info("Disconnected GitLab for user %s", user_id)
         return jsonify({"success": True, "message": "GitLab disconnected"})
     except Exception as e:

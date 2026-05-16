@@ -7,7 +7,7 @@ interface GitLabStatus {
   hasProjectsConnected: boolean | null;
 }
 
-export function useGitLabStatus(userId: string | null) {
+export function useGitLabStatus() {
   const [status, setStatus] = useState<GitLabStatus>({
     isConnected: false,
     hasProjectsConnected: null,
@@ -34,10 +34,9 @@ export function useGitLabStatus(userId: string | null) {
         return;
       }
 
-      const hasProjectsConnected = repos.length > 0;
       setStatus({
-        isConnected: hasProjectsConnected,
-        hasProjectsConnected,
+        isConnected: true,
+        hasProjectsConnected: repos.length > 0,
         username: credentials.username,
         baseUrl: credentials.base_url,
       });
