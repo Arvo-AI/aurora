@@ -254,33 +254,10 @@ def github_webhook():
                     )
                     conn.commit()
 
-                # Late import: keeps Flask startup decoupled from Celery
-                # broker availability and avoids a circular import at boot.
-                from tasks.github_webhook_tasks import dispatch_github_webhook
-
-                # Decode for Celery JSON serializer; payload is the same
-                # bytes the sender sent so handlers see the original text.
-                payload_json_str = (raw_body or b"").decode("utf-8", errors="replace")
-                try:
-                    dispatch_github_webhook.delay(delivery_id, event_type, payload_json_str)
-                except Exception as dispatch_exc:
-                    # Mark the row as ``failed`` so the next GitHub retry
-                    # lands on the redispatch branch above and tries again.
-                    cur.execute(
-                        """UPDATE webhook_deliveries
-                            SET status = 'failed',
-                                error = %s
-                            WHERE delivery_id = %s""",
-                        (
-                            redact_token(
-                                f"{type(dispatch_exc).__name__}: {dispatch_exc}"
-                            )[:1024],
-                            delivery_id,
-                        ),
-                    )
-                    conn.commit()
-                    raise
-
+                # Atomic claim: the row must transition from pending|failed
+                # to processing BEFORE the celery enqueue. If we lose the
+                # race (a concurrent retry already claimed it), skip the
+                # enqueue so the same delivery is never dispatched twice.
                 cur.execute(
                     """UPDATE webhook_deliveries
                        SET status = 'processing'
@@ -288,7 +265,41 @@ def github_webhook():
                          AND status IN ('pending', 'failed')""",
                     (delivery_id,),
                 )
+                claimed = cur.rowcount > 0
                 conn.commit()
+
+                if not claimed:
+                    logger.info(
+                        "gh_webhook_event=already_claimed delivery_id=%s event_type=%s",
+                        delivery_id, event_type,
+                    )
+                else:
+                    # Late import: keeps Flask startup decoupled from Celery
+                    # broker availability and avoids a circular import at boot.
+                    from tasks.github_webhook_tasks import dispatch_github_webhook
+
+                    # Decode for Celery JSON serializer; payload is the same
+                    # bytes the sender sent so handlers see the original text.
+                    payload_json_str = (raw_body or b"").decode("utf-8", errors="replace")
+                    try:
+                        dispatch_github_webhook.delay(delivery_id, event_type, payload_json_str)
+                    except Exception as dispatch_exc:
+                        # Revert the claim so the next GitHub retry can take
+                        # this delivery via the redispatch branch above.
+                        cur.execute(
+                            """UPDATE webhook_deliveries
+                                SET status = 'failed',
+                                    error = %s
+                                WHERE delivery_id = %s""",
+                            (
+                                redact_token(
+                                    f"{type(dispatch_exc).__name__}: {dispatch_exc}"
+                                )[:1024],
+                                delivery_id,
+                            ),
+                        )
+                        conn.commit()
+                        raise
     except Exception as exc:
         # Don't leak details (could include payload fragments). Log here
         # for ops; return generic to caller. ``redact_token`` covers any

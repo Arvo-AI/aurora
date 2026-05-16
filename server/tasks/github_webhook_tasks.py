@@ -232,6 +232,8 @@ def _handle_installation_event(
                            permissions = EXCLUDED.permissions,
                            events = EXCLUDED.events,
                            repository_selection = EXCLUDED.repository_selection,
+                           suspended_at = NULL,
+                           permissions_pending_update = FALSE,
                            updated_at = NOW()
                     """,
                     (

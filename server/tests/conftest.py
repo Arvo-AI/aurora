@@ -169,21 +169,26 @@ def _try_postgres_connection() -> Any:
     if not host or not port:
         return None
 
+    params: dict[str, Any] = {
+        "host": host,
+        "port": int(port),
+        "dbname": os.getenv("POSTGRES_DB", "aurora_db"),
+        "user": os.getenv("POSTGRES_USER", "aurora"),
+        "password": os.getenv("POSTGRES_PASSWORD", ""),
+        "sslmode": os.getenv("POSTGRES_SSLMODE", "prefer"),
+    }
+    sslrootcert = os.getenv("POSTGRES_SSLROOTCERT")
+    if sslrootcert:
+        params["sslrootcert"] = sslrootcert
+
     try:
-        params: dict[str, Any] = {
-            "host": host,
-            "port": int(port),
-            "dbname": os.getenv("POSTGRES_DB", "aurora_db"),
-            "user": os.getenv("POSTGRES_USER", "aurora"),
-            "password": os.getenv("POSTGRES_PASSWORD", ""),
-            "sslmode": os.getenv("POSTGRES_SSLMODE", "prefer"),
-        }
-        sslrootcert = os.getenv("POSTGRES_SSLROOTCERT")
-        if sslrootcert:
-            params["sslrootcert"] = sslrootcert
         return _psycopg2.connect(**params)
-    except Exception:
+    except _psycopg2.OperationalError:
+        # The host is configured but unreachable (refused, timeout, DNS).
+        # Treat this as "Postgres not available for tests" → skip.
         return None
+    # Anything else (auth failure, bad TLS config, invalid params) is a
+    # real misconfiguration we want CI to see; let it propagate.
 
 
 @pytest.fixture(scope="function")

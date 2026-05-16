@@ -361,10 +361,6 @@ def initialize_tables():
                         is_primary BOOLEAN NOT NULL DEFAULT FALSE,
                         UNIQUE(user_id, installation_id)
                     );
-
-                    CREATE INDEX IF NOT EXISTS idx_user_github_installations_installation_id
-                    ON user_github_installations(installation_id)
-                    WHERE disconnected_at IS NULL;
                 """,
                 "webhook_deliveries": """
                     CREATE TABLE IF NOT EXISTS webhook_deliveries (
@@ -1512,13 +1508,18 @@ def initialize_tables():
                 cursor.execute(
                     "ALTER TABLE user_github_installations ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL;"
                 )
+                cursor.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_user_github_installations_installation_id
+                       ON user_github_installations(installation_id)
+                       WHERE disconnected_at IS NULL;"""
+                )
                 conn.commit()
                 logging.info(
-                    "Ensured disconnected_at column exists on user_github_installations table."
+                    "Ensured disconnected_at column + partial index exist on user_github_installations table."
                 )
             except Exception as e:
                 logging.warning(
-                    f"Error adding disconnected_at column to user_github_installations: {e}"
+                    f"Error adding disconnected_at column/index to user_github_installations: {e}"
                 )
                 conn.rollback()
 

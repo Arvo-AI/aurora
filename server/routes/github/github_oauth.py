@@ -167,6 +167,24 @@ def github_callback():
             frontend_url=FRONTEND_URL,
         )
 
+    raw_state = request.args.get("state")
+    if not raw_state:
+        logger.error("[GITHUB-OAUTH] callback missing state")
+        return flask.render_template(
+            _CALLBACK_ERROR_TEMPLATE,
+            error="Missing state parameter",
+            frontend_url=FRONTEND_URL,
+        )
+
+    aurora_user_id = _verify_state(raw_state)
+    if not aurora_user_id:
+        logger.error("[GITHUB-OAUTH] callback state failed signature/expiry check")
+        return flask.render_template(
+            _CALLBACK_ERROR_TEMPLATE,
+            error="Invalid or expired state parameter",
+            frontend_url=FRONTEND_URL,
+        )
+
     code = request.args.get("code")
     if not code:
         logger.error("[GITHUB-OAUTH] callback hit with no code")
@@ -217,8 +235,16 @@ def github_callback():
             frontend_url=FRONTEND_URL,
         )
 
-    token_data = token_response.json()
-    access_token = token_data.get("access_token")
+    try:
+        token_data = token_response.json()
+    except ValueError:
+        logger.exception("[GITHUB-OAUTH] token response body was not JSON")
+        return flask.render_template(
+            _CALLBACK_ERROR_TEMPLATE,
+            error="Invalid response from GitHub",
+            frontend_url=FRONTEND_URL,
+        )
+    access_token = token_data.get("access_token") if isinstance(token_data, dict) else None
     if not access_token:
         logger.error("[GITHUB-OAUTH] no access_token in token response")
         return flask.render_template(
@@ -252,27 +278,24 @@ def github_callback():
             frontend_url=FRONTEND_URL,
         )
 
-    user_data = user_response.json()
+    try:
+        user_data = user_response.json()
+    except ValueError:
+        logger.exception("[GITHUB-OAUTH] user info response body was not JSON")
+        return flask.render_template(
+            _CALLBACK_ERROR_TEMPLATE,
+            error="Invalid response from GitHub",
+            frontend_url=FRONTEND_URL,
+        )
+    if not isinstance(user_data, dict):
+        logger.error("[GITHUB-OAUTH] user info response not a JSON object")
+        return flask.render_template(
+            _CALLBACK_ERROR_TEMPLATE,
+            error="Invalid response from GitHub",
+            frontend_url=FRONTEND_URL,
+        )
     github_username = user_data.get("login")
     github_user_id = user_data.get("id")
-
-    raw_state = request.args.get("state")
-    if not raw_state:
-        logger.error("[GITHUB-OAUTH] callback missing state")
-        return flask.render_template(
-            _CALLBACK_ERROR_TEMPLATE,
-            error="Missing state parameter",
-            frontend_url=FRONTEND_URL,
-        )
-
-    aurora_user_id = _verify_state(raw_state)
-    if not aurora_user_id:
-        logger.error("[GITHUB-OAUTH] callback state failed signature/expiry check")
-        return flask.render_template(
-            _CALLBACK_ERROR_TEMPLATE,
-            error="Invalid or expired state parameter",
-            frontend_url=FRONTEND_URL,
-        )
 
     try:
         from utils.auth.token_management import store_tokens_in_db

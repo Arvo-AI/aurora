@@ -198,6 +198,20 @@ export class GitHubIntegrationService {
   }
 }
 
+function getAuthCallbackOrigins(): Set<string> {
+  const origins = new Set<string>();
+  origins.add(window.location.origin);
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+  if (backendUrl) {
+    try {
+      origins.add(new URL(backendUrl).origin);
+    } catch {
+      /* ignore malformed env */
+    }
+  }
+  return origins;
+}
+
 export default function GitHubProviderIntegration() {
   const [userId, setUserId] = useState<string | null>(null);
   const githubStatus = useGitHubStatus(userId);
@@ -384,18 +398,8 @@ export default function GitHubProviderIntegration() {
     if (!userId) return;
     fetchInstallations();
     const handler = () => fetchInstallations();
-    const allowedOrigins = new Set<string>();
-    allowedOrigins.add(window.location.origin);
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-    if (backendUrl) {
-      try {
-        allowedOrigins.add(new URL(backendUrl).origin);
-      } catch {
-        /* ignore malformed env */
-      }
-    }
     const onMessage = (event: MessageEvent) => {
-      if (!allowedOrigins.has(event.origin)) return;
+      if (!getAuthCallbackOrigins().has(event.origin)) return;
       const data = event.data as { type?: string } | null;
       if (data && data.type === 'github_auth_success') fetchInstallations();
     };
@@ -505,6 +509,7 @@ export default function GitHubProviderIntegration() {
 
       const onMessage = (event: MessageEvent) => {
         if (event.source !== popup) return;
+        if (!getAuthCallbackOrigins().has(event.origin)) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
           finalize();
@@ -625,6 +630,7 @@ export default function GitHubProviderIntegration() {
       };
       const onMessage = (event: MessageEvent) => {
         if (event.source !== popup) return;
+        if (!getAuthCallbackOrigins().has(event.origin)) return;
         const data = event.data as { type?: string } | null;
         if (data && data.type === 'github_auth_success') {
           finalize(true);

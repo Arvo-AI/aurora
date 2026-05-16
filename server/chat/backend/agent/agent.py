@@ -182,6 +182,7 @@ class Agent:
                              JOIN github_installations gi
                                   ON gi.installation_id = ugi.installation_id
                             WHERE ugi.user_id = %s
+                              AND ugi.disconnected_at IS NULL
                               AND gi.suspended_at IS NULL
                             ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
                             LIMIT 1""",

@@ -394,12 +394,22 @@ def get_user_branches(user_id, repo_full_name):
         all_branches = []
         page = 1
         while True:
-            response = requests.get(
-                f"https://api.github.com/repos/{encoded_path}/branches",
-                headers=headers,
-                params={"per_page": _PER_PAGE, "page": page},
-                timeout=_GITHUB_TIMEOUT,
-            )
+            try:
+                response = requests.get(
+                    f"https://api.github.com/repos/{encoded_path}/branches",
+                    headers=headers,
+                    params={"per_page": _PER_PAGE, "page": page},
+                    timeout=_GITHUB_TIMEOUT,
+                )
+            except requests.RequestException as net_exc:
+                logger.warning(
+                    "GitHub transport error fetching branches for repo %s: %s",
+                    safe_repo, type(net_exc).__name__,
+                )
+                return create_cors_response(
+                    {"error": "Failed to reach GitHub", "branches": []},
+                    502,
+                )
 
             if response.status_code != 200:
                 logger.error("GitHub API error: %d", response.status_code)
@@ -420,7 +430,27 @@ def get_user_branches(user_id, repo_full_name):
                     upstream_status,
                 )
 
-            branches = response.json()
+            try:
+                branches = response.json()
+            except ValueError as parse_exc:
+                logger.warning(
+                    "GitHub returned non-JSON branches body for repo %s: %s",
+                    safe_repo, type(parse_exc).__name__,
+                )
+                return create_cors_response(
+                    {"error": "Invalid GitHub response", "branches": []},
+                    502,
+                )
+
+            if not isinstance(branches, list):
+                logger.warning(
+                    "GitHub branches response not a list for repo %s (got %s)",
+                    safe_repo, type(branches).__name__,
+                )
+                return create_cors_response(
+                    {"error": "Invalid GitHub response", "branches": []},
+                    502,
+                )
 
             if not branches:
                 break
@@ -443,7 +473,7 @@ def get_user_branches(user_id, repo_full_name):
         return create_cors_response({"branches": all_branches})
 
     except Exception as e:
-        logger.error(f"Error fetching branches: {e}", exc_info=True)
+        logger.exception("Error fetching branches: %s", e)
         return create_cors_response(
             {"error": "Failed to fetch branches", "branches": []}, 500,
         )

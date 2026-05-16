@@ -750,10 +750,19 @@ def github_app_claim_installation(user_id, installation_id):
     except ValueError:
         return jsonify({"error": "Failed to parse GitHub response"}), 502
 
-    account = data.get("account") if isinstance(data, dict) else None
-    account_login = (account or {}).get("login")
-    account_id = (account or {}).get("id")
-    account_type = (account or {}).get("type")
+    if not isinstance(data, dict):
+        logger.error(
+            "[GITHUB-APP-CLAIM] GitHub response is not an object (got %s)",
+            type(data).__name__,
+        )
+        return jsonify({"error": "Unexpected GitHub response shape"}), 502
+
+    account = data.get("account") or {}
+    if not isinstance(account, dict):
+        account = {}
+    account_login = account.get("login")
+    account_id = account.get("id")
+    account_type = account.get("type")
     target_type = data.get("target_type") or account_type
     permissions = data.get("permissions") or {}
     events = data.get("events") or []
@@ -836,6 +845,8 @@ def github_app_unlink_installation(user_id, installation_id):
     will reconcile if/when the user removes the install on GitHub's side.
     """
     try:
+        from utils.auth.stateless_auth import set_rls_context
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -844,6 +855,22 @@ def github_app_unlink_installation(user_id, installation_id):
                     (user_id, installation_id),
                 )
                 deleted = cur.rowcount
+
+                # Drop the auth binding from this user's repos so subsequent
+                # tool calls + status checks don't keep treating them as
+                # App-authenticated through a now-removed install.
+                set_rls_context(
+                    cur, conn, user_id,
+                    log_prefix="[GITHUB-APP-UNLINK]",
+                )
+                cur.execute(
+                    """UPDATE github_connected_repos
+                          SET installation_id = NULL,
+                              updated_at = NOW()
+                        WHERE user_id = %s
+                          AND installation_id = %s""",
+                    (user_id, installation_id),
+                )
                 conn.commit()
     except Exception:
         logger.exception(
@@ -1006,6 +1033,8 @@ def github_disconnect(user_id):
 
     soft_deleted_installs = 0
     try:
+        from utils.auth.stateless_auth import set_rls_context
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1016,6 +1045,25 @@ def github_disconnect(user_id):
                     (user_id,),
                 )
                 soft_deleted_installs = cur.rowcount
+
+                # Also null github_connected_repos.installation_id for the
+                # installs we just soft-deleted so the auth router and
+                # github_repos_tool stop treating those repos as App-bound.
+                # github_connected_repos is RLS-protected, so set the user's
+                # org context before the UPDATE.
+                if linked_installs:
+                    set_rls_context(
+                        cur, conn, user_id,
+                        log_prefix="[GITHUB-DISCONNECT]",
+                    )
+                    cur.execute(
+                        """UPDATE github_connected_repos
+                              SET installation_id = NULL,
+                                  updated_at = NOW()
+                            WHERE user_id = %s
+                              AND installation_id = ANY(%s)""",
+                        (user_id, linked_installs),
+                    )
                 conn.commit()
     except Exception as exc:
         logger.exception(

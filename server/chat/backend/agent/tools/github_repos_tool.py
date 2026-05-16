@@ -23,12 +23,15 @@ class GetConnectedReposArgs(BaseModel):
 
 
 def _user_has_oauth(user_id: str) -> bool:
+    """True if the user has a stored OAuth access token.
+
+    Raises whatever ``get_credentials_from_db`` raises so the caller can
+    surface a "credential lookup failed" error instead of silently
+    classifying every OAuth-backed repo as unusable.
+    """
     if not is_oauth_enabled():
         return False
-    try:
-        creds = get_credentials_from_db(user_id, "github")
-    except Exception:
-        return False
+    creds = get_credentials_from_db(user_id, "github")
     return bool(creds and creds.get("access_token"))
 
 
@@ -48,7 +51,11 @@ def get_connected_repos(**kwargs) -> str:
         logger.exception("Error resolving GitHub auth for user %s", user_id)
         return json.dumps({"error": f"Failed to resolve GitHub auth: {e}"})
 
-    user_has_oauth = _user_has_oauth(user_id)
+    try:
+        user_has_oauth = _user_has_oauth(user_id)
+    except Exception as e:
+        logger.exception("Error checking OAuth status for user %s", user_id)
+        return json.dumps({"error": f"Failed to read GitHub credentials: {e}"})
 
     try:
         from utils.db.connection_pool import db_pool
