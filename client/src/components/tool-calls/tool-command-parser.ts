@@ -377,6 +377,25 @@ export function parseGitLabToolCommand(toolInput: string): string {
         return `GitLab: Apply fix${args.suggestion_id ? ` #${args.suggestion_id}` : ""}`
       case "commit_terraform":
         return `GitLab: Push Terraform${repo ? ` to ${repo}` : ""}`
+      case "create_branch": {
+        const branch = args.branch || ""
+        const base = args.target_branch || "default"
+        return `GitLab: Create branch${branch ? ` '${branch}'` : ""}${repo ? ` in ${repo}` : ""} from ${base}`
+      }
+      case "push_files": {
+        const filePath = args.file_path ? args.file_path.split('/').pop() : ""
+        const branch = args.branch || ""
+        return `GitLab: Push${filePath ? ` ${filePath}` : " files"}${branch ? ` to ${branch}` : ""}${repo ? ` in ${repo}` : ""}`
+      }
+      case "create_merge_request": {
+        const branch = args.branch || ""
+        const target = args.target_branch || "default"
+        return `GitLab: Create MR from ${branch || "branch"} → ${target}${repo ? ` in ${repo}` : ""}`
+      }
+      case "delete_branch": {
+        const branch = args.branch || ""
+        return `GitLab: Delete branch${branch ? ` '${branch}'` : ""}${repo ? ` in ${repo}` : ""}`
+      }
       default:
         return `GitLab: ${action.replace(/_/g, " ")}`
     }

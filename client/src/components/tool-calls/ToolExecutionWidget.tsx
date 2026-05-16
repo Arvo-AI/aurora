@@ -451,7 +451,7 @@ const summarizeCommand = (cmd: string): string => {
 const ConfirmationPanel = ({ tool, command, userId, sessionId, sendRaw, onToolUpdate }: ConfirmationPanelProps) => {
   const effect = tool.yes_always_effect
   const allowYesAlways = !!(effect && effect.changes.length > 0)
-  const summary = summarizeCommand(command)
+  const summary = tool.confirmation_summary || summarizeCommand(command)
 
   const [edited, setEdited] = React.useState<Record<string, string>>(() => {
     const m: Record<string, string> = {}

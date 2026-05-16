@@ -350,3 +350,69 @@ def get_repo_selections(user_id):
     except Exception as e:
         logger.exception("Error getting GitLab repo selections")
         return jsonify({"error": "Failed to get project selections"}), 500
+
+
+@gitlab_bp.route("/repo-selections/<path:repo_full_name>/metadata", methods=["PUT"])
+@require_permission("connectors", "write")
+def update_repo_metadata(user_id, repo_full_name):
+    """Update the metadata summary for a specific GitLab project (human edit)."""
+    try:
+        data = request.get_json()
+        summary = data.get("metadata_summary") if data else None
+        if summary is None:
+            return jsonify({"error": "metadata_summary is required"}), 400
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[gitlab:update_metadata]")
+                cur.execute(
+                    """UPDATE connected_repos
+                       SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
+                       WHERE provider = 'gitlab' AND repo_full_name = %s""",
+                    (summary, repo_full_name),
+                )
+                conn.commit()
+        return jsonify({"message": "Metadata updated"})
+    except Exception as e:
+        logger.exception("Error updating GitLab repo metadata")
+        return jsonify({"error": "Failed to update metadata"}), 500
+
+
+@gitlab_bp.route("/repo-metadata/generate", methods=["POST"])
+@require_permission("connectors", "write")
+def trigger_metadata_generation(user_id):
+    """Trigger LLM metadata generation for a specific GitLab project."""
+    try:
+        data = request.get_json()
+        repo_full_name = data.get("repo_full_name") if data else None
+        if not repo_full_name:
+            return jsonify({"error": "repo_full_name is required"}), 400
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[gitlab:trigger_metadata]")
+                cur.execute(
+                    """UPDATE connected_repos SET metadata_status = 'generating', updated_at = NOW()
+                       WHERE provider = 'gitlab' AND repo_full_name = %s""",
+                    (repo_full_name,),
+                )
+                conn.commit()
+
+        from utils.repo_metadata import generate_repo_metadata
+        try:
+            generate_repo_metadata.delay(user_id, "gitlab", repo_full_name)
+        except Exception as e:
+            logger.error("Failed to enqueue metadata gen for %s: %s", repo_full_name, e)
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[gitlab:trigger_metadata]")
+                    cur.execute(
+                        "UPDATE connected_repos SET metadata_status = 'pending', updated_at = NOW() WHERE provider = 'gitlab' AND repo_full_name = %s",
+                        (repo_full_name,),
+                    )
+                    conn.commit()
+            return jsonify({"error": "Failed to start metadata generation"}), 500
+        return jsonify({"message": "Metadata generation started"})
+    except Exception as e:
+        logger.exception("Error triggering GitLab metadata generation")
+        return jsonify({"error": "Failed to trigger metadata generation"}), 500

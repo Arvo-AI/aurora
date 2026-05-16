@@ -38,6 +38,7 @@ class GitLabToolArgs(BaseModel):
         "list_projects",
         "deployment_check", "commits", "diff", "merge_requests",
         "suggest_fix", "apply_fix", "commit_terraform",
+        "create_branch", "push_files", "create_merge_request", "delete_branch",
     ] = Field(
         description=(
             "Action to perform: "
@@ -48,7 +49,11 @@ class GitLabToolArgs(BaseModel):
             "'merge_requests' (merged MRs in time window), "
             "'suggest_fix' (propose a code fix — requires file_path, suggested_content, fix_description, root_cause_summary), "
             "'apply_fix' (create MR from approved suggestion — requires suggestion_id), "
-            "'commit_terraform' (push Terraform files — requires repo, commit_message)"
+            "'commit_terraform' (push Terraform files — requires repo, commit_message), "
+            "'create_branch' (create a new branch — requires branch, optionally target_branch as base), "
+            "'push_files' (push file changes to a branch — requires branch, file_path, suggested_content, commit_message), "
+            "'create_merge_request' (open an MR — requires branch, target_branch), "
+            "'delete_branch' (delete a branch — requires branch)"
         )
     )
     repo: Optional[str] = Field(default=None, description="Project path 'namespace/project'. Auto-resolves if only one connected.")
@@ -56,15 +61,18 @@ class GitLabToolArgs(BaseModel):
     incident_time: Optional[str] = Field(default=None, description="ISO 8601 incident timestamp for time-window correlation.")
     time_window_hours: int = Field(default=24, description="Hours before incident_time to search (default: 24).")
     commit_sha: Optional[str] = Field(default=None, description="For 'diff': specific commit SHA.")
-    # suggest_fix params
-    file_path: Optional[str] = Field(default=None, description="For 'suggest_fix': path to the file in the project.")
-    suggested_content: Optional[str] = Field(default=None, description="For 'suggest_fix': complete suggested file content.")
+    # suggest_fix / push_files params
+    file_path: Optional[str] = Field(default=None, description="For 'suggest_fix'/'push_files': path to the file in the project.")
+    suggested_content: Optional[str] = Field(default=None, description="For 'suggest_fix'/'push_files': complete file content.")
     fix_description: Optional[str] = Field(default=None, description="For 'suggest_fix': what this fix does.")
     root_cause_summary: Optional[str] = Field(default=None, description="For 'suggest_fix': why this change is needed.")
-    commit_message: Optional[str] = Field(default=None, description="For 'suggest_fix'/'commit_terraform': commit message.")
+    commit_message: Optional[str] = Field(default=None, description="For 'suggest_fix'/'commit_terraform'/'push_files': commit message.")
     # apply_fix params
     suggestion_id: Optional[int] = Field(default=None, description="For 'apply_fix': ID of the fix suggestion to apply.")
-    target_branch: Optional[str] = Field(default=None, description="For 'apply_fix': base branch for MR (default: main).")
+    target_branch: Optional[str] = Field(default=None, description="For 'apply_fix'/'create_branch'/'create_merge_request': base/target branch (default: main).")
+    # create_merge_request params
+    mr_title: Optional[str] = Field(default=None, description="For 'create_merge_request': MR title.")
+    mr_description: Optional[str] = Field(default=None, description="For 'create_merge_request': MR description body.")
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +484,166 @@ def _action_apply_fix(
 
 
 # ---------------------------------------------------------------------------
+# Action: create_branch
+# ---------------------------------------------------------------------------
+
+def _action_create_branch(
+    user_id: str, repo: Optional[str], branch: Optional[str], target_branch: Optional[str],
+) -> str:
+    if not branch:
+        return build_error_response("branch is required for create_branch")
+
+    project_path, source = _resolve_repository(user_id, repo)
+    if not project_path:
+        return build_error_response(f"Could not resolve project: {source}")
+
+    encoded_project = quote(project_path, safe="")
+
+    if not target_branch:
+        project_meta = gitlab_api_request("GET", f"/projects/{encoded_project}", user_id)
+        base = project_meta.get("default_branch", "main") if isinstance(project_meta, dict) and "error" not in project_meta else "main"
+    else:
+        base = target_branch
+
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:create_branch",
+        summary=f"Create branch '{branch}' from '{base}' in {project_path}",
+    ).allowed:
+        return build_error_response("Branch creation cancelled by user")
+
+    resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/branches", user_id,
+                              json_body={"branch": branch, "ref": base})
+    if isinstance(resp, dict) and "error" in resp:
+        return build_error_response(f"Failed to create branch: {resp['error']}")
+
+    return build_success_response(
+        message=f"Branch '{branch}' created from '{base}'",
+        branch=branch, base=base, project=project_path,
+        web_url=resp.get("web_url", ""),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Action: push_files
+# ---------------------------------------------------------------------------
+
+def _action_push_files(
+    user_id: str, repo: Optional[str], branch: Optional[str],
+    file_path: Optional[str], content: Optional[str], commit_message: Optional[str],
+) -> str:
+    if not branch:
+        return build_error_response("branch is required for push_files")
+    if not file_path or not content:
+        return build_error_response("file_path and suggested_content are required for push_files")
+    if not commit_message:
+        return build_error_response("commit_message is required for push_files")
+
+    project_path, source = _resolve_repository(user_id, repo)
+    if not project_path:
+        return build_error_response(f"Could not resolve project: {source}")
+
+    encoded_project = quote(project_path, safe="")
+
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:push_files",
+        summary=f"Push changes to '{file_path}' on branch '{branch}' in {project_path}",
+    ).allowed:
+        return build_error_response("File push cancelled by user")
+
+    encoded_file = quote(file_path, safe="")
+    file_check = gitlab_api_request("GET", f"/projects/{encoded_project}/repository/files/{encoded_file}", user_id,
+                                    params={"ref": branch})
+    action_type = "update" if (isinstance(file_check, dict) and "error" not in file_check) else "create"
+
+    resp = gitlab_api_request("POST", f"/projects/{encoded_project}/repository/commits", user_id,
+                              json_body={"branch": branch, "commit_message": commit_message,
+                                         "actions": [{"action": action_type, "file_path": file_path, "content": content}]})
+    if isinstance(resp, dict) and "error" in resp:
+        return build_error_response(f"Failed to push files: {resp['error']}")
+
+    return build_success_response(
+        message=f"Pushed {action_type} to '{file_path}' on branch '{branch}'",
+        commit_sha=resp.get("id", ""), commit_url=resp.get("web_url", ""),
+        project=project_path, branch=branch, file_path=file_path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Action: create_merge_request
+# ---------------------------------------------------------------------------
+
+def _action_create_merge_request(
+    user_id: str, repo: Optional[str], branch: Optional[str],
+    target_branch: Optional[str], mr_title: Optional[str], mr_description: Optional[str],
+) -> str:
+    if not branch:
+        return build_error_response("branch (source branch) is required for create_merge_request")
+
+    project_path, source = _resolve_repository(user_id, repo)
+    if not project_path:
+        return build_error_response(f"Could not resolve project: {source}")
+
+    encoded_project = quote(project_path, safe="")
+
+    if not target_branch:
+        project_meta = gitlab_api_request("GET", f"/projects/{encoded_project}", user_id)
+        target = project_meta.get("default_branch", "main") if isinstance(project_meta, dict) and "error" not in project_meta else "main"
+    else:
+        target = target_branch
+
+    title = mr_title or f"Merge '{branch}' into '{target}'"
+
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:create_merge_request",
+        summary=f"Create MR '{title}' from '{branch}' to '{target}' in {project_path}",
+    ).allowed:
+        return build_error_response("Merge request creation cancelled by user")
+
+    resp = gitlab_api_request("POST", f"/projects/{encoded_project}/merge_requests", user_id,
+                              json_body={"source_branch": branch, "target_branch": target,
+                                         "title": title, "description": mr_description or ""})
+    if isinstance(resp, dict) and "error" in resp:
+        return build_error_response(f"Failed to create MR: {resp['error']}")
+
+    return build_success_response(
+        message=f"Merge request created",
+        mr_url=resp.get("web_url", ""), mr_iid=resp.get("iid", 0),
+        project=project_path, source_branch=branch, target_branch=target,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Action: delete_branch
+# ---------------------------------------------------------------------------
+
+def _action_delete_branch(user_id: str, repo: Optional[str], branch: Optional[str]) -> str:
+    if not branch:
+        return build_error_response("branch is required for delete_branch")
+
+    project_path, source = _resolve_repository(user_id, repo)
+    if not project_path:
+        return build_error_response(f"Could not resolve project: {source}")
+
+    encoded_project = quote(project_path, safe="")
+
+    if not gate_action(
+        user_id=user_id,
+        tool_name="gitlab:delete_branch",
+        summary=f"Delete branch '{branch}' in {project_path}",
+    ).allowed:
+        return build_error_response("Branch deletion cancelled by user")
+
+    resp = gitlab_api_request("DELETE", f"/projects/{encoded_project}/repository/branches/{quote(branch, safe='')}", user_id)
+    if isinstance(resp, dict) and "error" in resp:
+        return build_error_response(f"Failed to delete branch: {resp['error']}")
+
+    return build_success_response(message=f"Branch '{branch}' deleted", project=project_path, branch=branch)
+
+
+# ---------------------------------------------------------------------------
 # Action: commit_terraform
 # ---------------------------------------------------------------------------
 
@@ -607,6 +775,8 @@ def gitlab_tool(
     commit_message: Optional[str] = None,
     suggestion_id: Optional[int] = None,
     target_branch: Optional[str] = None,
+    mr_title: Optional[str] = None,
+    mr_description: Optional[str] = None,
     user_id: Optional[str] = None,
     incident_id: Optional[str] = None,
     session_id: Optional[str] = None,
@@ -636,6 +806,14 @@ def gitlab_tool(
         return _action_apply_fix(user_id, suggestion_id, target_branch, use_edited_content=use_edited)
     if action == "commit_terraform":
         return _action_commit_terraform(user_id, repo, branch, commit_message, session_id)
+    if action == "create_branch":
+        return _action_create_branch(user_id, repo, branch, target_branch)
+    if action == "push_files":
+        return _action_push_files(user_id, repo, branch, file_path, suggested_content, commit_message)
+    if action == "create_merge_request":
+        return _action_create_merge_request(user_id, repo, branch, target_branch, mr_title, mr_description)
+    if action == "delete_branch":
+        return _action_delete_branch(user_id, repo, branch)
 
     # RCA actions need repo resolution + time windows
     valid_rca_actions = ["deployment_check", "commits", "diff", "merge_requests"]

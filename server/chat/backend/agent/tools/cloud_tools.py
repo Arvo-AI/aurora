@@ -1877,7 +1877,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             name="gitlab",
             description=(
                 "Interact with GitLab repositories. Actions: list_projects, deployment_check, "
-                "commits, diff, merge_requests, suggest_fix, apply_fix, commit_terraform."
+                "commits, diff, merge_requests, suggest_fix, apply_fix, commit_terraform, "
+                "create_branch, push_files, create_merge_request, delete_branch."
             ),
             args_schema=GitLabToolArgs,
         ))

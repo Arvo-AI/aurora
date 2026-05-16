@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useGitLabStatus } from "@/hooks/use-gitlab-status";
-import { ArrowLeft, Loader2, Check, LogOut } from "lucide-react";
+import { ArrowLeft, Loader2, Check, LogOut, Pencil, X, RotateCw } from "lucide-react";
 
 interface ConnectedProject {
   repo_full_name: string;
@@ -32,6 +33,8 @@ export default function GitLabConnectPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [connectedUsername, setConnectedUsername] = useState<string | null>(null);
   const [connectedProjects, setConnectedProjects] = useState<ConnectedProject[]>([]);
+  const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchProjects = async () => {
     const res = await fetch("/api/proxy/gitlab/repo-selections");
@@ -39,6 +42,25 @@ export default function GitLabConnectPage() {
     const data = await res.json();
     return (data.repositories || []) as ConnectedProject[];
   };
+
+  const startMetadataPolling = useCallback((projects: ConnectedProject[]) => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    const hasPending = projects.some(p => p.metadata_status === "pending" || p.metadata_status === "generating");
+    if (!hasPending) return;
+    pollingRef.current = setInterval(async () => {
+      try {
+        const updated = await fetchProjects();
+        setConnectedProjects(updated);
+        const stillPending = updated.some(p => p.metadata_status === "pending" || p.metadata_status === "generating");
+        if (!stillPending && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch {}
+    }, 3000);
+  }, []);
+
+  useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -49,12 +71,14 @@ export default function GitLabConnectPage() {
       if (creds.base_url) setBaseUrlInput(creds.base_url);
 
       if (creds.connected) {
-        setConnectedProjects(await fetchProjects());
+        const projects = await fetchProjects();
+        setConnectedProjects(projects);
+        startMetadataPolling(projects);
       }
     } catch {
       setIsAuthenticated(false);
     }
-  }, []);
+  }, [startMetadataPolling]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
@@ -79,7 +103,9 @@ export default function GitLabConnectPage() {
         setConnectedUsername(result.username || null);
         window.dispatchEvent(new Event("providerStateChanged"));
         refresh();
-        setConnectedProjects(await fetchProjects());
+        const projects = await fetchProjects();
+        setConnectedProjects(projects);
+        startMetadataPolling(projects);
       } else {
         toast({ title: "Error", description: result.error || "Failed to connect", variant: "destructive" });
       }
@@ -105,6 +131,44 @@ export default function GitLabConnectPage() {
       toast({ title: "Error", description: "Failed to disconnect", variant: "destructive" });
     } finally {
       setIsDisconnecting(false);
+    }
+  };
+
+  const handleMetadataSave = async (repoFullName: string) => {
+    const summary = editingMetadata[repoFullName];
+    if (summary === undefined) return;
+    try {
+      const res = await fetch(`/api/proxy/gitlab/repo-selections/${encodeURIComponent(repoFullName)}/metadata`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metadata_summary: summary }),
+      });
+      if (!res.ok) throw new Error();
+      setConnectedProjects(prev => prev.map(p =>
+        p.repo_full_name === repoFullName ? { ...p, metadata_summary: summary, metadata_status: "ready" } : p
+      ));
+      setEditingMetadata(prev => { const n = { ...prev }; delete n[repoFullName]; return n; });
+      toast({ title: "Description updated" });
+    } catch {
+      toast({ title: "Error", description: "Failed to update description", variant: "destructive" });
+    }
+  };
+
+  const handleRegenerate = async (repoFullName: string) => {
+    try {
+      const res = await fetch("/api/proxy/gitlab/repo-metadata/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_full_name: repoFullName }),
+      });
+      if (!res.ok) throw new Error();
+      const updated = connectedProjects.map(p =>
+        p.repo_full_name === repoFullName ? { ...p, metadata_status: "generating" } : p
+      );
+      setConnectedProjects(updated);
+      startMetadataPolling(updated);
+    } catch {
+      toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
     }
   };
 
@@ -187,18 +251,66 @@ export default function GitLabConnectPage() {
 
               {connectedProjects.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-sm font-medium">Auto-connected Projects ({connectedProjects.length})</h4>
+                  <h4 className="text-sm font-medium">Connected Projects ({connectedProjects.length})</h4>
                   <p className="text-xs text-muted-foreground">
                     All projects accessible by the token are automatically connected. To change scope, update the token permissions in GitLab.
                   </p>
-                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                  <div className="space-y-2 max-h-[500px] overflow-y-auto">
                     {connectedProjects.map(p => (
-                      <div key={p.repo_full_name} className="flex items-center justify-between px-2 py-1.5 rounded text-sm bg-muted/20">
-                        <span className="font-mono text-xs">{p.repo_full_name}</span>
-                        <div className="flex items-center gap-1">
-                          {p.is_private && <Badge variant="outline" className="text-xs">Private</Badge>}
-                          <Badge variant="outline" className="text-xs">{p.default_branch}</Badge>
+                      <div key={p.repo_full_name} className="p-2 rounded-md border border-border space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">{p.repo_full_name}</span>
+                            {p.is_private && <Badge variant="secondary" className="text-xs">Private</Badge>}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {p.metadata_status === "ready" && (
+                              <>
+                                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                                  if (editingMetadata[p.repo_full_name] !== undefined) {
+                                    setEditingMetadata(prev => { const n = { ...prev }; delete n[p.repo_full_name]; return n; });
+                                  } else {
+                                    setEditingMetadata(prev => ({ ...prev, [p.repo_full_name]: p.metadata_summary || "" }));
+                                  }
+                                }} title="Edit description">
+                                  {editingMetadata[p.repo_full_name] !== undefined ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                                </Button>
+                                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleRegenerate(p.repo_full_name)} title="Regenerate">
+                                  <RotateCw className="h-3 w-3" />
+                                </Button>
+                              </>
+                            )}
+                            {p.metadata_status === "error" && (
+                              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => handleRegenerate(p.repo_full_name)}>Retry</Button>
+                            )}
+                          </div>
                         </div>
+
+                        {(p.metadata_status === "pending" || p.metadata_status === "generating") && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />Generating description...
+                          </div>
+                        )}
+                        {p.metadata_status === "error" && (
+                          <p className="text-xs text-red-500">Failed to generate description</p>
+                        )}
+                        {p.metadata_status === "ready" && editingMetadata[p.repo_full_name] !== undefined && (
+                          <div className="space-y-1">
+                            <Textarea
+                              value={editingMetadata[p.repo_full_name]}
+                              onChange={(e) => setEditingMetadata(prev => ({ ...prev, [p.repo_full_name]: e.target.value }))}
+                              className="text-xs min-h-[60px]"
+                              rows={3}
+                            />
+                            <div className="flex gap-1 justify-end">
+                              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setEditingMetadata(prev => { const n = { ...prev }; delete n[p.repo_full_name]; return n; })}>Cancel</Button>
+                              <Button size="sm" className="h-6 px-2 text-xs" onClick={() => handleMetadataSave(p.repo_full_name)}>Save</Button>
+                            </div>
+                          </div>
+                        )}
+                        {p.metadata_status === "ready" && editingMetadata[p.repo_full_name] === undefined && p.metadata_summary && (
+                          <p className="text-xs text-muted-foreground">{p.metadata_summary.replace(/\*\*/g, "")}</p>
+                        )}
                       </div>
                     ))}
                   </div>
