@@ -101,6 +101,10 @@ def get_webhook_url(user_id):
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
 
     base_url = ngrok_url if (ngrok_url and backend_url.startswith("http://localhost")) else backend_url
+
+    if not base_url:
+        return jsonify({"error": "NEXT_PUBLIC_BACKEND_URL or NGROK_URL must be configured"}), 500
+
     webhook_url = f"{base_url}/victorops/webhook/{user_id}"
 
     return jsonify({
@@ -121,6 +125,16 @@ def webhook(user_id: str):
     """Receive outbound webhook events from Splunk On-Call."""
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
+
+    # Optional shared-secret validation. Set VICTOROPS_WEBHOOK_SECRET in the
+    # environment and configure the same value as a custom header
+    # X-Webhook-Secret in Splunk On-Call's outbound webhook settings.
+    webhook_secret = os.getenv("VICTOROPS_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        provided = request.headers.get("X-Webhook-Secret", "")
+        if not provided or provided != webhook_secret:
+            logger.warning("[VICTOROPS] Webhook rejected: invalid or missing X-Webhook-Secret for user %s", sanitize(user_id))
+            return jsonify({"error": "Forbidden"}), 403
 
     creds = get_token_data(user_id, "victorops")
     if not creds:
@@ -179,7 +193,11 @@ def webhook(user_id: str):
 
     from routes.victorops.tasks import process_victorops_event
 
-    metadata = {"headers": dict(request.headers), "remote_addr": request.remote_addr}
+    metadata = {
+        "content_type": request.content_type,
+        "user_agent": request.user_agent.string if request.user_agent else "",
+        "remote_addr": request.remote_addr,
+    }
     process_victorops_event.delay(
         payload=payload,
         metadata=metadata,

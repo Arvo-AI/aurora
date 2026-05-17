@@ -147,6 +147,8 @@ export function VictorOpsWebhookStep() {
               variant={copied ? "secondary" : "outline"}
               size="sm"
               onClick={() => handleCopy(webhookUrl)}
+              aria-label="Copy webhook URL"
+              title="Copy webhook URL"
             >
               {copied ? (
                 <Check className="h-4 w-4" />

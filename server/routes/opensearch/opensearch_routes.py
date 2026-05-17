@@ -51,8 +51,18 @@ def connect(user_id):
     username = data.get("username", "").strip()
     password = data.get("password", "")
     index_pattern = data.get("indexPattern", "*").strip() or "*"
-    verify_ssl = bool(data.get("verifySsl", True))
-    max_retries = int(data.get("maxRetries", 2))
+    raw_verify_ssl = data.get("verifySsl", True)
+    if isinstance(raw_verify_ssl, bool):
+        verify_ssl = raw_verify_ssl
+    elif isinstance(raw_verify_ssl, str):
+        verify_ssl = raw_verify_ssl.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        return jsonify({"error": "verifySsl must be a boolean"}), 400
+
+    try:
+        max_retries = int(data.get("maxRetries", 2))
+    except (TypeError, ValueError):
+        return jsonify({"error": "maxRetries must be an integer"}), 400
 
     if not raw_endpoint:
         return jsonify({"error": "endpoint is required"}), 400
@@ -65,10 +75,9 @@ def connect(user_id):
         return jsonify({"error": str(exc)}), 400
 
     logger.info(
-        "[OPENSEARCH] Connecting user %s to %s (user=%s)",
+        "[OPENSEARCH] Connecting user %s to %s",
         sanitize(user_id),
         sanitize(endpoint),
-        sanitize(username),
     )
 
     client = OpenSearchClient(
@@ -186,7 +195,10 @@ def search(user_id):
     index = data.get("index") or creds.get("index_pattern", "*")
     start_time = data.get("startTime")
     end_time = data.get("endTime")
-    size = min(int(data.get("size", 50)), 200)
+    try:
+        size = min(max(1, int(data.get("size", 50))), 200)
+    except (TypeError, ValueError):
+        return jsonify({"error": "size must be an integer"}), 400
     timestamp_field = data.get("timestampField", "@timestamp")
 
     client = _make_client(creds)

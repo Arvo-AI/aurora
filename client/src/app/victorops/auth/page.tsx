@@ -31,14 +31,16 @@ export default function VictorOpsAuthPage() {
     } else {
       localStorage.removeItem('isVictorOpsConnected');
     }
-    window.dispatchEvent(new CustomEvent('providerStateChanged'));
+    window.dispatchEvent(new Event('victorOpsStateChanged'));
+    window.dispatchEvent(new Event('providerStateChanged'));
   };
 
   const fetchAndUpdateStatus = async () => {
     const result = await victoropsService.getStatus();
     setStatus(result);
     if (typeof window !== 'undefined' && result) {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+      // Only persist the minimal shape needed for instant UI hydration
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
     }
     updateLocalStorage(result?.connected ?? false);
   };
@@ -47,7 +49,10 @@ export default function VictorOpsAuthPage() {
     try {
       if (!skipCache && typeof window !== 'undefined') {
         const cached = localStorage.getItem(CACHE_KEY);
-        if (cached) setStatus(JSON.parse(cached) as VictorOpsStatus);
+        if (cached) {
+          const minimal = JSON.parse(cached) as { connected: boolean };
+          setStatus(minimal as VictorOpsStatus);
+        }
       }
       await fetchAndUpdateStatus();
     } catch {
@@ -73,6 +78,7 @@ export default function VictorOpsAuthPage() {
       const result = await victoropsService.connect(apiId, apiKey, displayName);
       if (result.connected) {
         setStatus(result);
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true }));
         updateLocalStorage(true);
         toast({
           title: 'Connected',

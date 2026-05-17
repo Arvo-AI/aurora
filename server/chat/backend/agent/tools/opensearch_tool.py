@@ -120,9 +120,9 @@ def search_opensearch(
 
         return "\n".join(lines)
 
-    except Exception as exc:
-        logger.warning("[OPENSEARCH TOOL] search_opensearch failed for user %s: %s", user_id, exc)
-        return f"OpenSearch search failed: {exc}"
+    except Exception:
+        logger.warning("[OPENSEARCH TOOL] search_opensearch failed for user %s: connection error", user_id)
+        return "OpenSearch search failed: connection error"
 
 
 def list_opensearch_indices(
@@ -153,6 +153,6 @@ def list_opensearch_indices(
 
         return "\n".join(lines)
 
-    except Exception as exc:
-        logger.warning("[OPENSEARCH TOOL] list_opensearch_indices failed for user %s: %s", user_id, exc)
-        return f"Failed to list OpenSearch indices: {exc}"
+    except Exception:
+        logger.warning("[OPENSEARCH TOOL] list_opensearch_indices failed for user %s: connection error", user_id)
+        return "Failed to list OpenSearch indices: connection error"
