@@ -8,6 +8,7 @@ x-logging: &default-logging
 x-common-env: &common-env
   # Global
   AURORA_ENV: ${AURORA_ENV}
+  FLASK_ENV: ${FLASK_ENV:-development}
 
   # Database - unified credentials
   POSTGRES_USER: ${POSTGRES_USER}
@@ -53,6 +54,7 @@ x-common-env: &common-env
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
   AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+  DEV_SECURITYHUB_API_KEY: ${DEV_SECURITYHUB_API_KEY}
 
   # Feature Flags (all disabled by default for minimal local setup)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
