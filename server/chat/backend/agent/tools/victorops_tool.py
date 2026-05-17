@@ -54,7 +54,6 @@ def _get_client(user_id: str):
 def get_victorops_incidents(
     limit: int = 20,
     user_id: Optional[str] = None,
-    **kwargs,
 ) -> str:
     """Retrieve recent incidents from Splunk On-Call."""
     if not user_id:
@@ -80,14 +79,13 @@ def get_victorops_incidents(
             "count": len(incidents),
             "results": incidents,
         })
-    except Exception as exc:
-        logger.exception("[VICTOROPS-TOOL] get_incidents failed for user=%s", user_id)
-        return json.dumps({"error": f"Error fetching incidents: {str(exc)[:200]}"})
+    except Exception:
+        logger.warning("[VICTOROPS-TOOL] get_incidents failed for user=%s: API error", user_id)
+        return json.dumps({"error": "Error fetching incidents: API error"})
 
 
 def get_victorops_teams(
     user_id: Optional[str] = None,
-    **kwargs,
 ) -> str:
     """Retrieve teams and on-call information from Splunk On-Call."""
     if not user_id:
@@ -105,6 +103,6 @@ def get_victorops_teams(
             "count": len(teams),
             "results": teams,
         })
-    except Exception as exc:
-        logger.exception("[VICTOROPS-TOOL] get_teams failed for user=%s", user_id)
-        return json.dumps({"error": f"Error fetching teams: {str(exc)[:200]}"})
+    except Exception:
+        logger.warning("[VICTOROPS-TOOL] get_teams failed for user=%s: API error", user_id)
+        return json.dumps({"error": "Error fetching teams: API error"})

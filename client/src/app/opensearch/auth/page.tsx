@@ -36,7 +36,7 @@ export default function OpenSearchAuthPage() {
       if (result !== null) {
         setStatus(result);
         if (typeof window !== "undefined") {
-          localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+          localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
           if (result.connected) setEndpoint(result.endpoint ?? "");
         }
       }
@@ -61,9 +61,10 @@ export default function OpenSearchAuthPage() {
       });
       setStatus(result);
       if (typeof window !== "undefined") {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
         localStorage.setItem("isOpenSearchConnected", "true");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
+        window.dispatchEvent(new Event("openSearchStateChanged"));
+        window.dispatchEvent(new Event("providerStateChanged"));
       }
       toast({ title: "OpenSearch connected", description: `Cluster: ${result.clusterName ?? endpoint}` });
       setPassword("");
@@ -90,7 +91,8 @@ export default function OpenSearchAuthPage() {
         if (typeof window !== "undefined") {
           localStorage.removeItem(CACHE_KEY);
           localStorage.removeItem("isOpenSearchConnected");
-          window.dispatchEvent(new CustomEvent("providerStateChanged"));
+          window.dispatchEvent(new Event("openSearchStateChanged"));
+          window.dispatchEvent(new Event("providerStateChanged"));
         }
         toast({ title: "OpenSearch disconnected" });
       } else {

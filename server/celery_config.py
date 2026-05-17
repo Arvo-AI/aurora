@@ -175,7 +175,7 @@ try:
     import routes.victorops.tasks  # noqa: F401
     logging.info("Splunk On-Call (VictorOps) tasks imported successfully")
 except ImportError as e:
-    logging.warning(f"Failed to import VictorOps tasks: {e}")
+    logging.warning("Failed to import VictorOps tasks: %s", e)
 
 try:
     import routes.opsgenie.tasks  # noqa: F401

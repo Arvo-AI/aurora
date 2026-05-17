@@ -184,6 +184,7 @@ services:
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
       NGROK_URL: ${NGROK_URL}
+      VICTOROPS_WEBHOOK_SECRET: ${VICTOROPS_WEBHOOK_SECRET:-}
 
       # GCP Auth (optional - only if GCP connector enabled)
       CLIENT_ID: ${CLIENT_ID}
