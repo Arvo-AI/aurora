@@ -85,18 +85,20 @@ def _update_metadata(user_id: str, repo_full_name: str, summary: str, status: st
                 return
             if summary is None:
                 cur.execute(
-                    """UPDATE github_connected_repos
+                    """UPDATE connected_repos
                        SET metadata_status = %s, updated_at = NOW()
                        WHERE user_id = %s
+                         AND provider = 'github'
                          AND repo_full_name = %s
                          AND metadata_status IN ('pending', 'generating')""",
                     (status, user_id, repo_full_name),
                 )
             else:
                 cur.execute(
-                    """UPDATE github_connected_repos
+                    """UPDATE connected_repos
                        SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
                        WHERE user_id = %s
+                         AND provider = 'github'
                          AND repo_full_name = %s
                          AND metadata_status IN ('pending', 'generating')""",
                     (summary, status, user_id, repo_full_name),
@@ -175,7 +177,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
         logger.info(f"Metadata generated for {repo_full_name} via {auth.method}")
 
     except Exception as e:
-        logger.error(f"Metadata generation failed for {repo_full_name}: {e}", exc_info=True)
+        logger.exception(f"Metadata generation failed for {repo_full_name}: {e}")
         try:
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:

@@ -5,4 +5,4 @@
 - CONFIGURATIONS for misconfigurations or invalid values
 - EVENTS for recent state changes
 - DEPENDENCIES for cascading failures
-- RECENT CHANGES or deployments that correlate with the issue
+- RECENT DEPLOYMENTS (not just commits) that correlate with the issue — verify the change reached production before blaming it

@@ -348,6 +348,10 @@ app.register_blueprint(github_webhook_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
 app.register_blueprint(github_oauth_bp, url_prefix="/github")
 
+# --- GitLab Integration Routes ---
+from routes.gitlab.gitlab_routes import gitlab_bp
+app.register_blueprint(gitlab_bp, url_prefix="/gitlab")
+
 # --- kubectl Agent Token Routes ---
 from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)

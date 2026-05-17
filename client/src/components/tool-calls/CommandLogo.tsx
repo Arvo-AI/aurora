@@ -204,6 +204,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Bitbucket logo:', e)}
     />
   ),
+  gitlab: (
+    <img
+      src="/gitlab.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="GitLab"
+      onError={(e) => console.error('Failed to load GitLab logo:', e)}
+    />
+  ),
   sharepoint: (
     <img
       src="/sharepoint.png"
@@ -453,6 +461,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Bitbucket tools
   if (tool.startsWith('bitbucket_')) {
     return 'bitbucket'
+  }
+
+  // GitLab tools
+  if (tool === 'gitlab' || tool.startsWith('gitlab_')) {
+    return 'gitlab'
   }
 
   // SharePoint tools

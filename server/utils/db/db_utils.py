@@ -316,11 +316,12 @@ def initialize_tables():
                         UNIQUE NULLS NOT DISTINCT (org_id, provider)
                     );
                 """,
-                "github_connected_repos": """
-                    CREATE TABLE IF NOT EXISTS github_connected_repos (
+                "connected_repos": """
+                    CREATE TABLE IF NOT EXISTS connected_repos (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
                         org_id VARCHAR(255),
+                        provider VARCHAR(20) NOT NULL DEFAULT 'github',
                         repo_full_name VARCHAR(512) NOT NULL,
                         repo_id INTEGER,
                         default_branch VARCHAR(255),
@@ -330,7 +331,7 @@ def initialize_tables():
                         repo_data JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, repo_full_name)
+                        UNIQUE(user_id, provider, repo_full_name)
                     );
                 """,
                 "github_installations": """
@@ -1385,16 +1386,7 @@ def initialize_tables():
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
-            rls_tables.append("github_connected_repos")
-            # user_github_installations is intentionally NOT RLS-protected.
-            # The webhook handler in tasks/github_webhook_tasks.py enumerates
-            # ALL users who linked a given installation_id (cross-org) when
-            # GitHub fires installation_repositories.removed; that read has
-            # no user_id filter and FORCE RLS would block it. Per-user reads
-            # (auth router, /github/app/installations list, unlink) all
-            # filter by user_id explicitly, so cross-org leakage is bounded
-            # by the WHERE clauses rather than by the policy. The org_id
-            # column is still populated on insert for future RLS migration.
+            rls_tables.append("connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
@@ -1437,19 +1429,70 @@ def initialize_tables():
                 logging.warning(f"Error adding merged_into_incident_id column to incidents: {e}")
                 conn.rollback()
 
+            # Migration: Rename github_connected_repos → connected_repos BEFORE table creation
+            # (must run first so CREATE TABLE IF NOT EXISTS doesn't create an empty duplicate)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'github_connected_repos')
+                           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'connected_repos') THEN
+                            ALTER TABLE github_connected_repos RENAME TO connected_repos;
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
+                conn.rollback()
+
+            # Migration: bring renamed table to provider-aware schema
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        -- Add provider column if missing (old github_connected_repos didn't have it)
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'connected_repos' AND column_name = 'provider'
+                        ) THEN
+                            ALTER TABLE connected_repos
+                                ADD COLUMN provider VARCHAR(20) NOT NULL DEFAULT 'github';
+                        END IF;
+
+                        -- Drop old unique constraint (user_id, repo_full_name) and create new one
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'connected_repos_user_id_provider_repo_full_name_key'
+                        ) THEN
+                            -- Drop any legacy unique constraint on (user_id, repo_full_name)
+                            BEGIN
+                                ALTER TABLE connected_repos
+                                    DROP CONSTRAINT IF EXISTS github_connected_repos_user_id_repo_full_name_key;
+                            EXCEPTION WHEN undefined_object THEN NULL;
+                            END;
+                            ALTER TABLE connected_repos
+                                ADD CONSTRAINT connected_repos_user_id_provider_repo_full_name_key
+                                UNIQUE (user_id, provider, repo_full_name);
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error completing connected_repos schema migration: {e}")
+                conn.rollback()
+
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
 
-            # Migration: Add installation_id column to github_connected_repos for
-            # GitHub App-linked repos while preserving legacy OAuth rows as NULL.
             try:
                 cursor.execute(
-                    "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
                 )
                 cursor.execute(
-                    """UPDATE github_connected_repos r
+                    """UPDATE connected_repos r
                           SET installation_id = NULL
                         WHERE installation_id IS NOT NULL
                           AND NOT EXISTS (
@@ -1462,10 +1505,10 @@ def initialize_tables():
                        BEGIN
                            IF NOT EXISTS (
                                SELECT 1 FROM pg_constraint
-                                WHERE conname = 'github_connected_repos_installation_id_fkey'
+                                WHERE conname = 'connected_repos_installation_id_fkey'
                            ) THEN
-                               ALTER TABLE github_connected_repos
-                                   ADD CONSTRAINT github_connected_repos_installation_id_fkey
+                               ALTER TABLE connected_repos
+                                   ADD CONSTRAINT connected_repos_installation_id_fkey
                                    FOREIGN KEY (installation_id)
                                    REFERENCES github_installations(installation_id)
                                    ON DELETE SET NULL;
@@ -1474,28 +1517,11 @@ def initialize_tables():
                 )
                 conn.commit()
                 logging.info(
-                    "Ensured installation_id column + FK exist on github_connected_repos table."
+                    "Ensured installation_id column + FK exist on connected_repos table."
                 )
             except Exception as e:
                 logging.warning(
-                    f"Error adding installation_id column/FK to github_connected_repos: {e}"
-                )
-                conn.rollback()
-
-            try:
-                cursor.execute(
-                    "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS metadata_summary TEXT;"
-                )
-                cursor.execute(
-                    "ALTER TABLE github_connected_repos ADD COLUMN IF NOT EXISTS metadata_status VARCHAR(20) DEFAULT 'pending';"
-                )
-                conn.commit()
-                logging.info(
-                    "Ensured metadata_summary/metadata_status columns exist on github_connected_repos table."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"Error adding metadata columns to github_connected_repos: {e}"
+                    f"Error adding installation_id column/FK to connected_repos: {e}"
                 )
                 conn.rollback()
 
@@ -2598,7 +2624,7 @@ def initialize_tables():
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
                 "incident_lifecycle_events",
-                "github_connected_repos",
+                "connected_repos",
             ]
             for tbl in org_id_tables:
                 try:

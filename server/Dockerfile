@@ -260,6 +260,7 @@ RUN useradd -m -u 1000 -s /bin/bash app && \
 
 # Copy project sources with root:root ownership + world-read so the `app`
 # user can read+execute but cannot self-modify the image contents.
+COPY --chmod=0555 ./aurora_mcp /app/aurora_mcp/
 COPY --chmod=0555 ./chat /app/chat/
 COPY --chmod=0555 ./config /app/config/
 COPY --chmod=0555 ./connectors /app/connectors/

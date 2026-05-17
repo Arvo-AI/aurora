@@ -256,6 +256,16 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "gitlab",
+      name: "GitLab",
+      description: "Connect to GitLab to investigate code changes, pipelines, merge requests, and manage fixes during incident response.",
+      iconPath: "/gitlab.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Development",
+      useCustomConnection: true,
+    });
+
+    this.register({
         id: "bitbucket",
         name: "Bitbucket",
         description: "Connect to Bitbucket Cloud to browse workspaces, manage repositories, track pull requests, and collaborate on code.",

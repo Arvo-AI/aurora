@@ -5,6 +5,7 @@ The agent uses this to decide which repo(s) to investigate during RCA.
 """
 import json
 import logging
+
 from pydantic import BaseModel
 
 from utils.auth.github_auth_router import (
@@ -60,12 +61,6 @@ def get_connected_repos(**kwargs) -> str:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[GithubRepos:list]")
-                # Predicate from utils.db.org_scope.org_read_predicate uses
-                # table-unqualified column names (e.g. "user_id"), so the
-                # outer SELECT mirrors that by referencing
-                # github_connected_repos via the alias "r" and joining
-                # github_installations as "i" inside a subquery to keep
-                # predicate column references unambiguous.
                 cur.execute(
                     f"""SELECT DISTINCT ON (r.repo_full_name)
                               r.repo_full_name, r.default_branch, r.is_private,
@@ -75,8 +70,9 @@ def get_connected_repos(**kwargs) -> str:
                                   AND i.suspended_at IS NULL) AS has_active_installation
                        FROM (
                            SELECT *
-                             FROM github_connected_repos
-                            WHERE {predicate}
+                             FROM connected_repos
+                            WHERE provider = 'github'
+                              AND {predicate}
                        ) r
                        LEFT JOIN github_installations i
                               ON i.installation_id = r.installation_id

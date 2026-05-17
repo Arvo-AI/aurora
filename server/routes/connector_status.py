@@ -720,6 +720,26 @@ def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_gitlab(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /gitlab/status — validates via GitLab user API."""
+    access_token = creds.get("access_token")
+    if not access_token:
+        return {"connected": False}
+    base_url = creds.get("base_url", "https://gitlab.com").rstrip("/")
+    try:
+        r = requests.get(
+            f"{base_url}/api/v4/user",
+            headers={"PRIVATE-TOKEN": access_token},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return {"connected": True, "username": data.get("username", "")}
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 # ── Provider checker registry ──────────────────────────────────────
 
 
@@ -735,10 +755,8 @@ PROVIDER_CHECKERS = {
     "jira": _check_jira,
     "slack": _check_slack,
     "google_chat": _check_google_chat,
-    # github is checked via the (user_id, org_id) special-case branch in
-    # _run_check. _check_github inspects user_github_installations for App
-    # mode and falls back to user_tokens (via get_token_data) when
-    # GITHUB_AUTH_MODE is "oauth" or "hybrid".
+    "github": _check_github,
+    "gitlab": _check_gitlab,
     "bitbucket": _check_bitbucket,
     "thousandeyes": _check_thousandeyes,
     "scaleway": _check_scaleway,

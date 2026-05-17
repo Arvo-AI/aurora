@@ -1362,6 +1362,13 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             incident_id=None,  # Don't trigger RCA workflow - this is a Q&A chat
             send_notifications=False,  # No notifications for Q&A
             mode=mode,  # Pass mode for execution capability
+            # `full_message` wraps `question` in <context>/<user_message> tags
+            # for the LLM. State.question (used by immediate_save and the
+            # input rail) must be the bare user text so the persistence-layer
+            # dedup matches the pre-seeded user row from
+            # create_background_chat_session — otherwise the question lands
+            # in chat_sessions.messages 2–3 times per turn.
+            rail_text=question,
         )
 
         logger.info(
@@ -1557,7 +1564,7 @@ def _reload_applied_pr_info(suggestion_id_int: int, suggestion_id_raw: str) -> t
 
     if not row:
         return None, None
-    pr_url = row[0] if isinstance(row[0], str) and row[0].startswith("https://github.com/") else None
+    pr_url = row[0] if isinstance(row[0], str) and row[0].startswith("http") else None
     pr_number = int(row[1]) if row[1] is not None else None
     return pr_url, pr_number
 
@@ -1595,14 +1602,50 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
     target_branch = data.get("targetBranch")
 
     try:
-        from chat.backend.agent.tools.github_apply_fix_tool import github_apply_fix
+        # Determine which provider owns this suggestion's repository
+        provider = None
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                cursor.execute(
+                    """SELECT s.repository FROM incident_suggestions s
+                       WHERE s.id = %s""",
+                    (suggestion_id_int,),
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    repo_name = row[0]
+                    cursor.execute(
+                        """SELECT provider FROM connected_repos
+                           WHERE repo_full_name = %s LIMIT 1""",
+                        (repo_name,),
+                    )
+                    provider_row = cursor.fetchone()
+                    if provider_row:
+                        provider = provider_row[0]
 
-        result_json = github_apply_fix(
-            suggestion_id=suggestion_id_int,
-            use_edited_content=use_edited_content,
-            target_branch=target_branch,
-            user_id=user_id,
-        )
+        if not provider:
+            return jsonify({"error": "Cannot determine VCS provider for this suggestion — repository not found in connected repos"}), 400
+
+        if provider == "gitlab":
+            from chat.backend.agent.tools.gitlab_tool import gitlab_tool
+            result_json = gitlab_tool(
+                action="apply_fix",
+                suggestion_id=suggestion_id_int,
+                target_branch=target_branch,
+                use_edited_content=use_edited_content,
+                user_id=user_id,
+            )
+        elif provider == "github":
+            from chat.backend.agent.tools.github_apply_fix_tool import github_apply_fix
+            result_json = github_apply_fix(
+                suggestion_id=suggestion_id_int,
+                use_edited_content=use_edited_content,
+                target_branch=target_branch,
+                user_id=user_id,
+            )
+        else:
+            return jsonify({"error": f"Unsupported VCS provider: {provider}"}), 400
         result = json.loads(result_json)
 
         if result.get("success"):
@@ -1956,3 +1999,57 @@ def get_recent_unlinked_incidents(user_id):
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to get recent unlinked incidents")
         return jsonify({"error": "Failed to get recent incidents"}), 500
+
+
+_ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
+
+
+@incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])
+@require_permission("incidents", "write")
+def trigger_rca_from_chat(user_id):
+    """Create an incident from a free-text description and dispatch the full
+    background RCA pipeline. Same code path the UI's RCA button invokes
+    (via the agent's `trigger_rca` LangChain tool), exposed as a direct
+    endpoint so MCP / API clients can hit it without going through the chat
+    agent. Returns the new incident_id and an RCA session_id for tracking.
+    """
+    data = request.get_json(silent=True) or {}
+    issue_description = (data.get("issue_description") or "").strip()
+    if not issue_description:
+        return jsonify({"error": "issue_description is required"}), 400
+    if len(issue_description) > 4000:
+        return jsonify({"error": "issue_description too long (max 4000 chars)"}), 400
+
+    title = (data.get("title") or "").strip()
+    service = (data.get("service") or "").strip()
+    severity = (data.get("severity") or "medium").strip().lower()
+    if severity not in _ALLOWED_SEVERITIES:
+        return jsonify({
+            "error": f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}"
+        }), 400
+
+    from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
+    try:
+        raw = _agent_trigger_rca(
+            issue_description=issue_description,
+            title=title,
+            service=service,
+            severity=severity,
+            user_id=user_id,
+        )
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool raised")
+        return jsonify({"error": "RCA dispatch failed"}), 500
+
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool returned unparseable payload")
+        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+
+    if not isinstance(payload, dict):
+        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+
+    if payload.get("error") and not payload.get("incident_id"):
+        return jsonify(payload), 400
+    return jsonify(payload), 200

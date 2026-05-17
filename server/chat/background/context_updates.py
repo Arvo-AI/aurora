@@ -35,8 +35,8 @@ def _get_session_status(user_id: str, session_id: str) -> Optional[str]:
                     return None
 
                 cursor.execute(
-                    "SELECT status FROM chat_sessions WHERE id = %s AND user_id = %s",
-                    (session_id, user_id)
+                    "SELECT status FROM chat_sessions WHERE id = %s",
+                    (session_id,)
                 )
                 row = cursor.fetchone()
                 return row[0] if row else None
@@ -89,8 +89,8 @@ def _append_context_update_to_completed_session(
                 
                 # Lock the row and get current messages to prevent race conditions
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
-                    (session_id, user_id)
+                    "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                    (session_id,)
                 )
                 row = cursor.fetchone()
                 if not row:
@@ -126,8 +126,8 @@ def _append_context_update_to_completed_session(
                 
                 # Update the database
                 cursor.execute(
-                    "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s AND user_id = %s",
-                    (json.dumps(messages), datetime.now(), session_id, user_id)
+                    "UPDATE chat_sessions SET messages = %s, updated_at = %s WHERE id = %s",
+                    (json.dumps(messages), datetime.now(), session_id)
                 )
                 conn.commit()
                 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
+
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import { isOvhEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
@@ -13,7 +14,7 @@ import { fetchR } from '@/lib/query';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
-const SPECIAL_CONNECTORS = new Set(["github", "bitbucket", "onprem", "slack", "google_chat", "pagerduty"]);
+const SPECIAL_CONNECTORS = new Set(["github", "gitlab", "bitbucket", "onprem", "slack", "google_chat", "pagerduty"]);
 
 /**
  * Connection status for a single connector card.
@@ -57,6 +58,7 @@ export function useConnectorStatus(
     if (hasOverride || !isSpecial) return;
     const check = () => {
       if (connector.id === "github") checkGitHubStatus();
+      else if (connector.id === "gitlab") checkGitLabStatus();
       else if (connector.id === "bitbucket") checkBitbucketStatus();
       else if (connector.id === "slack") checkSlackStatus();
       else if (connector.id === "google_chat") checkGoogleChatStatus();
@@ -107,6 +109,18 @@ export function useConnectorStatus(
   const checkGitHubStatus = async () => {
     try {
       const data = await GitHubIntegrationService.checkStatus();
+      setIsConnected(data.connected || false);
+    } catch {
+      setIsConnected(false);
+    } finally {
+      setIsCheckingConnection(false);
+    }
+  };
+
+  const checkGitLabStatus = async () => {
+    try {
+      const res = await fetch('/api/proxy/gitlab/status');
+      const data = res.ok ? await res.json() : { connected: false };
       setIsConnected(data.connected || false);
     } catch {
       setIsConnected(false);
@@ -216,6 +230,7 @@ export function useConnectorStatus(
   const checkConnectionStatus = () => {
     if (typeof window === "undefined") return;
     if (connector.id === "github") checkGitHubStatus();
+    else if (connector.id === "gitlab") checkGitLabStatus();
     else if (connector.id === "bitbucket") checkBitbucketStatus();
     else if (connector.id === "onprem") checkVmConfigStatus();
     else if (connector.id === "slack") checkSlackStatus();
@@ -235,6 +250,7 @@ export function useConnectorStatus(
     slackStatus,
     googleChatStatus,
     checkGitHubStatus,
+    checkGitLabStatus,
     checkBitbucketStatus,
     checkSlackStatus,
     checkGoogleChatStatus,
