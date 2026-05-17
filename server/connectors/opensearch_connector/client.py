@@ -50,6 +50,15 @@ class OpenSearchClient:
     def _url(self, path: str) -> str:
         return f"{self.endpoint}/{path.lstrip('/')}"
 
+    def _http_error_to_opensearch_error(self, exc: requests.HTTPError) -> OpenSearchError:
+        """Convert an HTTPError to a descriptive OpenSearchError."""
+        status = exc.response.status_code if exc.response is not None else "?"
+        if status == 401:
+            return OpenSearchError("Authentication failed — check username/password.")
+        if status == 403:
+            return OpenSearchError("Access forbidden — check cluster permissions.")
+        return OpenSearchError(f"HTTP {status}: {exc}")
+
     def _request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         url = self._url(path)
         last_exc: Exception = RuntimeError("unknown error")
@@ -67,23 +76,15 @@ class OpenSearchClient:
                     return resp.json()
                 except ValueError as exc:
                     raise OpenSearchError("OpenSearch returned a non-JSON response.") from exc
-            except requests.exceptions.ConnectTimeout as exc:
+            except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout) as exc:
                 last_exc = exc
-                logger.warning("[OPENSEARCH] Connect timeout on attempt %d: %s", attempt + 1, url)
-            except requests.exceptions.ReadTimeout as exc:
-                last_exc = exc
-                logger.warning("[OPENSEARCH] Read timeout on attempt %d: %s", attempt + 1, url)
+                logger.warning("[OPENSEARCH] Timeout on attempt %d: %s", attempt + 1, url)
             except requests.exceptions.SSLError as exc:
                 raise OpenSearchError(f"SSL error — check the endpoint certificate: {exc}") from exc
             except requests.exceptions.ConnectionError as exc:
                 raise OpenSearchError(f"Unable to connect to OpenSearch at {self.endpoint}: {exc}") from exc
             except requests.HTTPError as exc:
-                status = exc.response.status_code if exc.response is not None else "?"
-                if status == 401:
-                    raise OpenSearchError("Authentication failed — check username/password.") from exc
-                if status == 403:
-                    raise OpenSearchError("Access forbidden — check cluster permissions.") from exc
-                raise OpenSearchError(f"HTTP {status}: {exc}") from exc
+                raise self._http_error_to_opensearch_error(exc) from exc
             except requests.RequestException as exc:
                 raise OpenSearchError(str(exc)) from exc
         raise OpenSearchError(f"Request failed after {self.max_retries} attempts: {last_exc}") from last_exc

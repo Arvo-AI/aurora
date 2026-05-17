@@ -12,6 +12,26 @@ from utils.auth.token_management import get_token_data
 logger = logging.getLogger(__name__)
 
 MAX_HITS = 200
+DEFAULT_TIMESTAMP_FIELD = "@timestamp"
+
+
+def _format_hit(doc: Dict[str, Any]) -> str:
+    """Format a single OpenSearch hit into a human-readable summary line."""
+    import json as _json
+    ts = doc.get(DEFAULT_TIMESTAMP_FIELD) or doc.get("timestamp") or ""
+    level = doc.get("level") or doc.get("log.level") or doc.get("severity") or ""
+    msg = doc.get("message") or doc.get("msg") or doc.get("log") or ""
+    svc = doc.get("service") or doc.get("service.name") or doc.get("kubernetes.labels.app") or ""
+    parts = []
+    if ts:
+        parts.append(f"[{ts}]")
+    if level:
+        parts.append(f"[{level.upper()}]")
+    if svc:
+        parts.append(f"[{svc}]")
+    if msg:
+        parts.append(msg[:300])
+    return " ".join(parts) if parts else _json.dumps(doc)[:400]
 
 
 def is_opensearch_connected(user_id: str) -> bool:
@@ -50,7 +70,7 @@ class OpenSearchSearchArgs(BaseModel):
     start_time: Optional[str] = Field(default="now-1h", description="Start time — relative ('now-1h', 'now-30m') or ISO-8601")
     end_time: Optional[str] = Field(default=None, description="End time — relative or ISO-8601. Defaults to now.")
     size: int = Field(default=50, ge=1, le=MAX_HITS, description="Max number of log entries to return (1–200)")
-    timestamp_field: str = Field(default="@timestamp", description="Name of the timestamp field in your index")
+    timestamp_field: str = Field(default=DEFAULT_TIMESTAMP_FIELD, description="Name of the timestamp field in your index")
 
 
 class OpenSearchListIndicesArgs(BaseModel):
@@ -67,7 +87,7 @@ def search_opensearch(
     start_time: Optional[str] = "now-1h",
     end_time: Optional[str] = None,
     size: int = 50,
-    timestamp_field: str = "@timestamp",
+    timestamp_field: str = DEFAULT_TIMESTAMP_FIELD,
     user_id: Optional[str] = None,
 ) -> str:
     """Search OpenSearch logs using a Lucene query."""
@@ -93,27 +113,7 @@ def search_opensearch(
 
         lines = [f"OpenSearch results — index: {result['index']} | query: {query!r} | total hits: {total} | showing: {len(hits)}"]
         for i, doc in enumerate(hits, 1):
-            # Extract common log fields
-            ts = doc.get("@timestamp") or doc.get("timestamp") or ""
-            level = doc.get("level") or doc.get("log.level") or doc.get("severity") or ""
-            msg = doc.get("message") or doc.get("msg") or doc.get("log") or ""
-            svc = doc.get("service") or doc.get("service.name") or doc.get("kubernetes.labels.app") or ""
-
-            summary_parts = []
-            if ts:
-                summary_parts.append(f"[{ts}]")
-            if level:
-                summary_parts.append(f"[{level.upper()}]")
-            if svc:
-                summary_parts.append(f"[{svc}]")
-            if msg:
-                summary_parts.append(msg[:300])
-
-            if summary_parts:
-                lines.append(f"{i}. {' '.join(summary_parts)}")
-            else:
-                import json as _json
-                lines.append(f"{i}. {_json.dumps(doc)[:400]}")
+            lines.append(f"{i}. {_format_hit(doc)}")
 
         if total > len(hits):
             lines.append(f"\n... {total - len(hits)} more results not shown. Use a more specific query or smaller time range.")

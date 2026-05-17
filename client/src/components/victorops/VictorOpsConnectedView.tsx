@@ -12,9 +12,9 @@ import { CheckCircle2 } from "lucide-react";
 import { VictorOpsStatus } from "@/lib/services/victorops";
 
 interface VictorOpsConnectedViewProps {
-  status: VictorOpsStatus;
-  onDisconnect: () => void;
-  disconnecting: boolean;
+  readonly status: VictorOpsStatus;
+  readonly onDisconnect: () => void;
+  readonly disconnecting: boolean;
 }
 
 export function VictorOpsConnectedView({

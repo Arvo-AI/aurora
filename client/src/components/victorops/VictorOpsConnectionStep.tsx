@@ -14,15 +14,15 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 
 interface VictorOpsConnectionStepProps {
-  displayName: string;
-  setDisplayName: (value: string) => void;
-  apiId: string;
-  setApiId: (value: string) => void;
-  apiKey: string;
-  setApiKey: (value: string) => void;
-  loading: boolean;
-  error: string | null;
-  onConnect: (e: React.FormEvent<HTMLFormElement>) => void;
+  readonly displayName: string;
+  readonly setDisplayName: (value: string) => void;
+  readonly apiId: string;
+  readonly setApiId: (value: string) => void;
+  readonly apiKey: string;
+  readonly setApiKey: (value: string) => void;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onConnect: (e: React.FormEvent<HTMLFormElement>) => void;
 }
 
 export function VictorOpsConnectionStep({
