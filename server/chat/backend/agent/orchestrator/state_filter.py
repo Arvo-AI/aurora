@@ -12,6 +12,7 @@ _EXCLUDED_STATE_KEYS = frozenset({
     "summarized_context",
     "triage_rationale",
     "synthesis_notes",
+    "synthesis_history",
     "rca_ui_updates",
 })
 

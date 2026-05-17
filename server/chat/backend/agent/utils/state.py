@@ -43,5 +43,10 @@ class State(BaseModel):
     subagent_inputs: List[Dict[str, Any]] = []
     finding_refs: Annotated[List[Dict[str, Any]], operator.add] = []
     synthesis_wave: int = 0
+    # Per-wave decisions from the synthesis node (rationale, follow-ups). Used
+    # to feed the orchestrator's own prior thoughts back into later synthesis
+    # waves so the summary is grounded in the full investigation arc, not just
+    # the most recent sub-agent findings.
+    synthesis_history: List[Dict[str, Any]] = []
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
