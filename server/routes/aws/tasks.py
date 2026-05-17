@@ -23,8 +23,10 @@ def _generate_ai_triage(finding: dict) -> dict:
     resource_names = []
     service_types = []
     for res in resources:
-        if res.get("Id"): resource_names.append(res["Id"])
-        if res.get("Type"): service_types.append(res["Type"])
+        if res.get("Id"):
+            resource_names.append(res["Id"])
+        if res.get("Type"):
+            service_types.append(res["Type"])
             
     resource_names_str = ", ".join(resource_names) if resource_names else "Unknown resources"
     service_types_str = ", ".join(set(service_types)) if service_types else "Unknown services"
@@ -70,7 +72,14 @@ def process_securityhub_finding(payload: dict, org_id: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, org_id, log_prefix="[SECURITY_HUB]")
+                cursor.execute("SELECT id FROM users WHERE org_id = %s LIMIT 1", (org_id,))
+                user_row = cursor.fetchone()
+                if not user_row:
+                    logger.error("[SECURITY_HUB] No user found for org %s to set RLS context", sanitize(org_id))
+                    return
+                user_id = user_row[0]
+                
+                set_rls_context(cursor, conn, user_id, log_prefix="[SECURITY_HUB]")
                 for finding in findings:
                     if not isinstance(finding, dict):
                         continue
