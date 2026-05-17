@@ -241,12 +241,12 @@ If the correlated alerts are relevant, clearly indicate their relationship to th
         reasoning_block = ""
         if agent_reasoning and agent_reasoning.strip():
             reasoning_block = (
-                "\nAGENT REASONING & SYNTHESIS (the investigating agent's own thoughts "
-                "and any orchestrator synthesis summaries from this RCA):\n"
+                "\nAGENT REASONING (the investigating agent's own thoughts as shown "
+                "in the Thoughts panel — context, not direct evidence):\n"
                 f"{agent_reasoning}\n"
             )
 
-        prompt = f"""You are writing an incident report based on alert data, the investigating agent's reasoning, and forensic evidence.
+        prompt = f"""You are writing an incident report from alert data, the investigating agent's reasoning, and forensic evidence.
 
 ALERT INFORMATION:
 - Source: {source_type}
@@ -260,59 +260,38 @@ INVESTIGATION EVIDENCE (cite using [n] markers):
 
 Write a 2-3 paragraph incident report:
 
-PARAGRAPH 1 - What Happened:
-State what occurred, when it occurred, and what was affected, using only facts present in the alert, the agent reasoning, or the evidence. If a fact is not directly supported, do not state it. Write as if you're reporting a known fact rather than describing an investigation.
-Example (supported): "On [date], the data-processor service experienced OOMKilled events due to memory exhaustion [3, 5]."
+PARAGRAPH 1 — What Happened:
+State what occurred, when, and what was affected, using only facts present in the alert, agent reasoning, or evidence. Report as known facts, not as an investigation log.
 
-PARAGRAPH 2 - Root Cause:
-- If the evidence and agent reasoning together clearly support a specific root cause, state it and cite the supporting evidence.
+PARAGRAPH 2 — Root Cause:
+- If evidence and agent reasoning together clearly support a specific root cause, state it and cite the supporting evidence.
   Example: "The root cause was a ConfigMap change that increased BATCH_SIZE from 1000 to 10000 [7], causing memory usage to exceed the 128Mi limit [9, 11]."
-- If the evidence is missing, contradictory, or only consistent with the alert at a surface level, you MUST write a paragraph that begins with "Root cause undetermined." and then describe what is and isn't known. Do not invent a root cause to fill the paragraph. Do not present absence of data as evidence of a cause (e.g. "no logs were found" is not the same as "the service was not running").
+- Otherwise the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
 
-PARAGRAPH 3 (if significant) - Impact & Timeline:
-Describe only the scope of impact and timeline details that are actually present in the alert, agent reasoning, or evidence.
+PARAGRAPH 3 (if significant) — Impact & Timeline:
+Only the scope and timeline actually present in the alert, agent reasoning, or evidence.
 
-CITATION RULES:
-- Cite specific evidence that supports factual claims.
-- Group related citations together [3, 5, 7].
-- Don't cite every detail — only key supporting evidence.
-- Never describe the investigation process or tools used.
-- Never say "Investigation revealed..." or "Attempts to..." — just state what is known.
+ANTI-HALLUCINATION RULES (non-negotiable):
+- Use only facts present in the alert, agent reasoning, or cited evidence — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
+- Empty or missing output from a generic probe is NOT evidence of a specific failure mode; never promote absence of data into a confident root cause.
+- Never fabricate a [n] citation — every marker MUST reference a real evidence row above.
+- Treat purely temporal correlations as correlations, not causations.
+- If the agent reasoning says the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
 
-ANTI-HALLUCINATION RULES (NON-NEGOTIABLE):
-- Do NOT introduce services, hosts, environments, configuration keys, user counts, time windows, error messages, or metrics that do not appear in the alert, agent reasoning, or evidence.
-- Do NOT promote weak signals (a single empty `ps`/`ls`, a missing file in a sandbox, an unreachable internal hostname) to "the auth/api/database service is down" or "the deployment failed". Empty/missing output from a generic command is NOT evidence of a specific failure mode.
-- Do NOT fabricate citations. Every [n] marker MUST refer to a real evidence row above; do not invent new numbers.
-- If the agent reasoning explicitly says the investigation was inconclusive, the report MUST reflect that — its Root Cause paragraph MUST start with "Root cause undetermined."
-- If the only correlation is temporal (e.g. "a release shipped ~30 minutes before symptoms"), say so explicitly as a correlation, not as causation.
+WRITING RULES:
+- Cite specific evidence that supports factual claims; group related citations [3, 5, 7]; cite only key supporting evidence.
+- Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
+- Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-CRITICAL - DO NOT:
-- Describe investigation steps or what tools were run.
-- Say "Investigation revealed" or "Attempts to query" or "The investigation was unable".
-- Focus on tool failures or unavailable data.
-- Write about the RCA process itself.
-
-CRITICAL - DO:
-- Write as if reporting a completed incident, with calibrated certainty: state facts where supported, state uncertainty where not.
-- Focus on WHAT HAPPENED to the system, not HOW YOU FOUND OUT.
-- Use evidence citations to back up claims about system behavior.
-
-TONE: Professional, factual, incident-record style (not investigative process documentation).
-
-After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
-- Lists 2-4 specific areas the SRE should investigate next.
-- When the root cause is undetermined, these next steps MUST be the concrete checks an engineer would run to determine the root cause (e.g. specific logs, metrics, configs to inspect), not generic advice.
-- References specific metrics, logs, or infrastructure components mentioned in the investigation when available.
-- Keep it concise and targeted.
+After the report, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions (specific logs/metrics/configs/components). When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
 """
     else:
-        # Fallback to transcript-based prompt
+        # Transcript fallback — same anti-hallucination contract.
         transcript = investigation_transcript or "[No transcript available]"
         reasoning_block = ""
         if agent_reasoning and agent_reasoning.strip():
             reasoning_block = (
-                "\nAGENT REASONING & SYNTHESIS (the investigating agent's own thoughts "
-                "and any orchestrator synthesis summaries):\n"
+                "\nAGENT REASONING (Thoughts-panel content — context, not direct evidence):\n"
                 f"{agent_reasoning}\n"
             )
         prompt = f"""
@@ -328,28 +307,17 @@ ALERT INFORMATION:
 INVESTIGATION TRANSCRIPT (chat log):
 {transcript}
 
-Write a concise 2–3 paragraph summary that:
-- Describes what triggered the alert.
-- States the severity and observed impact (only if explicitly present in the alert or transcript).
-- Identifies the affected service or component (only if explicitly named).
-- Summarizes investigation findings and best-known root cause ONLY if explicitly supported by the transcript or agent reasoning.
-- If the root cause is not explicit, the Root Cause paragraph MUST begin with "Root cause undetermined." and then describe what is and isn't known.
+Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known.
 
-ANTI-HALLUCINATION RULES (NON-NEGOTIABLE):
-- Do NOT introduce services, hosts, configuration keys, user counts, error messages, or metrics that do not appear in the alert, agent reasoning, or transcript.
-- Do NOT promote absence of data (an empty command output, a missing file in a sandbox, an unreachable internal hostname) into a confident failure mode.
-- If the agent reasoning explicitly says the investigation was inconclusive, the report MUST reflect that.
+ANTI-HALLUCINATION RULES (non-negotiable):
+- Use only facts present in the alert, agent reasoning, or transcript — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
+- Empty or missing output from a generic probe is NOT evidence of a specific failure mode.
 - Treat purely temporal correlations as correlations, not causations.
+- If the agent reasoning says the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
 
-SUMMARY RULES:
-- Do NOT address any audience in the summary paragraphs.
-- Tone: neutral, factual, incident-record style.
-- Style: descriptive, not advisory.
+Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
-After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
-- Lists 2-4 specific areas the SRE should investigate based on the findings.
-- When the root cause is undetermined, these next steps MUST be concrete diagnostic actions (specific logs, metrics, configs), not generic advice.
-- Keep it concise and targeted.
+After the summary, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions. When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
 """
     return prompt
 
@@ -397,56 +365,22 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
         return None
 
 
-# Per-message and total caps for the agent-reasoning block. Sized so the block
-# carries the substantive intermediate thoughts (and the orchestrator's
-# synthesis summaries) without crowding out citations in the summary prompt.
-_REASONING_MAX_PER_MSG_CHARS = 1500
 _REASONING_MAX_TOTAL_CHARS = 8000
 
 
-def _extract_ai_text(content: Any) -> str:
-    """Pull plain text out of a serialized AIMessage `content` field.
+def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
+    """Return the agent's reasoning for an incident — the same stream of
+    AI-authored text the UI's Thoughts panel renders.
 
-    LangChain serializes AIMessage content as either a string or a list of
-    typed blocks (`{"type": "text", "text": ...}`, plus thinking/reasoning
-    blocks on some providers). We keep only user-visible text — thinking
-    blocks are private chain-of-thought and stay private.
-    """
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: List[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                btype = block.get("type", "")
-                if btype in ("thinking", "reasoning"):
-                    continue
-                text = block.get("text") or ""
-                if text:
-                    parts.append(str(text))
-            elif isinstance(block, str):
-                parts.append(block)
-        return "".join(parts).strip()
-    return str(content).strip()
+    Reading from `incident_thoughts` (instead of reconstructing reasoning from
+    `llm_context_history` AIMessages) is materially richer because thoughts are
+    streamed in token-by-token across single-agent, sub-agent, and synthesis
+    paths, while the checkpointer only persists the final-form messages.
 
-
-def _fetch_agent_reasoning(
-    user_id: str,
-    session_id: str,
-    max_per_msg: int = _REASONING_MAX_PER_MSG_CHARS,
-    max_total: int = _REASONING_MAX_TOTAL_CHARS,
-) -> str:
-    """Return the investigating agent's own text reasoning for a chat session.
-
-    Reads `llm_context_history` and concatenates every AIMessage's text content
-    (skipping AIMessages that only carry tool_calls and thinking/reasoning
-    blocks). This is the generic source of "agent thoughts" — in single-agent
-    mode it's the ReAct agent's intermediate analysis; in orchestrator mode it
-    additionally contains the synthesis_node's per-wave summaries. Without
-    this context the downstream summary LLM only sees raw tool outputs and
-    routinely fabricates root causes from absence of evidence.
+    `incident_thoughts` is not RLS-protected (it CASCADEs from `incidents`),
+    so we set RLS context on the connection and JOIN through `incidents` to
+    enforce the caller's tenant boundary. Truncated to a single budget so the
+    summary prompt stays inside the model context window.
     """
     try:
         with db_pool.get_admin_connection() as conn:
@@ -455,55 +389,29 @@ def _fetch_agent_reasoning(
                     return ""
                 cursor.execute(
                     """
-                    SELECT llm_context_history
-                    FROM chat_sessions
-                    WHERE id = %s AND user_id = %s
+                    SELECT it.content
+                    FROM incident_thoughts it
+                    JOIN incidents i ON i.id = it.incident_id
+                    WHERE it.incident_id = %s
+                    ORDER BY COALESCE(it.timestamp, it.created_at) ASC
                     """,
-                    (session_id, user_id),
+                    (incident_id,),
                 )
-                row = cursor.fetchone()
-                if not row or row[0] is None:
-                    return ""
-                history = row[0]
-                if isinstance(history, str):
-                    try:
-                        history = json.loads(history)
-                    except json.JSONDecodeError:
-                        return ""
-                if not isinstance(history, list):
-                    return ""
-
-        parts: List[str] = []
-        total = 0
-        msg_index = 0
-        for msg in history:
-            if not isinstance(msg, dict):
-                continue
-            if msg.get("role") != "ai":
-                continue
-            text = _extract_ai_text(msg.get("content"))
-            if not text:
-                continue
-            if len(text) > max_per_msg:
-                text = text[:max_per_msg] + "...[truncated]"
-            msg_index += 1
-            entry = f"[#{msg_index}] {text}"
-            if total + len(entry) > max_total:
-                remaining = max_total - total
-                if remaining > 200:
-                    parts.append(entry[:remaining] + "...[truncated]")
-                parts.append(
-                    "...[earlier agent reasoning truncated to fit prompt budget]"
-                )
-                break
-            parts.append(entry)
-            total += len(entry) + 1
-        return "\n\n".join(parts)
+                rows = cursor.fetchall()
     except Exception as e:
         logger.warning(
-            f"{_LOG_PREFIX} Failed to extract agent reasoning for session {session_id}: {e}"
+            f"{_LOG_PREFIX} Failed to read incident_thoughts for {incident_id}: {e}"
         )
         return ""
+
+    text = "\n\n".join(r[0] for r in rows if r and r[0])
+    if len(text) > _REASONING_MAX_TOTAL_CHARS:
+        # Keep the most recent reasoning — that's where the synthesis lands.
+        text = (
+            "...[earlier reasoning truncated to fit prompt budget]\n\n"
+            + text[-_REASONING_MAX_TOTAL_CHARS:]
+        )
+    return text
 
 
 def _fetch_chat_transcript(
@@ -748,14 +656,11 @@ def generate_incident_summary_from_chat(
         if not all_citations:
             transcript = _fetch_chat_transcript(user_id=user_id, session_id=session_id)
 
-        # The investigating agent's own reasoning (intermediate thoughts in
-        # single-agent mode + per-wave synthesis summaries in orchestrator
-        # mode) is the missing context that lets the summarizer ground its
-        # claims. Fetched generically so the same code path applies whether
-        # the workflow ran direct_react or the fan-out orchestrator.
-        agent_reasoning = _fetch_agent_reasoning(
-            user_id=user_id, session_id=session_id,
-        )
+        # Feed the same Thoughts-panel content the user sees back to the
+        # summarizer. Without it the LLM has only raw tool outputs and
+        # routinely promotes absence of evidence into a confident root cause.
+        # Same code path applies to both single-agent and orchestrator runs.
+        agent_reasoning = _fetch_agent_reasoning(user_id, incident_id)
 
         # Build prompt - uses citations if available, otherwise falls back to transcript
         prompt = _build_summary_prompt_with_chat(
