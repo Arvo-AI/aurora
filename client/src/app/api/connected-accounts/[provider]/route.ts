@@ -510,42 +510,12 @@ export async function DELETE(
 
     // Special handling for OpenSearch
     if (provider === 'opensearch') {
-      const response = await fetch(`${API_BASE_URL}/opensearch/disconnect`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting OpenSearch:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect OpenSearch' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+      return forwardRequest(request, 'DELETE', '/opensearch/disconnect', 'opensearch')
     }
 
     // Special handling for VictorOps (Splunk On-Call)
     if (provider === 'victorops') {
-      const response = await fetch(`${API_BASE_URL}/victorops`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Backend error disconnecting VictorOps:', errorText)
-        return NextResponse.json(
-          { error: 'Failed to disconnect Splunk On-Call' },
-          { status: response.status }
-        )
-      }
-
-      const data = await response.json()
-      return NextResponse.json(data)
+      return forwardRequest(request, 'DELETE', '/victorops', 'victorops')
     }
 
     // For other providers, use the general disconnect endpoint

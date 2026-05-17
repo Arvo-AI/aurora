@@ -365,7 +365,7 @@ def process_victorops_event(
                     logger.warning("[VICTOROPS] Failed to notify SSE: %s", e)
 
                 # Summary + RCA only for new triggered incidents
-                if alert_phase == "TRIGGERED":
+                if alert_phase == "TRIGGERED" and incident_was_inserted:
                     try:
                         from chat.background.summarization import generate_incident_summary
                         generate_incident_summary.delay(
@@ -390,7 +390,7 @@ def process_victorops_event(
                         from chat.background.rca_prompt_builder import build_victorops_rca_prompt
 
                         if is_background_chat_allowed(user_id):
-                            rca_prompt = build_victorops_rca_prompt(payload, user_id=user_id)
+                            rca_prompt, _rail_text = build_victorops_rca_prompt(payload, user_id=user_id)
                             session_id = create_background_chat_session(
                                 user_id=user_id,
                                 title=f"RCA: {incident_title}",

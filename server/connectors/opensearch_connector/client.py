@@ -63,7 +63,10 @@ class OpenSearchClient:
                     **kwargs,
                 )
                 resp.raise_for_status()
-                return resp.json()
+                try:
+                    return resp.json()
+                except ValueError as exc:
+                    raise OpenSearchError("OpenSearch returned a non-JSON response.") from exc
             except requests.exceptions.ConnectTimeout as exc:
                 last_exc = exc
                 logger.warning("[OPENSEARCH] Connect timeout on attempt %d: %s", attempt + 1, url)
