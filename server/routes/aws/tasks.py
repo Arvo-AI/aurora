@@ -16,13 +16,18 @@ def _generate_ai_triage(finding: dict) -> dict:
     """
     title = finding.get("Title", "Unknown Finding")
     desc = finding.get("Description", "")
-    severity = finding.get("Severity", {}).get("Label", "UNKNOWN")
+    severity_info = finding.get("Severity")
+    severity = severity_info.get("Label", "UNKNOWN") if isinstance(severity_info, dict) else "UNKNOWN"
     
-    resources = finding.get("Resources", [])
+    resources = finding.get("Resources")
+    if not isinstance(resources, list):
+        resources = []
     
     resource_names = []
     service_types = []
     for res in resources:
+        if not isinstance(res, dict):
+            continue
         if res.get("Id"):
             resource_names.append(res["Id"])
         if res.get("Type"):
@@ -57,7 +62,7 @@ def process_securityhub_finding(payload: dict, org_id: str):
     Background task to process Security Hub finding webhook payloads.
     Generates AI triage context and upserts records to PostgreSQL.
     """
-    logger.info(f"[SECURITY_HUB] Processing background task for event {payload.get('id')}")
+    logger.info("[SECURITY_HUB] Processing background task for event %s", sanitize(payload.get('id')))
 
     detail = payload.get("detail", {})
     findings = detail.get("findings", [])
@@ -89,7 +94,8 @@ def process_securityhub_finding(payload: dict, org_id: str):
                         continue
                     
                     title = finding.get("Title", "Untitled Finding")
-                    severity_label = finding.get("Severity", {}).get("Label", "UNKNOWN")
+                    severity_info = finding.get("Severity")
+                    severity_label = severity_info.get("Label", "UNKNOWN") if isinstance(severity_info, dict) else "UNKNOWN"
                     source = finding.get("ProductName", "AWS Security Hub")
                     
                     # Human-in-the-loop: Agent ONLY suggests
