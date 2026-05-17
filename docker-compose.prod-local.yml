@@ -106,6 +106,20 @@ x-common-env: &common-env
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
   GEMINI_DISABLE_THINKING: ${GEMINI_DISABLE_THINKING}
 
+  # GitHub auth — every Aurora service that talks to GitHub (server,
+  # celery_worker, chatbot) needs the auth mode + App credentials to mint
+  # installation tokens. OAuth client credentials are also shared so the
+  # MCP server and background workers can mint/read user tokens. Webhook
+  # secret stays server-only (lives on the aurora-server entry below).
+  GITHUB_AUTH_MODE: ${GITHUB_AUTH_MODE:-app}
+  GITHUB_APP_ID: ${GITHUB_APP_ID}
+  GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
+  NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
+  GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
+  GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
+  GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
+  GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
@@ -200,9 +214,10 @@ services:
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
 
-      # GitHub OAuth (optional)
-      GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
-      GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+      # GitHub App webhook secret — server-only (HMAC validation lives in
+      # the route handler; chatbot/celery_worker handle already-verified
+      # deliveries). Other GitHub vars come from x-common-env.
+      GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET}
 
       # Bitbucket OAuth (optional)
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
@@ -297,6 +312,9 @@ services:
       OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
       OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
       OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
+
+      # GitHub App — auth mode + App credentials come from x-common-env.
+      # Webhook secret intentionally NOT passed to the worker.
 
       # Google Chat (service account needed to send responses)
       GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}

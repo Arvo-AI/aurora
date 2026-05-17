@@ -22,6 +22,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "dynatrace",
     "gcp",
     "github",
+    "gitlab",
     "google_chat",
     "grafana",
     "incidentio",

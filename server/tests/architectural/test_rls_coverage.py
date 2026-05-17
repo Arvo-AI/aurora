@@ -19,6 +19,10 @@ RLS_EXCLUSIONS: Set[str] = {
     "org_invitations",            # queried during invite/join flows before org context
     "knowledge_base_documents",   # Celery cleanup_stale_documents runs cross-org sweeps
     "knowledge_base_memory",      # same Celery task dependency as knowledge_base_documents
+    "user_github_installations",  # join table — installations are system-wide and shared
+                                  # across users; webhook handlers and the install callback
+                                  # both need to query it without an established org_id
+                                  # (callback runs before login, webhook has no user ctx)
 }
 
 

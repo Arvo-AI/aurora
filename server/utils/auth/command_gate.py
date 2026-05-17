@@ -268,8 +268,8 @@ def is_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> boo
             if not set_rls_context(cursor, conn, user_id, log_prefix="[CommandGate:TaintRead]"):
                 return False
             cursor.execute(
-                "SELECT security_tainted FROM chat_sessions WHERE id = %s AND user_id = %s",
-                (session_id, user_id),
+                "SELECT security_tainted FROM chat_sessions WHERE id = %s",
+                (session_id,),
             )
             row = cursor.fetchone()
             return bool(row and row[0])
@@ -290,8 +290,8 @@ def mark_session_tainted(session_id: Optional[str], user_id: Optional[str]) -> N
             if not set_rls_context(cursor, conn, user_id, log_prefix="[CommandGate:Taint]"):
                 return
             cursor.execute(
-                "UPDATE chat_sessions SET security_tainted = true WHERE id = %s AND user_id = %s",
-                (session_id, user_id),
+                "UPDATE chat_sessions SET security_tainted = true WHERE id = %s",
+                (session_id,),
             )
             conn.commit()
     except Exception as e:

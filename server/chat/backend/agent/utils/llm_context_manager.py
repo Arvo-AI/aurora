@@ -173,8 +173,8 @@ class LLMContextManager:
                 cursor.execute("""
                     SELECT llm_context_history 
                     FROM chat_sessions 
-                    WHERE id = %s AND user_id = %s AND is_active = true
-                """, (session_id, user_id))
+                    WHERE id = %s AND is_active = true
+                """, (session_id,))
                 
                 result = cursor.fetchone()
                 

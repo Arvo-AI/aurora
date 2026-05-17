@@ -678,3 +678,7 @@ class SkillRegistry:
     def get_all_skill_ids(self) -> List[str]:
         """Return all registered skill IDs."""
         return list(self._skills.keys())
+
+    def get_skill_metadata(self, skill_id: str) -> Optional[SkillMetadata]:
+        """Return the metadata for a registered skill, or None if unknown."""
+        return self._skills.get(skill_id)

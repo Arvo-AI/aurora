@@ -1,4 +1,5 @@
 from celery import Celery
+import importlib
 import os
 import logging
 from dotenv import load_dotenv
@@ -93,6 +94,7 @@ celery_app.conf.update(
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
+        'tasks.github_webhook_tasks',
         'routes.github.github_repo_metadata',
         'services.actions.scheduler',
     ],
@@ -211,6 +213,12 @@ try:
     logging.info("New Relic tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
+
+try:
+    importlib.import_module("tasks.github_webhook_tasks")
+    logging.info("GitHub webhook dispatcher task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")
 
 try:
     import routes.sentry.tasks  # noqa: F401

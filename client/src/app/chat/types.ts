@@ -25,6 +25,7 @@ export interface ToolCall {
   timestamp: string;
   confirmation_id?: string;
   confirmation_message?: string;
+  confirmation_summary?: string;
   // Set when the confirmation originates from the command gate. Drives the
   // Yes-Always button visibility and the policy-change disclosure.
   block_layer?: string;

@@ -149,5 +149,5 @@ PostgreSQL tables use `FORCE ROW LEVEL SECURITY`. All queries on RLS-protected t
 - **Celery workers / background tasks**: There is NO Flask request context, so RLS vars are NEVER set automatically. You MUST call `set_rls_context(cursor, conn, user_id)` (from `utils.auth.stateless_auth`) before any query on an RLS-protected table.
 - **Helper**: `from utils.auth.stateless_auth import set_rls_context; org_id = set_rls_context(cursor, conn, user_id, log_prefix="[YourTask]")`
 - **Cross-org tasks** (iterating all users): Query the `users` table first (NOT RLS-protected), then iterate per-org setting RLS context before querying RLS tables.
-- **RLS-protected tables**: incidents, chat_sessions, user_tokens, user_connections, postmortems, llm_usage_tracking, incident_alerts, incident_lifecycle_events, github_connected_repos, execution_steps, and all monitoring event tables (datadog_events, grafana_alerts, etc.)
+- **RLS-protected tables**: incidents, chat_sessions, user_tokens, user_connections, postmortems, llm_usage_tracking, incident_alerts, incident_lifecycle_events, connected_repos, execution_steps, and all monitoring event tables (datadog_events, grafana_alerts, etc.)
 - **NOT RLS-protected**: users, incident_thoughts, incident_suggestions (CASCADE delete from incidents)

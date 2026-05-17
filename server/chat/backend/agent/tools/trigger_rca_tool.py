@@ -144,7 +144,7 @@ def trigger_rca(
             conn.commit()
     except Exception as e:
         logger.exception(f"[TriggerRCA] Failed to create incident: {e}")
-        return json.dumps({"error": f"Failed to create incident: {e}"})
+        return json.dumps({"error": "Failed to create incident due to an internal error."})
 
     if not incident_id:
         return json.dumps({"error": "Failed to create incident — no ID returned"})
@@ -235,7 +235,7 @@ def trigger_rca(
             logger.warning(f"[TriggerRCA] Could not mark incident {incident_id} as failed")
         return json.dumps({
             "incident_id": incident_id,
-            "error": f"Incident created but RCA dispatch failed: {e}",
+            "error": "Incident created but RCA dispatch failed due to an internal error.",
         })
 
     return json.dumps({

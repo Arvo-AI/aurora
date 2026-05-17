@@ -269,8 +269,8 @@ class Workflow:
                     return False
                 cursor.execute("""
                     SELECT messages FROM chat_sessions 
-                    WHERE id = %s AND user_id = %s AND is_active = true
-                """, (input_state.session_id, input_state.user_id))
+                    WHERE id = %s AND is_active = true
+                """, (input_state.session_id,))
                 
                 result = cursor.fetchone()
                 if result and result[0]:
@@ -785,8 +785,8 @@ class Workflow:
                                   i.aurora_status, i.source_type, cs.messages
                            FROM chat_sessions cs
                            JOIN incidents i ON i.id = cs.incident_id
-                           WHERE cs.id = %s AND cs.user_id = %s AND cs.incident_id IS NOT NULL""",
-                        (session_id, user_id),
+                           WHERE cs.id = %s AND cs.incident_id IS NOT NULL""",
+                        (session_id,),
                     )
                     row = cursor.fetchone()
                     if row:
@@ -1028,7 +1028,7 @@ class Workflow:
         self._history_prefix_len = history_prefix_len
 
         # --- Input rail: check user message for prompt injection ---
-        from guardrails.input_rail import check_input
+        from guardrails.input_rail import check_input, InputRailResult
         last_msg = input_state.messages[-1] if input_state.messages else None
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
             # Skip persistence for scaffold messages (background prompts, not user input)
@@ -1041,7 +1041,12 @@ class Workflow:
                 getattr(input_state, "question", None),
                 last_msg.content,
             )
-            rail_result = await check_input(msg_text)
+            # Skip rail when there is no untrusted text to evaluate (e.g.
+            # prediscovery prompts are entirely system-authored).
+            if not msg_text:
+                rail_result = InputRailResult(blocked=False)
+            else:
+                rail_result = await check_input(msg_text)
             if rail_result.blocked:
                 emit_block_event(
                     user_id=getattr(input_state, "user_id", "") or "",
@@ -1792,15 +1797,15 @@ class Workflow:
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET messages = %s, ui_state = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
-                    """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id, user_id))
+                        WHERE id = %s
+                    """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id))
                 else:
                     # Fallback to only updating messages if no UI state provided
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET messages = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
-                    """, (json.dumps(ui_messages), datetime.now(), session_id, user_id))
+                        WHERE id = %s
+                    """, (json.dumps(ui_messages), datetime.now(), session_id))
                 
                 if cursor.rowcount > 0:
                     conn.commit()
@@ -1838,8 +1843,8 @@ class Workflow:
                     return False
 
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
-                    (session_id, user_id),
+                    "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                    (session_id,),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -1852,10 +1857,26 @@ class Workflow:
                 if not isinstance(existing, list):
                     existing = []
 
+                # Drop mid-stream `_streaming` rows before computing dedup and
+                # the merged write-back. Those rows are appended by
+                # save_streaming_chat_message during token streaming and
+                # removed seconds later by finalize_streaming_chat_message —
+                # but in background-task ordering they're still present here
+                # and would mask the seeded user row from
+                # create_background_chat_session, causing the dedup below to
+                # never match the real prior user message. Net effect: the
+                # user's question persisted twice and message_number got a
+                # gap (1 → 3 → 4) once finalize wiped the streaming row.
+                existing = [
+                    m for m in existing
+                    if not (isinstance(m, dict) and m.get('_streaming'))
+                ]
+
                 to_append = list(turn_ui_messages)
                 if (
                     to_append
                     and existing
+                    and isinstance(existing[-1], dict)
                     and to_append[0].get('sender') == 'user'
                     and existing[-1].get('sender') == 'user'
                     and (existing[-1].get('text') or '') == (to_append[0].get('text') or '')
@@ -1874,18 +1895,18 @@ class Workflow:
                         """
                         UPDATE chat_sessions
                         SET messages = %s, ui_state = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s
                         """,
-                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id, user_id),
+                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id),
                     )
                 else:
                     cursor.execute(
                         """
                         UPDATE chat_sessions
                         SET messages = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s
                         """,
-                        (json.dumps(merged), datetime.now(), session_id, user_id),
+                        (json.dumps(merged), datetime.now(), session_id),
                     )
                 conn.commit()
                 logger.info(
