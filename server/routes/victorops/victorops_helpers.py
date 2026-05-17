@@ -92,17 +92,14 @@ def validate_credentials(client: VictorOpsClient) -> Dict[str, Any]:
         "capabilities": {"can_read_incidents": True},
     }
 
-    try:
-        data = client.get_current_oncall()
-        # teamsOnCall is present in a valid response
-        if isinstance(data, dict):
-            teams = data.get("teamsOnCall", [])
-            if teams and isinstance(teams, list):
-                first_team = teams[0]
-                if team_name := first_team.get("team", {}).get("name"):
-                    result["account_name"] = team_name
-    except VictorOpsAPIError:
-        raise
+    data = client.get_current_oncall()
+    # teamsOnCall is present in a valid response
+    if isinstance(data, dict):
+        teams = data.get("teamsOnCall", [])
+        if teams and isinstance(teams, list):
+            first_team = teams[0]
+            if team_name := first_team.get("team", {}).get("name"):
+                result["account_name"] = team_name
 
     return result
 

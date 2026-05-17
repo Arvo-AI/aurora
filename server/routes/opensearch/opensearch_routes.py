@@ -21,8 +21,8 @@ opensearch_bp = Blueprint("opensearch", __name__)
 def _get_creds(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         return get_token_data(user_id, "opensearch")
-    except Exception as exc:
-        logger.error("[OPENSEARCH] Failed to retrieve credentials for %s: %s", sanitize(user_id), exc)
+    except Exception:
+        logger.exception("[OPENSEARCH] Failed to retrieve credentials for %s", sanitize(user_id))
         return None
 
 
