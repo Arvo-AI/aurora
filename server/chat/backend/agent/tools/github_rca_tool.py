@@ -9,7 +9,15 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List, Literal
+
+import requests
 from pydantic import BaseModel, Field
+
+from utils.auth.github_auth_router import (
+    NoGitHubAuthError,
+    get_auth_for_user_repo,
+    make_auth_header,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +156,60 @@ def _parse_mcp_response(result: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _call_github_api(
+    user_id: str,
+    owner: str,
+    repo: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    timeout: int = 30,
+):
+    """Call GitHub REST API for a user/repo using the auth router.
+
+    Bypasses the MCP github server (which spawns a Docker container and
+    therefore cannot run in Aurora's chatbot service, which deliberately
+    has no docker socket). The auth router transparently picks App or
+    OAuth credentials per the hybrid mode rules and returns a token that
+    works with the standard ``Authorization: token <value>`` header.
+
+    Returns the parsed JSON body on success (list or dict, matching
+    GitHub's native shape so existing downstream parsers keep working),
+    or ``{"error": "..."}`` on any failure.
+    """
+    repo_full_name = f"{owner}/{repo}"
+    try:
+        auth = get_auth_for_user_repo(user_id, repo_full_name)
+    except NoGitHubAuthError as exc:
+        return {"error": f"No GitHub credential for {repo_full_name}: {exc}"}
+    except Exception as exc:
+        logger.exception("Auth resolution failed for user=%s repo=%s", user_id, repo_full_name)
+        return {"error": f"GitHub auth resolution failed: {type(exc).__name__}"}
+
+    headers = {
+        **make_auth_header(auth),
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    url = f"https://api.github.com/repos/{owner}/{repo}{path}"
+
+    try:
+        resp = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
+    except requests.RequestException as exc:
+        return {"error": f"GitHub API request failed: {type(exc).__name__}"}
+
+    if resp.status_code == 404:
+        return {"error": f"GitHub returned 404 for {path} (repo private without App access, or path wrong)"}
+    if resp.status_code == 403:
+        return {"error": f"GitHub returned 403 for {path} (rate limit or missing permission)"}
+    if resp.status_code != 200:
+        return {"error": f"GitHub API status={resp.status_code} for {path}: {resp.text[:200]}"}
+
+    try:
+        return resp.json()
+    except ValueError:
+        return {"error": "GitHub response was not valid JSON"}
+
+
 def _action_deployment_check(
     owner: str,
     repo: str,
@@ -169,17 +231,12 @@ def _action_deployment_check(
         "summary": {}
     }
 
-    # Build arguments for list_workflow_runs
-    args = {
-        "owner": owner,
-        "repo": repo,
-    }
+    # GET /repos/{owner}/{repo}/actions/runs
+    params: Dict[str, Any] = {"per_page": 50}
     if branch:
-        args["branch"] = branch
+        params["branch"] = branch
 
-    # Call list_workflow_runs
-    raw_result = _call_github_mcp_sync("list_workflow_runs", args, user_id)
-    parsed = _parse_mcp_response(raw_result)
+    parsed = _call_github_api(user_id, owner, repo, "/actions/runs", params)
 
     if isinstance(parsed, dict) and "error" in parsed:
         return {"error": parsed["error"]}
@@ -268,20 +325,15 @@ def _action_commits(
         "summary": {}
     }
 
-    # Build arguments for list_commits
-    args = {
-        "owner": owner,
-        "repo": repo,
+    # GET /repos/{owner}/{repo}/commits
+    params: Dict[str, Any] = {
+        "since": start_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        "per_page": 100,
     }
     if branch:
-        args["sha"] = branch
+        params["sha"] = branch
 
-    # Note: GitHub API 'since' parameter format
-    args["since"] = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-    # Call list_commits
-    raw_result = _call_github_mcp_sync("list_commits", args, user_id)
-    parsed = _parse_mcp_response(raw_result)
+    parsed = _call_github_api(user_id, owner, repo, "/commits", params)
 
     if isinstance(parsed, dict) and "error" in parsed:
         return {"error": parsed["error"]}
@@ -363,15 +415,8 @@ def _action_diff(
     if not commit_sha:
         return {"error": "commit_sha is required for diff action"}
 
-    # Call get_commit
-    args = {
-        "owner": owner,
-        "repo": repo,
-        "ref": commit_sha,
-    }
-
-    raw_result = _call_github_mcp_sync("get_commit", args, user_id)
-    parsed = _parse_mcp_response(raw_result)
+    # GET /repos/{owner}/{repo}/commits/{ref}
+    parsed = _call_github_api(user_id, owner, repo, f"/commits/{commit_sha}")
 
     if isinstance(parsed, dict) and "error" in parsed:
         return {"error": parsed["error"]}
@@ -438,17 +483,17 @@ def _action_pull_requests(
         "summary": {}
     }
 
-    # Call list_pull_requests for closed PRs
-    args = {
-        "owner": owner,
-        "repo": repo,
+    # GET /repos/{owner}/{repo}/pulls — closed only, sorted by updated desc
+    params: Dict[str, Any] = {
         "state": "closed",
+        "sort": "updated",
+        "direction": "desc",
+        "per_page": 100,
     }
     if branch:
-        args["base"] = branch
+        params["base"] = branch
 
-    raw_result = _call_github_mcp_sync("list_pull_requests", args, user_id)
-    parsed = _parse_mcp_response(raw_result)
+    parsed = _call_github_api(user_id, owner, repo, "/pulls", params)
 
     if isinstance(parsed, dict) and "error" in parsed:
         return {"error": parsed["error"]}
@@ -519,7 +564,9 @@ def _format_output(
     owner: str,
     repo: str,
     repo_source: str,
-    time_window: Tuple[datetime, datetime]
+    time_window: Tuple[datetime, datetime],
+    auth_method: Optional[str] = None,
+    installation_id: Optional[int] = None,
 ) -> str:
     """Format results as JSON string for LLM consumption."""
     output = {
@@ -527,6 +574,8 @@ def _format_output(
         "action": action,
         "repository": f"{owner}/{repo}",
         "repository_source": repo_source,
+        "auth_method": auth_method,
+        "installation_id": installation_id,
         "time_window": {
             "start": time_window[0].strftime('%Y-%m-%dT%H:%M:%SZ'),
             "end": time_window[1].strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -609,6 +658,33 @@ def github_rca(
 
     logger.info(f"Resolved repository: {owner}/{repo_name} (source: {repo_source})")
 
+    repo_full_name = f"{owner}/{repo_name}"
+    try:
+        auth = get_auth_for_user_repo(user_id, repo_full_name)
+    except NoGitHubAuthError:
+        return json.dumps({
+            "status": "error",
+            "error": "GitHub not connected for this user. Install the GitHub App or connect via OAuth.",
+            "action": action,
+            "repository": repo_full_name,
+        })
+    except Exception as e:
+        logger.exception(
+            "Error resolving GitHub auth for user %s repo %s",
+            user_id, repo_full_name,
+        )
+        return json.dumps({
+            "status": "error",
+            "error": f"Failed to resolve GitHub auth: {e}",
+            "action": action,
+            "repository": repo_full_name,
+        })
+
+    logger.info(
+        f"Resolved GitHub auth for {user_id} {repo_full_name}: "
+        f"method={auth.method} installation_id={auth.installation_id}"
+    )
+
     # Calculate time windows
     start_time, end_time = _calculate_time_windows(incident_time, time_window_hours)
     time_window = (start_time, end_time)
@@ -637,7 +713,16 @@ def github_rca(
                 owner, repo_name, branch, start_time, end_time, user_id
             )
 
-        return _format_output(action, results, owner, repo_name, repo_source, time_window)
+        return _format_output(
+            action,
+            results,
+            owner,
+            repo_name,
+            repo_source,
+            time_window,
+            auth_method=auth.method,
+            installation_id=auth.installation_id,
+        )
 
     except Exception as e:
         logger.error(f"Error in github_rca: {e}", exc_info=True)

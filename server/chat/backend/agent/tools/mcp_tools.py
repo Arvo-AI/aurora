@@ -233,7 +233,7 @@ class RealMCPServerManager:
                     return None
                 
                 cmd = [github_binary, "stdio"]
-                logging.info(f" GitHub MCP server command prepared (native binary, all toolsets)")
+                logging.info(" GitHub MCP server command prepared (native binary, all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
@@ -724,8 +724,13 @@ output = json
             # Get user credentials from Aurora's database
             credentials = get_user_cloud_credentials(user_id)
             if not credentials:
-                logging.warning(f" No credentials found for user {user_id}")
-                return {}
+                # App-mode github users have no entries in user_tokens.
+                # Don't bail here — the github branch below will mint an
+                # installation token from the App. Bail only for non-github.
+                if server_type != "github":
+                    logging.warning(f" No credentials found for user {user_id}")
+                    return {}
+                credentials = {}
             
             # Map credentials to environment variables for each server type
             if server_type == "aws":
@@ -752,8 +757,38 @@ output = json
             elif server_type == "github":
                 github_creds = credentials.get("github", {})
                 token = github_creds.get("access_token", "")
+                # App-mode users have no OAuth access_token in user_tokens.
+                # Fall back to minting an installation token via the auth
+                # router — the GitHub MCP server accepts an installation
+                # token in GITHUB_PERSONAL_ACCESS_TOKEN since both use the
+                # same `Authorization: token <value>` header convention.
+                # Tokens last 1h which is well above the MCP server's
+                # warm-keep window for a single agent turn.
+                if not token and user_id:
+                    try:
+                        from utils.auth.github_auth_router import (
+                            NoGitHubAuthError,
+                            get_any_auth_for_user,
+                        )
+                        auth = get_any_auth_for_user(user_id)
+                        token = auth.token
+                        logging.info(
+                            " GitHub MCP credentials: using App installation token "
+                            "(installation_id=%s) — no OAuth token in user_tokens",
+                            auth.installation_id,
+                        )
+                    except NoGitHubAuthError:
+                        logging.warning(
+                            " No GitHub OAuth token AND no App installation for user %s",
+                            user_id,
+                        )
+                    except Exception as exc:
+                        logging.warning(
+                            " Failed to mint App installation token for user %s: %s",
+                            user_id, exc,
+                        )
                 if token:
-                    logging.info(f" Found GitHub token for MCP server (length: {len(token)})")
+                    logging.info(" GitHub MCP token resolved (length: %d)", len(token))
                 else:
                     logging.warning(" No GitHub token found in credentials")
                 return {
@@ -998,7 +1033,28 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
             #     available_servers.append("azure")
             if credentials.get("github", {}).get("access_token"):
                 available_servers.append("github")
-        
+
+        # App-only users have no OAuth row in user_tokens, but they do have
+        # an active App installation. Probe the auth router so the github
+        # MCP server still spins up — get_credentials_for_server will mint
+        # an installation token via the App.
+        if "github" not in available_servers:
+            try:
+                from utils.auth.github_auth_router import (
+                    NoGitHubAuthError,
+                    get_any_auth_for_user,
+                )
+                get_any_auth_for_user(user_id)
+                available_servers.append("github")
+            except NoGitHubAuthError:
+                logging.debug(
+                    "User %s has no GitHub auth (App or OAuth); skipping GitHub MCP", user_id
+                )
+            except Exception as exc:
+                logging.warning(
+                    "GitHub App auth probe failed for user %s: %s", user_id, exc
+                )
+
         if not available_servers:
             logging.info(f"No cloud credentials found for user {user_id}, no MCP servers to load")
         

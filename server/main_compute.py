@@ -13,7 +13,7 @@ import logging
 import os
 import hmac
 import secrets
-import hmac
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
@@ -24,16 +24,6 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(leve
 # Silence verbose loggers
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('utils.auth.stateless_auth').setLevel(logging.INFO)
- 
-import os
-import secrets  # For generating a secure random key
-import flask
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-from utils.db.db_utils import (
-    ensure_database_exists,
-    initialize_tables,
-)
 
 
 # Initialize Flask application
@@ -195,6 +185,12 @@ _HEALTH_PATH = "/health"
 _OPEN_PREFIXES = (
     _HEALTH_PATH,
     "/callback",
+    # GitHub App install callback — verified via signed state token, not session.
+    "/github/app/install/callback",
+    "/github/webhook",
+    # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
+    # listed here unconditionally so the gate applies even if OAuth flips on
+    # at runtime.
     "/github/callback",
     "/bitbucket/callback",
     "/slack/callback",
@@ -340,13 +336,17 @@ app.register_blueprint(command_policies_bp)
 from routes.tool_permissions import tool_permissions_bp
 app.register_blueprint(tool_permissions_bp)
 
-# --- GitHub Integration Routes ---
-from routes.github.github import github_bp
+# --- GitHub Integration Routes (App-first, OAuth gated by GITHUB_AUTH_MODE) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
-app.register_blueprint(github_bp, url_prefix="/github")
+from routes.github.github_webhook import github_webhook_bp
+from routes.github.github_app import github_app_bp
+from routes.github.github_oauth import github_oauth_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
+app.register_blueprint(github_webhook_bp, url_prefix="/github")
+app.register_blueprint(github_app_bp, url_prefix="/github")
+app.register_blueprint(github_oauth_bp, url_prefix="/github")
 
 # --- GitLab Integration Routes ---
 from routes.gitlab.gitlab_routes import gitlab_bp
@@ -660,6 +660,28 @@ def initialize_app():
         logging.getLogger(__name__).info("Casbin RBAC enforcer initialized.")
     except Exception as e:
         logging.getLogger(__name__).warning("Casbin enforcer init deferred: %s", e)
+
+    # Pre-flight GitHub App config validation (degraded-mode fallback).
+    # Must NOT crash startup if env vars are missing — the auth router falls
+    # back to OAuth-only mode and App-only routes (install/webhook) gate at
+    # handler-time on app.config["GITHUB_APP_ENABLED"].
+    try:
+        from connectors.github_connector.config import validate_github_app_config
+        enabled, missing = validate_github_app_config()
+        app.config["GITHUB_APP_ENABLED"] = enabled
+        if enabled:
+            logging.getLogger(__name__).info("github_app_status=enabled")
+        else:
+            logging.getLogger(__name__).warning(
+                "github_app_status=disabled missing=%s", missing
+            )
+    except Exception as e:
+        # Defensive: never crash startup over a config check.
+        app.config["GITHUB_APP_ENABLED"] = False
+        logging.getLogger(__name__).warning(
+            "github_app_status=disabled missing=['validation_error'] error_class=%s",
+            type(e).__name__,
+        )
 
 # Always run initialization when module is imported (for Gunicorn and direct execution)
 initialize_app()

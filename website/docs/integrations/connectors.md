@@ -313,33 +313,179 @@ OVH_US_REDIRECT_URI=https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback
 
 ### GitHub
 
-OAuth App authentication for GitHub repositories and issues.
+Aurora ships with **GitHub App** as the default and recommended auth path.
+On-prem deployments that cannot host their own App can fall back to a
+classic OAuth App via the `GITHUB_AUTH_MODE` flag (or run both side-by-side
+in `hybrid` mode).
 
-#### 1. Create OAuth App
+#### Auth modes
+
+| `GITHUB_AUTH_MODE` | When to use | What the user sees |
+|---|---|---|
+| `app` (default) | Most deployments. Per-installation tokens, fine-grained perms, real-time webhooks. | "Install GitHub App" CTA only. |
+| `oauth` | On-prem boxes that cannot expose a public webhook URL. | "Connect via OAuth" CTA only. |
+| `hybrid` | Migration windows or operators who want to offer both. | Both CTAs; App is recommended. |
+
+#### Path A — GitHub App (recommended)
+
+##### Quickstart (local dev or single-tenant)
+
+The bootstrap script registers an App via GitHub's App Manifest flow,
+captures the post-create redirect, and writes `.env` + Vault for you:
+
+```bash
+python3 server/scripts/register_github_app.py --org <your-github-org>
+```
+
+For a manual click-through (every form field, permissions table, event
+list, troubleshooting), the operator walkthrough lives in the source
+tree at [`server/connectors/github_connector/SETUP_GITHUB_APP.md`](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md).
+
+Required env (set in `.env`):
+
+```bash
+GITHUB_AUTH_MODE=app
+
+GITHUB_APP_ID=<numeric, from App settings>
+GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
+NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
+GITHUB_APP_WEBHOOK_URL=https://<your-host>/github/webhook
+GITHUB_APP_SETUP_URL=https://<your-host>/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
+```
+
+The App's private key (PEM) goes into Vault at
+`aurora/system/github-app/private-key`, not into `.env`.
+
+##### On-prem deployment
+
+When Aurora runs on customer infrastructure (private cloud, on-prem
+datacenter, customer-managed VPC) the operator owns both the App and
+the ingress. There is **no shared "Aurora SaaS" GitHub App** — each
+customer creates their own App in their own GitHub org and points it at
+their own Aurora hostname.
+
+**Prerequisites:**
+
+| Requirement | Why |
+|---|---|
+| Public hostname Aurora can be reached at | GitHub.com posts webhooks from public IPs; tunnel-only setups break under load. |
+| Valid TLS cert (Let's Encrypt or chained to a public root) | GitHub refuses webhook delivery to invalid certs. |
+| Outbound HTTPS to `api.github.com` | Aurora calls GitHub for installation token mint, repo metadata, etc. |
+| GitHub org admin role | Creating an App on an org requires owner. |
+| Aurora deployment shell + Vault access | You need to write App private key + webhook secret into Vault. |
+
+**Step 1 — Create the App in the customer's org**:
+
+```
+https://github.com/organizations/<customer-org>/settings/apps/new
+```
+
+| Field | Value |
+|---|---|
+| GitHub App name | `aurora-<customer-slug>` (globally unique). Examples: `aurora-acme-prod`, `aurora-acme-staging`. |
+| Homepage URL | `<BASE_URL>` (the customer's Aurora hostname) |
+| Callback URL | `<BASE_URL>/github/app/install/callback` |
+| Setup URL | Same as Callback URL |
+| Webhook URL | `<BASE_URL>/github/webhook` |
+| Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to Vault |
+| Where can be installed? | **Only on this account** (locks the App to the customer org) |
+
+Permissions and events match the dev walkthrough — see
+[SETUP_GITHUB_APP.md § Step 3 / § Step 4](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md#step-3-permissions-checklist).
+
+**Step 2 — Download the private key**: on the App's settings page after
+creation, **Generate a private key** downloads a `.pem` file once. Back
+it up before closing the tab.
+
+**Step 3 — Write secrets to the customer's Vault**:
+
+```bash
+vault kv put aurora/system/github-app/webhook-secret value=<the secret>
+vault kv put aurora/system/github-app/private-key value=@<path-to-pem>
+```
+
+**Step 4 — Set Aurora env vars** in the customer's `.env` (same keys as
+the Quickstart block above), with `GITHUB_APP_*` URLs pointing at the
+customer's `<BASE_URL>`. Set `AURORA_ENV=production` and a rotated
+`INTERNAL_API_SECRET` so the runtime startup check enforces both.
+
+**Step 5 — Reverse-proxy sketch (nginx)**: terminate TLS at the edge,
+forward to `aurora-server:5080`.
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name aurora.example.com;
+    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://aurora-server:5080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+Traefik labels achieve the same; the only requirements are TLS
+termination and Host-header preservation.
+
+**Per-environment Apps**: create separate `aurora-<customer>-prod`,
+`aurora-<customer>-staging`, `aurora-<customer>-dev` Apps. Aurora reads
+`GITHUB_APP_*` env per deployment, so each env gets its own App keys
+and a stray callback-URL change in dev cannot break prod webhook
+delivery.
+
+**Verification**: open `<BASE_URL>` in a browser, navigate to **Settings →
+Connectors → GitHub** → **Connect** → **Install GitHub App**. The popup
+goes to GitHub.com, you approve repository access, and the dialog flips
+from "Not connected" to "Available" or "Connected". `aurora-server` logs
+should show `200 GET /github/app/install/callback` followed by the new
+`installation_id`.
+
+#### Path B — OAuth fallback (on-prem only, when public ingress isn't possible)
 
 1. Go to [GitHub > Settings > Developer settings > OAuth Apps](https://github.com/settings/developers)
 2. Click **New OAuth App**
    - Application name: `Aurora`
-   - Homepage URL: `http://localhost:3000`
+   - Homepage URL: `http://localhost:3000` (or your real `BASE_URL`)
    - Authorization callback URL: `http://localhost:5080/github/callback`
-3. Click **Register application**
-4. Copy the **Client ID**
-5. Click **Generate a new client secret** and copy it
-
-#### 2. Configure Environment
+3. Click **Register application** and copy the **Client ID** + a freshly-generated **Client secret**
 
 ```bash
+GITHUB_AUTH_MODE=oauth   # or hybrid if you also have an App
 GH_OAUTH_CLIENT_ID=your-github-client-id
 GH_OAUTH_CLIENT_SECRET=your-github-client-secret
-NEXT_PUBLIC_GITHUB_CLIENT_ID=your-github-client-id
 ```
+
+OAuth gives Aurora a user token and uses polling for repo state. You
+lose real-time webhook delivery (no push for `pull_request`,
+`workflow_run`, etc.) — incident correlation features that depend on
+webhooks degrade to lag-based polling.
+
+#### GitHub Enterprise Server (GHES)
+
+**Not currently supported.** Aurora's GitHub-API call sites still
+hardcode `https://api.github.com`. Enabling GHES requires routing every
+hardcoded `api.github.com` and `github.com` reference through
+configurable base URLs (`GH_API_BASE_URL`, `GH_BASE_URL`). Until that
+work lands, GHES customers must run Aurora at a public hostname and
+talk to a public GHES URL (which usually defeats the point of GHES) or
+use the OAuth fallback above.
 
 #### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
-| "No authorization code provided" | Verify callback URL matches exactly: `http://localhost:5080/github/callback` |
-| "Bad credentials" | Regenerate client secret and update `.env` |
+| "No authorization code provided" | OAuth callback URL must match what's registered exactly. Default: `http://localhost:5080/github/callback`. |
+| "Bad credentials" | Regenerate the OAuth Client secret and update `.env`. |
+| "GitHub App install URL is missing the required state parameter" | `GITHUB_APP_SETUP_URL` doesn't match what's registered on the App settings page. Update `.env` to match. |
+| "Failed to initiate GitHub OAuth" | `GH_OAUTH_CLIENT_ID`/`SECRET` empty when `GITHUB_AUTH_MODE=oauth` or `hybrid`. Set them and restart. |
+| Webhook deliveries fail with 4xx | Webhook secret in Vault doesn't match what's registered on the App. `vault kv put aurora/system/github-app/webhook-secret value=<secret>` and re-save the App secret. |
 
 ---
 

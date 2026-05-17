@@ -79,7 +79,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
   const {
     isConnecting: isConnectingOAuthHandler,
-    handleGitHubOAuth,
     handleSlackOAuth,
   } = useConnectorOAuth(connector, userId);
 
@@ -141,13 +140,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
 
   const handleConnect = async () => {
     if (connector.id === "github") {
-      const isGitHubAuthed = hasOverride ? isConnected : githubStatus.isAuthenticated;
-      if (!isGitHubAuthed) {
-        pendingGitHubDialog = true;
-        await handleGitHubOAuth(checkGitHubStatus);
-      } else {
-        setShowGitHubDialog(true);
-      }
+      setShowGitHubDialog(true);
       return;
     }
 
@@ -524,24 +517,16 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showScalewayDialog={showScalewayDialog}
         showNotionDialog={showNotionDialog}
         onGitHubDialogChange={(open) => {
-          if (!open && githubStatus.isAuthenticated && !githubStatus.isConnected) {
-            toast({ title: "Select at least one repository", description: "GitHub requires at least one connected repo to be useful during investigations.", variant: "destructive" });
-            return;
-          }
           setShowGitHubDialog(open);
           if (!open) {
-            setTimeout(() => {
-              checkGitHubStatus();
-              githubStatus.refresh();
-            }, 500);
+            checkGitHubStatus();
+            githubStatus.refresh();
           }
         }}
         onBitbucketDialogChange={(open) => {
           setShowBitbucketDialog(open);
           if (!open) {
-            setTimeout(() => {
-              bitbucketStatus.refresh();
-            }, 500);
+            bitbucketStatus.refresh();
           }
         }}
         onGcpDialogChange={setShowGcpDialog}
