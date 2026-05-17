@@ -109,14 +109,16 @@ export const useMessageHandler = ({
             if (messages[i].toolCalls) {
               let foundMatch = false;
               const updatedToolCalls = messages[i].toolCalls!.map(tc => {
-                if (tc.tool_name === toolName && tc.status === 'running' && !foundMatch) {
+                if ((tc.tool_name === toolName || toolName.startsWith(tc.tool_name + ':')) && tc.status === 'running' && !foundMatch) {
                   foundMatch = true;
+                  const preserveCommand = toolName.startsWith(tc.tool_name + ':');
                   return {
                     ...tc,
                     status: 'awaiting_confirmation' as const,
                     confirmation_id: confirmationId,
                     confirmation_message: message.data.message,
-                    command: message.data.command ?? tc.command,
+                    confirmation_summary: message.data.command,
+                    command: preserveCommand ? tc.command : (message.data.command ?? tc.command),
                     block_layer: message.data.block_layer,
                     yes_always_effect: message.data.yes_always_effect,
                   };

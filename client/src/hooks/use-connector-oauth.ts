@@ -1,10 +1,7 @@
-import { useState, createElement } from "react";
+import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { GitHubIntegrationService } from "@/components/github-provider-integration";
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import type { ConnectorConfig } from "@/components/connectors/types";
-import { ToastAction } from "@/components/ui/toast";
-import { ExternalLink } from "lucide-react";
 import { slackService } from "@/lib/services/slack";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
 
@@ -39,69 +36,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
       });
       setIsConnecting(false);
       throw error;
-    }
-  };
-
-  const handleGitHubOAuth = async (onStatusChange: () => void) => {
-    setIsConnecting(true);
-
-    try {
-      const oauthUrl = await GitHubIntegrationService.initiateOAuth();
-      const popup = window.open(
-        oauthUrl,
-        'github-oauth',
-        'width=600,height=700,scrollbars=yes,resizable=yes'
-      );
-
-      const checkClosed = setInterval(() => {
-        if (popup?.closed) {
-          clearInterval(checkClosed);
-          setIsConnecting(false);
-          setTimeout(() => {
-            onStatusChange();
-            window.dispatchEvent(new CustomEvent("providerStateChanged"));
-          }, 1000);
-        }
-      }, 1000);
-    } catch (error: any) {
-      if (error.isHandled) {
-        console.log("OAuth error (handled):", error.message);
-      } else {
-        console.error("OAuth error:", error);
-      }
-      setIsConnecting(false);
-
-      if (error.errorCode === 'GITHUB_NOT_CONFIGURED' || error.message?.includes('not configured')) {
-        const readmeAction = createElement(
-          ToastAction,
-          {
-            altText: "View GitHub setup guide",
-            onClick: () => {
-              window.open(
-                "https://github.com/arvo-ai/aurora/blob/main/server/connectors/github_connector/README.md",
-                "_blank",
-                "noopener,noreferrer"
-              );
-            },
-            className: "flex items-center gap-1",
-          },
-          createElement(ExternalLink, { className: "h-3 w-3" }),
-          " View Setup Guide"
-        );
-        
-        toast({
-          title: "GitHub OAuth Not Configured",
-          description: "GitHub OAuth environment variables are not configured. Please configure them to connect GitHub.",
-          variant: "destructive",
-          action: readmeAction,
-        });
-      } else {
-        toast({
-          title: "Connection Failed",
-          description: error.message || "Failed to connect to GitHub",
-          variant: "destructive",
-        });
-      }
     }
   };
 
@@ -179,7 +113,6 @@ export function useConnectorOAuth(connector: ConnectorConfig, userId: string | n
 
   return {
     isConnecting,
-    handleGitHubOAuth,
     handleBitbucketOAuth,
     handleSlackOAuth,
     handleGCPOAuth,

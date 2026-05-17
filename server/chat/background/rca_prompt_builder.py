@@ -393,11 +393,24 @@ def _build_provider_investigation_section(providers: List[str], user_id: Optiona
     return ""
 
 def _get_github_connected(user_id: str) -> bool:
-    """Check if user has GitHub connected."""
+    """Return True when the user has a usable GitHub credential.
+
+    Checks both auth paths: an active App installation OR a stored OAuth
+    token (hybrid deployments may have either or both). Without the OAuth
+    branch, OAuth-only users would have GitHub-investigation guidance
+    suppressed in the RCA prompt even though their connection works.
+    """
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        creds = get_credentials_from_db(user_id, "github")
-        return bool(creds and creds.get("access_token"))
+        from utils.auth.github_auth_mode import is_oauth_enabled
+        from utils.auth.github_auth_router import _lookup_any_active_installation
+        if _lookup_any_active_installation(user_id) is not None:
+            return True
+        if is_oauth_enabled():
+            from utils.auth.token_management import get_token_data
+            creds = get_token_data(user_id, "github")
+            if creds and creds.get("access_token"):
+                return True
+        return False
     except Exception as e:
         logger.warning(f"Error checking GitHub connection for user {user_id}: {e}")
         return False

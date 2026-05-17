@@ -40,6 +40,7 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "aws",      # Amazon Web Services
     "azure",    # Microsoft Azure
     "github",   # GitHub tokens
+    "gitlab",   # GitLab connector tokens
     "grafana",  # Grafana connector tokens
     "datadog",  # Datadog connector tokens
     "netdata",  # Netdata connector tokens

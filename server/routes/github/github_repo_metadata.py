@@ -1,13 +1,39 @@
 """
 Celery task to generate LLM-powered metadata summaries for connected GitHub repos.
 Fetches README + top-level directory listing via GitHub REST API, summarizes with LLM.
+
+Auth selection is delegated to :mod:`utils.auth.github_auth_router` so
+the task transparently uses the GitHub App installation token when the
+repo was added via the App install flow and the legacy OAuth token
+otherwise. ``NoGitHubAuthError`` is mapped to a clean ``error`` status on
+the row (no retry — re-auth is a user action, not a transient failure).
 """
 import base64
 import logging
+from typing import Any, List, Union
 import requests
 from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_text_from_response(content: Union[str, List[Any]]) -> str:
+    """Extract text from a LangChain AIMessage content payload."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") in ("thinking", "reasoning"):
+                    continue
+                text = part.get("text", "")
+                if text:
+                    text_parts.append(str(text))
+            elif isinstance(part, str):
+                text_parts.append(part)
+        return "".join(text_parts).strip()
+    return str(content).strip()
 
 METADATA_PROMPT = (
     "Write a 2-3 sentence summary of this GitHub repository. "
@@ -18,16 +44,10 @@ METADATA_PROMPT = (
 )
 
 
-def _get_github_token(user_id: str) -> str | None:
-    from utils.auth.stateless_auth import get_credentials_from_db
-    creds = get_credentials_from_db(user_id, "github")
-    return creds.get("access_token") if creds else None
-
-
-def _fetch_readme(token: str, owner: str, repo: str) -> str:
+def _fetch_readme(auth_headers: dict[str, Any], owner: str, repo: str) -> str:
     resp = requests.get(
         f"https://api.github.com/repos/{owner}/{repo}/readme",
-        headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+        headers={**auth_headers, "Accept": "application/vnd.github.v3+json"},
         timeout=15,
     )
     if resp.status_code != 200:
@@ -41,10 +61,10 @@ def _fetch_readme(token: str, owner: str, repo: str) -> str:
         return ""
 
 
-def _fetch_top_level_listing(token: str, owner: str, repo: str) -> str:
+def _fetch_top_level_listing(auth_headers: dict[str, Any], owner: str, repo: str) -> str:
     resp = requests.get(
         f"https://api.github.com/repos/{owner}/{repo}/contents",
-        headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+        headers={**auth_headers, "Accept": "application/vnd.github.v3+json"},
         timeout=15,
     )
     if resp.status_code != 200:
@@ -56,33 +76,59 @@ def _fetch_top_level_listing(token: str, owner: str, repo: str) -> str:
 
 
 def _update_metadata(user_id: str, repo_full_name: str, summary: str, status: str):
+    """Persist a generation-task metadata write with CAS protection."""
     from utils.db.connection_pool import db_pool
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             from utils.auth.stateless_auth import set_rls_context
             if not set_rls_context(cur, conn, user_id, log_prefix="[GitHubMetadata]"):
                 return
-            cur.execute(
-                """UPDATE github_connected_repos
-                   SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
-                   WHERE user_id = %s AND repo_full_name = %s""",
-                (summary, status, user_id, repo_full_name),
-            )
+            if summary is None:
+                cur.execute(
+                    """UPDATE connected_repos
+                       SET metadata_status = %s, updated_at = NOW()
+                       WHERE user_id = %s
+                         AND provider = 'github'
+                         AND repo_full_name = %s
+                         AND metadata_status IN ('pending', 'generating')""",
+                    (status, user_id, repo_full_name),
+                )
+            else:
+                cur.execute(
+                    """UPDATE connected_repos
+                       SET metadata_summary = %s, metadata_status = %s, updated_at = NOW()
+                       WHERE user_id = %s
+                         AND provider = 'github'
+                         AND repo_full_name = %s
+                         AND metadata_status IN ('pending', 'generating')""",
+                    (summary, status, user_id, repo_full_name),
+                )
             conn.commit()
 
 
 @celery_app.task(name="routes.github.github_repo_metadata.generate_repo_metadata", bind=True, max_retries=2)
 def generate_repo_metadata(self, user_id: str, repo_full_name: str):
     """Fetch repo info from GitHub API and generate an LLM summary."""
+    from utils.auth.github_auth_router import (
+        NoGitHubAuthError,
+        get_auth_for_user_repo,
+        make_auth_header,
+    )
+
     logger.info(f"Generating metadata for {repo_full_name} (user {user_id})")
     _update_metadata(user_id, repo_full_name, None, "generating")
 
     try:
-        token = _get_github_token(user_id)
-        if not token:
-            logger.error(f"No GitHub token for user {user_id}, cannot generate metadata for {repo_full_name}")
+        try:
+            auth = get_auth_for_user_repo(user_id, repo_full_name)
+        except NoGitHubAuthError as exc:
+            logger.exception(
+                "No GitHub auth available for user %s repo %s: %s",
+                user_id, repo_full_name, exc,
+            )
             _update_metadata(user_id, repo_full_name, None, "error")
             return
+        auth_headers = make_auth_header(auth)
 
         parts = repo_full_name.split("/")
         if len(parts) != 2:
@@ -91,8 +137,8 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             return
         owner, repo = parts
 
-        readme = _fetch_readme(token, owner, repo)
-        file_list = _fetch_top_level_listing(token, owner, repo)
+        readme = _fetch_readme(auth_headers, owner, repo)
+        file_list = _fetch_top_level_listing(auth_headers, owner, repo)
 
         if not readme and file_list == "(could not list files)":
             logger.warning(f"Could not fetch any content for {repo_full_name}, skipping LLM summary")
@@ -124,12 +170,14 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             request_type="github_repo_metadata",
         )
 
-        summary = response.content.strip() if response.content else "No summary generated"
+        summary = _extract_text_from_response(response.content) if response.content else "No summary generated"
+        if not summary:
+            summary = "No summary generated"
         _update_metadata(user_id, repo_full_name, summary, "ready")
-        logger.info(f"Metadata generated for {repo_full_name}")
+        logger.info(f"Metadata generated for {repo_full_name} via {auth.method}")
 
     except Exception as e:
-        logger.error(f"Metadata generation failed for {repo_full_name}: {e}", exc_info=True)
+        logger.exception(f"Metadata generation failed for {repo_full_name}: {e}")
         try:
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:

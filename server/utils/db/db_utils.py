@@ -316,11 +316,12 @@ def initialize_tables():
                         UNIQUE NULLS NOT DISTINCT (org_id, provider)
                     );
                 """,
-                "github_connected_repos": """
-                    CREATE TABLE IF NOT EXISTS github_connected_repos (
+                "connected_repos": """
+                    CREATE TABLE IF NOT EXISTS connected_repos (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
                         org_id VARCHAR(255),
+                        provider VARCHAR(20) NOT NULL DEFAULT 'github',
                         repo_full_name VARCHAR(512) NOT NULL,
                         repo_id INTEGER,
                         default_branch VARCHAR(255),
@@ -330,8 +331,52 @@ def initialize_tables():
                         repo_data JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, repo_full_name)
+                        UNIQUE(user_id, provider, repo_full_name)
                     );
+                """,
+                "github_installations": """
+                    CREATE TABLE IF NOT EXISTS github_installations (
+                        id SERIAL PRIMARY KEY,
+                        installation_id BIGINT NOT NULL UNIQUE,
+                        account_login VARCHAR(255) NOT NULL,
+                        account_id BIGINT NOT NULL,
+                        account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('User', 'Organization')),
+                        target_type VARCHAR(20) NOT NULL,
+                        permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        events JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        repository_selection VARCHAR(20) NOT NULL DEFAULT 'selected',
+                        suspended_at TIMESTAMP NULL,
+                        permissions_pending_update BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """,
+                "user_github_installations": """
+                    CREATE TABLE IF NOT EXISTS user_github_installations (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255) NULL,
+                        installation_id BIGINT NOT NULL REFERENCES github_installations(installation_id) ON DELETE CASCADE,
+                        linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        disconnected_at TIMESTAMP NULL,
+                        is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+                        UNIQUE(user_id, installation_id)
+                    );
+                """,
+                "webhook_deliveries": """
+                    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                        id SERIAL PRIMARY KEY,
+                        delivery_id VARCHAR(64) NOT NULL UNIQUE,
+                        event_type VARCHAR(64) NOT NULL,
+                        installation_id BIGINT NULL,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        processed_at TIMESTAMP NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'received',
+                        error TEXT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
+                    ON webhook_deliveries(received_at);
                 """,
                 "user_manual_vms": """
                     CREATE TABLE IF NOT EXISTS user_manual_vms (
@@ -1360,7 +1405,7 @@ def initialize_tables():
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
-            rls_tables.append("github_connected_repos")
+            rls_tables.append("connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("aws_security_findings")
             rls_tables.append("org_command_policies")
@@ -1404,10 +1449,125 @@ def initialize_tables():
                 logging.warning(f"Error adding merged_into_incident_id column to incidents: {e}")
                 conn.rollback()
 
+            # Migration: Rename github_connected_repos → connected_repos BEFORE table creation
+            # (must run first so CREATE TABLE IF NOT EXISTS doesn't create an empty duplicate)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'github_connected_repos')
+                           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'connected_repos') THEN
+                            ALTER TABLE github_connected_repos RENAME TO connected_repos;
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
+                conn.rollback()
+
+            # Migration: bring renamed table to provider-aware schema
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        -- Add provider column if missing (old github_connected_repos didn't have it)
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'connected_repos' AND column_name = 'provider'
+                        ) THEN
+                            ALTER TABLE connected_repos
+                                ADD COLUMN provider VARCHAR(20) NOT NULL DEFAULT 'github';
+                        END IF;
+
+                        -- Drop old unique constraint (user_id, repo_full_name) and create new one
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'connected_repos_user_id_provider_repo_full_name_key'
+                        ) THEN
+                            -- Drop any legacy unique constraint on (user_id, repo_full_name)
+                            BEGIN
+                                ALTER TABLE connected_repos
+                                    DROP CONSTRAINT IF EXISTS github_connected_repos_user_id_repo_full_name_key;
+                            EXCEPTION WHEN undefined_object THEN NULL;
+                            END;
+                            ALTER TABLE connected_repos
+                                ADD CONSTRAINT connected_repos_user_id_provider_repo_full_name_key
+                                UNIQUE (user_id, provider, repo_full_name);
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error completing connected_repos schema migration: {e}")
+                conn.rollback()
+
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
+                )
+                cursor.execute(
+                    """UPDATE connected_repos r
+                          SET installation_id = NULL
+                        WHERE installation_id IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM github_installations i
+                               WHERE i.installation_id = r.installation_id
+                          );"""
+                )
+                cursor.execute(
+                    """DO $$
+                       BEGIN
+                           IF NOT EXISTS (
+                               SELECT 1 FROM pg_constraint
+                                WHERE conname = 'connected_repos_installation_id_fkey'
+                           ) THEN
+                               ALTER TABLE connected_repos
+                                   ADD CONSTRAINT connected_repos_installation_id_fkey
+                                   FOREIGN KEY (installation_id)
+                                   REFERENCES github_installations(installation_id)
+                                   ON DELETE SET NULL;
+                           END IF;
+                       END $$;"""
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured installation_id column + FK exist on connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding installation_id column/FK to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add disconnected_at to user_github_installations so
+            # Aurora-side disconnect can soft-delete the link instead of
+            # dropping the row. Reconnects (which often don't re-fire GitHub's
+            # install callback when the App is already installed) just clear
+            # this column instead of relying on a fresh installation_id.
+            try:
+                cursor.execute(
+                    "ALTER TABLE user_github_installations ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL;"
+                )
+                cursor.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_user_github_installations_installation_id
+                       ON user_github_installations(installation_id)
+                       WHERE disconnected_at IS NULL;"""
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured disconnected_at column + partial index exist on user_github_installations table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding disconnected_at column/index to user_github_installations: {e}"
+                )
+                conn.rollback()
 
             # Migration: add system action columns to actions table
             try:
@@ -2484,7 +2644,7 @@ def initialize_tables():
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
                 "incident_lifecycle_events",
-                "github_connected_repos",
+                "connected_repos",
             ]
             for tbl in org_id_tables:
                 try:

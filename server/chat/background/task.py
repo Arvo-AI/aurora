@@ -180,9 +180,9 @@ def _ensure_llm_context_history(
                     """
                     SELECT llm_context_history, messages
                     FROM chat_sessions
-                    WHERE id = %s AND user_id = %s
+                    WHERE id = %s
                     """,
-                    (session_id, user_id),
+                    (session_id,),
                 )
                 row = cursor.fetchone()
 
@@ -461,7 +461,8 @@ def run_background_chat(
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
-                        if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]"):
+                        rls_org_id = set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                        if not rls_org_id:
                             logger.error("[BackgroundChat] Cannot resolve org_id for user %s, skipping incident linking", user_id)
                             raise ValueError(f"Missing org_id for user {user_id}")
                     # Ensure chat_sessions.incident_id is set (single source of truth)
@@ -536,7 +537,7 @@ def run_background_chat(
                                 """INSERT INTO incident_lifecycle_events
                                    (incident_id, user_id, org_id, event_type, new_value)
                                    VALUES (%s, %s, %s, %s, %s)""",
-                                (incident_id, user_id, None, 'rca_started', 'running')
+                                (incident_id, user_id, rls_org_id, 'rca_started', 'running')
                             )
                             conn.commit()
                             logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
@@ -991,7 +992,7 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
                 # Find where the Jira-specific messages start by looking for the
                 # follow-up prompt. Everything before it is re-injected context
                 # that duplicates the investigation.
-                jira_start_idx = 0
+                jira_start_idx = -1
                 if followup_prompt_prefix:
                     for i, msg in enumerate(followup):
                         text = msg.get('text') or msg.get('content') or ''
@@ -999,7 +1000,11 @@ def _merge_investigation_messages(session_id: str, investigation_messages: list,
                             jira_start_idx = i
                             break
 
-                jira_only = followup[jira_start_idx:] if jira_start_idx > 0 else followup
+                # If we can't find the follow-up user message, Phase 2 produced
+                # no new messages (e.g. guardrail blocked it). Returning the
+                # entire `followup` here would duplicate the investigation,
+                # since `investigation_messages` already contains those rows.
+                jira_only = followup[jira_start_idx:] if jira_start_idx >= 0 else []
                 merged = investigation_messages + jira_only
                 cursor.execute(
                     "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
@@ -1175,7 +1180,7 @@ async def _execute_background_chat(
         # user input and would produce false positives. Callers pass rail_text
         # for that case; fall back to initial_message to preserve legacy
         # semantics for triggers that forward a raw user question.
-        rail_question = rail_text if rail_text else initial_message
+        rail_question = rail_text if rail_text is not None else initial_message
 
         # State.incident_id is read-only context for downstream nodes (triage
         # uses it to look up prior findings, prompt_builder for RCA scaffolding).
@@ -1830,8 +1835,8 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                 with conn.cursor() as cursor:
                     set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCANotifSummary]")
                     cursor.execute(
-                        "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
-                        (session_id, user_id)
+                        "SELECT messages FROM chat_sessions WHERE id = %s",
+                        (session_id,)
                     )
                     row = cursor.fetchone()
                     
@@ -1954,8 +1959,8 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SlackResponse]")
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
-                    (session_id, user_id)
+                    "SELECT messages FROM chat_sessions WHERE id = %s",
+                    (session_id,)
                 )
                 row = cursor.fetchone()
                 
@@ -2077,8 +2082,8 @@ def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadat
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GoogleChatResponse]")
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s",
-                    (session_id, user_id)
+                    "SELECT messages FROM chat_sessions WHERE id = %s",
+                    (session_id,)
                 )
                 row = cursor.fetchone()
 
@@ -2222,12 +2227,14 @@ def create_background_chat_session(
 def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
     """Write an rca_error lifecycle event, wrapped in a savepoint to avoid aborting the caller."""
     try:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
         cursor.execute("SAVEPOINT sp_rca_err")
         cursor.execute(
             """INSERT INTO incident_lifecycle_events
                (incident_id, user_id, org_id, event_type, new_value)
                VALUES (%s, %s, %s, %s, %s)""",
-            (incident_id, user_id, None, 'rca_error', 'error')
+            (incident_id, user_id, org_id, 'rca_error', 'error')
         )
         cursor.execute("RELEASE SAVEPOINT sp_rca_err")
     except Exception as e:
