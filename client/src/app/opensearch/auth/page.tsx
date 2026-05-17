@@ -24,7 +24,7 @@ export default function OpenSearchAuthPage() {
 
   const loadStatus = async () => {
     try {
-      if (typeof window !== "undefined") {
+      if (typeof globalThis.window !== "undefined") {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
           const parsed = JSON.parse(cached);
@@ -35,7 +35,7 @@ export default function OpenSearchAuthPage() {
       const result = await openSearchService.getStatus();
       if (result !== null) {
         setStatus(result);
-        if (typeof window !== "undefined") {
+        if (typeof globalThis.window !== "undefined") {
           localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
           if (result.connected) setEndpoint(result.endpoint ?? "");
         }
@@ -60,11 +60,11 @@ export default function OpenSearchAuthPage() {
         indexPattern: indexPattern || "*",
       });
       setStatus(result);
-      if (typeof window !== "undefined") {
+      if (typeof globalThis.window !== "undefined") {
         localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
         localStorage.setItem("isOpenSearchConnected", "true");
-        window.dispatchEvent(new Event("openSearchStateChanged"));
-        window.dispatchEvent(new Event("providerStateChanged"));
+        globalThis.dispatchEvent(new Event("openSearchStateChanged"));
+        globalThis.dispatchEvent(new Event("providerStateChanged"));
       }
       toast({ title: "OpenSearch connected", description: `Cluster: ${result.clusterName ?? endpoint}` });
       setPassword("");
@@ -88,11 +88,11 @@ export default function OpenSearchAuthPage() {
         setEndpoint("");
         setUsername("");
         setPassword("");
-        if (typeof window !== "undefined") {
+        if (typeof globalThis.window !== "undefined") {
           localStorage.removeItem(CACHE_KEY);
           localStorage.removeItem("isOpenSearchConnected");
-          window.dispatchEvent(new Event("openSearchStateChanged"));
-          window.dispatchEvent(new Event("providerStateChanged"));
+          globalThis.dispatchEvent(new Event("openSearchStateChanged"));
+          globalThis.dispatchEvent(new Event("providerStateChanged"));
         }
         toast({ title: "OpenSearch disconnected" });
       } else {

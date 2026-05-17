@@ -89,6 +89,117 @@ def _extract_incident_number(payload: Dict[str, Any]) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------
+# Processing helpers (extracted to keep task function complexity manageable)
+# ---------------------------------------------------------------------------
+
+def _record_primary_alert(cursor, conn, user_id, org_id, incident_db_id, event_db_id,
+                           incident_title, service_name, severity, alert_metadata):
+    """Insert the primary alert row and update affected_services."""
+    try:
+        cursor.execute(
+            """INSERT INTO incident_alerts
+               (user_id, org_id, incident_id, source_type, source_alert_id,
+                alert_title, alert_service, alert_severity,
+                correlation_strategy, correlation_score, alert_metadata)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                user_id, org_id, incident_db_id, "victorops", event_db_id,
+                incident_title, service_name, severity, "primary", 1.0,
+                json.dumps(alert_metadata),
+            ),
+        )
+        cursor.execute(
+            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+            (service_name, incident_db_id),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning("[VICTOROPS] Failed to record primary alert: %s", e)
+
+
+def _write_lifecycle_events(cursor, conn, incident_db_id, user_id, org_id, lifecycle_writes):
+    """Insert incident lifecycle event rows inside savepoints."""
+    for ev_type, prev_val, new_val in lifecycle_writes:
+        try:
+            cursor.execute("SAVEPOINT sp_lifecycle")
+            cursor.execute(
+                """INSERT INTO incident_lifecycle_events
+                   (incident_id, user_id, org_id, event_type, previous_value, new_value)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (incident_db_id, user_id, org_id, ev_type, prev_val, new_val),
+            )
+            cursor.execute("RELEASE SAVEPOINT sp_lifecycle")
+            conn.commit()
+        except Exception as e:
+            try:
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_lifecycle")
+            except Exception:
+                pass
+            logger.warning(
+                "[VICTOROPS] Failed to record lifecycle event %s for incident %s: %s",
+                ev_type, incident_db_id, e,
+            )
+
+
+def _schedule_summary_and_rca(user_id, incident_db_id, incident_title, incident_number,
+                               severity, service_name, payload, alert_metadata, cursor, conn):
+    """Schedule incident summary generation and RCA chat session."""
+    try:
+        from chat.background.summarization import generate_incident_summary
+        generate_incident_summary.delay(
+            incident_id=str(incident_db_id),
+            user_id=user_id,
+            source_type="victorops",
+            alert_title=incident_title or "Unknown Incident",
+            severity=severity,
+            service=service_name,
+            raw_payload=payload,
+            alert_metadata=alert_metadata,
+        )
+    except Exception as e:
+        logger.warning("[VICTOROPS] Failed to schedule summary: %s", e)
+
+    try:
+        from chat.background.task import (
+            run_background_chat,
+            create_background_chat_session,
+            is_background_chat_allowed,
+        )
+        from chat.background.rca_prompt_builder import build_victorops_rca_prompt
+
+        if is_background_chat_allowed(user_id):
+            rca_prompt, _rail_text = build_victorops_rca_prompt(payload, user_id=user_id)
+            session_id = create_background_chat_session(
+                user_id=user_id,
+                title=f"RCA: {incident_title}",
+                trigger_metadata={
+                    "source": "victorops",
+                    "incident_number": incident_number,
+                    "severity": severity,
+                },
+                incident_id=incident_db_id,
+            )
+            task = run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=rca_prompt,
+                trigger_metadata={"source": "victorops", "incident_number": incident_number},
+                incident_id=incident_db_id,
+            )
+            cursor.execute(
+                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                (task.id, incident_db_id),
+            )
+            conn.commit()
+            logger.info(
+                "[VICTOROPS] Triggered RCA for incident %s (task=%s)",
+                incident_db_id, task.id,
+            )
+    except Exception as e:
+        logger.warning("[VICTOROPS] Failed to trigger RCA: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Celery task
 # ---------------------------------------------------------------------------
 
@@ -296,34 +407,10 @@ def process_victorops_event(
 
                 # Record primary alert for triggered events
                 if alert_phase == "TRIGGERED":
-                    try:
-                        cursor.execute(
-                            """INSERT INTO incident_alerts
-                               (user_id, org_id, incident_id, source_type, source_alert_id,
-                                alert_title, alert_service, alert_severity,
-                                correlation_strategy, correlation_score, alert_metadata)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (
-                                user_id,
-                                org_id,
-                                incident_db_id,
-                                "victorops",
-                                event_db_id,
-                                incident_title,
-                                service_name,
-                                severity,
-                                "primary",
-                                1.0,
-                                json.dumps(alert_metadata),
-                            ),
-                        )
-                        cursor.execute(
-                            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                            (service_name, incident_db_id),
-                        )
-                        conn.commit()
-                    except Exception as e:
-                        logger.warning("[VICTOROPS] Failed to record primary alert: %s", e)
+                    _record_primary_alert(
+                        cursor, conn, user_id, org_id, incident_db_id, event_db_id,
+                        incident_title, service_name, severity, alert_metadata,
+                    )
 
                 # Lifecycle events
                 lifecycle_writes = []
@@ -333,26 +420,7 @@ def process_victorops_event(
                     ev_name = "resolved" if aurora_status == "resolved" else "status_changed"
                     lifecycle_writes.append((ev_name, previous_status, aurora_status))
 
-                for ev_type, prev_val, new_val in lifecycle_writes:
-                    try:
-                        cursor.execute("SAVEPOINT sp_lifecycle")
-                        cursor.execute(
-                            """INSERT INTO incident_lifecycle_events
-                               (incident_id, user_id, org_id, event_type, previous_value, new_value)
-                               VALUES (%s, %s, %s, %s, %s, %s)""",
-                            (incident_db_id, user_id, org_id, ev_type, prev_val, new_val),
-                        )
-                        cursor.execute("RELEASE SAVEPOINT sp_lifecycle")
-                        conn.commit()
-                    except Exception as e:
-                        try:
-                            cursor.execute("ROLLBACK TO SAVEPOINT sp_lifecycle")
-                        except Exception:
-                            pass
-                        logger.warning(
-                            "[VICTOROPS] Failed to record lifecycle event %s for incident %s: %s",
-                            ev_type, incident_db_id, e,
-                        )
+                _write_lifecycle_events(cursor, conn, incident_db_id, user_id, org_id, lifecycle_writes)
 
                 # SSE broadcast
                 try:
@@ -366,62 +434,10 @@ def process_victorops_event(
 
                 # Summary + RCA only for new triggered incidents
                 if alert_phase == "TRIGGERED" and incident_was_inserted:
-                    try:
-                        from chat.background.summarization import generate_incident_summary
-                        generate_incident_summary.delay(
-                            incident_id=str(incident_db_id),
-                            user_id=user_id,
-                            source_type="victorops",
-                            alert_title=incident_title or "Unknown Incident",
-                            severity=severity,
-                            service=service_name,
-                            raw_payload=payload,
-                            alert_metadata=alert_metadata,
-                        )
-                    except Exception as e:
-                        logger.warning("[VICTOROPS] Failed to schedule summary: %s", e)
-
-                    try:
-                        from chat.background.task import (
-                            run_background_chat,
-                            create_background_chat_session,
-                            is_background_chat_allowed,
-                        )
-                        from chat.background.rca_prompt_builder import build_victorops_rca_prompt
-
-                        if is_background_chat_allowed(user_id):
-                            rca_prompt, _rail_text = build_victorops_rca_prompt(payload, user_id=user_id)
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {incident_title}",
-                                trigger_metadata={
-                                    "source": "victorops",
-                                    "incident_number": incident_number,
-                                    "severity": severity,
-                                },
-                                incident_id=incident_db_id,
-                            )
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "victorops",
-                                    "incident_number": incident_number,
-                                },
-                                incident_id=incident_db_id,
-                            )
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, incident_db_id),
-                            )
-                            conn.commit()
-                            logger.info(
-                                "[VICTOROPS] Triggered RCA for incident %s (task=%s)",
-                                incident_db_id, task.id,
-                            )
-                    except Exception as e:
-                        logger.warning("[VICTOROPS] Failed to trigger RCA: %s", e)
+                    _schedule_summary_and_rca(
+                        user_id, incident_db_id, incident_title, incident_number,
+                        severity, service_name, payload, alert_metadata, cursor, conn,
+                    )
 
                 logger.info(
                     "[VICTOROPS] Processed %s event for incident #%s (db_id=%s)",

@@ -25,20 +25,20 @@ export default function VictorOpsAuthPage() {
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
   const updateLocalStorage = (connected: boolean) => {
-    if (typeof window === 'undefined') return;
+    if (typeof globalThis.window === 'undefined') return;
     if (connected) {
       localStorage.setItem('isVictorOpsConnected', 'true');
     } else {
       localStorage.removeItem('isVictorOpsConnected');
     }
-    window.dispatchEvent(new Event('victorOpsStateChanged'));
-    window.dispatchEvent(new Event('providerStateChanged'));
+    globalThis.dispatchEvent(new Event('victorOpsStateChanged'));
+    globalThis.dispatchEvent(new Event('providerStateChanged'));
   };
 
   const fetchAndUpdateStatus = async () => {
     const result = await victoropsService.getStatus();
     setStatus(result);
-    if (typeof window !== 'undefined' && result) {
+    if (typeof globalThis.window !== 'undefined' && result) {
       // Only persist the minimal shape needed for instant UI hydration
       localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
     }
@@ -47,11 +47,11 @@ export default function VictorOpsAuthPage() {
 
   const loadStatus = async (skipCache = false) => {
     try {
-      if (!skipCache && typeof window !== 'undefined') {
+      if (!skipCache && typeof globalThis.window !== 'undefined') {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
-          const minimal = JSON.parse(cached) as { connected: boolean };
-          setStatus(minimal as VictorOpsStatus);
+          const minimal = JSON.parse(cached) as VictorOpsStatus;
+          setStatus(minimal);
         }
       }
       await fetchAndUpdateStatus();
@@ -102,7 +102,7 @@ export default function VictorOpsAuthPage() {
       await victoropsService.disconnect();
       setStatus(null);
       updateLocalStorage(false);
-      if (typeof window !== 'undefined') localStorage.removeItem(CACHE_KEY);
+      if (typeof globalThis.window !== 'undefined') localStorage.removeItem(CACHE_KEY);
       toast({ title: 'Disconnected', description: 'Splunk On-Call disconnected.' });
     } catch (err: unknown) {
       const message = getUserFriendlyError(err);
