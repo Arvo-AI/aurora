@@ -120,7 +120,12 @@ async def _triage(state: State) -> TriageDecision:
         # Non-streaming: triage's structured output is internal — must not
         # leak token chunks into the user-facing chat stream.
         llm = create_chat_model(model=ModelConfig.RCA_ORCHESTRATOR_MODEL, streaming=False)
-        structured = llm.with_structured_output(TriageDecision, include_raw=True)
+        # method="function_calling" — Bedrock-routed Anthropic models (Opus via
+        # OpenRouter) reject the OpenAI json_schema response_format
+        # (output_config.format). Tool calling is supported across all providers.
+        structured = llm.with_structured_output(
+            TriageDecision, include_raw=True, method="function_calling"
+        )
 
         incident_summary = await _build_triage_prompt(state, available_roles)
         start_time = time.time()

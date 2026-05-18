@@ -220,7 +220,7 @@ def _create_safety_llm():
         temperature=0.0,
         streaming=False,
     )
-    return base.with_structured_output(SafetyVerdict)
+    return base.with_structured_output(SafetyVerdict, method="function_calling")
 
 
 # Pool is deliberately generous: future.result(timeout=...) frees the waiter

@@ -225,7 +225,7 @@ class LLMManager:
         try:
             if output_struct:
                 raw_result = model.with_structured_output(
-                    schema=output_struct, include_raw=True
+                    schema=output_struct, include_raw=True, method="function_calling"
                 ).invoke(prompt)
                 llm_response = raw_result.get("raw")
                 parsed = raw_result.get("parsed")
