@@ -4,7 +4,7 @@ import flask
 from azure.identity import ClientSecretCredential
 from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
-from connectors.azure_connector.auth import azure_login, azure_callback
+from connectors.azure_connector.auth import azure_login
 from connectors.azure_connector.k8s_client import (
     get_sp_object_id, get_aks_clusters, extract_resource_group,
 )
@@ -67,12 +67,6 @@ def azure_setup_script_ps1():
         logging.error("Error serving Azure PS1 setup script", exc_info=e)
         return jsonify({"error": "Failed to serve PowerShell setup script"}), 500
 
-
-@azure_bp.route("/azure/callback", methods=["GET", "OPTIONS"])
-def azure_callback_route():
-    if flask.request.method == 'OPTIONS':
-        return create_cors_response()
-    return azure_callback()
 
 
 @azure_bp.route("/azure/fetch_data", methods=["GET", "OPTIONS"])

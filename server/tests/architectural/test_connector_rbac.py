@@ -57,7 +57,6 @@ EXEMPT_FUNCTIONS: Set[str] = {
     "bitbucket_callback",
     "slack_callback",
     "google_chat_callback",
-    "azure_callback_route",
     # Webhooks (external service push — HMAC/secret validates sender)
     "webhook",
     "alert_webhook",
