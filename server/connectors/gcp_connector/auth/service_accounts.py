@@ -53,7 +53,7 @@ def _get_user_sa_suffix(user_id: str, sa_type: str = 'full') -> str:
     Returns:
         22-character string: hash (20 chars) + suffix (2 chars)
     """
-    hash_obj = hashlib.sha256(user_id.encode('utf-8'))
+    hash_obj = hashlib.sha256(user_id.encode('utf-8'))  # noqa: S324 — not password hashing; produces a deterministic 20-char GCP SA name identifier
     hash_part = hash_obj.hexdigest()[:20]
 
     suffix = '-f' if sa_type == 'full' else '-r'
@@ -577,7 +577,7 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
             "service_account_email": sa_email,
         }
     except HttpError as e:
-        logger.error("Failed to generate access token for service account (status=%s)", e.resp.status if hasattr(e, 'resp') else 'unknown')
+        logger.exception("Failed to generate access token for service account (status=%s)", e.resp.status if hasattr(e, 'resp') else 'unknown')
         raise
 
 

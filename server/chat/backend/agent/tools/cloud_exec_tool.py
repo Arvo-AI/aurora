@@ -215,7 +215,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             ws = get_or_create_workspace(user_id, "default")
             external_id = ws.get("aws_external_id")
             if not external_id:
-                logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], hash_for_log(user_id))
+                logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
                 return False, None, None, None
 
             current_mode = get_mode_from_context()
@@ -260,7 +260,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 "aws_regions": [selected_region or "us-east-1"],
             }
 
-            logger.info("Assumed workspace role for %s, obtained temporary credentials (expires %s)", ws["id"], sts_creds["expiration"])
+            logger.info("Assumed workspace role for %s, obtained temporary credentials (expires %s)", hash_for_log(str(ws["id"])), sts_creds["expiration"])
 
         except Exception as e:
             logger.error("Failed to obtain AWS workspace credentials: %s", e)
@@ -385,7 +385,7 @@ def setup_aws_environments_all_accounts(user_id: str):
     ws = get_or_create_workspace(user_id, "default")
     external_id = ws.get("aws_external_id")
     if not external_id:
-        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], hash_for_log(user_id))
+        logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
         return []
 
     connections = get_all_user_aws_connections(user_id)

@@ -280,8 +280,8 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
             'total_projects': len(projects)
         }
 
-    except Exception as e:
-        logging.error(f"Error during GCP post-auth setup for user {user_id}: {e}")
+    except Exception:
+        logging.exception("Error during GCP post-auth setup")
 
         return {
             'status': 'FAILED',
