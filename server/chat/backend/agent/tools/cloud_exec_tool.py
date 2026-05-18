@@ -260,7 +260,11 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 "aws_regions": [selected_region or "us-east-1"],
             }
 
-            logger.info("Assumed workspace role for %s, obtained temporary credentials (expires %s)", hash_for_log(str(ws["id"])), sts_creds["expiration"])
+            logger.info(
+                "Assumed workspace role for %s in region %s",
+                hash_for_log(str(ws["id"])),
+                selected_region or "us-east-1",
+            )
 
         except Exception as e:
             logger.error("Failed to obtain AWS workspace credentials: %s", e)

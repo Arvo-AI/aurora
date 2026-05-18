@@ -8,8 +8,6 @@ import os
 import time
 import tempfile
 import datetime
-
-from utils.log_sanitizer import hash_for_log
 import hashlib
 from typing import List, Dict, Optional, Tuple
 from googleapiclient.discovery import build
@@ -53,7 +51,7 @@ def _get_user_sa_suffix(user_id: str, sa_type: str = 'full') -> str:
     Returns:
         22-character string: hash (20 chars) + suffix (2 chars)
     """
-    hash_obj = hashlib.sha256(user_id.encode('utf-8'))  # noqa: S324 — not password hashing; produces a deterministic 20-char GCP SA name identifier
+    hash_obj = hashlib.sha256(user_id.encode('utf-8'))
     hash_part = hash_obj.hexdigest()[:20]
 
     suffix = '-f' if sa_type == 'full' else '-r'
@@ -505,7 +503,7 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         try:
             if _service_account_exists(iam_service, root_project_id, read_only_email):
                 sa_email = read_only_email
-                logger.info("Using read-only runner service account for user %s", hash_for_log(user_id))
+                logger.info("Using read-only runner service account for user %s", user_id)
             else:
                 logger.warning(
                     "Read-only service account %s missing in project %s; falling back to full-access runner",
@@ -526,11 +524,11 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         project_ids = [p.get('projectId') for p in projects]
         if selected_project_id in project_ids:
             target_project_id = selected_project_id
-            logger.info("Using user-selected project for queries")
+            logger.info(f"Using user-selected project for queries: {selected_project_id}")
         else:
-            logger.info("Selected project not accessible; falling back to root project")
+            logger.info(f"Selected project {selected_project_id} not accessible. Using root project: {root_project_id}")
     else:
-        logger.info("No project selected, using root project for queries")
+        logger.info(f"No project selected, using root project for queries: {root_project_id}")
     
     # First, check if the service account exists
     try:
@@ -577,7 +575,10 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
             "service_account_email": sa_email,
         }
     except HttpError as e:
-        logger.exception("Failed to generate access token for service account (status=%s)", e.resp.status if hasattr(e, 'resp') else 'unknown')
+        logger.error(f"Failed to generate access token: {e}")
+        logger.error(f"Service account: {sa_email}")
+        logger.error(f"Root project ID: {root_project_id}")
+        logger.error(f"Target project ID: {target_project_id}")
         raise
 
 
