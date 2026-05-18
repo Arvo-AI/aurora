@@ -8,6 +8,8 @@ import os
 import time
 import tempfile
 import datetime
+
+from utils.log_sanitizer import hash_for_log
 import hashlib
 from typing import List, Dict, Optional, Tuple
 from googleapiclient.discovery import build
@@ -503,7 +505,7 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         try:
             if _service_account_exists(iam_service, root_project_id, read_only_email):
                 sa_email = read_only_email
-                logger.info("Using read-only runner service account for user %s", user_id)
+                logger.info("Using read-only runner service account for user %s", hash_for_log(user_id))
             else:
                 logger.warning(
                     "Read-only service account %s missing in project %s; falling back to full-access runner",

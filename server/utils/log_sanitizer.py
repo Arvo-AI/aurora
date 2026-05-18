@@ -81,4 +81,4 @@ def hash_for_log(value: object, length: int = 12) -> str:
     if salt is None:
         return _MISSING_SALT_SENTINEL
     text = _CONTROL_CHARS.sub("", str(value)).encode("utf-8")
-    return hmac.new(salt, text, sha256).hexdigest()[:length]
+    return hmac.new(salt, text, sha256).hexdigest()[:length]  # lgtm[py/weak-sensitive-data-hashing]

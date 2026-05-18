@@ -204,7 +204,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             else:
                 aws_conn = get_user_aws_connection(user_id)
             if not aws_conn or not aws_conn.get('role_arn'):
-                logger.error("User %s does not have an active AWS connection", user_id)
+                logger.error("User %s does not have an active AWS connection", hash_for_log(user_id))
                 return False, None, None, None
 
             conn_region = aws_conn.get("region")
@@ -215,7 +215,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             ws = get_or_create_workspace(user_id, "default")
             external_id = ws.get("aws_external_id")
             if not external_id:
-                logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+                logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], hash_for_log(user_id))
                 return False, None, None, None
 
             current_mode = get_mode_from_context()
@@ -229,7 +229,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 if read_only_role:
                     # Use dedicated read-only role if available
                     role_arn = read_only_role
-                    logger.info("Using AWS read-only role for user %s", user_id)
+                    logger.info("Using AWS read-only role for user %s", hash_for_log(user_id))
                 else:
                     # Apply restrictive session policy to make the role read-only
                     # NOTE: Session policies work as an intersection with base role permissions.
@@ -240,7 +240,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                         "Read-only mode enabled for user %s but no read_only_role_arn provided. "
                         "Using session policy fallback. This may fail if the base role lacks read permissions. "
                         "Consider providing a dedicated read-only role for better reliability.",
-                        user_id
+                        hash_for_log(user_id)
                     )
 
             sts_creds = assume_workspace_role(
@@ -385,12 +385,12 @@ def setup_aws_environments_all_accounts(user_id: str):
     ws = get_or_create_workspace(user_id, "default")
     external_id = ws.get("aws_external_id")
     if not external_id:
-        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], hash_for_log(user_id))
         return []
 
     connections = get_all_user_aws_connections(user_id)
     if not connections:
-        logger.warning("No active AWS connections for user %s", user_id)
+        logger.warning("No active AWS connections for user %s", hash_for_log(user_id))
         return []
 
     current_mode = get_mode_from_context()
@@ -446,7 +446,7 @@ def setup_aws_environments_all_accounts(user_id: str):
 
     logger.info(
         "Assumed roles for %d / %d accounts for user %s",
-        len(account_envs), len(connections), user_id,
+        len(account_envs), len(connections), hash_for_log(user_id),
     )
     return account_envs
 
