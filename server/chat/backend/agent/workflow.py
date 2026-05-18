@@ -156,11 +156,15 @@ class Workflow:
         workflow.add_node("synthesis", synthesis_node)
 
         # Only background RCA sessions enter the orchestrator. Foreground chats
-        # bypass triage so they don't pay the role-discovery + LLM call cost.
+        # and actions bypass triage entirely.
         def _route_start(state) -> str:
             is_bg = getattr(state, "is_background", False)
+            rca_ctx = getattr(state, "rca_context", None)
             if isinstance(state, dict):
                 is_bg = state.get("is_background", False)
+                rca_ctx = state.get("rca_context")
+            if (rca_ctx or {}).get("source") == "action":
+                return "direct_react"
             return "triage" if is_bg else "direct_react"
 
         workflow.add_conditional_edges(
