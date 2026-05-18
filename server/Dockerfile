@@ -267,6 +267,7 @@ COPY --chmod=0555 ./connectors /app/connectors/
 COPY --chmod=0555 ./guardrails /app/guardrails/
 COPY --chmod=0555 ./routes /app/routes/
 COPY --chmod=0555 ./services /app/services/
+COPY --chmod=0555 ./tasks /app/tasks/
 COPY --chmod=0555 ./utils /app/utils/
 COPY --chmod=0444 ./celery_config.py /app/celery_config.py
 COPY --chmod=0444 ./main_chatbot.py /app/main_chatbot.py
