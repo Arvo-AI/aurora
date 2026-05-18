@@ -1382,6 +1382,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 args_schema=GetConnectedReposArgs
             )
         elif name == 'github_rca':
+            # Wrap to always inject incident_time from the authoritative DB timestamp
+            # stored in state. The field is not in GitHubRCAArgs so the agent LLM
+            # never supplies a value — the wrapper is the only source.
+            _github_rca_inner = final_func
+            def _github_rca_pinned(*args, **kwargs):
+                state_ctx = get_state_context()
+                pinned = getattr(state_ctx, "incident_start_time", None) if state_ctx else None
+                if pinned:
+                    kwargs["incident_time"] = pinned
+                return _github_rca_inner(*args, **kwargs)
+            final_func = _github_rca_pinned
+
             tool = StructuredTool.from_function(
                 func=final_func,
                 name=name,
@@ -1393,7 +1405,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'pull_requests' (merged PRs in time window). "
                     "IMPORTANT: Always pass repo='owner/repo' to specify which repository to investigate. "
                     "If unsure which repo, call get_connected_repos first. "
-                    "Pass incident_time (ISO 8601) for automatic time window correlation."
+                    "The incident time is set automatically — do not pass it."
                 ),
                 args_schema=GitHubRCAArgs
             )

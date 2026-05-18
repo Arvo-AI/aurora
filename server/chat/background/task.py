@@ -1189,12 +1189,32 @@ async def _execute_background_chat(
         # need the incident in state so context-aware nodes can find it.
         context_incident_id = incident_id or (trigger_metadata or {}).get("incident_id")
 
+        # Fetch the real incident start time so downstream agents never have to
+        # infer or guess it from alert text (which causes date hallucinations).
+        incident_start_time: Optional[str] = None
+        if context_incident_id:
+            try:
+                with db_pool.get_admin_connection() as _conn:
+                    with _conn.cursor() as _cur:
+                        set_rls_context(_cur, _conn, user_id, log_prefix="[BackgroundChat:StartTime]")
+                        _cur.execute(
+                            "SELECT started_at FROM incidents WHERE id = %s",
+                            (context_incident_id,),
+                        )
+                        row = _cur.fetchone()
+                        if row and row[0]:
+                            incident_start_time = row[0].strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception as _e:
+                logger.warning(f"[BackgroundChat] Could not fetch incident started_at: {_e}")
+        logger.info("[BackgroundChat] incident_start_time=%r for incident %s", incident_start_time, context_incident_id)
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
             user_id=user_id,
             session_id=session_id,
             incident_id=context_incident_id,
+            incident_start_time=incident_start_time,
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],

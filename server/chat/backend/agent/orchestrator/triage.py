@@ -125,6 +125,10 @@ async def _triage(state: State) -> TriageDecision:
         )
 
         incident_summary = await _build_triage_prompt(state, available_roles)
+        logger.info(
+            "triage: incident_start_time in prompt: %r",
+            getattr(state, "incident_start_time", None),
+        )
         start_time = time.time()
         result = await structured.ainvoke(incident_summary)
 
@@ -227,6 +231,7 @@ async def _build_triage_prompt(state: State, available_roles: list) -> str:
     rca_context = getattr(state, "rca_context", None) or {}
     question = (getattr(state, "question", "") or "")[:1000]
     incident_id = getattr(state, "incident_id", "unknown") or "unknown"
+    incident_start_time = getattr(state, "incident_start_time", None) or ""
     user_id = getattr(state, "user_id", None) or ""
 
     role_lines = "\n".join(
@@ -254,9 +259,11 @@ async def _build_triage_prompt(state: State, available_roles: list) -> str:
     )
 
     gen_cap = _PER_ROLE_CAPS[_GENERAL_INVESTIGATOR_ROLE]
+    incident_time_line = f"Incident start time (authoritative — use this for all time_window values): {incident_start_time}\n" if incident_start_time else ""
     return (
         f"You are an RCA orchestrator deciding whether to fan out to parallel sub-agents.\n\n"
         f"Incident ID: {incident_id}\n"
+        f"{incident_time_line}"
         f"Alert/question: {question}\n"
         f"Severity: {rca_context.get('severity', 'unknown')}\n\n"
         f"{context_block}"
