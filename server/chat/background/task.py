@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
@@ -1205,7 +1205,10 @@ async def _execute_background_chat(
                         )
                         row = _cur.fetchone()
                         if row and row[0]:
-                            incident_start_time = row[0].strftime("%Y-%m-%dT%H:%M:%SZ")
+                            started_at = row[0]
+                            if started_at.tzinfo is None:
+                                started_at = started_at.replace(tzinfo=timezone.utc)
+                            incident_start_time = started_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             except Exception as _e:
                 logger.warning(f"[BackgroundChat] Could not fetch incident started_at: {_e}")
         logger.info("[BackgroundChat] incident_start_time=%r for incident %s", incident_start_time, context_incident_id)
