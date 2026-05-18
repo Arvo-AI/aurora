@@ -24,7 +24,7 @@ export default function OpenSearchAuthPage() {
 
   const loadStatus = async () => {
     try {
-      if (typeof globalThis.window !== "undefined") {
+      if (globalThis.window !== undefined) {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
           const parsed = JSON.parse(cached);
@@ -35,7 +35,7 @@ export default function OpenSearchAuthPage() {
       const result = await openSearchService.getStatus();
       if (result !== null) {
         setStatus(result);
-        if (typeof globalThis.window !== "undefined") {
+        if (globalThis.window !== undefined) {
           localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
           if (result.connected) setEndpoint(result.endpoint ?? "");
         }
@@ -60,9 +60,9 @@ export default function OpenSearchAuthPage() {
         indexPattern: indexPattern || "*",
       });
       setStatus(result);
-      if (typeof globalThis.window !== "undefined") {
+      if (globalThis.window !== undefined) {
         localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
-        localStorage.setItem("isOpenSearchConnected", "true");
+        localStorage.setItem("isOpenSearchConnected", result.connected ? "true" : "false");
         globalThis.dispatchEvent(new Event("openSearchStateChanged"));
         globalThis.dispatchEvent(new Event("providerStateChanged"));
       }
@@ -88,7 +88,7 @@ export default function OpenSearchAuthPage() {
         setEndpoint("");
         setUsername("");
         setPassword("");
-        if (typeof globalThis.window !== "undefined") {
+        if (globalThis.window !== undefined) {
           localStorage.removeItem(CACHE_KEY);
           localStorage.removeItem("isOpenSearchConnected");
           globalThis.dispatchEvent(new Event("openSearchStateChanged"));

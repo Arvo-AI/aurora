@@ -12,7 +12,7 @@ MAX_OUTPUT_SIZE = 32_000
 
 
 class GetVictorOpsIncidentsArgs(BaseModel):
-    limit: int = Field(default=20, description="Maximum number of recent incidents to return")
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum number of recent incidents to return (1–100)")
 
 
 class GetVictorOpsTeamsArgs(BaseModel):
@@ -64,15 +64,13 @@ def get_victorops_incidents(
         return json.dumps({"error": "Splunk On-Call not connected. Please connect it first."})
 
     try:
-        from routes.victorops.victorops_helpers import VictorOpsAPIError
-
-        data = client.get_incidents(limit=min(limit, 100))
+        limit = max(1, min(limit, 100))
+        data = client.get_incidents(limit=limit)
         incidents = data.get("incidents", [])[:limit]
 
-        # Trim to size
-        results_str = json.dumps(incidents)
-        if len(results_str) > MAX_OUTPUT_SIZE:
-            incidents = incidents[: max(1, limit // 2)]
+        # Trim iteratively to stay within the agent response budget
+        while len(json.dumps(incidents)) > MAX_OUTPUT_SIZE and len(incidents) > 1:
+            incidents = incidents[: len(incidents) // 2]
 
         return json.dumps({
             "success": True,
