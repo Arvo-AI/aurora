@@ -535,6 +535,61 @@ def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
             return {"connected": False}
 
 
+def _check_opensearch(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate OpenSearch connection.
+
+    Attempts a live cluster health call. Falls back to credential existence when
+    the cluster is unreachable from this network (e.g. behind a VPN). Only
+    returns connected=False for missing credentials or explicit 401/403 responses.
+    """
+    endpoint = creds.get("endpoint")
+    username = creds.get("username")
+    password = creds.get("password")
+    if not endpoint or not username or not password:
+        return {"connected": False}
+    try:
+        r = requests.get(
+            f"{endpoint}/_cluster/health",
+            auth=(username, password),
+            timeout=HTTP_TIMEOUT,
+            verify=creds.get("verify_ssl", True),
+        )
+        if r.status_code in (401, 403):
+            return {"connected": False}
+        if r.ok:
+            return {"connected": True, "endpoint": endpoint}
+    except Exception:
+        pass
+    # Network unreachable — fall back to credential existence (validated at connect time)
+    return {"connected": True, "endpoint": endpoint}
+
+
+def _check_victorops(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate Splunk On-Call credentials.
+
+    Attempts a live user API call. Falls back to credential existence on network
+    errors; only returns connected=False for missing creds or 401/403 responses.
+    """
+    api_id = creds.get("api_id")
+    api_key = creds.get("api_key")
+    if not api_id or not api_key:
+        return {"connected": False}
+    try:
+        r = requests.get(
+            "https://api.victorops.com/api-public/v1/user",
+            headers={"X-VO-Api-Id": api_id, "X-VO-Api-Key": api_key},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code in (401, 403):
+            return {"connected": False}
+        if r.ok:
+            return {"connected": True}
+    except Exception:
+        pass
+    # Network unreachable — fall back to credential existence (validated at connect time)
+    return {"connected": True}
+
+
 def _check_opsgenie(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Validate OpsGenie / JSM Operations credentials."""
     auth_type = creds.get("auth_type", "opsgenie")
@@ -765,6 +820,8 @@ PROVIDER_CHECKERS = {
     "notion": _check_notion,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "victorops": _check_victorops,
+    "opensearch": _check_opensearch,
     "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,

@@ -112,6 +112,14 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/victorops/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                            "Authorization", "X-Provider-Preference"],
+                          "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/opensearch/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                             "Authorization", "X-Provider-Preference"],
+                           "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/opsgenie/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With",
                                            "X-User-ID", "Authorization", "X-Provider-Preference"],
@@ -208,6 +216,7 @@ _OPEN_PREFIXES = (
     "/sentry/webhook/",
     "/pagerduty/webhook/",
     "/opsgenie/webhook/",
+    "/victorops/webhook/",
     "/jenkins/webhook/",
     "/cloudbees/webhook/",
     "/spinnaker/webhook/",
@@ -446,6 +455,14 @@ from routes.sentry import tasks as _sentry_tasks  # noqa: F401
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
+
+# --- Splunk On-Call (VictorOps) Integration Routes ---
+from routes.victorops.victorops_routes import victorops_bp  # noqa: F401
+app.register_blueprint(victorops_bp, url_prefix="/victorops")
+
+# --- OpenSearch Integration Routes ---
+from routes.opensearch import opensearch_bp  # noqa: F401
+app.register_blueprint(opensearch_bp, url_prefix="/opensearch")
 
 # --- OpsGenie Integration Routes ---
 from routes.opsgenie import bp as opsgenie_bp  # noqa: F401

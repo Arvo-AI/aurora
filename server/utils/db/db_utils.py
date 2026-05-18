@@ -699,6 +699,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_status ON pagerduty_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_received_at ON pagerduty_events(received_at DESC);
                 """,
+                "victorops_events": """
+                    CREATE TABLE IF NOT EXISTS victorops_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alert_phase VARCHAR(50),
+                        incident_number INTEGER,
+                        incident_title TEXT,
+                        service_name VARCHAR(255),
+                        entity_id VARCHAR(255),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_victorops_events_user_id ON victorops_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_victorops_events_incident_number ON victorops_events(incident_number);
+                    CREATE INDEX IF NOT EXISTS idx_victorops_events_received_at ON victorops_events(received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_victorops_events_alert_phase ON victorops_events(alert_phase);
+                """,
                 "opsgenie_events": """
                     CREATE TABLE IF NOT EXISTS opsgenie_events (
                         id SERIAL PRIMARY KEY,
@@ -1364,6 +1384,7 @@ def initialize_tables():
             rls_tables.append("newrelic_events")
             rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
+            rls_tables.append("victorops_events")
 
             # Add monitoring tables
             rls_tables.append("grafana_alerts")
@@ -2436,7 +2457,7 @@ def initialize_tables():
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
-                "pagerduty_events", "opsgenie_events", "knowledge_base_memory",
+                "pagerduty_events", "opsgenie_events", "victorops_events", "knowledge_base_memory",
                 "knowledge_base_documents",
             ]))
             for tbl in _org_id_tables:
@@ -2612,7 +2633,7 @@ def initialize_tables():
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
-                "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
+                "pagerduty_events", "opsgenie_events", "victorops_events", "incidents", "incident_alerts",
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
