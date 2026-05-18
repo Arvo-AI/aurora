@@ -181,7 +181,7 @@ def force_disconnect_gcp(user_id):
         )
         
         cursor.execute(
-            "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
+            "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key IN ('gcp_root_project', 'gcp_connected_projects')",
             (user_id, org_id)
         )
         

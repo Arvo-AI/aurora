@@ -38,13 +38,13 @@ KUBECTL_COMMANDS = {
 # =========================================================================
 
 
-def _run_json_command(args, timeout=KUBECTL_TIMEOUT, env=None):
+def _run_json_command(args, env, timeout=KUBECTL_TIMEOUT):
     """Run a CLI command expecting JSON output.
 
     Returns:
         Tuple of (parsed_json, error_string_or_None).
     """
-    stdout, error = run_cli_command(args, timeout=timeout, env=env)
+    stdout, error = run_cli_command(args, env, timeout=timeout)
     if error:
         return None, error
     if not stdout:
@@ -72,17 +72,19 @@ def _get_gcp_cluster_credentials(cluster, provider_credentials, provider_envs):
         or gcp_creds.get("project")
         or (gcp_creds.get("project_ids") or [None])[0]
     )
-    location = zone or region
-    if not location:
+    if not (zone or region):
         return f"GKE cluster {cluster_name}: missing zone/region"
     args = [
         "gcloud", "container", "clusters", "get-credentials",
         cluster_name,
-        "--zone", location,
     ]
+    if zone:
+        args.extend(["--zone", zone])
+    else:
+        args.extend(["--region", region])
     if project:
         args.extend(["--project", project])
-    gcp_env = provider_envs.get("gcp")
+    gcp_env = provider_envs.get("gcp") or {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
     _, error = run_cli_command(args, env=gcp_env, timeout=CREDENTIALS_TIMEOUT)
     return error
 
@@ -105,6 +107,7 @@ def _get_aws_cluster_credentials(cluster, provider_envs):
         parts = arn.split(":") if arn.startswith("arn:aws") else []
         acct_id = parts[4] if len(parts) >= 5 and parts[4] else None
         aws_env = multi_envs.get(acct_id, aws_env)
+    aws_env = aws_env or {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
     _, error = run_cli_command(args, env=aws_env, timeout=CREDENTIALS_TIMEOUT)
     return error
 
@@ -122,7 +125,7 @@ def _get_azure_cluster_credentials(cluster, provider_credentials, provider_envs)
         "--resource-group", resource_group,
         "--overwrite-existing",
     ]
-    azure_env = provider_envs.get("azure")
+    azure_env = provider_envs.get("azure") or {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
     _, error = run_cli_command(args, env=azure_env, timeout=CREDENTIALS_TIMEOUT)
     return error
 
@@ -494,7 +497,7 @@ def _fetch_raw_resources(cluster_name, kubectl_env):
     errors = []
     for resource_kind, cmd in KUBECTL_COMMANDS.items():
         logger.info("K8s enrichment: fetching %s from cluster %s", resource_kind, cluster_name)
-        data, error = _run_json_command(cmd, env=kubectl_env)
+        data, error = _run_json_command(cmd, kubectl_env)
         if error:
             error_msg = (
                 f"Failed to fetch {resource_kind} from cluster "

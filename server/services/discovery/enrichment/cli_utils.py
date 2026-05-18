@@ -15,12 +15,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 120
 
 
-def run_cli_json_command(cmd, env=None, timeout=DEFAULT_TIMEOUT, label="cli"):
+def run_cli_json_command(cmd, env, timeout=DEFAULT_TIMEOUT, label="cli"):
     """Run a CLI command and return parsed JSON output.
 
     Args:
         cmd: List of command arguments.
-        env: Optional environment dict for subprocess.
+        env: Explicit environment dict for subprocess. Must not be None —
+             callers are required to pass a minimal isolated env to prevent
+             the subprocess from inheriting the full server environment.
         timeout: Command timeout in seconds (default 120).
         label: A safe, caller-provided string used in log messages (never
                derived from ``cmd`` to avoid leaking credentials).
@@ -28,6 +30,9 @@ def run_cli_json_command(cmd, env=None, timeout=DEFAULT_TIMEOUT, label="cli"):
     Returns:
         Parsed JSON output, or None on failure.
     """
+    if env is None:
+        logger.error("[%s] Missing explicit subprocess env — refusing to inherit server environment", label)
+        return None
     try:
         result = subprocess.run(
             cmd,
@@ -56,7 +61,7 @@ def run_cli_json_command(cmd, env=None, timeout=DEFAULT_TIMEOUT, label="cli"):
         return None
 
 
-def run_cli_command(cmd, env=None, timeout=DEFAULT_TIMEOUT, label="cli"):
+def run_cli_command(cmd, env, timeout=DEFAULT_TIMEOUT, label="cli"):
     """Run a CLI command and return (stdout_string, error_string_or_None).
 
     Unlike run_cli_json_command, this returns raw stdout without JSON parsing.
@@ -64,7 +69,9 @@ def run_cli_command(cmd, env=None, timeout=DEFAULT_TIMEOUT, label="cli"):
 
     Args:
         cmd: List of command arguments.
-        env: Optional environment dict for subprocess.
+        env: Explicit environment dict for subprocess. Must not be None —
+             callers are required to pass a minimal isolated env to prevent
+             the subprocess from inheriting the full server environment.
         timeout: Command timeout in seconds (default 120).
         label: A safe, caller-provided string used in error messages (never
                derived from ``cmd`` to avoid leaking credentials).
@@ -72,6 +79,8 @@ def run_cli_command(cmd, env=None, timeout=DEFAULT_TIMEOUT, label="cli"):
     Returns:
         Tuple of (stdout_str, error_str_or_None).
     """
+    if env is None:
+        return None, f"[{label}] Missing explicit subprocess env — refusing to inherit server environment"
     try:
         result = subprocess.run(
             cmd,

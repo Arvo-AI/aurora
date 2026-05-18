@@ -49,8 +49,12 @@ def _setup_provider_env(provider_name, user_id, credentials):
 
     Args:
         provider_name: One of gcp, aws, azure, ovh, scaleway, tailscale.
-        user_id: The user ID performing discovery.
-        credentials: Original credentials dict (may contain project_id, etc.).
+        user_id: The user ID performing discovery (used for RLS / error tracking).
+        credentials: Original credentials dict (may contain project_id,
+            owner_id, etc.).  When an ``owner_id`` key is present it is used
+            as the credential-lookup identity so org-shared connectors are
+            resolved against the correct Vault path, regardless of which org
+            member triggered discovery.
 
     Returns:
         (env_dict_or_None, updated_credentials_dict)
@@ -67,6 +71,10 @@ def _setup_provider_env(provider_name, user_id, credentials):
         setup_tailscale_environment_isolated,
     )
 
+    # Use the per-provider credential owner when available so org-shared
+    # connectors resolve against the correct Vault secret path.
+    auth_user_id = credentials.pop("owner_id", None) or user_id
+
     # kubectl uses the chatbot internal API, no subprocess env needed
     if provider_name == "kubectl":
         return None, credentials
@@ -78,14 +86,14 @@ def _setup_provider_env(provider_name, user_id, credentials):
             project_ids = credentials.get("project_ids", [])
             selected = project_ids[0] if project_ids else credentials.get("project_id")
             success, resolved_project, _auth_type, env = setup_gcp_environment_isolated(
-                user_id, selected_project_id=selected, provider_preference="gcp"
+                auth_user_id, selected_project_id=selected, provider_preference="gcp"
             )
             if success and env:
                 return env, credentials  # credentials already has project_ids
 
         elif provider_name == "aws":
             # Try multi-account first; fall back to single-account
-            account_envs = setup_aws_environments_all_accounts(user_id)
+            account_envs = setup_aws_environments_all_accounts(auth_user_id)
             if account_envs and len(account_envs) > 1:
                 creds = {
                     "_multi_account": True,
@@ -105,7 +113,7 @@ def _setup_provider_env(provider_name, user_id, credentials):
                 return None, creds
 
             # Legacy fallback
-            success, _region, _auth_type, env = setup_aws_environment_isolated(user_id)
+            success, _region, _auth_type, env = setup_aws_environment_isolated(auth_user_id)
             if success and env:
                 creds = {
                     "access_key_id": env.get("AWS_ACCESS_KEY_ID", ""),
@@ -117,7 +125,7 @@ def _setup_provider_env(provider_name, user_id, credentials):
 
         elif provider_name == "azure":
             subscription_id = credentials.get("subscription_id")
-            result = setup_azure_environment_isolated(user_id, subscription_id=subscription_id)
+            result = setup_azure_environment_isolated(auth_user_id, subscription_id=subscription_id)
             success, resolved_sub, _auth_type, env, auth_command = result
             if success and env:
                 # Build credentials dict from env so azure_asset_discovery._build_env works
@@ -130,17 +138,17 @@ def _setup_provider_env(provider_name, user_id, credentials):
                 return None, creds  # Azure provider builds its own env from credentials
 
         elif provider_name == "ovh":
-            success, _project, _auth_type, env = setup_ovh_environment_isolated(user_id)
+            success, _project, _auth_type, env = setup_ovh_environment_isolated(auth_user_id)
             if success and env:
                 return env, credentials
 
         elif provider_name == "scaleway":
-            success, _project, _auth_type, env = setup_scaleway_environment_isolated(user_id)
+            success, _project, _auth_type, env = setup_scaleway_environment_isolated(auth_user_id)
             if success and env:
                 return env, credentials
 
         elif provider_name == "tailscale":
-            success, tailnet, _auth_type, env = setup_tailscale_environment_isolated(user_id)
+            success, tailnet, _auth_type, env = setup_tailscale_environment_isolated(auth_user_id)
             if success and env:
                 creds = {
                     "api_key": env.get("TAILSCALE_ACCESS_TOKEN", ""),
@@ -149,7 +157,7 @@ def _setup_provider_env(provider_name, user_id, credentials):
                 return None, creds  # Tailscale uses REST API, not subprocess
 
     except Exception as e:
-        logger.error(f"[Discovery] Failed to setup {provider_name} environment for user {user_id}: {e}")
+        logger.error(f"[Discovery] Failed to setup {provider_name} environment for user {user_id} (auth_as={auth_user_id}): {e}")
 
     logger.warning(f"[Discovery] Could not obtain credentials for {provider_name}, user {user_id}")
     return None, credentials

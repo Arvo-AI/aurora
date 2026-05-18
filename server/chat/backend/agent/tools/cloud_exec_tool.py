@@ -513,6 +513,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         # on-disk gcloud state persists across invocations.  Each call gets its
         # own directory; the OS reclaims it when the process exits (or earlier
         # when the caller explicitly calls shutil.rmtree on _gcloud_tmpdir).
+        import atexit, shutil as _shutil
         cloudsdk_config_dir = tempfile.mkdtemp(prefix=f".gcloud-{user_id}-")
         try:
             # Write a minimal properties file so gcloud sees an active account.
@@ -528,13 +529,11 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
                 _pf.write(f"[core]\naccount = {account_identity}\n")
         except OSError as mkdir_err:
             logger.warning(
-                "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s) — falling back to shared path",
+                "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s)",
                 type(mkdir_err).__name__,
             )
-            # Point CLOUDSDK_CONFIG at the system default (empty string = unset)
-            # so gcloud uses its normal config directory rather than the empty
-            # tmpdir that has no properties file.
-            cloudsdk_config_dir = ""
+            _shutil.rmtree(cloudsdk_config_dir, ignore_errors=True)
+            return False, None, None, None
 
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
@@ -545,7 +544,6 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             "GOOGLE_CLOUD_PROJECT": project_id,
             "CLOUDSDK_CONFIG": cloudsdk_config_dir,
             # Expose the temp dir path so callers can clean up after use.
-            # Empty string means the OSError fallback fired and there is nothing to clean up.
             "_gcloud_tmpdir": cloudsdk_config_dir,
         }
         if is_sa_mode:
@@ -569,9 +567,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         # Safety-net: register an atexit handler so the tmpdir is always
         # removed even if the caller forgets to clean it up.  This covers
         # every call-site, not just discovery_service.py.
-        if cloudsdk_config_dir:
-            import atexit, shutil as _shutil
-            atexit.register(_shutil.rmtree, cloudsdk_config_dir, True)
+        atexit.register(_shutil.rmtree, cloudsdk_config_dir, True)
 
         return True, project_id, auth_method, isolated_env
 

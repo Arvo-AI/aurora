@@ -323,10 +323,18 @@ def _get_oauth_project_ids(user_id):
     Proactively refreshes the access token before use so a near-expired token
     doesn't cause the enumeration call to fail.
 
+    Only returns projects that were explicitly set up during GCP post-auth
+    (stored as the ``gcp_connected_projects`` user preference).  This prevents
+    stale or unintended projects from being scanned when the OAuth account has
+    access to more projects than the user connected in Aurora.  Falls back to
+    the full billing-filtered enumeration when the preference has not been set
+    yet (e.g. accounts connected before this preference was introduced).
+
     Returns:
         Tuple of (project_ids: list[str], credential_error: str | None).
     """
     from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
+    from utils.auth.stateless_auth import get_user_preference
 
     refreshed = _refresh_gcp(user_id, "gcp")
     if refreshed is None:
@@ -334,6 +342,19 @@ def _get_oauth_project_ids(user_id):
         logger.warning("[Discovery] %s (user=%s)", err, user_id)
         return [], err
 
+    # If the user has a stored allowlist of connected projects, use it directly
+    # instead of enumerating every project the OAuth token can see.
+    connected_projects = get_user_preference(user_id, "gcp_connected_projects")
+    if connected_projects and isinstance(connected_projects, list):
+        project_ids = [p for p in connected_projects if isinstance(p, str) and p]
+        logger.info(
+            "[Discovery] Using stored gcp_connected_projects (%d) for user %s: %s",
+            len(project_ids), user_id, project_ids,
+        )
+        return project_ids, None
+
+    # Fallback: enumerate all projects the OAuth token can see (legacy path for
+    # accounts that predate the gcp_connected_projects preference).
     from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
     from connectors.gcp_connector.billing import has_active_billing
 
@@ -351,7 +372,7 @@ def _get_oauth_project_ids(user_id):
         except Exception:
             project_ids.append(pid)
 
-    logger.info("[Discovery] Found %d GCP projects (OAuth) for user %s", len(project_ids), user_id)
+    logger.info("[Discovery] Found %d GCP projects (OAuth, full enumeration) for user %s", len(project_ids), user_id)
     return project_ids, None
 
 
@@ -405,12 +426,12 @@ def _resolve_gcp_provider(user_id, org_id, providers, get_owner):
     gcp_project_ids, gcp_cred_error = _get_all_gcp_project_ids(owner_id)
 
     if gcp_project_ids:
-        providers["gcp"] = {"project_ids": gcp_project_ids}
+        providers["gcp"] = {"project_ids": gcp_project_ids, "owner_id": owner_id}
         return owner_id
 
     root_project = get_user_preference(owner_id, "gcp_root_project")
     if root_project:
-        providers["gcp"] = {"project_ids": [root_project]}
+        providers["gcp"] = {"project_ids": [root_project], "owner_id": owner_id}
         return owner_id
 
     del providers["gcp"]
@@ -440,7 +461,13 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
     Returns None when the org has no usable providers and should be skipped.
     """
     user_id = org_info["rep"]
-    providers = org_info["providers"]
+    # Build provider credentials dict, embedding the per-provider owner so
+    # discovery_service._setup_provider_env authenticates against the correct
+    # Vault secret path for each connector.
+    providers = {
+        pname: {"owner_id": pdata.get("owner_id", user_id)}
+        for pname, pdata in org_info["providers"].items()
+    }
 
     if "gcp" in providers:
         _resolve_gcp_provider(user_id, org_id, providers, get_owner)
@@ -489,16 +516,17 @@ def run_full_discovery(self):
             logger.info("[Discovery Task] No orgs with connected cloud providers")
             return {"status": "no_users", "users_processed": 0}
 
-        # Deduplicate by org: collect the union of active providers per org and
-        # keep one representative user (the first encountered, which is
-        # consistent within a run since _query_connected_providers iterates
-        # users in a stable order).  Provider credential lookups use the token
-        # owner at runtime, so the representative just needs to belong to the org.
-        orgs: dict = {}  # org_id -> {"rep": user_id, "providers": {provider: {}}}
+        # Deduplicate by org: collect the union of active providers per org.
+        # Record the connector owner per provider (the user_id from each row IS
+        # the owner — _query_connected_providers returns the row that owns the
+        # token).  Using the owner directly in _setup_provider_env avoids relying
+        # on the internal get_token_owner_id resolution chain and makes the
+        # credential routing explicit.
+        orgs: dict = {}  # org_id -> {"rep": user_id, "providers": {provider: {"owner_id": user_id}}}
         for user_id, org_id, provider in rows:
             if org_id not in orgs:
                 orgs[org_id] = {"rep": user_id, "providers": {}}
-            orgs[org_id]["providers"][provider] = {}
+            orgs[org_id]["providers"][provider] = {"owner_id": user_id}
 
         logger.info("[Discovery Task] Processing %d org(s)", len(orgs))
 
