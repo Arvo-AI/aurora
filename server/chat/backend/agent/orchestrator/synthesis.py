@@ -25,11 +25,12 @@ logger = logging.getLogger(__name__)
 
 _MAX_SYNTHESIS_WAVES = 2
 _MAX_FOLLOWUPS = 6
+_MAX_FINDINGS_CHARS = 12000
 
 # Caps for orchestrator-context fields embedded in the synthesis prompt.
-# Findings themselves are already capped at 12000 chars; these are kept small
-# enough that the combined prompt comfortably fits inside the model window
-# while still surfacing the full alert + plan.
+# Findings themselves are already capped at _MAX_FINDINGS_CHARS; these are
+# kept small enough that the combined prompt comfortably fits inside the model
+# window while still surfacing the full alert + plan.
 _MAX_ORCH_QUESTION_CHARS = 4000
 _MAX_ORCH_ALERT_FIELD_CHARS = 600
 _MAX_ORCH_RATIONALE_CHARS = 800
@@ -98,7 +99,7 @@ async def _synthesis(state: State) -> dict:
         header = f"## Wave {row.get('wave', '?')} | Agent: {row.get('agent_id')} ({row.get('role_name')})"
         purpose = row.get("purpose")
         if purpose:
-            header = f"{header}\nAssigned purpose: {_trunc(purpose, _MAX_ORCH_PURPOSE_CHARS)}"
+            header = f"{header}\nAssigned purpose: {_trunc(purpose, _MAX_ORCH_PURPOSE_CHARS, 'finding_purpose')}"
         body = body_by_agent.get(row.get("agent_id"))
         if body:
             finding_bodies.append(f"{header}\n\n{body}")
@@ -315,12 +316,17 @@ def _build_synthesis_prompt(state: State, combined_findings: str, wave: int,
     role_lines = "\n".join(
         f"- {r.name}: {r.description}" for r in available_roles
     ) or "(none available)"
+    findings_len = len(combined_findings)
+    if findings_len > _MAX_FINDINGS_CHARS:
+        logger.info("synthesis: truncated combined_findings from %d to %d chars", findings_len, _MAX_FINDINGS_CHARS)
+        combined_findings = combined_findings[:_MAX_FINDINGS_CHARS]
+
     return (
         f"You are an RCA orchestrator synthesizing parallel investigation findings.\n\n"
         f"Most recent wave: {target_wave} (max {_MAX_SYNTHESIS_WAVES})\n\n"
         f"{orchestrator_thoughts}\n\n"
         f"Available investigator roles for follow-up (use ONLY these role_name values):\n{role_lines}\n\n"
-        f"=== SUB-AGENT FINDINGS (grouped by wave) ===\n\n{combined_findings[:12000]}\n\n"
+        f"=== SUB-AGENT FINDINGS (grouped by wave) ===\n\n{combined_findings}\n\n"
         f"=== TASK ===\n"
         f"Treat ORCHESTRATOR CONTEXT as ground-truth facts about the alert and "
         f"the investigation plan. Treat SUB-AGENT FINDINGS as the only source "
@@ -392,9 +398,12 @@ def _build_orchestrator_thoughts(state: State) -> str:
     return "\n".join(lines)
 
 
-def _trunc(value, limit: int) -> str:
+def _trunc(value, limit: int, field: str = "") -> str:
     s = "" if value is None else str(value)
-    return s if len(s) <= limit else s[:limit] + "...[truncated]"
+    if len(s) <= limit:
+        return s
+    logger.info("synthesis: truncated %s from %d to %d chars", field or "field", len(s), limit)
+    return s[:limit] + "...[truncated]"
 
 
 def _format_rca_context(rca_context: dict) -> str:
@@ -412,7 +421,7 @@ def _format_rca_context(rca_context: dict) -> str:
     for key, label in fields:
         val = rca_context.get(key)
         if val:
-            parts.append(f"- {label}: {_trunc(val, _MAX_ORCH_ALERT_FIELD_CHARS)}")
+            parts.append(f"- {label}: {_trunc(val, _MAX_ORCH_ALERT_FIELD_CHARS, label)}")
     providers = rca_context.get("providers")
     if isinstance(providers, (list, tuple)) and providers:
         parts.append(f"- Connected providers: {', '.join(str(p) for p in providers)}")
@@ -436,7 +445,7 @@ def _format_triage_decision(triage_decision) -> str:
     if mode:
         parts.append(f"- Mode: {mode}")
     if rationale:
-        parts.append(f"- Rationale: {_trunc(rationale, _MAX_ORCH_RATIONALE_CHARS)}")
+        parts.append(f"- Rationale: {_trunc(rationale, _MAX_ORCH_RATIONALE_CHARS, 'triage_rationale')}")
     if inputs:
         parts.append("- Sub-agents dispatched:")
         for inp in inputs:
@@ -449,7 +458,7 @@ def _format_triage_decision(triage_decision) -> str:
                 role = getattr(inp, "role_name", "?")
                 purpose = getattr(inp, "purpose", "")
             parts.append(
-                f"  - {agent_id} ({role}): {_trunc(purpose, _MAX_ORCH_PURPOSE_CHARS)}"
+                f"  - {agent_id} ({role}): {_trunc(purpose, _MAX_ORCH_PURPOSE_CHARS, 'purpose')}"
             )
     return "\n".join(parts)
 
@@ -462,7 +471,7 @@ def _format_synthesis_history(history) -> str:
         if not isinstance(entry, dict):
             continue
         wave = entry.get("wave", "?")
-        rationale = _trunc(entry.get("rationale", ""), _MAX_ORCH_RATIONALE_CHARS)
+        rationale = _trunc(entry.get("rationale", ""), _MAX_ORCH_RATIONALE_CHARS, "history_rationale")
         needs_more = entry.get("needs_more_research")
         parts.append(f"- Wave {wave}: needs_more_research={bool(needs_more)}")
         if rationale:
@@ -473,7 +482,7 @@ def _format_synthesis_history(history) -> str:
                 continue
             agent_id = fu.get("agent_id") or "?"
             role = fu.get("role_name") or "?"
-            purpose = _trunc(fu.get("purpose", ""), _MAX_ORCH_PURPOSE_CHARS)
+            purpose = _trunc(fu.get("purpose", ""), _MAX_ORCH_PURPOSE_CHARS, "history_purpose")
             parts.append(f"  follow-up {agent_id} ({role}): {purpose}")
     return "\n".join(parts)
 
