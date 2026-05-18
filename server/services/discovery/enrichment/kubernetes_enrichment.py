@@ -14,6 +14,14 @@ import os
 from services.discovery.enrichment.cli_utils import run_cli_command
 from services.discovery.resource_mapper import infer_type_from_image
 
+
+def _extract_aws_account_id(arn: str) -> str | None:
+    """Extract AWS account ID from an ARN string, or None if invalid."""
+    if not arn.startswith("arn:aws"):
+        return None
+    parts = arn.split(":")
+    return parts[4] if len(parts) >= 5 and parts[4] else None
+
 logger = logging.getLogger(__name__)
 
 # Timeout for credential and kubectl commands (seconds)
@@ -104,8 +112,7 @@ def _get_aws_cluster_credentials(cluster, provider_envs):
     aws_env = provider_envs.get("aws")
     if multi_envs:
         arn = cluster.get("cloud_resource_id", "")
-        parts = arn.split(":") if arn.startswith("arn:aws") else []
-        acct_id = parts[4] if len(parts) >= 5 and parts[4] else None
+        acct_id = _extract_aws_account_id(arn)
         aws_env = multi_envs.get(acct_id, aws_env)
     aws_env = aws_env or {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
     _, error = run_cli_command(args, env=aws_env, timeout=CREDENTIALS_TIMEOUT)
@@ -483,8 +490,7 @@ def _resolve_kubectl_env(cluster, provider_envs):
     if provider == "aws" and provider_envs.get("_aws_multi"):
         multi_envs = provider_envs["_aws_multi"]
         arn = cluster.get("cloud_resource_id", "")
-        parts = arn.split(":") if arn.startswith("arn:aws") else []
-        acct_id = parts[4] if len(parts) >= 5 and parts[4] else None
+        acct_id = _extract_aws_account_id(arn)
         kubectl_env = multi_envs.get(acct_id, kubectl_env)
     if kubectl_env is None:
         kubectl_env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}

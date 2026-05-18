@@ -95,5 +95,5 @@ def run_cli_command(cmd, env, timeout=DEFAULT_TIMEOUT, label="cli"):
         return result.stdout.strip(), None
     except subprocess.TimeoutExpired:
         return None, f"[{label}] Command timed out after {timeout}s"
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return None, f"[{label}] Command error: {e}"

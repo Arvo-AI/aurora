@@ -6,6 +6,7 @@ Phase 3: Connection Inference (all 11 methods)
 """
 
 import logging
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -310,7 +311,7 @@ def run_discovery_for_user(user_id, connected_providers):
                         summary.setdefault("unknown_provider_errors", []).append(err_str)
             stale = k8s_result.get("stale_clusters", [])
             if stale:
-                logger.warning("[Discovery] Stale K8s clusters for user %s: %s", user_id, stale)
+                logger.warning("[Discovery] Stale K8s clusters for user_hash=%s: %s", hash_for_log(user_id), stale)
                 summary.setdefault("stale_clusters", []).extend(stale)
             logger.info(f"[Discovery] Phase 2 K8s: {len(k8s_nodes)} nodes, {len(k8s_rels)} relationships")
         except Exception as e:
@@ -360,7 +361,7 @@ def run_discovery_for_user(user_id, connected_providers):
                         if pname in connected_providers and pname in err_str.lower():
                             summary["provider_errors"].setdefault(pname, []).append(err_str)
                             break
-            logger.info(f"[Discovery] Phase 2 Serverless enrichment complete")
+            logger.info("[Discovery] Phase 2 Serverless enrichment complete")
         except Exception as e:
             logger.error(f"[Discovery] Phase 2 Serverless enrichment failed: {e}")
             error_msg = f"Serverless enrichment failed: {str(e)}"
@@ -407,8 +408,7 @@ def run_discovery_for_user(user_id, connected_providers):
     )
 
     # Clean up any ephemeral gcloud temp directories created during this run.
-    import shutil
-    for _pname, (env, _) in provider_envs.items():
+    for env, _ in provider_envs.values():
         tmpdir = env.get("_gcloud_tmpdir") if isinstance(env, dict) else None
         if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)

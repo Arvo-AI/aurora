@@ -348,8 +348,8 @@ def _get_oauth_project_ids(user_id):
     if connected_projects and isinstance(connected_projects, list):
         project_ids = [p for p in connected_projects if isinstance(p, str) and p]
         logger.info(
-            "[Discovery] Using stored gcp_connected_projects (%d) for user %s: %s",
-            len(project_ids), user_id, project_ids,
+            "[Discovery] Using stored gcp_connected_projects (%d) for user %s",
+            len(project_ids), user_id,
         )
         return project_ids, None
 

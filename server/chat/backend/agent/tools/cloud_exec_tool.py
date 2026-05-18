@@ -567,7 +567,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         # Safety-net: register an atexit handler so the tmpdir is always
         # removed even if the caller forgets to clean it up.  This covers
         # every call-site, not just discovery_service.py.
-        atexit.register(_shutil.rmtree, cloudsdk_config_dir, True)
+        atexit.register(_shutil.rmtree, cloudsdk_config_dir, ignore_errors=True)
 
         return True, project_id, auth_method, isolated_env
 
