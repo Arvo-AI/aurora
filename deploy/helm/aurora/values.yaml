@@ -98,6 +98,7 @@ autoscaling:
 # ------------------------------------------------------------------------------
 replicaCounts:
   # Scalable services (can increase for load balancing)
+  # NOTE: When autoscaling is enabled above, these values are ignored — HPA's minReplicas takes over.
   server: 1          # API server (Flask) - stateless, can scale
   mcp: 1             # MCP server (streamable-http on 8811)
   celeryWorker: 1    # Background task workers - stateless, can scale

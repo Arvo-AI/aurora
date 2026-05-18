@@ -65,6 +65,7 @@ DB_POOL_MAX=20
 ```
 
 For higher concurrency, scale these together. Example for a 4-vCPU pod:
+
 ```bash
 GUNICORN_WORKERS=4
 GUNICORN_THREADS=8

@@ -58,7 +58,7 @@ def _getconn_with_retry(pool, label="connection"):
             if connection:
                 return connection
         except psycopg2.pool.PoolError:
-            pass
+            logger.debug("Pool exhausted on attempt %d, will retry", attempt + 1)
         if attempt < _POOL_RETRY_ATTEMPTS - 1:
             delay = _POOL_RETRY_BASE_DELAY * (2 ** attempt)
             logger.warning("Pool exhausted getting %s, retrying in %.2fs (attempt %d/%d)",
