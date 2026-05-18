@@ -175,6 +175,13 @@ def _mark_provider_inactive(user_id: str, provider: str) -> None:
     from datetime import datetime, timezone
 
     org_id = get_org_id_for_user(user_id)
+    if org_id is None:
+        logger.warning(
+            "[Discovery:AutoDisconnect] org_id is None for user=%s — 'org_id = %%s' in SQL "
+            "will not match any rows (NULL comparisons require IS NULL); "
+            "only user-scoped rows will be deactivated",
+            user_id,
+        )
     conn = None
     try:
         conn = connect_to_db_as_admin()

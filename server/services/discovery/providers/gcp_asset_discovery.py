@@ -15,6 +15,10 @@ from services.discovery.resource_mapper import map_gcp_resource, GCP_RELATIONSHI
 logger = logging.getLogger(__name__)
 
 
+class SCCPremiumRequiredError(RuntimeError):
+    """Raised when GCP reports that Security Command Center premium is required."""
+
+
 def _run_command(args, timeout=600, env=None):
     """Run a gcloud CLI command and return parsed JSON output.
 
@@ -51,7 +55,7 @@ def _run_command(args, timeout=600, env=None):
             # exception so callers can downgrade to a warning.
             if "Relationship is only supported for SCC premium customers" in stderr or \
                ("UNAUTHENTICATED" in stderr and "premium customers" in stderr):
-                raise RuntimeError("__SCC_PREMIUM_REQUIRED__")
+                raise SCCPremiumRequiredError()
             logger.error(f"gcloud command failed (rc={result.returncode}): {stderr}")
             return None
 
@@ -455,14 +459,13 @@ def _discover_project(project_id, auth_args, env=None):
         elif isinstance(raw_relationships, list):
             logger.info(f"[{project_id}] Fetched {len(raw_relationships)} relationship assets")
             relationships = _parse_relationships(raw_relationships, nodes_by_id)
+    except SCCPremiumRequiredError:
+        logger.info(
+            "[%s] Relationship data requires SCC premium — skipping (nodes still discovered)",
+            project_id,
+        )
     except RuntimeError as e:
-        if "__SCC_PREMIUM_REQUIRED__" in str(e):
-            logger.info(
-                "[%s] Relationship data requires SCC premium — skipping (nodes still discovered)",
-                project_id,
-            )
-        else:
-            errors.append(f"[{project_id}] Relationship fetch failed: {e}")
+        errors.append(f"[{project_id}] Relationship fetch failed: {e}")
 
     return nodes, relationships, errors
 

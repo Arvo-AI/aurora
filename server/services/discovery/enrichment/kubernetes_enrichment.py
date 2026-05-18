@@ -456,7 +456,14 @@ _STALE_CLUSTER_FRAGMENTS = (
 
 
 def _is_stale_cluster_error(error_msg: str) -> bool:
-    """Return True when error_msg indicates the cluster no longer exists."""
+    """Return True when error_msg indicates the cluster no longer exists.
+
+    NOTE: This function is only intended to be called on stderr from the
+    ``get-credentials`` command (via ``_get_cluster_credentials``).  The
+    fragments below (e.g. "NOT_FOUND", "cluster not found") are scoped to
+    that context and may produce false positives if applied to kubectl fetch
+    errors from other call sites.
+    """
     lower = error_msg.lower()
     return any(frag.lower() in lower for frag in _STALE_CLUSTER_FRAGMENTS)
 
@@ -477,7 +484,7 @@ def _resolve_kubectl_env(cluster, provider_envs):
         acct_id = parts[4] if len(parts) >= 5 and parts[4] else None
         kubectl_env = multi_envs.get(acct_id, kubectl_env)
     if kubectl_env is None:
-        kubectl_env = {"PATH": os.environ.get("PATH", "")}
+        kubectl_env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
     return kubectl_env
 
 

@@ -390,6 +390,11 @@ def _fetch_raw_env_vars(node, aws_account_envs, _any_aws_env, gcp_env, gcp_defau
         node_arn = node.get("cloud_resource_id", "")
         acct_id = _extract_account_id_from_arn(node_arn)
         aws_env = aws_account_envs.get(acct_id) or _any_aws_env
+        if acct_id and acct_id not in aws_account_envs:
+            logger.warning(
+                "AWS Lambda %s: account %s not in credentials map — falling back to a different account's credentials",
+                name, acct_id,
+            )
         return _fetch_lambda_env_vars(name, aws_env)
 
     if provider == "azure":

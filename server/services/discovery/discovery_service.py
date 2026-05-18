@@ -273,29 +273,22 @@ def run_discovery_for_user(user_id, connected_providers):
                 summary["phase2_relationships"] += write_dependencies(user_id, k8s_rels)
             if k8s_result.get("errors"):
                 summary["errors"].extend(k8s_result["errors"])
-                # Attribute each error to its provider via the structured "provider"
-                # field when available; fall back to substring matching only as a
-                # last resort so misattribution is minimised.
+                # Attribute each error to its provider via substring matching.
+                # kubernetes_enrichment returns plain strings in its errors list.
                 for err in k8s_result["errors"]:
                     attributed = False
-                    if isinstance(err, dict):
-                        pname = err.get("provider")
-                        if pname and pname in connected_providers:
-                            summary["provider_errors"].setdefault(pname, []).append(
-                                err.get("message", err)
-                            )
+                    err_str = err if isinstance(err, str) else str(err)
+                    # Substring match: a cluster name like "aws-prod" will
+                    # attribute to "aws", which is usually correct (a cluster
+                    # named "aws-prod" really is on AWS).  Keep this assumption
+                    # in mind if attribution appears wrong in the future.
+                    for pname in ("gcp", "aws", "azure"):
+                        if pname in connected_providers and pname in err_str.lower():
+                            summary["provider_errors"].setdefault(pname, []).append(err_str)
                             attributed = True
+                            break
                     if not attributed:
-                        err_str = err if isinstance(err, str) else str(err)
-                        for pname in ("gcp", "aws", "azure"):
-                            if pname in connected_providers and pname in err_str.lower():
-                                summary["provider_errors"].setdefault(pname, []).append(err_str)
-                                attributed = True
-                                break
-                        if not attributed:
-                            summary.setdefault("unknown_provider_errors", []).append(
-                                err if isinstance(err, str) else str(err)
-                            )
+                        summary.setdefault("unknown_provider_errors", []).append(err_str)
             stale = k8s_result.get("stale_clusters", [])
             if stale:
                 logger.warning("[Discovery] Stale K8s clusters for user %s: %s", user_id, stale)
@@ -399,9 +392,6 @@ def run_discovery_for_user(user_id, connected_providers):
     for _pname, (env, _) in provider_envs.items():
         tmpdir = env.get("_gcloud_tmpdir") if isinstance(env, dict) else None
         if tmpdir:
-            try:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            except Exception as e:
-                logger.debug("[Discovery] Failed to clean up temp dir %s (ignored): %s", tmpdir, e)
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     return summary

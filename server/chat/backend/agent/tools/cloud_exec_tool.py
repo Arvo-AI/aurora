@@ -531,6 +531,10 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
                 "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s) — falling back to shared path",
                 type(mkdir_err).__name__,
             )
+            # Point CLOUDSDK_CONFIG at the system default (empty string = unset)
+            # so gcloud uses its normal config directory rather than the empty
+            # tmpdir that has no properties file.
+            cloudsdk_config_dir = ""
 
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
@@ -541,6 +545,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             "GOOGLE_CLOUD_PROJECT": project_id,
             "CLOUDSDK_CONFIG": cloudsdk_config_dir,
             # Expose the temp dir path so callers can clean up after use.
+            # Empty string means the OSError fallback fired and there is nothing to clean up.
             "_gcloud_tmpdir": cloudsdk_config_dir,
         }
         if is_sa_mode:
@@ -560,6 +565,13 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
 
         logger.info("GCP isolated environment configured (%s)", auth_method)
         logger.info("TIME: setup_gcp_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
+
+        # Safety-net: register an atexit handler so the tmpdir is always
+        # removed even if the caller forgets to clean it up.  This covers
+        # every call-site, not just discovery_service.py.
+        if cloudsdk_config_dir:
+            import atexit, shutil as _shutil
+            atexit.register(_shutil.rmtree, cloudsdk_config_dir, True)
 
         return True, project_id, auth_method, isolated_env
 
