@@ -9,6 +9,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from utils.log_sanitizer import safe_provider, hash_for_log
 from services.discovery.graph_writer import write_services, write_dependencies
 from services.discovery.providers import (
     gcp_asset_discovery,
@@ -157,9 +158,19 @@ def _setup_provider_env(provider_name, user_id, credentials):
                 return None, creds  # Tailscale uses REST API, not subprocess
 
     except Exception as e:
-        logger.error(f"[Discovery] Failed to setup {provider_name} environment for user {user_id} (auth_as={auth_user_id}): {e}")
+        logger.exception(
+            "[Discovery] Failed to setup %s environment for user_hash=%s (auth_as_hash=%s), error_type=%s",
+            safe_provider(provider_name),
+            hash_for_log(user_id),
+            hash_for_log(auth_user_id),
+            type(e).__name__,
+        )
 
-    logger.warning(f"[Discovery] Could not obtain credentials for {provider_name}, user {user_id}")
+    logger.warning(
+        "[Discovery] Could not obtain credentials for %s, user_hash=%s",
+        safe_provider(provider_name),
+        hash_for_log(user_id),
+    )
     return None, credentials
 
 
