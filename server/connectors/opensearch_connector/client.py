@@ -30,7 +30,7 @@ class OpenSearchClient:
         verify_ssl: bool = True,
         max_retries: int = 2,
     ):
-        self.endpoint = endpoint.rstrip("/")
+        self.endpoint = OpenSearchClient.normalize_endpoint(endpoint)
         self.username = username
         self.index_pattern = index_pattern
         self.verify_ssl = verify_ssl

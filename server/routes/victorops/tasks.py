@@ -199,6 +199,205 @@ def _schedule_summary_and_rca(user_id, incident_db_id, incident_title, incident_
         logger.warning("[VICTOROPS] Failed to trigger RCA: %s", e)
 
 
+def _run_correlation_check(
+    cursor, conn, user_id: str, org_id: str, event_db_id: int,
+    incident_title: str, service_name: str, severity: str,
+    alert_metadata: Dict[str, Any], payload: Dict[str, Any],
+) -> bool:
+    """Run alert correlation; returns True if correlated (caller should return early)."""
+    try:
+        correlator = AlertCorrelator()
+        correlation_result = correlator.correlate(
+            cursor=cursor,
+            user_id=user_id,
+            source_type="victorops",
+            source_alert_id=event_db_id,
+            alert_title=incident_title,
+            alert_service=service_name,
+            alert_severity=severity,
+            alert_metadata=alert_metadata,
+            org_id=org_id,
+        )
+        if correlation_result.is_correlated:
+            handle_correlated_alert(
+                cursor=cursor,
+                user_id=user_id,
+                incident_id=correlation_result.incident_id,
+                source_type="victorops",
+                source_alert_id=event_db_id,
+                alert_title=incident_title,
+                alert_service=service_name,
+                alert_severity=severity,
+                correlation_result=correlation_result,
+                alert_metadata=alert_metadata,
+                raw_payload=payload,
+                org_id=org_id,
+            )
+            conn.commit()
+            return True
+    except Exception as corr_exc:
+        logger.warning("[VICTOROPS] Correlation check failed, proceeding normally: %s", corr_exc)
+    return False
+
+
+def _process_victorops_event_in_db(
+    cursor, conn, user_id: str, payload: Dict[str, Any], received_at
+) -> None:
+    """Core DB processing extracted to keep the Celery task function complexity low."""
+    org_id = set_rls_context(cursor, conn, user_id, log_prefix="[VICTOROPS]")
+    if not org_id:
+        return
+
+    alert_phase = _normalize_phase(payload)
+    incident_number = _extract_incident_number(payload)
+    incident_title = (
+        payload.get("INCIDENT.ENTITY_DISPLAY_NAME")
+        or payload.get("ALERT.entity_display_name")
+        or payload.get("ALERT.title")
+        or payload.get("INCIDENT_DISPLAY_NAME")
+        or payload.get("ENTITY_DISPLAY_NAME")
+        or payload.get("ENTITY_ID")
+        or "Untitled Incident"
+    )
+    service_name = (
+        payload.get("INCIDENT.SERVICE")
+        or payload.get("ALERT.monitoring_tool")
+        or payload.get("ALERT.entity_display_name")
+        or payload.get("SERVICE")
+        or payload.get("MONITORING_TOOL")
+        or "unknown"
+    )
+    entity_id = (
+        payload.get("STATE.ENTITY_ID")
+        or payload.get("ALERT.entity_id")
+        or payload.get("ENTITY_ID")
+        or ""
+    )
+    incident_url = payload.get("ALERT.alert_url") or payload.get("INCIDENT_URL", "")
+
+    if not incident_number:
+        logger.warning("[VICTOROPS] No INCIDENT_NUMBER in payload for user %s, skipping", user_id)
+        return
+
+    severity = _extract_severity(payload)
+    aurora_status = _extract_status(alert_phase)
+
+    # Persist raw event
+    cursor.execute(
+        """
+        INSERT INTO victorops_events
+        (user_id, org_id, alert_phase, incident_number, incident_title,
+         service_name, entity_id, payload, received_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (user_id, org_id, alert_phase, incident_number, incident_title,
+         service_name, entity_id, json.dumps(payload), received_at),
+    )
+    event_result = cursor.fetchone()
+    event_db_id = event_result[0] if event_result else None
+    conn.commit()
+
+    if not event_db_id:
+        return
+
+    alert_metadata: Dict[str, Any] = {
+        "incidentNumber": incident_number,
+        "incidentUrl": incident_url,
+        "entityId": entity_id,
+        "alertPhase": alert_phase,
+    }
+    state_message = (
+        payload.get("ALERT.state_message")
+        or payload.get("ALERT.message")
+        or payload.get("STATE_MESSAGE")
+        or ""
+    )
+    if state_message:
+        alert_metadata["description"] = state_message[:2000]
+
+    # Correlation check for triggered events
+    if alert_phase == "TRIGGERED":
+        if _run_correlation_check(cursor, conn, user_id, org_id, event_db_id,
+                                   incident_title, service_name, severity,
+                                   alert_metadata, payload):
+            return
+
+    # Upsert incident
+    cursor.execute(
+        """
+        WITH prev AS (
+            SELECT status FROM incidents
+            WHERE org_id = %s AND source_type = 'victorops'
+              AND source_alert_id = %s AND user_id = %s
+        )
+        INSERT INTO incidents
+        (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
+         severity, status, started_at, alert_metadata, alert_fired_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
+        SET updated_at = CURRENT_TIMESTAMP,
+            status = EXCLUDED.status,
+            severity = EXCLUDED.severity,
+            started_at = CASE
+                WHEN incidents.status = 'resolved' AND EXCLUDED.status != 'resolved'
+                THEN EXCLUDED.started_at
+                ELSE incidents.started_at
+            END,
+            alert_metadata = EXCLUDED.alert_metadata,
+            alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
+        RETURNING id, (xmax = 0) AS inserted, (SELECT status FROM prev) AS previous_status
+        """,
+        (
+            org_id, incident_number, user_id,
+            user_id, org_id, "victorops", incident_number,
+            incident_title, service_name, severity, aurora_status,
+            received_at, json.dumps(alert_metadata), received_at,
+        ),
+    )
+    incident_row = cursor.fetchone()
+    incident_db_id = incident_row[0] if incident_row else None
+    incident_was_inserted = bool(incident_row[1]) if incident_row else False
+    previous_status = incident_row[2] if incident_row else None
+    conn.commit()
+
+    if not incident_db_id:
+        return
+
+    # Record primary alert for triggered events
+    if alert_phase == "TRIGGERED":
+        _record_primary_alert(cursor, conn, user_id, org_id, incident_db_id, event_db_id,
+                               incident_title, service_name, severity, alert_metadata)
+
+    # Lifecycle events
+    lifecycle_writes = []
+    if incident_was_inserted and alert_phase == "TRIGGERED":
+        lifecycle_writes.append(("created", None, "investigating"))
+    elif previous_status is not None and previous_status != aurora_status:
+        ev_name = "resolved" if aurora_status == "resolved" else "status_changed"
+        lifecycle_writes.append((ev_name, previous_status, aurora_status))
+
+    _write_lifecycle_events(cursor, conn, incident_db_id, user_id, org_id, lifecycle_writes)
+
+    # SSE broadcast
+    try:
+        from routes.incidents_sse import broadcast_incident_update_to_user_connections
+        broadcast_incident_update_to_user_connections(
+            user_id,
+            {"type": "incident_update", "incident_id": str(incident_db_id), "source": "victorops"},
+        )
+    except Exception as e:
+        logger.warning("[VICTOROPS] Failed to notify SSE: %s", e)
+
+    # Summary + RCA only for new triggered incidents
+    if alert_phase == "TRIGGERED" and incident_was_inserted:
+        _schedule_summary_and_rca(user_id, incident_db_id, incident_title, incident_number,
+                                   severity, service_name, payload, alert_metadata, cursor, conn)
+
+    logger.info("[VICTOROPS] Processed %s event for incident #%s (db_id=%s)",
+                alert_phase, incident_number, incident_db_id)
+
+
 # ---------------------------------------------------------------------------
 # Celery task
 # ---------------------------------------------------------------------------
@@ -215,234 +414,14 @@ def process_victorops_event(
     metadata: Optional[Dict[str, Any]] = None,
     user_id: Optional[str] = None,
 ) -> None:
-    """Background processor for Splunk On-Call outbound webhook events.
-
-    Args:
-        payload:  Full webhook JSON body from Splunk On-Call.
-        metadata: Request metadata (headers, IP, etc.).
-        user_id:  Aurora user ID.
-    """
+    """Background processor for Splunk On-Call outbound webhook events."""
     received_at = datetime.now(timezone.utc)
-
     try:
         if not user_id:
             return
-
         from utils.db.connection_pool import db_pool
-
-        alert_phase = _normalize_phase(payload)
-        incident_number = _extract_incident_number(payload)
-        incident_title = (
-            payload.get("INCIDENT.ENTITY_DISPLAY_NAME")
-            or payload.get("ALERT.entity_display_name")
-            or payload.get("ALERT.title")
-            or payload.get("INCIDENT_DISPLAY_NAME")
-            or payload.get("ENTITY_DISPLAY_NAME")
-            or payload.get("ENTITY_ID")
-            or "Untitled Incident"
-        )
-        service_name = (
-            payload.get("INCIDENT.SERVICE")
-            or payload.get("ALERT.monitoring_tool")
-            or payload.get("ALERT.entity_display_name")
-            or payload.get("SERVICE")
-            or payload.get("MONITORING_TOOL")
-            or "unknown"
-        )
-        entity_id = (
-            payload.get("STATE.ENTITY_ID")
-            or payload.get("ALERT.entity_id")
-            or payload.get("ENTITY_ID")
-            or ""
-        )
-        incident_url = payload.get("ALERT.alert_url") or payload.get("INCIDENT_URL", "")
-
-        if not incident_number:
-            logger.warning(
-                "[VICTOROPS] No INCIDENT_NUMBER in payload for user %s, skipping", user_id
-            )
-            return
-
-        severity = _extract_severity(payload)
-        aurora_status = _extract_status(alert_phase)
-
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[VICTOROPS]")
-                if not org_id:
-                    return
-
-                # Persist raw event
-                cursor.execute(
-                    """
-                    INSERT INTO victorops_events
-                    (user_id, org_id, alert_phase, incident_number, incident_title,
-                     service_name, entity_id, payload, received_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        user_id,
-                        org_id,
-                        alert_phase,
-                        incident_number,
-                        incident_title,
-                        service_name,
-                        entity_id,
-                        json.dumps(payload),
-                        received_at,
-                    ),
-                )
-                event_result = cursor.fetchone()
-                event_db_id = event_result[0] if event_result else None
-                conn.commit()
-
-                if not event_db_id:
-                    return
-
-                alert_metadata = {
-                    "incidentNumber": incident_number,
-                    "incidentUrl": incident_url,
-                    "entityId": entity_id,
-                    "alertPhase": alert_phase,
-                }
-                state_message = (
-                    payload.get("ALERT.state_message")
-                    or payload.get("ALERT.message")
-                    or payload.get("STATE_MESSAGE")
-                    or ""
-                )
-                if state_message:
-                    alert_metadata["description"] = state_message[:2000]
-
-                # Correlation check for triggered events
-                if alert_phase == "TRIGGERED":
-                    try:
-                        correlator = AlertCorrelator()
-                        correlation_result = correlator.correlate(
-                            cursor=cursor,
-                            user_id=user_id,
-                            source_type="victorops",
-                            source_alert_id=event_db_id,
-                            alert_title=incident_title,
-                            alert_service=service_name,
-                            alert_severity=severity,
-                            alert_metadata=alert_metadata,
-                            org_id=org_id,
-                        )
-
-                        if correlation_result.is_correlated:
-                            handle_correlated_alert(
-                                cursor=cursor,
-                                user_id=user_id,
-                                incident_id=correlation_result.incident_id,
-                                source_type="victorops",
-                                source_alert_id=event_db_id,
-                                alert_title=incident_title,
-                                alert_service=service_name,
-                                alert_severity=severity,
-                                correlation_result=correlation_result,
-                                alert_metadata=alert_metadata,
-                                raw_payload=payload,
-                                org_id=org_id,
-                            )
-                            conn.commit()
-                            return
-                    except Exception as corr_exc:
-                        logger.warning(
-                            "[VICTOROPS] Correlation check failed, proceeding normally: %s",
-                            corr_exc,
-                        )
-
-                # Upsert incident
-                cursor.execute(
-                    """
-                    WITH prev AS (
-                        SELECT status FROM incidents
-                        WHERE org_id = %s AND source_type = 'victorops'
-                          AND source_alert_id = %s AND user_id = %s
-                    )
-                    INSERT INTO incidents
-                    (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                     severity, status, started_at, alert_metadata, alert_fired_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
-                    SET updated_at = CURRENT_TIMESTAMP,
-                        status = EXCLUDED.status,
-                        severity = EXCLUDED.severity,
-                        started_at = CASE
-                            WHEN incidents.status = 'resolved' AND EXCLUDED.status != 'resolved'
-                            THEN EXCLUDED.started_at
-                            ELSE incidents.started_at
-                        END,
-                        alert_metadata = EXCLUDED.alert_metadata,
-                        alert_fired_at = COALESCE(EXCLUDED.alert_fired_at, incidents.alert_fired_at)
-                    RETURNING id, (xmax = 0) AS inserted, (SELECT status FROM prev) AS previous_status
-                    """,
-                    (
-                        org_id,
-                        incident_number,
-                        user_id,
-                        user_id,
-                        org_id,
-                        "victorops",
-                        incident_number,
-                        incident_title,
-                        service_name,
-                        severity,
-                        aurora_status,
-                        received_at,
-                        json.dumps(alert_metadata),
-                        received_at,
-                    ),
-                )
-                incident_row = cursor.fetchone()
-                incident_db_id = incident_row[0] if incident_row else None
-                incident_was_inserted = bool(incident_row[1]) if incident_row else False
-                previous_status = incident_row[2] if incident_row else None
-                conn.commit()
-
-                if not incident_db_id:
-                    return
-
-                # Record primary alert for triggered events
-                if alert_phase == "TRIGGERED":
-                    _record_primary_alert(
-                        cursor, conn, user_id, org_id, incident_db_id, event_db_id,
-                        incident_title, service_name, severity, alert_metadata,
-                    )
-
-                # Lifecycle events
-                lifecycle_writes = []
-                if incident_was_inserted and alert_phase == "TRIGGERED":
-                    lifecycle_writes.append(("created", None, "investigating"))
-                elif previous_status is not None and previous_status != aurora_status:
-                    ev_name = "resolved" if aurora_status == "resolved" else "status_changed"
-                    lifecycle_writes.append((ev_name, previous_status, aurora_status))
-
-                _write_lifecycle_events(cursor, conn, incident_db_id, user_id, org_id, lifecycle_writes)
-
-                # SSE broadcast
-                try:
-                    from routes.incidents_sse import broadcast_incident_update_to_user_connections
-                    broadcast_incident_update_to_user_connections(
-                        user_id,
-                        {"type": "incident_update", "incident_id": str(incident_db_id), "source": "victorops"},
-                    )
-                except Exception as e:
-                    logger.warning("[VICTOROPS] Failed to notify SSE: %s", e)
-
-                # Summary + RCA only for new triggered incidents
-                if alert_phase == "TRIGGERED" and incident_was_inserted:
-                    _schedule_summary_and_rca(
-                        user_id, incident_db_id, incident_title, incident_number,
-                        severity, service_name, payload, alert_metadata, cursor, conn,
-                    )
-
-                logger.info(
-                    "[VICTOROPS] Processed %s event for incident #%s (db_id=%s)",
-                    alert_phase, incident_number, incident_db_id,
-                )
-
+                _process_victorops_event_in_db(cursor, conn, user_id, payload, received_at)
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc

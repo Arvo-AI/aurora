@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request
 from connectors.opensearch_connector.client import OpenSearchClient, OpenSearchError
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_management import get_token_data, store_tokens_in_db
-from utils.log_sanitizer import sanitize, hash_for_log
+from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 
 logger = logging.getLogger(__name__)
