@@ -1,5 +1,6 @@
 """Splunk On-Call (VictorOps) integration routes."""
 
+import hmac
 import json
 import logging
 import os
@@ -132,7 +133,7 @@ def webhook(user_id: str):
     webhook_secret = os.getenv("VICTOROPS_WEBHOOK_SECRET", "")
     if webhook_secret:
         provided = request.headers.get("X-Webhook-Secret", "")
-        if not provided or provided != webhook_secret:
+        if not provided or not hmac.compare_digest(provided, webhook_secret):
             logger.warning("[VICTOROPS] Webhook rejected: invalid or missing X-Webhook-Secret for user %s", sanitize(user_id))
             return jsonify({"error": "Forbidden"}), 403
 

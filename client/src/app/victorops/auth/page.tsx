@@ -25,7 +25,7 @@ export default function VictorOpsAuthPage() {
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
   const updateLocalStorage = (connected: boolean) => {
-    if (typeof globalThis.window === 'undefined') return;
+    if (globalThis.window === undefined) return;
     if (connected) {
       localStorage.setItem('isVictorOpsConnected', 'true');
     } else {
@@ -38,7 +38,7 @@ export default function VictorOpsAuthPage() {
   const fetchAndUpdateStatus = async () => {
     const result = await victoropsService.getStatus();
     setStatus(result);
-    if (typeof globalThis.window !== 'undefined' && result) {
+    if (globalThis.window !== undefined && result) {
       // Only persist the minimal shape needed for instant UI hydration
       localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: result.connected }));
     }
@@ -47,7 +47,7 @@ export default function VictorOpsAuthPage() {
 
   const loadStatus = async (skipCache = false) => {
     try {
-      if (!skipCache && typeof globalThis.window !== 'undefined') {
+      if (!skipCache && globalThis.window !== undefined) {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
           const minimal = JSON.parse(cached) as VictorOpsStatus;
@@ -102,7 +102,7 @@ export default function VictorOpsAuthPage() {
       await victoropsService.disconnect();
       setStatus(null);
       updateLocalStorage(false);
-      if (typeof globalThis.window !== 'undefined') localStorage.removeItem(CACHE_KEY);
+      if (globalThis.window !== undefined) localStorage.removeItem(CACHE_KEY);
       toast({ title: 'Disconnected', description: 'Splunk On-Call disconnected.' });
     } catch (err: unknown) {
       const message = getUserFriendlyError(err);
