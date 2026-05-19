@@ -174,6 +174,13 @@ async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
 
 def _warm_user_caches(user_id: str):
     """Kick off background tasks that pre-warm per-user caches."""
+    import uuid as _uuid
+    try:
+        _uuid.UUID(user_id)
+    except (ValueError, TypeError, AttributeError):
+        logger.debug(f"Skipping cache warmup for non-UUID user_id: {user_id}")
+        return
+
     _cost_warm_task = asyncio.create_task(update_api_cost_cache_async(user_id))
     _background_tasks.add(_cost_warm_task)
     _cost_warm_task.add_done_callback(_background_tasks.discard)
