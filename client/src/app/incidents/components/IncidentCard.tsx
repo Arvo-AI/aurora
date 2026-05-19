@@ -123,11 +123,15 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
   const sourceIconSrc = alert.source === 'chat' ? null : `/${alert.source}.svg`;
 
+  const [justResolved, setJustResolved] = useState(false);
+
   const handleResolveIncident = async () => {
     setResolvingIncident(true);
     try {
       await incidentsService.resolveIncident(incident.id);
       toast({ title: 'Incident resolved', description: 'Postmortem is being generated in the background.' });
+      setJustResolved(true);
+      setShowPostmortem(true);
       onRefresh?.();
     } catch (e) {
       console.error('Failed to resolve incident:', e);
@@ -764,6 +768,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         incidentTitle={incident.alert.title}
         isVisible={showPostmortem}
         onClose={() => setShowPostmortem(false)}
+        justResolved={justResolved}
       />
 
       {/* Infrastructure Visualization */}

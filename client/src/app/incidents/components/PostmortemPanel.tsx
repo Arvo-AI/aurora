@@ -18,11 +18,12 @@ interface PostmortemPanelProps {
   incidentTitle: string;
   isVisible: boolean;
   onClose: () => void;
+  justResolved?: boolean;
 }
 
 
 
-export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, onClose }: PostmortemPanelProps) {
+export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, onClose, justResolved }: PostmortemPanelProps) {
   const [postmortem, setPostmortem] = useState<PostmortemData | null>(null);
   const [postmortemNotFound, setPostmortemNotFound] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -42,6 +43,8 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
   const [currentVersionId, setCurrentVersionId] = useState<string | null>(null);
   const [loadingVersions, setLoadingVersions] = useState(false);
 
+  const notFoundCountRef = useRef(0);
+
   const loadPostmortem = useCallback(async () => {
     const result = await postmortemService.getPostmortem(incidentId);
     if (result.error) {
@@ -53,13 +56,20 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       setEditContent(result.data.content);
       setPostmortemNotFound(false);
       setRegenerating(false);
+      notFoundCountRef.current = 0;
     } else if (result.generating) {
       setPostmortemNotFound(false);
       setRegenerating(true);
+      notFoundCountRef.current = 0;
     } else if (!regenerating) {
-      setPostmortemNotFound(true);
+      notFoundCountRef.current += 1;
+      if (justResolved && notFoundCountRef.current < 5) {
+        setRegenerating(true);
+      } else {
+        setPostmortemNotFound(true);
+      }
     }
-  }, [incidentId, regenerating]);
+  }, [incidentId, regenerating, justResolved]);
 
   useEffect(() => {
     if (isVisible) {
