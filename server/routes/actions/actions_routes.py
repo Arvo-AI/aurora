@@ -428,7 +428,7 @@ def trigger_action(user_id, action_id):
                 if row and row[0] == "on_incident" and not trigger_context.get("incident_id"):
                     return jsonify({"error": "This action requires an incident. Trigger it from an incident page instead."}), 400
     except Exception:
-        pass
+        logger.debug("Failed to verify on_incident precondition, proceeding to dispatch")
 
     try:
         from services.actions.executor import dispatch_action
