@@ -108,11 +108,7 @@ def dispatch_action(
 
 
 def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "immediate") -> None:
-    """Dispatch enabled on_incident actions matching the given timing. Fire-and-forget.
-
-    Note: generate_postmortem is skipped here — users trigger it explicitly
-    from the incident's Postmortem panel.
-    """
+    """Dispatch enabled on_incident actions matching the given timing. Fire-and-forget."""
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[Actions:on_incident]")
@@ -128,17 +124,26 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
         if action_timing != timing:
             continue
 
-        if system_key == "generate_postmortem":
-            continue
-
         try:
-            dispatch_action(
-                action_id=str(action_id),
-                user_id=user_id,
-                trigger_context={"source": "on_incident", "incident_id": incident_id},
-            )
+            if system_key == "generate_postmortem":
+                _dispatch_postmortem_via_action(user_id, incident_id)
+            else:
+                dispatch_action(
+                    action_id=str(action_id),
+                    user_id=user_id,
+                    trigger_context={"source": "on_incident", "incident_id": incident_id},
+                )
         except Exception:
             logger.debug("[Actions] Failed to dispatch on_incident action %s", action_id)
+
+
+def _dispatch_postmortem_via_action(user_id: str, incident_id: str) -> None:
+    """Dispatch the postmortem system action with its special pre-reserve logic."""
+    from services.actions.postmortem_action import dispatch_postmortem_action
+    try:
+        dispatch_postmortem_action(user_id, incident_id)
+    except ValueError:
+        logger.info("[Actions] Postmortem action skipped for incident")
 
 
 def build_action_prompt(

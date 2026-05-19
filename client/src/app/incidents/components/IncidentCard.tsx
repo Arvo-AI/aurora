@@ -127,7 +127,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     setResolvingIncident(true);
     try {
       await incidentsService.resolveIncident(incident.id);
-      toast({ title: 'Incident resolved', description: 'You can now generate a postmortem from the Postmortem panel.' });
+      toast({ title: 'Incident resolved', description: 'Postmortem is being generated in the background.' });
       onRefresh?.();
     } catch (e) {
       console.error('Failed to resolve incident:', e);
