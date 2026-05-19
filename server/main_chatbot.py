@@ -1557,6 +1557,7 @@ async def handle_connection(websocket) -> None:
             # Fetch org tool permissions for gate bypass
             _permitted_tools = None
             try:
+                from utils.db.connection_pool import db_pool
                 with db_pool.get_connection() as conn:
                     with conn.cursor() as cur:
                         set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:perms]")
