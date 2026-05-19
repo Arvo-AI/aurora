@@ -345,6 +345,9 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
               )}
             </div>
             {action.description && <p className="text-sm text-zinc-500 mt-0.5">{action.description}</p>}
+            {action.trigger_type === 'on_incident' && (
+              <p className="text-xs text-zinc-600 mt-1">Triggered automatically when an incident is resolved from the Incidents page.</p>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
