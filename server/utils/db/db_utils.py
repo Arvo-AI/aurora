@@ -1023,7 +1023,6 @@ def initialize_tables():
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_user ON kubectl_agent_tokens(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_org ON kubectl_agent_tokens(org_id);
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_token ON kubectl_agent_tokens(token);
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_status ON kubectl_agent_tokens(status);
                 """,
@@ -2564,19 +2563,6 @@ def initialize_tables():
             logging.info("Added kubectl token resolve RLS policies on kubectl_agent_tokens.")
 
             conn.commit()
-
-            # Migration: add org_id index on kubectl_agent_tokens to support
-            # org-scoped cluster queries introduced with org-sharing fix.
-            try:
-                cursor.execute("SAVEPOINT sp_kubectl_org_idx")
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_org ON kubectl_agent_tokens(org_id);"
-                )
-                cursor.execute("RELEASE SAVEPOINT sp_kubectl_org_idx")
-                logging.info("Added idx_kubectl_tokens_org index on kubectl_agent_tokens(org_id).")
-            except Exception as e:
-                logging.warning(f"Error adding org_id index to kubectl_agent_tokens: {e}")
-                cursor.execute("ROLLBACK TO SAVEPOINT sp_kubectl_org_idx")
 
             # Migration: Add role column to users table for RBAC
             try:

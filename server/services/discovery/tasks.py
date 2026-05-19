@@ -481,6 +481,7 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
 
     # Query active kubectl clusters for this org.
     if "kubectl" in providers:
+        conn = None
         try:
             conn = connect_to_db_as_admin()
             with conn.cursor() as cur:
@@ -494,7 +495,6 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
                     (user_id, rls_org_id),
                 )
                 kubectl_rows = cur.fetchall()
-            conn.close()
             if kubectl_rows:
                 clusters = [
                     {"cluster_id": row[0], "cluster_name": row[1] or row[0]}
@@ -510,6 +510,9 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
         except Exception as e:
             logger.warning("[Discovery Task] kubectl cluster query failed for org=%s: %s", org_id, e)
             del providers["kubectl"]
+        finally:
+            if conn:
+                conn.close()
 
     if not providers:
         logger.info("[Discovery Task] No valid providers for org=%s, skipping", org_id)
@@ -551,15 +554,27 @@ def run_full_discovery(self):
 
         # kubectl on-prem connections live in active_kubectl_connections /
         # kubectl_agent_tokens — never in user_connections / user_tokens — so
-        # _query_connected_providers misses them entirely.  kubectl_agent_tokens
-        # is not RLS-protected, so a plain admin query finds all active orgs.
-        cur.execute(
-            """SELECT DISTINCT t.org_id, t.user_id
-               FROM kubectl_agent_tokens t
-               JOIN active_kubectl_connections c ON t.token = c.token
-               WHERE t.status = 'active' AND c.status = 'active'"""
-        )
-        kubectl_org_rows = cur.fetchall()
+        # _query_connected_providers misses them entirely.
+        # kubectl_agent_tokens IS RLS-protected, so we must mirror the pattern
+        # used by _query_connected_providers: enumerate orgs via the non-RLS
+        # users table first, then set RLS context per org before querying.
+        cur.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+        all_users = cur.fetchall()
+        kubectl_org_rows = []
+        for uid, org_id in all_users:
+            cur.execute("SET myapp.current_user_id = %s;", (uid,))
+            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
+            cur.execute(
+                """SELECT %s, %s FROM kubectl_agent_tokens t
+                   JOIN active_kubectl_connections c ON t.token = c.token
+                   WHERE (t.user_id = %s OR t.org_id = %s)
+                     AND t.status = 'active' AND c.status = 'active'
+                   LIMIT 1""",
+                (org_id, uid, uid, org_id),
+            )
+            if cur.fetchone():
+                kubectl_org_rows.append((org_id, uid))
 
         cur.close()
         conn.close()

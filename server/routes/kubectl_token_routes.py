@@ -12,6 +12,8 @@ from utils.web.limiter_ext import limiter
 logger = logging.getLogger(__name__)
 kubectl_token_bp = Blueprint('kubectl_token', __name__)
 
+_ORG_CONTEXT_REQUIRED = 'Organization context required'
+
 def generate_token():
     return f"aurora_kubectl_{secrets.token_urlsafe(48)}"
 
@@ -74,7 +76,7 @@ def list_tokens(user_id):
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             org_id = set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_tokens]")
             if not org_id:
-                return jsonify({'error': 'Organization context required'}), 400
+                return jsonify({'error': _ORG_CONTEXT_REQUIRED}), 400
             cursor.execute("""
                 SELECT id, cluster_name, cluster_id, created_at, last_connected_at, expires_at, status, notes,
                        CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
@@ -104,7 +106,7 @@ def list_connections(user_id):
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             org_id = set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_connections]")
             if not org_id:
-                return jsonify({'error': 'Organization context required'}), 400
+                return jsonify({'error': _ORG_CONTEXT_REQUIRED}), 400
             cursor.execute("UPDATE active_kubectl_connections SET status = 'stale' WHERE last_heartbeat < NOW() - INTERVAL '3 minutes'")
             cursor.execute("UPDATE active_kubectl_connections SET status = 'active' WHERE last_heartbeat >= NOW() - INTERVAL '3 minutes'")
             conn.commit()
@@ -134,7 +136,7 @@ def disconnect_cluster(user_id, cluster_id):
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             org_id = set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:disconnect_cluster]")
             if not org_id:
-                return jsonify({'error': 'Organization context required'}), 400
+                return jsonify({'error': _ORG_CONTEXT_REQUIRED}), 400
             cursor.execute("""
                 SELECT c.token, t.cluster_name FROM active_kubectl_connections c
                 JOIN kubectl_agent_tokens t ON c.token = t.token
