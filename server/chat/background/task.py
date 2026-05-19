@@ -1230,19 +1230,11 @@ async def _execute_background_chat(
                 logger.warning(f"[BackgroundChat] Could not fetch incident started_at: {_e}")
         logger.info("[BackgroundChat] incident_start_time=%r for incident %s", incident_start_time, context_incident_id)
 
-        # Determine whether this session is the dedicated postmortem generation action.
-        # The postmortem action sets source="postmortem_generation" (or overrides to
-        # source="action" when an action_id is found in the DB, but always includes
-        # the original "postmortem_generation" context via action_id).  No RCA or
-        # webhook source ever uses "postmortem_generation", so this flag is exclusive.
+        # True when triggered by the "Generate Postmortem" action; gates save_postmortem.
+        # source is "postmortem_generation" when no action_id exists, "action" otherwise.
         _tm_source = (trigger_metadata or {}).get("source", "")
         _is_postmortem_action = _tm_source == "postmortem_generation" or (
             _tm_source == "action"
-            and (trigger_metadata or {}).get("action_id") is not None
-            # Distinguish postmortem actions from other /action-triggered chats by
-            # checking whether the action's system_key is generate_postmortem.  We
-            # look this up lazily only when source=="action" to avoid a DB round-trip
-            # on every RCA background chat.
             and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"))
         )
 

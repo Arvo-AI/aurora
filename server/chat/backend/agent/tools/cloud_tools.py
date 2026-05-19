@@ -1314,10 +1314,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
 
-    # Postmortem tools: save_postmortem is write-only and must not be exposed to
-    # the RCA agent — it has no Aurora incident UUID and may pass ULIDs or
-    # hallucinated strings, causing UUID type errors in PostgreSQL.
-    # get_postmortem is read-only and safe to expose in all contexts.
+    # get_postmortem is always available (read-only).
+    # save_postmortem is restricted to the dedicated postmortem generation action.
     try:
         from .postmortem_tool import get_postmortem, save_postmortem
         tool_functions.append((get_postmortem, "get_postmortem"))
