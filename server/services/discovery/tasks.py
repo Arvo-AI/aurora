@@ -16,6 +16,33 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale')
 
 
+def _query_kubectl_orgs(cur, conn):
+    """Return list of (org_id, user_id) pairs that have at least one active kubectl cluster.
+
+    kubectl_agent_tokens is RLS-protected, so this mirrors the pattern used by
+    _query_connected_providers: enumerate orgs from the non-RLS users table first,
+    then set RLS context per org before querying kubectl_agent_tokens.
+    """
+    cur.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
+    all_users = cur.fetchall()
+    result = []
+    for uid, org_id in all_users:
+        cur.execute("SET myapp.current_user_id = %s;", (uid,))
+        cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+        conn.commit()
+        cur.execute(
+            """SELECT 1 FROM kubectl_agent_tokens t
+               JOIN active_kubectl_connections c ON t.token = c.token
+               WHERE (t.user_id = %s OR t.org_id = %s)
+                 AND t.status = 'active' AND c.status = 'active'
+               LIMIT 1""",
+            (uid, org_id),
+        )
+        if cur.fetchone():
+            result.append((org_id, uid))
+    return result
+
+
 def _query_connected_providers(cur, user_id=None, conn=None):
     """Query active cloud provider connections.
 
@@ -555,26 +582,9 @@ def run_full_discovery(self):
         # kubectl on-prem connections live in active_kubectl_connections /
         # kubectl_agent_tokens — never in user_connections / user_tokens — so
         # _query_connected_providers misses them entirely.
-        # kubectl_agent_tokens IS RLS-protected, so we must mirror the pattern
-        # used by _query_connected_providers: enumerate orgs via the non-RLS
-        # users table first, then set RLS context per org before querying.
-        cur.execute("SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL")
-        all_users = cur.fetchall()
-        kubectl_org_rows = []
-        for uid, org_id in all_users:
-            cur.execute("SET myapp.current_user_id = %s;", (uid,))
-            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            conn.commit()
-            cur.execute(
-                """SELECT %s, %s FROM kubectl_agent_tokens t
-                   JOIN active_kubectl_connections c ON t.token = c.token
-                   WHERE (t.user_id = %s OR t.org_id = %s)
-                     AND t.status = 'active' AND c.status = 'active'
-                   LIMIT 1""",
-                (org_id, uid, uid, org_id),
-            )
-            if cur.fetchone():
-                kubectl_org_rows.append((org_id, uid))
+        # kubectl_agent_tokens IS RLS-protected; _query_kubectl_orgs mirrors
+        # _query_connected_providers and sets RLS context per org before querying.
+        kubectl_org_rows = _query_kubectl_orgs(cur, conn)
 
         cur.close()
         conn.close()
