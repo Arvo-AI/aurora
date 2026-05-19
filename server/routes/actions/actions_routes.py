@@ -428,7 +428,8 @@ def trigger_action(user_id, action_id):
                 if row and row[0] == "on_incident" and not trigger_context.get("incident_id"):
                     return jsonify({"error": "This action requires an incident. Trigger it from an incident page instead."}), 400
     except Exception:
-        logger.debug("Failed to verify on_incident precondition, proceeding to dispatch")
+        logger.exception("Failed to verify on_incident precondition")
+        return jsonify({"error": "Unable to validate action context. Please retry."}), 503
 
     try:
         from services.actions.executor import dispatch_action

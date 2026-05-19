@@ -189,13 +189,11 @@ function ActionsListView({ actions, onSelect, onCreate }: {
       ) : (
         <div className="space-y-3">
           {actions.map((action) => (
-            <div
+            <button
               key={action.id}
-              role="button"
-              tabIndex={0}
+              type="button"
               onClick={() => onSelect(action)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(action); } }}
-              className="group bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 cursor-pointer hover:border-zinc-700/80 hover:bg-zinc-800/40 transition-all duration-200"
+              className="group w-full text-left bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 cursor-pointer hover:border-zinc-700/80 hover:bg-zinc-800/40 transition-all duration-200"
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
@@ -227,7 +225,7 @@ function ActionsListView({ actions, onSelect, onCreate }: {
                 </div>
                 <ChevronRight className="h-4 w-4 text-zinc-700 group-hover:text-zinc-400 transition-colors mt-0.5 flex-shrink-0" />
               </div>
-            </div>
+            </button>
           ))}
         </div>
       )}
