@@ -559,16 +559,16 @@ def run_full_discovery(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
-        rows = _query_connected_providers(cur)
+        try:
+            with conn.cursor() as cur:
+                rows = _query_connected_providers(cur)
 
-        # kubectl connections live in active_kubectl_connections / kubectl_agent_tokens,
-        # not user_connections / user_tokens, so _query_connected_providers misses them.
-        # _query_kubectl_orgs handles this with a single aggregated JOIN query.
-        kubectl_org_rows = _query_kubectl_orgs(cur)
-
-        cur.close()
-        conn.close()
+                # kubectl connections live in active_kubectl_connections / kubectl_agent_tokens,
+                # not user_connections / user_tokens, so _query_connected_providers misses them.
+                # _query_kubectl_orgs handles this with a single aggregated JOIN query.
+                kubectl_org_rows = _query_kubectl_orgs(cur)
+        finally:
+            conn.close()
 
         # Deduplicate by org: collect the union of active providers per org.
         # Record the connector owner per provider (the user_id from each row IS
@@ -678,7 +678,7 @@ def run_user_discovery(self, user_id):
                 for row in kubectl_rows
             ]
             providers["kubectl"] = {"clusters": clusters}
-            logger.info(f"[Discovery Task] Found {len(clusters)} active kubectl clusters for org {org_id}")
+            logger.info("[Discovery Task] Found %d active kubectl clusters for org %s", len(clusters), org_id)
 
         if "gcp" in providers:
             # Wait for GCP post-auth setup to finish (API enablement, SA propagation)
@@ -718,10 +718,11 @@ def mark_stale_services(self):
 
     try:
         conn = connect_to_db_as_admin()
-        cur = conn.cursor()
-        rows = _query_connected_providers(cur)
-        cur.close()
-        conn.close()
+        try:
+            with conn.cursor() as cur:
+                rows = _query_connected_providers(cur)
+        finally:
+            conn.close()
         # Deduplicate by org: one representative user per org is sufficient
         # since graph data is written per org credential owner.
         user_ids = list({org_id: user_id for user_id, org_id, _provider in rows}.values())
