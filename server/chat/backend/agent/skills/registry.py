@@ -505,8 +505,9 @@ class SkillRegistry:
         """Fetch connected on-prem cluster names and IDs for template rendering."""
         try:
             from utils.db.connection_pool import db_pool
-            from utils.auth.stateless_auth import set_rls_context
+            from utils.auth.stateless_auth import set_rls_context, resolve_org_id
 
+            org_id = resolve_org_id(user_id)
             with db_pool.get_user_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:kubectl]")
@@ -514,9 +515,9 @@ class SkillRegistry:
                         """SELECT c.cluster_id, t.cluster_name
                            FROM active_kubectl_connections c
                            JOIN kubectl_agent_tokens t ON c.token = t.token
-                           WHERE t.user_id = %s AND c.status = 'active'
+                           WHERE (t.user_id = %s OR t.org_id = %s) AND c.status = 'active'
                            ORDER BY t.cluster_name""",
-                        (user_id,),
+                        (user_id, org_id),
                     )
                     rows = cur.fetchall()
 

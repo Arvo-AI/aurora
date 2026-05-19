@@ -9,7 +9,11 @@ from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl')
+# Providers whose connections are stored in user_connections / user_tokens.
+# kubectl is intentionally excluded: its connections live in the separate
+# kubectl_agent_tokens / active_kubectl_connections tables and are picked up
+# by the explicit kubectl queries in run_full_discovery / run_user_discovery.
+SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale')
 
 
 def _query_connected_providers(cur, user_id=None, conn=None):
@@ -165,7 +169,7 @@ def _reset_provider_failure(user_id: str, provider: str) -> None:
 def _mark_provider_inactive(user_id: str, provider: str) -> None:
     """Mark all active connections for (user_id, provider) as inactive.
 
-    Covers both user_connections (AWS/kubectl/OVH/Scaleway/Tailscale) and
+    Covers both user_connections (AWS/OVH/Scaleway/Tailscale) and
     user_tokens (GCP/Azure and other OAuth-backed providers).  Deactivates
     both user-scoped and org-scoped rows so org-shared connections are also
     cleaned up.
@@ -460,6 +464,9 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
 
     Returns None when the org has no usable providers and should be skipped.
     """
+    from utils.db.db_utils import connect_to_db_as_admin
+    from utils.auth.stateless_auth import set_rls_context
+
     user_id = org_info["rep"]
     # Build provider credentials dict, embedding the per-provider owner so
     # discovery_service._setup_provider_env authenticates against the correct
@@ -471,6 +478,38 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
 
     if "gcp" in providers:
         _resolve_gcp_provider(user_id, org_id, providers, get_owner)
+
+    # Query active kubectl clusters for this org.
+    if "kubectl" in providers:
+        try:
+            conn = connect_to_db_as_admin()
+            with conn.cursor() as cur:
+                rls_org_id = set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
+                cur.execute(
+                    """SELECT c.cluster_id, t.cluster_name
+                       FROM active_kubectl_connections c
+                       JOIN kubectl_agent_tokens t ON c.token = t.token
+                       WHERE (t.user_id = %s OR t.org_id = %s)
+                         AND t.status = 'active' AND c.status = 'active'""",
+                    (user_id, rls_org_id),
+                )
+                kubectl_rows = cur.fetchall()
+            conn.close()
+            if kubectl_rows:
+                clusters = [
+                    {"cluster_id": row[0], "cluster_name": row[1] or row[0]}
+                    for row in kubectl_rows
+                ]
+                providers["kubectl"] = {"clusters": clusters}
+                logger.info(
+                    "[Discovery Task] Found %d active kubectl cluster(s) for org=%s",
+                    len(clusters), org_id,
+                )
+            else:
+                del providers["kubectl"]
+        except Exception as e:
+            logger.warning("[Discovery Task] kubectl cluster query failed for org=%s: %s", org_id, e)
+            del providers["kubectl"]
 
     if not providers:
         logger.info("[Discovery Task] No valid providers for org=%s, skipping", org_id)
@@ -509,12 +548,21 @@ def run_full_discovery(self):
         conn = connect_to_db_as_admin()
         cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
         rows = _query_connected_providers(cur, conn=conn)
+
+        # kubectl on-prem connections live in active_kubectl_connections /
+        # kubectl_agent_tokens — never in user_connections / user_tokens — so
+        # _query_connected_providers misses them entirely.  kubectl_agent_tokens
+        # is not RLS-protected, so a plain admin query finds all active orgs.
+        cur.execute(
+            """SELECT DISTINCT t.org_id, t.user_id
+               FROM kubectl_agent_tokens t
+               JOIN active_kubectl_connections c ON t.token = c.token
+               WHERE t.status = 'active' AND c.status = 'active'"""
+        )
+        kubectl_org_rows = cur.fetchall()
+
         cur.close()
         conn.close()
-
-        if not rows:
-            logger.info("[Discovery Task] No orgs with connected cloud providers")
-            return {"status": "no_users", "users_processed": 0}
 
         # Deduplicate by org: collect the union of active providers per org.
         # Record the connector owner per provider (the user_id from each row IS
@@ -527,6 +575,17 @@ def run_full_discovery(self):
             if org_id not in orgs:
                 orgs[org_id] = {"rep": user_id, "providers": {}}
             orgs[org_id]["providers"][provider] = {"owner_id": user_id}
+
+        # Add any kubectl-only orgs (not found via cloud provider query above).
+        # Mark kubectl as a provider so _process_org will query the cluster list.
+        for org_id, kubectl_user_id in kubectl_org_rows:
+            if org_id not in orgs:
+                orgs[org_id] = {"rep": kubectl_user_id, "providers": {}}
+            orgs[org_id]["providers"].setdefault("kubectl", {"owner_id": kubectl_user_id})
+
+        if not orgs:
+            logger.info("[Discovery Task] No orgs with connected cloud providers")
+            return {"status": "no_users", "users_processed": 0}
 
         logger.info("[Discovery Task] Processing %d org(s)", len(orgs))
 
@@ -571,10 +630,21 @@ def run_user_discovery(self, user_id):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-        set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
+        org_id = set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
         provider_names = _query_connected_providers(cur, user_id, conn=conn)
 
-        if not provider_names:
+        # Query active kubectl clusters for this org before the early-return
+        # check — kubectl connections live in their own tables and are never
+        # returned by _query_connected_providers.
+        cur.execute("""
+            SELECT c.cluster_id, t.cluster_name
+            FROM active_kubectl_connections c
+            JOIN kubectl_agent_tokens t ON c.token = t.token
+            WHERE (t.user_id = %s OR t.org_id = %s) AND t.status = 'active' AND c.status = 'active'
+        """, (user_id, org_id))
+        kubectl_rows = cur.fetchall()
+
+        if not provider_names and not kubectl_rows:
             cur.close()
             conn.close()
             return {"status": "no_providers", "user_id": user_id}
@@ -587,15 +657,6 @@ def run_user_discovery(self, user_id):
             from utils.auth.stateless_auth import get_user_preference
             root_project = get_user_preference(user_id, 'gcp_root_project')
 
-        # Query active kubectl clusters for this user
-        cur.execute("""
-            SELECT c.cluster_id, t.cluster_name
-            FROM active_kubectl_connections c
-            JOIN kubectl_agent_tokens t ON c.token = t.token
-            WHERE t.user_id = %s AND t.status = 'active' AND c.status = 'active'
-        """, (user_id,))
-        kubectl_rows = cur.fetchall()
-
         # Close DB connection BEFORE calling setup functions that also use the pool
         cur.close()
         conn.close()
@@ -607,7 +668,7 @@ def run_user_discovery(self, user_id):
                 for row in kubectl_rows
             ]
             providers["kubectl"] = {"clusters": clusters}
-            logger.info(f"[Discovery Task] Found {len(clusters)} active kubectl clusters for user {user_id}")
+            logger.info(f"[Discovery Task] Found {len(clusters)} active kubectl clusters for org {org_id}")
 
         if "gcp" in providers:
             # Wait for GCP post-auth setup to finish (API enablement, SA propagation)
