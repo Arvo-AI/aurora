@@ -56,9 +56,25 @@ services:
 #   annotations:
 #     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<your-aurora-irsa-role>
 serviceAccount:
-  # Annotations applied to backend service accounts (server, chatbot, celery)
+  # Annotations applied to ALL backend service accounts (server, chatbot, celery, mcp)
   annotations: {}
-  
+
+  # Per-service annotation overrides (merged on top of shared annotations above)
+  # Example GKE Workload Identity:
+  #   chatbot:
+  #     annotations:
+  #       iam.gke.io/gcp-service-account: aurora-chatbot@your-project.iam.gserviceaccount.com
+  server:
+    annotations: {}
+  chatbot:
+    annotations: {}
+  celeryWorker:
+    annotations: {}
+  celeryBeat:
+    annotations: {}
+  mcp:
+    annotations: {}
+
   # Vault-specific ServiceAccount annotations (e.g., for cloud KMS auto-unseal)
   vault:
     annotations: {}
