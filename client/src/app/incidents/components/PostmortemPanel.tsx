@@ -14,14 +14,74 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 interface PostmortemPanelProps {
-  incidentId: string;
-  incidentTitle: string;
-  isVisible: boolean;
-  onClose: () => void;
-  justResolved?: boolean;
+  readonly incidentId: string;
+  readonly incidentTitle: string;
+  readonly isVisible: boolean;
+  readonly onClose: () => void;
+  readonly justResolved?: boolean;
 }
 
-
+function PostmortemContent({ postmortem, regenerating, postmortemNotFound, regenerateSubmitting, editing, editContent, prevContent, onEditChange, onRegenerate }: {
+  readonly postmortem: PostmortemData | null;
+  readonly regenerating: boolean;
+  readonly postmortemNotFound: boolean;
+  readonly regenerateSubmitting: boolean;
+  readonly editing: boolean;
+  readonly editContent: string;
+  readonly prevContent: string | null;
+  readonly onEditChange: (v: string) => void;
+  readonly onRegenerate: () => void;
+}) {
+  if (postmortem === null && regenerating) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
+        <RefreshCw className="w-5 h-5 animate-spin" />
+        <p className="text-xs">{prevContent ? 'Regenerating postmortem...' : 'Generating postmortem...'}</p>
+      </div>
+    );
+  }
+  if (postmortem === null && postmortemNotFound) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
+        <FileText className="w-5 h-5" />
+        <p className="text-xs">No postmortem generated yet.</p>
+        <button
+          onClick={onRegenerate}
+          disabled={regenerating || regenerateSubmitting}
+          className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+        >
+          <RotateCcw className={`w-3 h-3 ${regenerateSubmitting ? 'animate-spin' : ''}`} />
+          {regenerateSubmitting ? 'Starting...' : 'Generate Postmortem'}
+        </button>
+      </div>
+    );
+  }
+  if (postmortem === null) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
+        <RefreshCw className="w-5 h-5 animate-spin" />
+        <p className="text-xs">Loading...</p>
+      </div>
+    );
+  }
+  if (editing) {
+    return (
+      <textarea
+        value={editContent}
+        onChange={e => onEditChange(e.target.value)}
+        className="w-full h-96 px-4 py-3 rounded-lg bg-zinc-900 border border-zinc-700 text-sm text-zinc-300 font-mono focus:outline-none focus:border-zinc-500 resize-y"
+        placeholder="Postmortem content in markdown..."
+      />
+    );
+  }
+  return (
+    <div className="prose prose-invert prose-sm max-w-none">
+      <ReactMarkdown components={postmortemMarkdownComponents}>
+        {postmortem.content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, onClose, justResolved }: PostmortemPanelProps) {
   const [postmortem, setPostmortem] = useState<PostmortemData | null>(null);
@@ -45,31 +105,36 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
 
   const notFoundCountRef = useRef(0);
 
+  const handlePostmortemLoaded = useCallback((data: PostmortemData | null, generating: boolean | undefined) => {
+    setPostmortem(data);
+    if (data) {
+      setEditContent(data.content);
+      setPostmortemNotFound(false);
+      setRegenerating(false);
+      notFoundCountRef.current = 0;
+      return;
+    }
+    if (generating) {
+      setPostmortemNotFound(false);
+      setRegenerating(true);
+      notFoundCountRef.current = 0;
+      return;
+    }
+    if (regenerating) return;
+    notFoundCountRef.current += 1;
+    const shouldRetry = !!justResolved && notFoundCountRef.current < 5;
+    setRegenerating(shouldRetry);
+    setPostmortemNotFound(!shouldRetry);
+  }, [regenerating, justResolved]);
+
   const loadPostmortem = useCallback(async () => {
     const result = await postmortemService.getPostmortem(incidentId);
     if (result.error) {
       console.error('Failed to load postmortem:', result.error);
       return;
     }
-    setPostmortem(result.data);
-    if (result.data) {
-      setEditContent(result.data.content);
-      setPostmortemNotFound(false);
-      setRegenerating(false);
-      notFoundCountRef.current = 0;
-    } else if (result.generating) {
-      setPostmortemNotFound(false);
-      setRegenerating(true);
-      notFoundCountRef.current = 0;
-    } else if (!regenerating) {
-      notFoundCountRef.current += 1;
-      if (justResolved && notFoundCountRef.current < 5) {
-        setRegenerating(true);
-      } else {
-        setPostmortemNotFound(true);
-      }
-    }
-  }, [incidentId, regenerating, justResolved]);
+    handlePostmortemLoaded(result.data, result.generating);
+  }, [incidentId, handlePostmortemLoaded]);
 
   useEffect(() => {
     if (isVisible) {
@@ -486,45 +551,17 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       )}
 
       {/* Content */}
-      {postmortem === null && regenerating ? (
-        <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
-          <RefreshCw className="w-5 h-5 animate-spin" />
-          <p className="text-xs">{prevContentRef.current ? 'Regenerating postmortem...' : 'Generating postmortem...'}</p>
-        </div>
-      ) : postmortem === null && postmortemNotFound ? (
-        <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
-          <FileText className="w-5 h-5" />
-          <p className="text-xs">No postmortem generated yet.</p>
-          <button
-            onClick={handleRegenerate}
-            disabled={regenerating || regenerateSubmitting}
-            className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
-          >
-            <RotateCcw className={`w-3 h-3 ${regenerateSubmitting ? 'animate-spin' : ''}`} />
-            {regenerateSubmitting ? 'Starting...' : 'Generate Postmortem'}
-          </button>
-        </div>
-      ) : postmortem === null ? (
-        <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
-          <RefreshCw className="w-5 h-5 animate-spin" />
-          <p className="text-xs">Loading...</p>
-        </div>
-      ) : editing ? (
-        <textarea
-          value={editContent}
-          onChange={e => setEditContent(e.target.value)}
-          className="w-full h-96 px-4 py-3 rounded-lg bg-zinc-900 border border-zinc-700 text-sm text-zinc-300 font-mono focus:outline-none focus:border-zinc-500 resize-y"
-          placeholder="Postmortem content in markdown..."
-        />
-      ) : (
-        <div className="prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown
-            components={postmortemMarkdownComponents}
-          >
-            {postmortem.content}
-          </ReactMarkdown>
-        </div>
-      )}
+      <PostmortemContent
+        postmortem={postmortem}
+        regenerating={regenerating}
+        postmortemNotFound={postmortemNotFound}
+        regenerateSubmitting={regenerateSubmitting}
+        editing={editing}
+        editContent={editContent}
+        prevContent={prevContentRef.current}
+        onEditChange={setEditContent}
+        onRegenerate={handleRegenerate}
+      />
 
       <ExportToNotionDialog
         open={activeExport === 'notion'}
