@@ -33,13 +33,10 @@ class GitHubRCAArgs(BaseModel):
             "'pull_requests' (list merged PRs in time window)"
         )
     )
-    incident_time: Optional[str] = Field(
-        default=None,
-        description=(
-            "ISO 8601 timestamp of the incident (e.g., '2024-01-15T14:30:00Z'). "
-            "Used for automatic time window correlation. If not provided, uses current time."
-        )
-    )
+    # incident_time is intentionally excluded from this schema.
+    # It is always injected from the authoritative DB timestamp (incidents.started_at)
+    # by the tool wrapper in cloud_tools.py. Exposing it here would allow the agent
+    # LLM to supply a hallucinated value.
     repo: Optional[str] = Field(
         default=None,
         description=(
@@ -53,7 +50,7 @@ class GitHubRCAArgs(BaseModel):
     )
     time_window_hours: int = Field(
         default=24,
-        description="Hours before incident_time to search for changes (default: 24 hours)."
+        description="Hours before the incident to search for changes (default: 24 hours)."
     )
     commit_sha: Optional[str] = Field(
         default=None,

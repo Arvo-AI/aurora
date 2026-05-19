@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
@@ -1025,6 +1025,7 @@ async def _run_jira_action(
     session_id: str,
     user_id: str,
     incident_id: Optional[str],
+    incident_start_time: Optional[str],
     provider_preference: Optional[List[str]],
     rca_context: dict,
     mode: str,
@@ -1071,6 +1072,7 @@ async def _run_jira_action(
         user_id=user_id,
         session_id=session_id,
         incident_id=incident_id,
+        incident_start_time=incident_start_time,
         provider_preference=provider_preference,
         selected_project_id=None,
         messages=[HumanMessage(content=followup_text)],
@@ -1189,12 +1191,35 @@ async def _execute_background_chat(
         # need the incident in state so context-aware nodes can find it.
         context_incident_id = incident_id or (trigger_metadata or {}).get("incident_id")
 
+        # Fetch the real incident start time so downstream agents never have to
+        # infer or guess it from alert text (which causes date hallucinations).
+        incident_start_time: Optional[str] = None
+        if context_incident_id:
+            try:
+                with db_pool.get_admin_connection() as _conn:
+                    with _conn.cursor() as _cur:
+                        set_rls_context(_cur, _conn, user_id, log_prefix="[BackgroundChat:StartTime]")
+                        _cur.execute(
+                            "SELECT started_at FROM incidents WHERE id = %s",
+                            (context_incident_id,),
+                        )
+                        row = _cur.fetchone()
+                        if row and row[0]:
+                            started_at = row[0]
+                            if started_at.tzinfo is None:
+                                started_at = started_at.replace(tzinfo=timezone.utc)
+                            incident_start_time = started_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception as _e:
+                logger.warning(f"[BackgroundChat] Could not fetch incident started_at: {_e}")
+        logger.info("[BackgroundChat] incident_start_time=%r for incident %s", incident_start_time, context_incident_id)
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
             user_id=user_id,
             session_id=session_id,
             incident_id=context_incident_id,
+            incident_start_time=incident_start_time,
             provider_preference=provider_preference,
             selected_project_id=None,
             messages=[human_message],
@@ -1245,6 +1270,7 @@ async def _execute_background_chat(
                 session_id=session_id,
                 user_id=user_id,
                 incident_id=incident_id,
+                incident_start_time=incident_start_time,
                 provider_preference=provider_preference,
                 rca_context=rca_context,
                 mode=mode,

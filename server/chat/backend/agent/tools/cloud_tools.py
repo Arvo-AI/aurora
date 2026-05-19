@@ -1341,13 +1341,32 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     
     # Process Aurora native tools
     for func, name in tool_functions:
+        # For github_rca, inject the authoritative incident timestamp before any
+        # other decoration so the fail-closed check and incident_time kwarg flow
+        # through with_completion_notification and wrap_func_with_capture.
+        effective_func = func
+        if name == 'github_rca':
+            def _github_rca_pinned(*args, _inner=func, **kwargs):
+                state_ctx = get_state_context()
+                incident_id_ctx = getattr(state_ctx, "incident_id", None) if state_ctx else None
+                pinned = getattr(state_ctx, "incident_start_time", None) if state_ctx else None
+                if incident_id_ctx and not pinned:
+                    return json.dumps({
+                        "status": "error",
+                        "error": "incident_start_time is missing from state; cannot run github_rca for an incident without the pinned timestamp.",
+                    })
+                if pinned:
+                    kwargs["incident_time"] = pinned
+                return _inner(*args, **kwargs)
+            effective_func = _github_rca_pinned
+
         # Apply forced context wrapper for critical tools that should never have parameters mixed up
         if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix']:
-            context_wrapped = with_forced_context(func)
+            context_wrapped = with_forced_context(effective_func)
             logging.info(f"Applied with_forced_context decorator to {name}")
         else:
             # Apply user context wrapper for other tools
-            context_wrapped = with_user_context(func)
+            context_wrapped = with_user_context(effective_func)
             logging.info(f"Applied with_user_context decorator to {name}")
         
         # Apply completion notification wrapper for WebSocket updates
@@ -1393,7 +1412,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'pull_requests' (merged PRs in time window). "
                     "IMPORTANT: Always pass repo='owner/repo' to specify which repository to investigate. "
                     "If unsure which repo, call get_connected_repos first. "
-                    "Pass incident_time (ISO 8601) for automatic time window correlation."
+                    "The incident time is set automatically — do not pass it."
                 ),
                 args_schema=GitHubRCAArgs
             )
