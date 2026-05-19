@@ -162,18 +162,29 @@ def _check_project_iam(crm_service, pid, name, member_sa, root_project):
 
 def _oauth_mode_project_list(credentials, sa_email, root_project):
     """Build project list for OAuth mode by enumerating projects + IAM."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     projects = get_project_list(credentials)
-    crm_service = build('cloudresourcemanager', 'v1', credentials=credentials)
     member_sa = f"serviceAccount:{sa_email}"
 
+    items = [(p.get('projectId'), p.get('name', p.get('projectId'))) for p in projects if p.get('projectId')]
+
+    def check_one(pid_name):
+        pid, name = pid_name
+        crm = build('cloudresourcemanager', 'v1', credentials=credentials)
+        return _check_project_iam(crm, pid, name, member_sa, root_project)
+
     result = []
-    for proj in projects:
-        pid = proj.get('projectId')
-        if not pid:
-            continue
-        result.append(_check_project_iam(
-            crm_service, pid, proj.get('name', pid), member_sa, root_project,
-        ))
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(check_one, item): item for item in items}
+        for future in as_completed(futures):
+            try:
+                result.append(future.result())
+            except Exception as e:
+                pid, name = futures[future]
+                logging.warning(f"IAM check failed for {pid}: {e}")
+                result.append({"projectId": pid, "name": name, "enabled": False, "hasPermission": False, "isRootProject": pid == root_project})
+
     result.sort(key=lambda x: x['name'])
     return result
 
