@@ -155,8 +155,9 @@ class Workflow:
         workflow.add_node("sub_agent", sub_agent_node)
         workflow.add_node("synthesis", synthesis_node)
 
-        # Only background RCA sessions enter the orchestrator. Foreground chats
-        # and actions bypass triage entirely.
+        # Only background RCA sessions WITH an rca_context enter the
+        # orchestrator. Foreground chats, actions, and follow-up messages
+        # (which are background but lack rca_context) use direct_react.
         def _route_start(state) -> str:
             is_bg = getattr(state, "is_background", False)
             rca_ctx = getattr(state, "rca_context", None)
@@ -165,7 +166,7 @@ class Workflow:
                 rca_ctx = state.get("rca_context")
             if (rca_ctx or {}).get("source") == "action":
                 return "direct_react"
-            return "triage" if is_bg else "direct_react"
+            return "triage" if (is_bg and rca_ctx) else "direct_react"
 
         workflow.add_conditional_edges(
             START, _route_start, {"triage": "triage", "direct_react": "direct_react"}
