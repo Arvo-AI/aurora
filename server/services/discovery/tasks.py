@@ -558,8 +558,7 @@ def run_full_discovery(self):
     logger.info("[Discovery Task] Starting full discovery run")
 
     try:
-        conn = connect_to_db_as_admin()
-        try:
+        with connect_to_db_as_admin() as conn:
             with conn.cursor() as cur:
                 rows = _query_connected_providers(cur)
 
@@ -567,8 +566,6 @@ def run_full_discovery(self):
                 # not user_connections / user_tokens, so _query_connected_providers misses them.
                 # _query_kubectl_orgs handles this with a single aggregated JOIN query.
                 kubectl_org_rows = _query_kubectl_orgs(cur)
-        finally:
-            conn.close()
 
         # Deduplicate by org: collect the union of active providers per org.
         # Record the connector owner per provider (the user_id from each row IS
@@ -717,12 +714,9 @@ def mark_stale_services(self):
     logger.info("[Discovery Task] Starting stale service detection")
 
     try:
-        conn = connect_to_db_as_admin()
-        try:
+        with connect_to_db_as_admin() as conn:
             with conn.cursor() as cur:
                 rows = _query_connected_providers(cur)
-        finally:
-            conn.close()
         # Deduplicate by org: one representative user per org is sufficient
         # since graph data is written per org credential owner.
         user_ids = list({org_id: user_id for user_id, org_id, _provider in rows}.values())
