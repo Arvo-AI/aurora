@@ -6,7 +6,8 @@ logger = logging.getLogger(__name__)
 
 # Reduce verbosity of specific noisy loggers
 logging.getLogger("langchain").setLevel(logging.WARNING)
-logging.getLogger("websockets").setLevel(logging.WARNING)  
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 logging.getLogger("weaviate").setLevel(logging.WARNING)
 logging.getLogger("redis").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -1644,7 +1645,8 @@ async def main():
         ping_interval=20,  # Send ping every 20 seconds
         ping_timeout=10,   # Wait 10 seconds for pong response
         max_size=10 * 1024 * 1024,  # 10MB max message size
-        compression=None   # Disable compression to avoid frame issues
+        compression=None,  # Disable compression to avoid frame issues
+        logger=logging.getLogger("websockets.server"),
     ):
         logger.info(f"WebSocket server listening on port {WS_PORT}")
         await asyncio.Future()
