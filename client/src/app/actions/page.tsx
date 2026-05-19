@@ -175,8 +175,8 @@ function ActionsListView({ actions, onSelect, onCreate }: {
         <StatCard label="Total Runs" value={String(totalRuns)} icon={Play} />
       </div>
 
-      <Panel title="Configured Actions" subtitle="Background agent tasks that follow your instructions">
-        {actions.length === 0 ? (
+      {actions.length === 0 ? (
+        <Panel title="Configured Actions" subtitle="Background agent tasks that follow your instructions">
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <Workflow className="h-8 w-8 text-zinc-700 mb-3" />
             <p className="text-sm text-zinc-500">No actions yet</p>
@@ -185,65 +185,49 @@ function ActionsListView({ actions, onSelect, onCreate }: {
               <Plus className="h-3.5 w-3.5 mr-1.5" /> Create Action
             </Button>
           </div>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-zinc-800/60">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-800/60 text-zinc-500 text-xs uppercase tracking-wider">
-                  <th className="text-left px-4 py-2.5 font-medium">Name</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Trigger</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Mode</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Runs</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Last Run</th>
-                  <th className="text-left px-4 py-2.5 font-medium w-8"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {actions.map((action) => (
-                  <tr
-                    key={action.id}
-                    onClick={() => onSelect(action)}
-                    className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors duration-150 cursor-pointer"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-zinc-200 font-medium text-sm">{action.name}</span>
-                        {action.is_system && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">System</span>
-                        )}
-                        {!action.enabled && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-800 text-zinc-500">OFF</span>
-                        )}
+        </Panel>
+      ) : (
+        <div className="space-y-3">
+          {actions.map((action) => (
+            <div
+              key={action.id}
+              onClick={() => onSelect(action)}
+              className="group bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 cursor-pointer hover:border-zinc-700/80 hover:bg-zinc-800/40 transition-all duration-200"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2.5 mb-1">
+                    <h3 className="text-sm font-medium text-zinc-100">{action.name}</h3>
+                    {action.is_system && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">System</span>
+                    )}
+                    {!action.enabled && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-800 text-zinc-500">Disabled</span>
+                    )}
+                  </div>
+                  {action.description && (
+                    <p className="text-xs text-zinc-500 leading-relaxed">{action.description}</p>
+                  )}
+                  <div className="flex items-center gap-3 mt-3">
+                    <TriggerBadge type={action.trigger_type} />
+                    <ModeBadge mode={action.mode} />
+                    {action.last_run_at && (
+                      <div className="flex items-center gap-1.5">
+                        <StatusDot status={action.last_run_status || 'pending'} />
+                        <span className="text-xs text-zinc-500">{formatTimeAgo(action.last_run_at)}</span>
                       </div>
-                      {action.description && (
-                        <p className="text-xs text-zinc-600 mt-0.5 truncate max-w-md">{action.description}</p>
-                      )}
-                    </td>
-                    <td className="px-4 py-3"><TriggerBadge type={action.trigger_type} /></td>
-                    <td className="px-4 py-3"><ModeBadge mode={action.mode} /></td>
-                    <td className="px-4 py-3 text-right text-zinc-400 text-sm" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {action.run_count || 0}
-                    </td>
-                    <td className="px-4 py-3">
-                      {action.last_run_at ? (
-                        <div className="flex items-center gap-1.5">
-                          <StatusDot status={action.last_run_status || 'pending'} />
-                          <span className="text-xs text-zinc-500">{formatTimeAgo(action.last_run_at)}</span>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-zinc-600">Never</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <ChevronRight className="h-3.5 w-3.5 text-zinc-600" />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
+                    )}
+                    {action.run_count > 0 && (
+                      <span className="text-xs text-zinc-600">{action.run_count} {action.run_count === 1 ? 'run' : 'runs'}</span>
+                    )}
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 text-zinc-700 group-hover:text-zinc-400 transition-colors mt-0.5 flex-shrink-0" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
