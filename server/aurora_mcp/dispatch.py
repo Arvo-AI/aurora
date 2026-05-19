@@ -15,9 +15,11 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from .registry import (
+    _get_cached_connector_status,
     dispatch_entry_visible,
     find_dispatch_entry,
     search_dispatch_entries,
+    set_connector_status,
 )
 from .response import truncate_payload
 
@@ -177,6 +179,22 @@ def register_dispatch_tools(
         user_id, _ = resolve_token(token)
         return user_id
 
+    async def _ensure_connector_cache(user_id: str) -> None:
+        """Populate connector cache from the backend if not already fresh."""
+        if _get_cached_connector_status(user_id) is not None:
+            return
+        try:
+            data = await api_call("GET", "/api/connectors/status")
+            connectors = data.get("connectors", {})
+            status = {
+                provider.lower(): bool(info.get("connected"))
+                for provider, info in connectors.items()
+                if isinstance(info, dict)
+            }
+            set_connector_status(user_id, status)
+        except Exception:
+            logger.debug("connector cache refresh failed in dispatch", exc_info=True)
+
     @mcp.tool()
     async def search_tools(
         query: str = "",
@@ -196,7 +214,9 @@ def register_dispatch_tools(
         Results that need a connector you haven't connected appear as "not
         connected" and won't be callable until you connect them in Aurora.
         """
-        return _do_search_tools(_user_id(), query, category, connector, limit)
+        uid = _user_id()
+        await _ensure_connector_cache(uid)
+        return _do_search_tools(uid, query, category, connector, limit)
 
     @mcp.tool()
     async def call_tool(name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -211,4 +231,6 @@ def register_dispatch_tools(
         (Terraform apply, kubectl mutations, shell exec, Cloudflare WAF) are
         deliberately excluded.
         """
-        return await _do_call_tool(api_call, _user_id(), name, args)
+        uid = _user_id()
+        await _ensure_connector_cache(uid)
+        return await _do_call_tool(api_call, uid, name, args)

@@ -15,10 +15,37 @@ are intentionally excluded.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Connector-status cache — populated via the Flask backend API by the MCP
+# server so skill-connectivity checks don't rely on local DB access (which
+# can fail due to missing Flask/RLS context in the standalone MCP process).
+# ---------------------------------------------------------------------------
+
+_connector_cache: Dict[str, Tuple[float, Dict[str, bool]]] = {}
+_CONNECTOR_CACHE_TTL = 30.0  # seconds
+
+
+def set_connector_status(user_id: str, status: Dict[str, bool]) -> None:
+    """Cache connector status for a user (called from mcp_server.py)."""
+    _connector_cache[user_id] = (time.monotonic(), status)
+
+
+def _get_cached_connector_status(user_id: str) -> Optional[Dict[str, bool]]:
+    """Return cached connector status if fresh, else None."""
+    entry = _connector_cache.get(user_id)
+    if entry is None:
+        return None
+    ts, status = entry
+    if time.monotonic() - ts > _CONNECTOR_CACHE_TTL:
+        return None
+    return status
 
 
 # ---------------------------------------------------------------------------
@@ -799,9 +826,14 @@ assert_allowlist_safe()
 def _check_skill_connected(skill_id: str, user_id: str) -> bool:
     """Return True iff `skill_id` is connected for `user_id`.
 
-    Lazy-imports SkillRegistry to keep this module import-light.
-    Failures (missing skill, registry errors) are treated as disconnected.
+    First checks the connector-status cache (populated from the Flask backend
+    API which handles RLS correctly). Falls back to the local SkillRegistry
+    check if the cache is empty (e.g. first request before list_tools fires).
     """
+    cached = _get_cached_connector_status(user_id)
+    if cached is not None:
+        return cached.get(skill_id, False)
+
     try:
         from chat.backend.agent.skills.registry import SkillRegistry
 
