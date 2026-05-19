@@ -1,0 +1,46 @@
+# PodDisruptionBudgets — prevent Autopilot from evicting all replicas
+# simultaneously, which drops active WebSocket sessions and API requests.
+{{- if ge (int .Values.replicaCounts.server) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aurora.fullname" . }}-server
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-server
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+---
+{{- if ge (int .Values.replicaCounts.chatbot) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aurora.fullname" . }}-chatbot
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-chatbot
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+---
+{{- if ge (int .Values.replicaCounts.celeryWorker) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aurora.fullname" . }}-celery-worker
+  labels:
+    {{- include "aurora.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aurora.name" . }}-celery-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
