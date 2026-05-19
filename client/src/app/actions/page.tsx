@@ -191,7 +191,10 @@ function ActionsListView({ actions, onSelect, onCreate }: {
           {actions.map((action) => (
             <div
               key={action.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelect(action)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(action); } }}
               className="group bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-5 cursor-pointer hover:border-zinc-700/80 hover:bg-zinc-800/40 transition-all duration-200"
             >
               <div className="flex items-start justify-between gap-4">
