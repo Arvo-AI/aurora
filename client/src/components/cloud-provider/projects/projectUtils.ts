@@ -76,6 +76,7 @@ export const fetchProjects = async (providerId: string, forceRefresh = false, cu
       // Any 401 means credentials are missing/expired — clear cache
       if (res.status === 401) {
         ProjectCache.invalidate(providerId);
+        window.dispatchEvent(new Event('providerStateChanged'));
         const authError = new Error(`${providerId.toUpperCase()} is disconnected. Please reconnect from the connectors page.`) as Error & {
           status?: number;
           code?: string;
@@ -144,7 +145,14 @@ export const saveProjects = async (providerId: string, projects: Project[]): Pro
   if (!res.ok) {
     if (res.status === 401) {
       ProjectCache.invalidate(providerId);
-      throw new Error(`${providerId.toUpperCase()} is disconnected. Please reconnect from the connectors page.`);
+      window.dispatchEvent(new Event('providerStateChanged'));
+      const authError = new Error(`${providerId.toUpperCase()} is disconnected. Please reconnect from the connectors page.`) as Error & {
+        status?: number;
+        code?: string;
+      };
+      authError.status = 401;
+      authError.code = 'DISCONNECTED';
+      throw authError;
     }
     throw new Error(`Failed to save ${providerId} projects`);
   }

@@ -155,20 +155,21 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
         except Exception as _enc_err:
             logging.warning(f"Failed to encode policy_results: {_enc_err}")
 
-        # Propagation verification (DEBUG LOGS)
+        # Propagation verification — only check projects_to_setup, not all accessible projects
         logging.info("=== PROPAGATION VERIFICATION START ===")
-        logging.info(f"[DEBUG] Verifying propagation for {len(projects)} projects")
+        logging.info(f"[DEBUG] Verifying propagation for {len(projects_to_setup)} projects")
         self.update_state(
             state='PROGRESS',
             meta={'status': 'Verifying permissions across projects...', 'progress': 75, 'step': 6, 'total_steps': 7}
         )
-        verified = {p['projectId']: False for p in projects}
+        verified = {p['projectId']: False for p in projects_to_setup}
         verified_count = 0
         attempts = 0
         max_attempts = 20
-        while verified_count < len(projects) and attempts < max_attempts:
+        total_to_verify = len(projects_to_setup)
+        while verified_count < total_to_verify and attempts < max_attempts:
             pending = [pid for pid, v in verified.items() if not v][:10]
-            logging.info(f"[DEBUG] Propagation attempt {attempts + 1}/{max_attempts}: checking {len(pending)} projects ({verified_count}/{len(projects)} already verified)")
+            logging.info(f"[DEBUG] Propagation attempt {attempts + 1}/{max_attempts}: checking {len(pending)} projects ({verified_count}/{total_to_verify} already verified)")
             if not pending:
                 logging.info("[DEBUG] Propagation verification complete early: all projects verified")
                 break
@@ -185,16 +186,16 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
             verified_count += batch_success
             attempts += 1
             self.update_state(state='PROGRESS', meta={
-                'status': f'Verifying permissions: {verified_count}/{len(projects)} ({attempts}/{max_attempts})',
-                'progress': 75 + min((verified_count / len(projects)) * 15, 15),
-                'propagation': {'current': verified_count, 'total': len(projects)},
+                'status': f'Verifying permissions: {verified_count}/{total_to_verify} ({attempts}/{max_attempts})',
+                'progress': 75 + min((verified_count / total_to_verify) * 15, 15),
+                'propagation': {'current': verified_count, 'total': total_to_verify},
                 'step': 6, 'total_steps': 7
             })
-            logging.info(f"[DEBUG] Batch {attempts} complete: +{batch_success} verified (total {verified_count}/{len(projects)})")
+            logging.info(f"[DEBUG] Batch {attempts} complete: +{batch_success} verified (total {verified_count}/{total_to_verify})")
             time.sleep(30)  # Give IAM bindings time to propagate; only holds one Celery slot, not the whole worker
-        is_fully_verified = verified_count == len(projects)
+        is_fully_verified = verified_count == total_to_verify
         propagation_status = 'FULL' if is_fully_verified else 'PARTIAL'
-        logging.info(f"=== PROPAGATION VERIFICATION FINISH: {propagation_status} ({verified_count}/{len(projects)}) ===")
+        logging.info(f"=== PROPAGATION VERIFICATION FINISH: {propagation_status} ({verified_count}/{total_to_verify}) ===")
 
         redirect_params = f"login=gcp_success&policy={policy_param}"
         if policy_details_param:
@@ -245,7 +246,7 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
             'redirect_params': redirect_params,
             'propagation_status': propagation_status,
             'verified_projects': verified_count,
-            'total_projects': len(projects)
+            'total_projects': total_to_verify
         }
 
     except Exception:

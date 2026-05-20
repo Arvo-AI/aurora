@@ -342,6 +342,10 @@ def sa_project_access_post(user_id):
             first_enabled = next((pid for pid, en in selections.items() if en), None)
             if not first_enabled:
                 return jsonify({"error": "No root project configured and no project being enabled."}), 400
+            from routes.gcp.root_project import validate_root_project
+            validation = validate_root_project(credentials, first_enabled)
+            if not validation['valid']:
+                return jsonify({"error": f"Cannot use project as root: {validation['reason']}"}), 400
             from utils.auth.stateless_auth import store_user_preference
             store_user_preference(user_id, 'gcp_root_project', first_enabled)
             from routes.gcp.root_project_tasks import setup_root_project_async
