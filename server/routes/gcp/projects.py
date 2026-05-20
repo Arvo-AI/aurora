@@ -1,4 +1,5 @@
 """GCP project management routes."""
+import hashlib
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.stateless_auth import get_user_preference
@@ -189,6 +190,16 @@ def _oauth_mode_project_list(credentials, sa_email, root_project):
     return result
 
 
+def _derive_sa_email(owner_id: str, root_project_id: str) -> str:
+    """Derive Aurora SA email from owner_id and root project without any API calls.
+
+    The email format is deterministic:
+        aurora-{sha256(owner_id)[:20]}-f@{root_project_id}.iam.gserviceaccount.com
+    """
+    hash_part = hashlib.sha256(owner_id.encode('utf-8')).hexdigest()[:20]
+    return f"aurora-{hash_part}-f@{root_project_id}.iam.gserviceaccount.com"
+
+
 @gcp_projects_bp.route("/api/gcp/sa-project-access", methods=["GET"])
 @require_permission("connectors", "read")
 def sa_project_access_get(user_id):
@@ -218,7 +229,15 @@ def sa_project_access_get(user_id):
             return err
 
         credentials = get_credentials(token_data)
-        sa_email = get_aurora_service_account_email(sa_owner_id)
+
+        # Derive SA email directly when root_project is known (zero API calls).
+        # get_aurora_service_account_email() lists all projects + checks billing/IAM
+        # per project sequentially — catastrophically slow for 100+ projects.
+        if root_project:
+            sa_email = _derive_sa_email(sa_owner_id, root_project)
+        else:
+            sa_email = get_aurora_service_account_email(sa_owner_id)
+
         result = _oauth_mode_project_list(credentials, sa_email, root_project)
         return jsonify({"projects": result, "root_project": root_project}), 200
 
@@ -265,7 +284,13 @@ def sa_project_access_post(user_id):
             return err
 
         credentials = get_credentials(token_data)
-        sa_email = get_aurora_service_account_email(sa_owner_id)
+
+        root_project = get_user_preference(user_id, 'gcp_root_project')
+        if root_project:
+            sa_email = _derive_sa_email(sa_owner_id, root_project)
+        else:
+            sa_email = get_aurora_service_account_email(sa_owner_id)
+
         update_service_account_project_access(credentials, sa_email, selections)
 
         return jsonify({"success": True}), 200
