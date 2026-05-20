@@ -1742,7 +1742,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 description=SAVE_INFRA_CONTEXT_DESCRIPTION,
                 args_schema=SaveInfraContextArgs,
             ))
-            logging.info(f"Added save_infrastructure_context tool for prediscovery mode")
+            logging.info("Added save_infrastructure_context tool for prediscovery mode")
         except Exception as e:
             logging.warning(f"Failed to add save_infrastructure_context tool: {e}")
 
