@@ -1548,6 +1548,29 @@ async def handle_connection(websocket) -> None:
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
             _incident_id = _rbac_incident_id
 
+            # Fetch the authoritative incident start time so github_rca (and any
+            # other time-sensitive tool) doesn't fail-closed in this code path.
+            # Mirrors the fetch in server/chat/background/task.py.
+            _incident_start_time = None
+            if _incident_id:
+                try:
+                    from datetime import timezone as _tz
+                    with db_pool.get_admin_connection() as _conn:
+                        with _conn.cursor() as _cur:
+                            set_rls_context(_cur, _conn, user_id, log_prefix="[Chatbot:StartTime]")
+                            _cur.execute(
+                                "SELECT started_at FROM incidents WHERE id = %s",
+                                (_incident_id,),
+                            )
+                            _row = _cur.fetchone()
+                            if _row and _row[0]:
+                                _started_at = _row[0]
+                                if _started_at.tzinfo is None:
+                                    _started_at = _started_at.replace(tzinfo=_tz.utc)
+                                _incident_start_time = _started_at.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception as _e:
+                    logger.warning("[Chatbot] Could not fetch incident started_at for %s: %s", _incident_id, _e)
+
             # Fetch org tool permissions for gate bypass
             _permitted_tools = None
             try:
@@ -1566,6 +1589,7 @@ async def handle_connection(websocket) -> None:
                 user_id=user_id,
                 session_id=session_id,
                 incident_id=_incident_id,
+                incident_start_time=_incident_start_time,
                 org_id=org_id,
                 provider_preference=provider_preference,
                 selected_project_id=selected_project_id,
