@@ -670,6 +670,14 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
     ),
     # ----- Service dependency graph (Aurora-internal, /api/graph) -----
     DispatchEntry(
+        name="get_infrastructure_context",
+        description="Full infrastructure context document: environments, services, dependencies, CI/CD, monitoring. Call when you need to understand system topology.",
+        category="topology",
+        method="GET",
+        path="/api/graph/infrastructure/context",
+        enabling_skills=(),
+    ),
+    DispatchEntry(
         name="graph_get_full",
         description="Fetch the full service dependency graph (nodes + edges + stats).",
         category="topology",

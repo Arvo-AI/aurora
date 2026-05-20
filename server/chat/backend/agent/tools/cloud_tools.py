@@ -1670,6 +1670,32 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
+    # Add get_infrastructure_context for all authenticated users
+    if user_id:
+        try:
+            from chat.backend.agent.tools.infra_context_tool import (
+                get_infrastructure_context,
+                GetInfraContextArgs,
+                GET_INFRA_CONTEXT_DESCRIPTION,
+            )
+
+            context_wrapped_ic = with_user_context(get_infrastructure_context)
+            notification_wrapped_ic = with_completion_notification(context_wrapped_ic)
+            if tool_capture:
+                final_ic_func = wrap_func_with_capture(notification_wrapped_ic, "get_infrastructure_context")
+            else:
+                final_ic_func = notification_wrapped_ic
+
+            tools.append(StructuredTool.from_function(
+                func=final_ic_func,
+                name="get_infrastructure_context",
+                description=GET_INFRA_CONTEXT_DESCRIPTION,
+                args_schema=GetInfraContextArgs,
+            ))
+            logging.info(f"Added get_infrastructure_context tool for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
+
     # Add discovery finding tool for prediscovery mode
     if user_id and mode_suffix == "prediscovery":
         try:
@@ -1695,6 +1721,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added save_discovery_finding tool for prediscovery mode")
         except Exception as e:
             logging.warning(f"Failed to add save_discovery_finding tool: {e}")
+
+        try:
+            from chat.backend.agent.tools.infra_context_tool import (
+                save_infrastructure_context,
+                SaveInfraContextArgs,
+                SAVE_INFRA_CONTEXT_DESCRIPTION,
+            )
+
+            context_wrapped_sic = with_user_context(save_infrastructure_context)
+            notification_wrapped_sic = with_completion_notification(context_wrapped_sic)
+            if tool_capture:
+                final_sic_func = wrap_func_with_capture(notification_wrapped_sic, "save_infrastructure_context")
+            else:
+                final_sic_func = notification_wrapped_sic
+
+            tools.append(StructuredTool.from_function(
+                func=final_sic_func,
+                name="save_infrastructure_context",
+                description=SAVE_INFRA_CONTEXT_DESCRIPTION,
+                args_schema=SaveInfraContextArgs,
+            ))
+            logging.info(f"Added save_infrastructure_context tool for prediscovery mode")
+        except Exception as e:
+            logging.warning(f"Failed to add save_infrastructure_context tool: {e}")
 
     # Add Splunk tools if connected
     if user_id and is_splunk_connected(user_id):

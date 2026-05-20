@@ -16,3 +16,9 @@ knowledge_base_search(query, limit) - Search user's uploaded documentation:
   - 'escalation process database'
 - IMPORTANT: Reference knowledge base findings with source citations in your analysis
 - If a runbook exists for the issue, FOLLOW the documented steps
+
+INFRASTRUCTURE CONTEXT:
+get_infrastructure_context() - Retrieve the full infrastructure context document:
+- Call when you need to understand system topology, service relationships, or deployment chains
+- Returns a comprehensive document covering environments, services, dependencies, CI/CD, and monitoring
+- Prefer this over knowledge_base_search when you need the big picture rather than specific details
