@@ -73,15 +73,16 @@ export const fetchProjects = async (providerId: string, forceRefresh = false, cu
     if (!res.ok) {
       const errorText = await res.text();
 
-      if (res.status === 401 && errorText.toLowerCase().includes('not found')) {
-        console.warn(`[fetchProjects] Projects not found for ${providerId}:`, errorText);
-        const notFoundError = new Error(errorText || `No ${providerId} projects found.`) as Error & {
+      // Any 401 means credentials are missing/expired — clear cache
+      if (res.status === 401) {
+        ProjectCache.invalidate(providerId);
+        const authError = new Error(`${providerId.toUpperCase()} is disconnected. Please reconnect from the connectors page.`) as Error & {
           status?: number;
           code?: string;
         };
-        notFoundError.status = 401;
-        notFoundError.code = 'PROJECT_NOT_FOUND';
-        throw notFoundError;
+        authError.status = 401;
+        authError.code = 'DISCONNECTED';
+        throw authError;
       }
 
       console.error(`[fetchProjects] Error response for ${providerId}:`, errorText);
@@ -140,8 +141,14 @@ export const saveProjects = async (providerId: string, projects: Project[]): Pro
     headers,
     body: JSON.stringify({ projects: projects.map(p => ({ projectId: p.projectId, enabled: p.enabled })) })
   });
-  if (!res.ok) throw new Error(`Failed to save ${providerId} projects`);
-  
+  if (!res.ok) {
+    if (res.status === 401) {
+      ProjectCache.invalidate(providerId);
+      throw new Error(`${providerId.toUpperCase()} is disconnected. Please reconnect from the connectors page.`);
+    }
+    throw new Error(`Failed to save ${providerId} projects`);
+  }
+
   // Update cache after successful save
   ProjectCache.set(providerId, projects);
 };
