@@ -41,6 +41,7 @@ class State(BaseModel):
     )
     guardrail_blocked: bool = False  # Set by workflow when input rail blocks the message
     permitted_tools: Optional[set] = None
+    strip_level: int = 0  # RCA prompt strip level for A/B comparison (0 = full prompt)
 
     # --- Multi-agent orchestrator fields (defaults preserve single-agent behavior) ---
     triage_decision: Optional[Dict[str, Any]] = None

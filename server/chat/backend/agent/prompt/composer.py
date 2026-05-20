@@ -23,7 +23,7 @@ from .provider_rules import (
 from .schema import PromptSegments
 
 
-def build_system_invariant(is_background: bool = False) -> str:
+def build_system_invariant(is_background: bool = False, strip_level: int = 0) -> str:
     """Load core system prompt from modular markdown files under skills/core/.
 
     Segments are loaded in a fixed order that mirrors the original monolithic
@@ -32,8 +32,18 @@ def build_system_invariant(is_background: bool = False) -> str:
     In background RCA mode, Terraform/IaC, SSH setup, and cloud CLI discovery
     segments are omitted (~3,300 tokens) since background investigations are
     read-only and the freed budget is better spent on integration skills.
+
+    When strip_level > 0, progressively fewer core segments are included
+    in background RCA mode to A/B test investigation quality:
+
+        Level 0: identity + security + knowledge_base + error_handling + investigation + behavioral_rules
+        Level 1: Drop behavioral_rules  (Terraform/zip/web search noise)
+        Level 2: Drop investigation      (prescriptive checklists)
+        Level 4: Drop error_handling     (retry/recovery logic)
+        Level 6: Replace identity+security with one-liner
     """
     from chat.backend.agent.skills.loader import load_core_prompt
+    from .rca_strip import MINIMAL_IDENTITY
 
     core_dir = os.path.join(
         os.path.dirname(__file__), os.pardir, "skills", "core"
@@ -41,14 +51,21 @@ def build_system_invariant(is_background: bool = False) -> str:
     core_dir = os.path.normpath(core_dir)
 
     if is_background:
-        return load_core_prompt(core_dir, segments=[
-            "identity",
-            "security",
-            "knowledge_base",
-            "error_handling",
-            "investigation",
-            "behavioral_rules",
-        ])
+        strip = strip_level
+
+        if strip >= 6:  # L6: replace identity+security with one-liner
+            return MINIMAL_IDENTITY + "\n\n" + load_core_prompt(
+                core_dir, segments=["knowledge_base"]
+            )
+
+        segments = ["identity", "security", "knowledge_base"]
+        if strip < 4:  # L4 drops error retry/recovery logic (39 lines)
+            segments.append("error_handling")
+        if strip < 2:  # L2 drops "make 15-20 tool calls" checklists (40 lines)
+            segments.append("investigation")
+        if strip < 1:  # L1 drops Terraform/zip/web search noise (94 lines)
+            segments.append("behavioral_rules")
+        return load_core_prompt(core_dir, segments=segments)
 
     return load_core_prompt(core_dir, segments=[
         "identity",
@@ -75,9 +92,13 @@ def build_prompt_segments(
     is_background = bool(state and getattr(state, 'is_background', False))
     rca_context = getattr(state, 'rca_context', None) or {}
     is_action = rca_context.get('source') == 'action'
+    strip_level = getattr(state, 'strip_level', 0) if state else 0
 
     # Actions need tool_selection, cloud_access, ssh_access — use full invariant
-    system_invariant = build_system_invariant(is_background=is_background and not is_action)
+    system_invariant = build_system_invariant(
+        is_background=is_background and not is_action,
+        strip_level=strip_level,
+    )
 
     provider_context = build_provider_context_segment(
         provider_preference=provider_preference,

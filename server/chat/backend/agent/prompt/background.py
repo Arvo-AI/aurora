@@ -71,7 +71,13 @@ def _append_background_segment(
 
 
 def build_background_mode_segment(state: Optional[Any]) -> str:
-    """Build background mode instructions for RCA or prediscovery chats."""
+    """Build background mode instructions for RCA or prediscovery chats.
+
+    Respects RCA_PROMPT_STRIP_LEVEL to progressively omit segments:
+
+        Level 3: Drop background_source_general mandatory steps + footer
+        Level 5: Skip eager-loaded integration skills (agent uses tools directly)
+    """
     if not state:
         return ""
 
@@ -81,6 +87,8 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     rca_context = getattr(state, 'rca_context', None)
     if not rca_context:
         return ""
+
+    strip = getattr(state, 'strip_level', 0)
 
     source = rca_context.get('source', '').lower()
     providers = rca_context.get('providers', [])
@@ -107,28 +115,25 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         leading_blank=True,
     )
 
-    # Load integration-specific RCA guidance from skill files
-    user_id = rca_context.get('user_id', '')
-    if user_id:
-        try:
-            from chat.backend.agent.skills.registry import SkillRegistry
-            registry = SkillRegistry.get_instance()
-            rca_skills_content = registry.load_skills_for_rca(
-                user_id=user_id,
-                source=source,
-                providers=providers,
-                integrations=integrations,
-                alert_details=rca_context.get('trigger_metadata', {}),
-            )
-            if rca_skills_content:
-                parts.extend(["", rca_skills_content])
-        except Exception as e:
-            logger.warning(f"Failed to load RCA skills: {e}")
-    else:
-        logger.warning("Skipping RCA skill loading — user_id missing from rca_context")
-
-    # Integration-specific guidance (Splunk, Datadog, GitHub, Jira, etc.)
-    # now loaded from skill files above via SkillRegistry.load_skills_for_rca().
+    if strip < 5:  # L5 drops eager-loaded integration skills (~3-8K tok)
+        user_id = rca_context.get('user_id', '')
+        if user_id:
+            try:
+                from chat.backend.agent.skills.registry import SkillRegistry
+                registry = SkillRegistry.get_instance()
+                rca_skills_content = registry.load_skills_for_rca(
+                    user_id=user_id,
+                    source=source,
+                    providers=providers,
+                    integrations=integrations,
+                    alert_details=rca_context.get('trigger_metadata', {}),
+                )
+                if rca_skills_content:
+                    parts.extend(["", rca_skills_content])
+            except Exception as e:
+                logger.warning(f"Failed to load RCA skills: {e}")
+        else:
+            logger.warning("Skipping RCA skill loading — user_id missing from rca_context")
 
     _append_background_segment(parts, "background_knowledge_base", leading_blank=True)
     _append_background_segment(parts, "background_vm_access", leading_blank=True)
@@ -139,25 +144,24 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         trailing_blank=True,
     )
 
-    # Critical requirements - MUST complete all before stopping
-    if source == 'slack':
-        _append_background_segment(parts, "background_source_slack", leading_blank=True)
-    elif source == 'google_chat':
-        _append_background_segment(parts, "background_source_google_chat", leading_blank=True)
-    else:
-        _append_background_segment(
-            parts,
-            "background_source_general",
-            context={"providers_display": providers_display},
-            leading_blank=True,
-        )
+    if strip < 3:  # L3 drops mandatory investigation steps + "NEVER stop" footer
+        if source == 'slack':
+            _append_background_segment(parts, "background_source_slack", leading_blank=True)
+        elif source == 'google_chat':
+            _append_background_segment(parts, "background_source_google_chat", leading_blank=True)
+        else:
+            _append_background_segment(
+                parts,
+                "background_source_general",
+                context={"providers_display": providers_display},
+                leading_blank=True,
+            )
 
-        # Non-Anthropic models often don't produce text between tool calls unless instructed to
-        model_name = (getattr(state, 'model', '') or '').lower()
-        if model_name and not model_name.startswith("anthropic/"):
-            _append_background_segment(parts, "background_source_general_non_anthropic")
+            model_name = (getattr(state, 'model', '') or '').lower()
+            if model_name and not model_name.startswith("anthropic/"):
+                _append_background_segment(parts, "background_source_general_non_anthropic")
 
-        _append_background_segment(parts, "background_source_general_footer")
+            _append_background_segment(parts, "background_source_general_footer")
 
     return "\n".join(parts)
 

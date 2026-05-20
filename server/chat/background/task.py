@@ -420,6 +420,7 @@ def run_background_chat(
     send_notifications: bool = True,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    strip_level: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -444,12 +445,88 @@ def run_background_chat(
             only the externally-controlled fields should be checked for prompt
             injection; the internal instruction scaffolding should not. When
             omitted, falls back to initial_message (legacy behavior).
+        strip_level: Optional per-task RCA_PROMPT_STRIP_LEVEL override (0-6).
+            Used by run_rca_comparison to test different prompt sizes in parallel.
 
     Returns:
         Dict with session_id, status, and any error information
     """
     from celery.exceptions import SoftTimeLimitExceeded
-    
+
+    # Auto-fork: if this is a normal RCA (strip_level=None) and comparison mode
+    # is enabled, spawn sibling tasks at other levels. This task continues as
+    # the baseline (level 0). Siblings get explicit strip_level so they won't fork.
+    if strip_level is None and incident_id:
+        comparison_levels = [0, 1, 2, 3, 4, 5, 6]
+        if comparison_levels and len(comparison_levels) > 1:
+            # Rename this (primary) session to include "L0" for easy identification
+            try:
+                alert_title = (trigger_metadata or {}).get('alert_title', 'Investigation')
+                primary_title = f"[L0] {alert_title}"[:200]
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Comparison]")
+                        cursor.execute(
+                            "UPDATE chat_sessions SET title = %s WHERE id = %s",
+                            (primary_title, session_id),
+                        )
+                    conn.commit()
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to rename primary session: {e}")
+
+            for sibling_level in comparison_levels:
+                if sibling_level == 0:
+                    continue  # this task IS the level-0 run
+                try:
+                    sibling_title = f"[L{sibling_level}] {(trigger_metadata or {}).get('alert_title', 'Investigation')}"[:200]
+
+                    # Create a separate incident for this sibling so it doesn't
+                    # collapse with the primary on the frontend.
+                    sibling_incident_id = None
+                    try:
+                        with db_pool.get_admin_connection() as conn:
+                            with conn.cursor() as cursor:
+                                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Comparison]")
+                                cursor.execute(
+                                    """INSERT INTO incidents
+                                       (user_id, org_id, source_type, source_alert_id, alert_title,
+                                        alert_service, severity, status, started_at, alert_metadata)
+                                       SELECT user_id, org_id, source_type,
+                                              source_alert_id * 100 + %s,
+                                              %s, alert_service, severity, 'investigating',
+                                              started_at, alert_metadata
+                                       FROM incidents WHERE id = %s
+                                       RETURNING id""",
+                                    (sibling_level, sibling_title, incident_id),
+                                )
+                                row = cursor.fetchone()
+                                sibling_incident_id = str(row[0]) if row else None
+                            conn.commit()
+                    except Exception as e:
+                        logger.warning(f"[BackgroundChat] Failed to create sibling incident for L{sibling_level}: {e}")
+
+                    sibling_session = create_background_chat_session(
+                        user_id=user_id,
+                        title=sibling_title,
+                        trigger_metadata={**(trigger_metadata or {}), "strip_level": sibling_level, "comparison_run": True},
+                        incident_id=sibling_incident_id,
+                    )
+                    run_background_chat.delay(
+                        user_id=user_id,
+                        session_id=sibling_session,
+                        initial_message=initial_message,
+                        trigger_metadata=trigger_metadata,
+                        provider_preference=provider_preference,
+                        incident_id=sibling_incident_id,
+                        send_notifications=False,
+                        mode=mode,
+                        rail_text=rail_text,
+                        strip_level=sibling_level,
+                    )
+                    logger.info(f"[BackgroundChat] Forked comparison sibling L{sibling_level} -> session {sibling_session}, incident {sibling_incident_id}")
+                except Exception as e:
+                    logger.warning(f"[BackgroundChat] Failed to fork L{sibling_level}: {e}")
+
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
     
@@ -586,6 +663,7 @@ def run_background_chat(
                 incident_id=incident_id,
                 mode=mode,
                 rail_text=rail_text,
+                strip_level=strip_level or 0,
             ))
             pass
         except Exception as e:
@@ -1125,6 +1203,7 @@ async def _execute_background_chat(
     incident_id: Optional[str] = None,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    strip_level: int = 0,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1255,6 +1334,7 @@ async def _execute_background_chat(
             is_postmortem_action=_is_postmortem_action,
             rca_context=rca_context,
             permitted_tools=_resolve_permitted_tools(user_id),
+            strip_level=strip_level,
         )
         logger.info(
             f"[BackgroundChat] Created state with is_background=True, is_postmortem_action={_is_postmortem_action}, "
