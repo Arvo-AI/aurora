@@ -120,12 +120,11 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       notFoundCountRef.current = 0;
       return;
     }
-    if (regenerating) return;
     notFoundCountRef.current += 1;
     const shouldRetry = !!justResolved && notFoundCountRef.current < 5;
     setRegenerating(shouldRetry);
     setPostmortemNotFound(!shouldRetry);
-  }, [regenerating, justResolved]);
+  }, [justResolved]);
 
   const loadPostmortem = useCallback(async () => {
     const result = await postmortemService.getPostmortem(incidentId);

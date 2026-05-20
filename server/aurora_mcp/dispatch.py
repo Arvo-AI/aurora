@@ -18,8 +18,8 @@ from .registry import (
     _get_cached_connector_status,
     dispatch_entry_visible,
     find_dispatch_entry,
+    parse_and_cache_connector_status,
     search_dispatch_entries,
-    set_connector_status,
 )
 from .response import truncate_payload
 
@@ -185,15 +185,9 @@ def register_dispatch_tools(
             return
         try:
             data = await api_call("GET", "/api/connectors/status")
-            connectors = data.get("connectors", {})
-            status = {
-                provider.lower(): bool(info.get("connected"))
-                for provider, info in connectors.items()
-                if isinstance(info, dict)
-            }
-            set_connector_status(user_id, status)
+            parse_and_cache_connector_status(user_id, data)
         except Exception:
-            logger.debug("connector cache refresh failed in dispatch", exc_info=True)
+            logger.error("connector cache refresh failed in dispatch", exc_info=True)
 
     @mcp.tool()
     async def search_tools(

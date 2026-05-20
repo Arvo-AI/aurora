@@ -174,10 +174,9 @@ async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
 
 def _warm_user_caches(user_id: str):
     """Kick off background tasks that pre-warm per-user caches."""
-    import uuid as _uuid
     try:
-        _uuid.UUID(user_id)
-    except (ValueError, TypeError, AttributeError):
+        uuid.UUID(user_id)
+    except (ValueError, TypeError):
         logger.debug(f"Skipping cache warmup for non-UUID user_id: {user_id}")
         return
 
@@ -1557,7 +1556,6 @@ async def handle_connection(websocket) -> None:
             # Fetch org tool permissions for gate bypass
             _permitted_tools = None
             try:
-                from utils.db.connection_pool import db_pool
                 with db_pool.get_connection() as conn:
                     with conn.cursor() as cur:
                         set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:perms]")

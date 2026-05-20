@@ -324,8 +324,9 @@ register_prompts(mcp)
 
 from aurora_mcp.registry import (  # noqa: E402
     TIER2_TOOLS,
+    _get_cached_connector_status,
     gated_tool_visible,
-    set_connector_status,
+    parse_and_cache_connector_status,
 )
 
 _GATED_NAMES = {spec.name: spec for spec in TIER2_TOOLS}
@@ -341,15 +342,9 @@ async def _refresh_connector_cache(user_id: str) -> None:
     """
     try:
         data = await _api("GET", "/api/connectors/status")
-        connectors = data.get("connectors", {})
-        status = {
-            provider.lower(): bool(info.get("connected"))
-            for provider, info in connectors.items()
-            if isinstance(info, dict)
-        }
-        set_connector_status(user_id, status)
+        parse_and_cache_connector_status(user_id, data)
     except Exception:
-        logger.debug("connector cache refresh failed for user=%s", user_id, exc_info=True)
+        logger.error("connector cache refresh failed for user=%s", user_id, exc_info=True)
 
 
 @mcp._mcp_server.list_tools()
@@ -369,7 +364,8 @@ async def _filtered_list_tools():  # type: ignore[no-redef]
 
     # Populate connector cache from the backend API so that gated_tool_visible
     # (and downstream search_tools/call_tool) use the authoritative status.
-    await _refresh_connector_cache(user_id)
+    if _get_cached_connector_status(user_id) is None:
+        await _refresh_connector_cache(user_id)
 
     filtered = []
     for t in all_tools:

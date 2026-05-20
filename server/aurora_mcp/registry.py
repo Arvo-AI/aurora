@@ -44,8 +44,23 @@ def _get_cached_connector_status(user_id: str) -> Optional[Dict[str, bool]]:
         return None
     ts, status = entry
     if time.monotonic() - ts > _CONNECTOR_CACHE_TTL:
+        _connector_cache.pop(user_id, None)
         return None
     return status
+
+
+def parse_and_cache_connector_status(user_id: str, api_response: Dict) -> None:
+    """Parse /api/connectors/status response and cache the result.
+
+    Shared by mcp_server._refresh_connector_cache and dispatch._ensure_connector_cache.
+    """
+    connectors = api_response.get("connectors", {})
+    status = {
+        provider.lower(): bool(info.get("connected"))
+        for provider, info in connectors.items()
+        if isinstance(info, dict)
+    }
+    set_connector_status(user_id, status)
 
 
 # ---------------------------------------------------------------------------

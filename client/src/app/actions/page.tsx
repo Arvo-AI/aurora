@@ -176,16 +176,14 @@ function ActionsListView({ actions, onSelect, onCreate }: {
       </div>
 
       {actions.length === 0 ? (
-        <Panel title="Configured Actions" subtitle="Background agent tasks that follow your instructions">
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <Workflow className="h-8 w-8 text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500">No actions yet</p>
-            <p className="text-xs text-zinc-600 mt-1 mb-4">Create your first action to automate SRE workflows</p>
-            <Button variant="outline" size="sm" onClick={onCreate}>
-              <Plus className="h-3.5 w-3.5 mr-1.5" /> Create Action
-            </Button>
-          </div>
-        </Panel>
+        <div className="flex flex-col items-center justify-center py-16 text-center border border-zinc-800/80 rounded-xl bg-zinc-900/60">
+          <Workflow className="h-8 w-8 text-zinc-700 mb-3" />
+          <p className="text-sm text-zinc-500">No actions yet</p>
+          <p className="text-xs text-zinc-600 mt-1 mb-4">Create your first action to automate SRE workflows</p>
+          <Button variant="outline" size="sm" onClick={onCreate}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" /> Create Action
+          </Button>
+        </div>
       ) : (
         <div className="space-y-3">
           {actions.map((action) => (
