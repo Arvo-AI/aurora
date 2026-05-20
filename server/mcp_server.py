@@ -344,7 +344,7 @@ async def _refresh_connector_cache(user_id: str) -> None:
         data = await _api("GET", "/api/connectors/status")
         parse_and_cache_connector_status(user_id, data)
     except Exception:
-        logger.error("connector cache refresh failed for user=%s", user_id, exc_info=True)
+        logger.exception("connector cache refresh failed for user=%s", user_id)
 
 
 @mcp._mcp_server.list_tools()

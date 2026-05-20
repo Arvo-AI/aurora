@@ -187,7 +187,7 @@ def register_dispatch_tools(
             data = await api_call("GET", "/api/connectors/status")
             parse_and_cache_connector_status(user_id, data)
         except Exception:
-            logger.error("connector cache refresh failed in dispatch", exc_info=True)
+            logger.exception("connector cache refresh failed in dispatch")
 
     @mcp.tool()
     async def search_tools(
