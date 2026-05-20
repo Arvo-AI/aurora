@@ -122,7 +122,3 @@ def validate_root_project(credentials, project_id):
     except Exception as e:
         logger.error(f"Error validating project {project_id}: {e}", exc_info=True)
         return {"valid": False, "reason": "Failed to validate project"}
-
-def setup_service_accounts_in_project(*args, **kwargs):
-    """Deprecated shim retained for backward compatibility."""
-    raise RuntimeError("setup_service_accounts_in_project is no longer called inline. Use Celery task instead.")

@@ -10,7 +10,6 @@ from utils.auth.token_management import get_token_data
 from utils.log_sanitizer import sanitize
 from connectors.gcp_connector.gcp.projects import get_project_list
 from connectors.gcp_connector.auth.service_accounts import (
-    get_aurora_service_account_email,
     update_service_account_project_access,
     get_gcp_auth_type,
     GCP_AUTH_TYPE_SA,
@@ -165,7 +164,6 @@ def _check_project_iam(crm_service, pid, name, member_sa, root_project):
 def _oauth_mode_project_list(credentials, sa_email, root_project):
     """Build project list for OAuth mode by enumerating projects + IAM."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from googleapiclient._helpers import positional
 
     projects = get_project_list(credentials)
     member_sa = f"serviceAccount:{sa_email}"
