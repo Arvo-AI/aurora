@@ -1427,7 +1427,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Suggest a code fix for an identified issue during RCA. "
                     "Use this when you identify a specific code change that would fix the root cause. "
                     "The fix is stored for user review before being applied. "
-                    "Parameters: file_path (path in repo), suggested_content (complete fixed file), "
+                    "Parameters: file_path (path in repo), "
+                    "suggested_content (the ENTIRE updated file body — every line of the file, "
+                    "not just the changed lines; Aurora overwrites the whole file with this string), "
                     "fix_description (what this fix does), root_cause_summary (why this change is needed). "
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),

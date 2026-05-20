@@ -26,7 +26,14 @@ class GitHubFixArgs(BaseModel):
         description="Path to the file in the repository (e.g., 'config/deployment.yaml', 'src/app.py')"
     )
     suggested_content: str = Field(
-        description="The complete suggested file content with the fix applied. Must be the full file, not just the diff."
+        description=(
+            "COMPLETE updated file body with your fix applied — every line of "
+            "the file from first to last, not a snippet, not a diff, not just "
+            "the changed section. If the original file is 800 lines, your "
+            "suggested_content should also be ~800 lines (give or take the "
+            "lines you added/removed). Aurora overwrites the entire file with "
+            "this string, so any line you omit will be deleted."
+        )
     )
     fix_description: str = Field(
         description="Human-readable description of what this fix does (e.g., 'Increase memory limit from 256Mi to 512Mi')"
@@ -183,6 +190,28 @@ def github_fix(
     original_content = _get_file_content(owner, repo_name, file_path, branch, user_id)
     if original_content is None:
         logger.warning(f"Could not fetch original content for {file_path}, proceeding without it")
+    else:
+        # Guard against the LLM passing only a snippet of the change instead of
+        # the complete file. push_files overwrites the entire file with whatever
+        # we hand it, so a snippet here silently deletes the rest of the file.
+        orig_lines = original_content.count("\n") + 1
+        sugg_lines = suggested_content.count("\n") + 1
+        orig_len = len(original_content)
+        sugg_len = len(suggested_content)
+        if orig_len > 500 and (sugg_len < 0.4 * orig_len or sugg_lines < 0.4 * orig_lines):
+            logger.warning(
+                "[github_fix] Rejecting truncated suggestion for %s: "
+                "original %d lines / %d chars, suggested %d lines / %d chars",
+                file_path, orig_lines, orig_len, sugg_lines, sugg_len,
+            )
+            return build_error_response(
+                f"suggested_content is too short to be the full {file_path} "
+                f"(original is {orig_lines} lines / {orig_len} chars, "
+                f"you sent {sugg_lines} lines / {sugg_len} chars). "
+                "You must pass the COMPLETE updated file contents, not just "
+                "the changed lines. Re-call github_fix with the full file body "
+                "containing your targeted change applied."
+            )
 
     # Generate commit message if not provided
     final_commit_message = commit_message or f"fix: {fix_description[:100]}"
