@@ -21,8 +21,7 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
     try:
         logging.info(f"Starting GCP post-auth setup for user {user_id}")
 
-        # If a root project is already configured, SA setup is handled by
-        # setup_root_project_async — nothing to do here.
+        # Root already configured — SA setup handled by setup_root_project_async.
         existing_root = get_user_preference(user_id, 'gcp_root_project')
         if existing_root and not selected_project_ids:
             logging.info(
@@ -31,10 +30,7 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
             )
             return {'status': 'already_configured', 'root_project': existing_root}
 
-        # No root project yet and no pre-selected projects — user must pick
-        # from the manage page. No billing enumeration needed: creating a SA
-        # doesn't require billing, and the manage page lists projects with a
-        # single API call.
+        # No root project and no pre-selected projects — user picks from manage page.
         if not selected_project_ids:
             logging.info(
                 "No root project configured for user %s, needs manual selection from manage page",

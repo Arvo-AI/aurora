@@ -231,9 +231,7 @@ def sa_project_access_get(user_id):
 
         credentials = get_credentials(token_data)
 
-        # Derive SA email directly when root_project is known (zero API calls).
-        # get_aurora_service_account_email() lists all projects + checks billing/IAM
-        # per project sequentially — catastrophically slow for 100+ projects.
+        # Derive SA email directly — no API calls needed.
         sa_setup_pending = False
         if root_project:
             sa_email = _derive_sa_email(sa_owner_id, root_project)
@@ -266,8 +264,7 @@ def sa_project_access_get(user_id):
                 else:
                     raise
         else:
-            # No root project means no SA has been provisioned yet.
-            # Just list projects without IAM checks (all will show enabled=False).
+            # No root project — no SA provisioned yet.
             sa_setup_pending = True
             projects = get_project_list(credentials)
             result = []
@@ -336,9 +333,7 @@ def sa_project_access_post(user_id):
 
         root_project = get_user_preference(user_id, 'gcp_root_project')
         if not root_project:
-            # No root project yet — auto-select the first project being
-            # enabled as the root, trigger SA creation, and tell the frontend
-            # to retry after setup completes.
+            # Auto-select first enabled project as root, trigger SA creation.
             first_enabled = next((pid for pid, en in selections.items() if en), None)
             if not first_enabled:
                 return jsonify({"error": "No root project configured and no project being enabled."}), 400
@@ -360,9 +355,7 @@ def sa_project_access_post(user_id):
 
         sa_email = _derive_sa_email(sa_owner_id, root_project)
 
-        # Verify the SA actually exists before attempting IAM operations.
-        # The SA is created asynchronously by setup_root_project_async — if it
-        # hasn't completed yet, setIamPolicy will fail with a confusing 400.
+        # SA is created async — verify it exists before IAM operations.
         iam_service = build('iam', 'v1', credentials=credentials)
         sa_resource = f"projects/{root_project}/serviceAccounts/{sa_email}"
         try:
