@@ -19,6 +19,11 @@ from .github_mcp_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Reject suggested_content much smaller than the original — likely a snippet
+# rather than the full file body push_files will overwrite with.
+MIN_FILE_SIZE_FOR_TRUNCATION_CHECK = 500
+MIN_CONTENT_RATIO_THRESHOLD = 0.4
+
 
 class GitHubFixArgs(BaseModel):
     """Arguments for github_fix tool."""
@@ -191,26 +196,29 @@ def github_fix(
     if original_content is None:
         logger.warning(f"Could not fetch original content for {file_path}, proceeding without it")
     else:
-        # Guard against the LLM passing only a snippet of the change instead of
-        # the complete file. push_files overwrites the entire file with whatever
-        # we hand it, so a snippet here silently deletes the rest of the file.
         orig_lines = original_content.count("\n") + 1
         sugg_lines = suggested_content.count("\n") + 1
         orig_len = len(original_content)
         sugg_len = len(suggested_content)
-        if orig_len > 500 and (sugg_len < 0.4 * orig_len or sugg_lines < 0.4 * orig_lines):
+        if orig_len > MIN_FILE_SIZE_FOR_TRUNCATION_CHECK and (
+            sugg_len < MIN_CONTENT_RATIO_THRESHOLD * orig_len
+            or sugg_lines < MIN_CONTENT_RATIO_THRESHOLD * orig_lines
+        ):
             logger.warning(
-                "[github_fix] Rejecting truncated suggestion for %s: "
-                "original %d lines / %d chars, suggested %d lines / %d chars",
+                "[github_fix] Rejecting suggested_content for %s as likely truncated: "
+                "original %d lines / %d chars, suggested %d lines / %d chars "
+                "(threshold ratio=%.2f)",
                 file_path, orig_lines, orig_len, sugg_lines, sugg_len,
+                MIN_CONTENT_RATIO_THRESHOLD,
             )
             return build_error_response(
-                f"suggested_content is too short to be the full {file_path} "
-                f"(original is {orig_lines} lines / {orig_len} chars, "
-                f"you sent {sugg_lines} lines / {sugg_len} chars). "
-                "You must pass the COMPLETE updated file contents, not just "
-                "the changed lines. Re-call github_fix with the full file body "
-                "containing your targeted change applied."
+                f"suggested_content for {file_path} is much smaller than the "
+                f"original (original {orig_lines} lines / {orig_len} chars, "
+                f"you sent {sugg_lines} lines / {sugg_len} chars). If you "
+                "intended a large deletion, that's fine — re-send the COMPLETE "
+                "new file body so push_files writes the file you mean. If you "
+                "only sent the changed snippet, expand it to the full file with "
+                "your targeted change applied and re-call github_fix."
             )
 
     # Generate commit message if not provided
