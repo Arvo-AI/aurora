@@ -265,7 +265,7 @@ def _reconcile_user_installations(user_id: str) -> None:
                         (user_id, stale),
                     )
                     cur.execute(
-                        """UPDATE github_connected_repos
+                        """UPDATE connected_repos
                               SET installation_id = NULL,
                                   updated_at = NOW()
                             WHERE user_id = %s
@@ -880,7 +880,7 @@ def github_app_unlink_installation(user_id, installation_id):
                     log_prefix="[GITHUB-APP-UNLINK]",
                 )
                 cur.execute(
-                    """UPDATE github_connected_repos
+                    """UPDATE connected_repos
                           SET installation_id = NULL,
                               updated_at = NOW()
                         WHERE user_id = %s
@@ -1068,7 +1068,7 @@ def github_disconnect(user_id):
                         log_prefix="[GITHUB-DISCONNECT]",
                     )
                     cur.execute(
-                        """UPDATE github_connected_repos
+                        """UPDATE connected_repos
                               SET installation_id = NULL,
                                   updated_at = NOW()
                             WHERE user_id = %s
