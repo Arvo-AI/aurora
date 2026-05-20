@@ -239,6 +239,7 @@ def _build_sends(state: State) -> list:
         return []
 
     incident_id = getattr(state, "incident_id", None)
+    incident_start_time = getattr(state, "incident_start_time", None)
     user_id = getattr(state, "user_id", None)
     org_id = getattr(state, "org_id", None)
     parent_session_id = getattr(state, "session_id", None)
@@ -269,6 +270,7 @@ def _build_sends(state: State) -> list:
         payload = {
             **inp.model_dump(),
             "parent_incident_id": incident_id,
+            "parent_incident_start_time": incident_start_time,
             "parent_user_id": user_id,
             "parent_org_id": org_id,
             "parent_session_id": parent_session_id,
