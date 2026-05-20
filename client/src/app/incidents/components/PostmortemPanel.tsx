@@ -105,6 +105,10 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
 
   const notFoundCountRef = useRef(0);
 
+  useEffect(() => {
+    notFoundCountRef.current = 0;
+  }, [incidentId]);
+
   const handlePostmortemLoaded = useCallback((data: PostmortemData | null, generating: boolean | undefined) => {
     setPostmortem(data);
     if (data) {

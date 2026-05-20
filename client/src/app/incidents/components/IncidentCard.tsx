@@ -46,15 +46,15 @@ function sourceDisplayName(source: string): string {
 }
 
 interface IncidentCardProps {
-  incident: Incident;
-  duration: string;
-  showThoughts: boolean;
-  onToggleThoughts: () => void;
-  citations?: Citation[];
-  onRefresh?: () => void;
+  readonly incident: Incident;
+  readonly duration: string;
+  readonly showThoughts: boolean;
+  readonly onToggleThoughts: () => void;
+  readonly citations?: Citation[];
+  readonly onRefresh?: () => void;
 }
 
-function StatusPill({ status }: { status: AuroraStatus }) {
+function StatusPill({ status }: { readonly status: AuroraStatus }) {
   switch (status) {
     case 'running':
       return (
