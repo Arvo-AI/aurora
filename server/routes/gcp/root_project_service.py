@@ -17,9 +17,12 @@ class RootProjectSetupManager:
         self._logger = logging.getLogger(self.__class__.__name__)
 
     def setup_service_accounts(self, user_id: str, project_id: str) -> Dict[str, str]:
+        # Only provision the SA in the root project itself — not all projects.
+        # The user explicitly enables other projects via the manage page.
         ensure_aurora_full_access(
             self._credentials,
             user_id,
+            projects_list=[{"projectId": project_id}],
             root_project_id_override=project_id,
         )
 

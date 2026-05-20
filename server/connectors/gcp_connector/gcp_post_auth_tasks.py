@@ -8,9 +8,6 @@ from .auth_compatibility import (
     enable_all_required_apis_for_all_projects, ensure_aurora_full_access,
     allow_public_access_for_all_projects, get_project_list
 )
-from .billing import has_active_billing
-from .gcp.projects import select_best_project
-from .gcp.apis import enable_single_api
 from utils.auth.stateless_auth import get_credentials_from_db, get_user_preference, store_user_preference
 from connectors.gcp_connector.auth.service_accounts import generate_sa_access_token
 import time
@@ -23,31 +20,27 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
     """
     try:
         logging.info(f"Starting GCP post-auth setup for user {user_id}")
-        
-        # Check project count before proceeding (only if not already filtered)
+
+        # If a root project is already configured, SA setup is handled by
+        # setup_root_project_async — nothing to do here.
+        existing_root = get_user_preference(user_id, 'gcp_root_project')
+        if existing_root and not selected_project_ids:
+            logging.info(
+                "Root project %s already set for user %s, skipping post-auth setup",
+                existing_root, user_id,
+            )
+            return {'status': 'already_configured', 'root_project': existing_root}
+
+        # No root project yet and no pre-selected projects — user must pick
+        # from the manage page. No billing enumeration needed: creating a SA
+        # doesn't require billing, and the manage page lists projects with a
+        # single API call.
         if not selected_project_ids:
-            token_data = get_credentials_from_db(user_id, 'gcp')
-            if token_data:
-                creds = get_credentials(token_data)
-                all_projects = get_project_list(creds)
-                
-                # Count eligible projects (only check billing - SA permissions don't exist yet on first auth)
-                eligible = []
-                for p in all_projects:
-                    pid = p.get('projectId')
-                    if not pid:
-                        continue
-                    if has_active_billing(pid, creds):
-                        eligible.append({'projectId': pid, 'name': p.get('name', pid)})
-                
-                # If > 5, return early with project list for user selection
-                if len(eligible) > 5:
-                    logging.info(f"Too many projects ({len(eligible)}), needs selection")
-                    return {
-                        'status': 'needs_selection',
-                        'eligible_projects': eligible,
-                        'count': len(eligible)
-                    }
+            logging.info(
+                "No root project configured for user %s, needs manual selection from manage page",
+                user_id,
+            )
+            return {'status': 'needs_selection'}
         
         # Update progress: Starting
         self.update_state(
@@ -78,34 +71,9 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
                 'redirect_params': 'login=gcp_no_projects'
             }
         
-        # Filter projects early if selected_project_ids provided
-        if selected_project_ids:
-            projects_to_check = [p for p in projects if p.get('projectId') in selected_project_ids]
-            logging.info(f"Checking billing for {len(projects_to_check)} pre-selected projects")
-        else:
-            projects_to_check = projects
-        
-        # Check if at least one project has billing
-        for proj in projects_to_check:
-            project_id = proj.get("projectId")
-            if has_active_billing(project_id, credentials):
-                break
-        else:
-            logging.warning("No GCP project with active billing found for user %s", user_id)
-            return {
-                'status': 'FAILED', 
-                'redirect_params': 'login=gcp_failed_billing'
-            }
-
-        # Determine which projects to setup based on selection
-        if selected_project_ids:
-            # Filter projects to only the selected ones
-            projects_to_setup = [p for p in projects if p.get('projectId') in selected_project_ids]
-            logging.info(f"Running setup for {len(projects_to_setup)} selected projects")
-        else:
-            # Use all projects
-            projects_to_setup = projects
-            logging.info(f"Running setup for all {len(projects_to_setup)} projects")
+        # Filter to selected projects
+        projects_to_setup = [p for p in projects if p.get('projectId') in selected_project_ids]
+        logging.info(f"Running setup for {len(projects_to_setup)} selected projects")
 
         # Update progress: Enabling APIs
         self.update_state(
@@ -127,9 +95,9 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
         # Determine root project preference (used for service account setup)
         root_project_id = get_user_preference(user_id, 'gcp_root_project')
         if not root_project_id:
-            root_project_id = select_best_project(credentials, projects, user_id)
+            root_project_id = selected_project_ids[0] if selected_project_ids else None
             if root_project_id:
-                logging.info(f"Detected and saving root project preference: {root_project_id}")
+                logging.info(f"No root project set, using first selected project: {root_project_id}")
                 store_user_preference(user_id, 'gcp_root_project', root_project_id)
 
         # Update progress: Creating service accounts

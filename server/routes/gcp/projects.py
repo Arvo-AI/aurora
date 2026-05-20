@@ -17,6 +17,7 @@ from connectors.gcp_connector.auth.service_accounts import (
 )
 from connectors.gcp_connector.billing import has_active_billing
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from utils.secrets.secret_ref_utils import get_token_owner_id
 
 gcp_projects_bp = Blueprint("gcp_projects", __name__)
@@ -164,6 +165,7 @@ def _check_project_iam(crm_service, pid, name, member_sa, root_project):
 def _oauth_mode_project_list(credentials, sa_email, root_project):
     """Build project list for OAuth mode by enumerating projects + IAM."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    from googleapiclient._helpers import positional
 
     projects = get_project_list(credentials)
     member_sa = f"serviceAccount:{sa_email}"
@@ -172,11 +174,12 @@ def _oauth_mode_project_list(credentials, sa_email, root_project):
 
     def check_one(pid_name):
         pid, name = pid_name
-        crm = build('cloudresourcemanager', 'v1', credentials=credentials)
+        # Each thread needs its own client (httplib2 isn't thread-safe)
+        crm = build('cloudresourcemanager', 'v1', credentials=credentials, cache_discovery=False)
         return _check_project_iam(crm, pid, name, member_sa, root_project)
 
     result = []
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=20) as pool:
         futures = {pool.submit(check_one, item): item for item in items}
         for future in as_completed(futures):
             try:
@@ -233,12 +236,41 @@ def sa_project_access_get(user_id):
         # Derive SA email directly when root_project is known (zero API calls).
         # get_aurora_service_account_email() lists all projects + checks billing/IAM
         # per project sequentially — catastrophically slow for 100+ projects.
+        sa_setup_pending = False
         if root_project:
             sa_email = _derive_sa_email(sa_owner_id, root_project)
-            result = _oauth_mode_project_list(credentials, sa_email, root_project)
+
+            # Check if SA actually exists — if not, fall back to listing
+            # projects without IAM checks (setup is still in progress).
+            iam_service = build('iam', 'v1', credentials=credentials)
+            sa_resource = f"projects/{root_project}/serviceAccounts/{sa_email}"
+            try:
+                iam_service.projects().serviceAccounts().get(name=sa_resource).execute()
+                result = _oauth_mode_project_list(credentials, sa_email, root_project)
+            except HttpError as e:
+                if e.resp.status == 404:
+                    logging.info("SA %s not yet provisioned, listing without IAM checks", sa_email)
+                    sa_setup_pending = True
+                    projects = get_project_list(credentials)
+                    result = []
+                    for p in projects:
+                        pid = p.get('projectId')
+                        if not pid:
+                            continue
+                        result.append({
+                            "projectId": pid,
+                            "name": p.get('name', pid),
+                            "enabled": False,
+                            "hasPermission": True,
+                            "isRootProject": pid == root_project,
+                        })
+                    result.sort(key=lambda x: x['name'])
+                else:
+                    raise
         else:
             # No root project means no SA has been provisioned yet.
             # Just list projects without IAM checks (all will show enabled=False).
+            sa_setup_pending = True
             projects = get_project_list(credentials)
             result = []
             for p in projects:
@@ -254,7 +286,11 @@ def sa_project_access_get(user_id):
                 })
             result.sort(key=lambda x: x['name'])
 
-        return jsonify({"projects": result, "root_project": root_project}), 200
+        return jsonify({
+            "projects": result,
+            "root_project": root_project,
+            "sa_setup_pending": sa_setup_pending,
+        }), 200
 
     except ValueError as e:
         logging.warning(f"Validation error in sa_project_access_get: {e}")
@@ -301,10 +337,42 @@ def sa_project_access_post(user_id):
         credentials = get_credentials(token_data)
 
         root_project = get_user_preference(user_id, 'gcp_root_project')
-        if root_project:
-            sa_email = _derive_sa_email(sa_owner_id, root_project)
-        else:
-            return jsonify({"error": "No root project configured. Please select a root project first."}), 400
+        if not root_project:
+            # No root project yet — auto-select the first project being
+            # enabled as the root, trigger SA creation, and tell the frontend
+            # to retry after setup completes.
+            first_enabled = next((pid for pid, en in selections.items() if en), None)
+            if not first_enabled:
+                return jsonify({"error": "No root project configured and no project being enabled."}), 400
+            from utils.auth.stateless_auth import store_user_preference
+            store_user_preference(user_id, 'gcp_root_project', first_enabled)
+            from routes.gcp.root_project_tasks import setup_root_project_async
+            setup_root_project_async.delay(user_id, first_enabled)
+            logging.info("Auto-selected root project %s for user %s, triggered SA setup", first_enabled, user_id)
+            return jsonify({
+                "success": True,
+                "root_project_set": first_enabled,
+                "sa_setup_pending": True,
+                "message": "Root project set and service account provisioning started."
+            }), 202
+
+        sa_email = _derive_sa_email(sa_owner_id, root_project)
+
+        # Verify the SA actually exists before attempting IAM operations.
+        # The SA is created asynchronously by setup_root_project_async — if it
+        # hasn't completed yet, setIamPolicy will fail with a confusing 400.
+        iam_service = build('iam', 'v1', credentials=credentials)
+        sa_resource = f"projects/{root_project}/serviceAccounts/{sa_email}"
+        try:
+            iam_service.projects().serviceAccounts().get(name=sa_resource).execute()
+        except HttpError as e:
+            if e.resp.status == 404:
+                return jsonify({
+                    "success": True,
+                    "sa_setup_pending": True,
+                    "message": "Service account is being provisioned. Projects will be configured once setup completes."
+                }), 202
+            raise
 
         update_service_account_project_access(credentials, sa_email, selections)
 

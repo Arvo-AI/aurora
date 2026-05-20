@@ -11,7 +11,6 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.rbac_decorators import require_permission
 from connectors.gcp_connector.auth.oauth import get_credentials
-from connectors.gcp_connector.gcp.projects import check_billing_enabled
 from routes.gcp.root_project_tasks import setup_root_project_async
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -101,17 +100,14 @@ def set_root_project(user_id):
         return jsonify({"error": "Failed to set root project"}), 500
 
 def validate_root_project(credentials, project_id):
-    """Validate if a project can be used as root project."""
-    try:
-        # Check billing
-        billing_enabled = check_billing_enabled(credentials, project_id)
-        if not billing_enabled:
-            return {"valid": False, "reason": "Billing is not enabled"}
+    """Validate if a project can be used as root project.
 
-        # Check IAM permissions
+    Only requirement: user must have IAM permission to create a service
+    account in this project. Billing is NOT required for SA creation.
+    """
+    try:
         crm_service = build('cloudresourcemanager', 'v1', credentials=credentials)
         try:
-            # Try to get IAM policy - this will fail if no permissions
             crm_service.projects().getIamPolicy(
                 resource=project_id,
                 body={}
