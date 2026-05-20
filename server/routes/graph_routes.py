@@ -139,11 +139,11 @@ def get_infrastructure_context_api(user_id):
     from utils.auth.stateless_auth import get_org_id_for_user
     from utils.db.connection_pool import db_pool
 
-    org_id = get_org_id_for_user(user_id)
-    if not org_id:
-        return jsonify({"error": "No organization context"}), 400
-
     try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return jsonify({"error": "No organization context"}), 400
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
