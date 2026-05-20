@@ -97,7 +97,7 @@ def dispatch_action(
             mode=action["mode"],
             rail_text=rail_text,
             send_notifications=False,
-            incident_id=None,
+            incident_id=trigger_context.get("incident_id"),
         )
     except Exception as e:
         _update_run(run_id, user_id, status="error", error=f"Failed to enqueue: {e}")

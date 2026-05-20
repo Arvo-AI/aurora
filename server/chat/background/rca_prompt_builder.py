@@ -362,32 +362,6 @@ def get_user_providers(user_id: str) -> List[str]:
     return result
 
 
-def _has_onprem_clusters(user_id: Optional[str]) -> bool:
-    """Check if user has active on-prem kubectl connections."""
-    if not user_id:
-        return False
-    try:
-        from utils.db.db_adapters import connect_to_db_as_user
-        from utils.auth.stateless_auth import set_rls_context
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:onprem]")
-            cursor.execute("""
-                SELECT COUNT(*) FROM active_kubectl_connections c
-                JOIN kubectl_agent_tokens t ON c.token = t.token
-                WHERE t.user_id = %s AND c.status = 'active'
-            """, (user_id,))
-            count = cursor.fetchone()[0]
-            cursor.close()
-            return count > 0
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.warning(f"Error checking on-prem clusters: {e}")
-        return False
-
-
 def _build_provider_investigation_section(providers: List[str], user_id: Optional[str] = None) -> str:
     """Provider investigation now loaded from skills/rca/ files."""
     return ""

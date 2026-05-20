@@ -7,7 +7,6 @@ connection_check:
   method: always
 tools:
   - get_postmortem
-  - save_postmortem
 index: "Incident postmortem management -- read, write, version postmortem documents"
 rca_priority: 90
 metadata:
@@ -18,7 +17,7 @@ metadata:
 # Postmortem Tools
 
 ## Overview
-Core tools for reading and writing postmortem documents. Always available. Used by the built-in "Generate Postmortem" action and accessible during interactive chat for postmortem-related tasks.
+Core tools for reading postmortem documents during investigation, and writing them during the dedicated "Generate Postmortem" action. `get_postmortem` is available in all sessions. `save_postmortem` is only available during the "Generate Postmortem" action — not during RCA.
 
 ## Tools
 
@@ -26,7 +25,7 @@ Core tools for reading and writing postmortem documents. Always available. Used 
 Read the current postmortem for an incident. Returns markdown content, generated_at, and updated_at timestamps. Returns `status: "not_found"` if no postmortem exists yet. Only the latest version is returned; historical versions are browsable in the UI but not via this tool.
 
 ### `save_postmortem(incident_id, content)`
-Write or update a postmortem. Each save automatically snapshots the previous content as a version for history tracking. Content must be complete markdown — partial updates are not supported. Max 100,000 characters.
+Write or update a postmortem. **Only available during the "Generate Postmortem" action — not during RCA.** Each save automatically snapshots the previous content as a version for history tracking. Content must be complete markdown — partial updates are not supported. Max 100,000 characters.
 
 ## Workflow
 

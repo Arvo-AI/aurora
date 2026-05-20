@@ -269,7 +269,12 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
 
   const handleRunNow = useCallback(async () => {
     try {
-      await fetchR(`/api/actions/${actionId}/run`, { method: 'POST' });
+      const res = await fetchR(`/api/actions/${actionId}/run`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast({ title: 'Failed to trigger action', description: body.error || res.statusText, variant: 'destructive' });
+        return;
+      }
       toast({ title: 'Action triggered', description: 'Background task started.' });
       mutate();
     } catch {
@@ -323,15 +328,20 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
               )}
             </div>
             {action.description && <p className="text-sm text-zinc-500 mt-0.5">{action.description}</p>}
+            {action.trigger_type === 'on_incident' && (
+              <p className="text-xs text-zinc-600 mt-1">Triggered automatically when an incident is resolved from the Incidents page.</p>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <span className="text-xs text-zinc-500">Enabled</span>
               <Switch checked={action.enabled} onCheckedChange={handleToggle} />
             </div>
-            <button onClick={handleRunNow} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all">
-              <Play className="h-3 w-3" /> Run Now
-            </button>
+            {action.trigger_type !== 'on_incident' && (
+              <button onClick={handleRunNow} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all">
+                <Play className="h-3 w-3" /> Run Now
+              </button>
+            )}
             <button onClick={onEdit} className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700/50 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-700/80 transition-all">
               Edit
             </button>

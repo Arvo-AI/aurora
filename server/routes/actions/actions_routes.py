@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import set_rls_context
 from services.actions.system_actions import seed_system_actions, SYSTEM_ACTIONS
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
@@ -413,6 +414,22 @@ def trigger_action(user_id, action_id):
         trigger_context["incident_id"] = body["incident_id"]
     if body.get("trigger_label"):
         trigger_context["trigger_label"] = body["trigger_label"]
+
+    # on_incident actions (like postmortem) require an incident_id
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Actions:trigger]")
+                cur.execute(
+                    "SELECT trigger_type FROM actions WHERE id = %s",
+                    (action_id,),
+                )
+                row = cur.fetchone()
+                if row and row[0] == "on_incident" and not trigger_context.get("incident_id"):
+                    return jsonify({"error": "This action requires an incident. Trigger it from an incident page instead."}), 400
+    except Exception:
+        logger.exception("Failed to verify on_incident precondition")
+        return jsonify({"error": "Unable to validate action context. Please retry."}), 503
 
     try:
         from services.actions.executor import dispatch_action

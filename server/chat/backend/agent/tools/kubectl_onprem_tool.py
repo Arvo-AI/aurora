@@ -141,21 +141,22 @@ def on_prem_kubectl(
 
 
 def is_kubectl_onprem_connected(user_id: str) -> bool:
-    """Check if user has active on-prem kubectl connections."""
+    """Check if the org has active on-prem kubectl connections."""
     if not user_id:
         return False
     try:
         from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
+        from utils.auth.stateless_auth import set_rls_context, resolve_org_id
 
+        org_id = resolve_org_id(user_id)
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[KubectlOnprem:check]")
                 cursor.execute(
                     """SELECT COUNT(*) FROM active_kubectl_connections c
                        JOIN kubectl_agent_tokens t ON c.token = t.token
-                       WHERE t.user_id = %s AND c.status = 'active'""",
-                    (user_id,),
+                       WHERE (t.user_id = %s OR t.org_id = %s) AND c.status = 'active'""",
+                    (user_id, org_id),
                 )
                 count = cursor.fetchone()[0]
                 return count > 0

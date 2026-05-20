@@ -1006,10 +1006,11 @@ def get_cloud_tools():
     #   session gets its own wrapped functions that close over the *right* capture instance.
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
+    is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
     
     if user_id:
         current_time = time.time()
@@ -1313,11 +1314,13 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
 
-    # Postmortem tools (always available)
+    # get_postmortem is always available (read-only).
+    # save_postmortem is restricted to the dedicated postmortem generation action.
     try:
         from .postmortem_tool import get_postmortem, save_postmortem
         tool_functions.append((get_postmortem, "get_postmortem"))
-        tool_functions.append((save_postmortem, "save_postmortem"))
+        if is_postmortem_action:
+            tool_functions.append((save_postmortem, "save_postmortem"))
     except ImportError:
         logger.warning("Postmortem tools not available — import failed")
 

@@ -9,16 +9,53 @@ from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl')
+# Providers whose connections are stored in user_connections / user_tokens.
+# kubectl is intentionally excluded: its connections live in the separate
+# kubectl_agent_tokens / active_kubectl_connections tables and are picked up
+# by the explicit kubectl queries in run_full_discovery / run_user_discovery.
+SUPPORTED_PROVIDERS = ('gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale')
+
+
+def _query_kubectl_orgs(cur):
+    """Return dict of org_id -> {user_id, clusters} for orgs with active kubectl clusters.
+
+    Uses a single query joining kubectl_agent_tokens and active_kubectl_connections
+    directly against the users table so no per-user RLS iteration is needed.
+    kubectl_agent_tokens has FORCE RLS; we opt in to the permissive
+    select_by_token_resolve policy (same pattern as agent_ws_handler) so the
+    cross-org scan can see all tokens without setting org context per row.
+    """
+    cur.execute("SET LOCAL myapp.kubectl_token_resolve = 'true'")
+    cur.execute("""
+        SELECT t.org_id, MIN(u.id) AS user_id, c.cluster_id, t.cluster_name
+        FROM kubectl_agent_tokens t
+        JOIN active_kubectl_connections c ON c.token = t.token
+        JOIN users u ON u.org_id = t.org_id
+        WHERE t.status = 'active' AND c.status = 'active'
+          AND t.org_id IS NOT NULL
+        GROUP BY t.org_id, c.cluster_id, t.cluster_name
+        ORDER BY t.org_id
+    """)
+    rows = cur.fetchall()
+
+    orgs: dict = {}
+    for org_id, user_id, cluster_id, cluster_name in rows:
+        if org_id not in orgs:
+            orgs[org_id] = {"user_id": user_id, "clusters": []}
+        orgs[org_id]["clusters"].append(
+            {"cluster_id": cluster_id, "cluster_name": cluster_name or cluster_id}
+        )
+    return orgs
 
 
 def _query_connected_providers(cur, user_id=None, conn=None):
     """Query active cloud provider connections.
 
-    If user_id is given, returns just the provider name strings for that user.
-    Otherwise returns (user_id, org_id, provider) rows for all users so the
-    caller can deduplicate at the org level.
-    Requires conn for cross-org queries to set RLS context per-org.
+    If user_id is given, returns just the provider name strings for that user
+    (requires conn to set RLS context).
+    Otherwise issues a single aggregated query returning (user_id, org_id, provider)
+    rows — one row per (org, provider) pair with a representative user_id — so
+    callers never need to iterate per-user or set RLS context themselves.
 
     Includes org_id fallback so org-shared connections (e.g. AWS accounts
     registered under the org rather than directly under the user) are picked
@@ -39,30 +76,32 @@ def _query_connected_providers(cur, user_id=None, conn=None):
             """, (user_id, org_id, org_id, SUPPORTED_PROVIDERS, user_id, org_id, org_id, SUPPORTED_PROVIDERS))
         return [row[0] for row in cur.fetchall()]
     else:
-        # No RLS needed — cross-org loop sets RLS per user.
-        # Returns (user_id, org_id, provider) so callers can group by org.
-        cur.execute(
-            "SELECT DISTINCT id, org_id FROM users WHERE org_id IS NOT NULL"
-        )
-        all_users = cur.fetchall()
-        results = []
-        for uid, org_id in all_users:
-            cur.execute("SET myapp.current_user_id = %s;", (uid,))
-            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
-            if conn:
-                conn.commit()
-            cur.execute("""
-                SELECT DISTINCT provider FROM (
-                    SELECT provider FROM user_connections
-                    WHERE (user_id = %s OR org_id = %s) AND status = 'active' AND provider IN %s
-                    UNION
-                    SELECT provider FROM user_tokens
-                    WHERE (user_id = %s OR org_id = %s) AND is_active = true AND provider IN %s
-                ) AS connected
-            """, (uid, org_id, SUPPORTED_PROVIDERS, uid, org_id, SUPPORTED_PROVIDERS))
-            for row in cur.fetchall():
-                results.append((uid, org_id, row[0]))
-        return results
+        # Single query: for each (org_id, provider) pair pick one representative
+        # user_id via MIN so the caller can route Vault / token lookups.
+        # user_connections / user_tokens are NOT RLS-protected when queried
+        # through an admin connection, so no per-user SET myapp.* is needed.
+        cur.execute("""
+            SELECT MIN(u.id) AS user_id, u.org_id, c.provider
+            FROM users u
+            JOIN user_connections c
+              ON (c.user_id = u.id OR c.org_id = u.org_id)
+             AND c.status = 'active'
+             AND c.provider = ANY(%s)
+            WHERE u.org_id IS NOT NULL
+            GROUP BY u.org_id, c.provider
+
+            UNION
+
+            SELECT MIN(u.id) AS user_id, u.org_id, t.provider
+            FROM users u
+            JOIN user_tokens t
+              ON (t.user_id = u.id OR t.org_id = u.org_id)
+             AND t.is_active = true
+             AND t.provider = ANY(%s)
+            WHERE u.org_id IS NOT NULL
+            GROUP BY u.org_id, t.provider
+        """, (list(SUPPORTED_PROVIDERS), list(SUPPORTED_PROVIDERS)))
+        return cur.fetchall()
 
 
 def _clear_discovery_lock(user_id):
@@ -165,7 +204,7 @@ def _reset_provider_failure(user_id: str, provider: str) -> None:
 def _mark_provider_inactive(user_id: str, provider: str) -> None:
     """Mark all active connections for (user_id, provider) as inactive.
 
-    Covers both user_connections (AWS/kubectl/OVH/Scaleway/Tailscale) and
+    Covers both user_connections (AWS/OVH/Scaleway/Tailscale) and
     user_tokens (GCP/Azure and other OAuth-backed providers).  Deactivates
     both user-scoped and org-scoped rows so org-shared connections are also
     cleaned up.
@@ -460,17 +499,30 @@ def _process_org(org_id, org_info, get_owner, run_discovery):
 
     Returns None when the org has no usable providers and should be skipped.
     """
+
     user_id = org_info["rep"]
     # Build provider credentials dict, embedding the per-provider owner so
     # discovery_service._setup_provider_env authenticates against the correct
-    # Vault secret path for each connector.
+    # Vault secret path for each connector.  Preserve any extra keys (e.g.
+    # pre-fetched "clusters" for kubectl) so downstream code can skip re-querying.
     providers = {
-        pname: {"owner_id": pdata.get("owner_id", user_id)}
+        pname: {**pdata, "owner_id": pdata.get("owner_id", user_id)}
         for pname, pdata in org_info["providers"].items()
     }
 
     if "gcp" in providers:
         _resolve_gcp_provider(user_id, org_id, providers, get_owner)
+
+    # Query active kubectl clusters for this org.
+    if "kubectl" in providers:
+        clusters = providers["kubectl"].get("clusters", [])
+        if clusters:
+            logger.info(
+                "[Discovery Task] Using %d pre-fetched kubectl cluster(s) for org=%s",
+                len(clusters), org_id,
+            )
+        else:
+            del providers["kubectl"]
 
     if not providers:
         logger.info("[Discovery Task] No valid providers for org=%s, skipping", org_id)
@@ -506,15 +558,14 @@ def run_full_discovery(self):
     logger.info("[Discovery Task] Starting full discovery run")
 
     try:
-        conn = connect_to_db_as_admin()
-        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
-        rows = _query_connected_providers(cur, conn=conn)
-        cur.close()
-        conn.close()
+        with connect_to_db_as_admin() as conn:
+            with conn.cursor() as cur:
+                rows = _query_connected_providers(cur)
 
-        if not rows:
-            logger.info("[Discovery Task] No orgs with connected cloud providers")
-            return {"status": "no_users", "users_processed": 0}
+                # kubectl connections live in active_kubectl_connections / kubectl_agent_tokens,
+                # not user_connections / user_tokens, so _query_connected_providers misses them.
+                # _query_kubectl_orgs handles this with a single aggregated JOIN query.
+                kubectl_org_rows = _query_kubectl_orgs(cur)
 
         # Deduplicate by org: collect the union of active providers per org.
         # Record the connector owner per provider (the user_id from each row IS
@@ -527,6 +578,21 @@ def run_full_discovery(self):
             if org_id not in orgs:
                 orgs[org_id] = {"rep": user_id, "providers": {}}
             orgs[org_id]["providers"][provider] = {"owner_id": user_id}
+
+        # Add any kubectl-only orgs (not found via cloud provider query above).
+        # Embed the cluster list directly so _process_org skips the re-query.
+        for org_id, kubectl_info in kubectl_org_rows.items():
+            kubectl_user_id = kubectl_info["user_id"]
+            if org_id not in orgs:
+                orgs[org_id] = {"rep": kubectl_user_id, "providers": {}}
+            orgs[org_id]["providers"].setdefault(
+                "kubectl",
+                {"owner_id": kubectl_user_id, "clusters": kubectl_info["clusters"]},
+            )
+
+        if not orgs:
+            logger.info("[Discovery Task] No orgs with connected cloud providers")
+            return {"status": "no_users", "users_processed": 0}
 
         logger.info("[Discovery Task] Processing %d org(s)", len(orgs))
 
@@ -571,10 +637,21 @@ def run_user_discovery(self, user_id):
     try:
         conn = connect_to_db_as_admin()
         cur = conn.cursor()
-        set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
+        org_id = set_rls_context(cur, conn, user_id, log_prefix="[Discovery Task]")
         provider_names = _query_connected_providers(cur, user_id, conn=conn)
 
-        if not provider_names:
+        # Query active kubectl clusters for this org before the early-return
+        # check — kubectl connections live in their own tables and are never
+        # returned by _query_connected_providers.
+        cur.execute("""
+            SELECT c.cluster_id, t.cluster_name
+            FROM active_kubectl_connections c
+            JOIN kubectl_agent_tokens t ON c.token = t.token
+            WHERE (t.user_id = %s OR t.org_id = %s) AND t.status = 'active' AND c.status = 'active'
+        """, (user_id, org_id))
+        kubectl_rows = cur.fetchall()
+
+        if not provider_names and not kubectl_rows:
             cur.close()
             conn.close()
             return {"status": "no_providers", "user_id": user_id}
@@ -587,15 +664,6 @@ def run_user_discovery(self, user_id):
             from utils.auth.stateless_auth import get_user_preference
             root_project = get_user_preference(user_id, 'gcp_root_project')
 
-        # Query active kubectl clusters for this user
-        cur.execute("""
-            SELECT c.cluster_id, t.cluster_name
-            FROM active_kubectl_connections c
-            JOIN kubectl_agent_tokens t ON c.token = t.token
-            WHERE t.user_id = %s AND t.status = 'active' AND c.status = 'active'
-        """, (user_id,))
-        kubectl_rows = cur.fetchall()
-
         # Close DB connection BEFORE calling setup functions that also use the pool
         cur.close()
         conn.close()
@@ -607,7 +675,7 @@ def run_user_discovery(self, user_id):
                 for row in kubectl_rows
             ]
             providers["kubectl"] = {"clusters": clusters}
-            logger.info(f"[Discovery Task] Found {len(clusters)} active kubectl clusters for user {user_id}")
+            logger.info("[Discovery Task] Found %d active kubectl clusters for org %s", len(clusters), org_id)
 
         if "gcp" in providers:
             # Wait for GCP post-auth setup to finish (API enablement, SA propagation)
@@ -646,11 +714,9 @@ def mark_stale_services(self):
     logger.info("[Discovery Task] Starting stale service detection")
 
     try:
-        conn = connect_to_db_as_admin()
-        cur = conn.cursor()  # No RLS needed — cross-org loop, sets RLS per user inside
-        rows = _query_connected_providers(cur, conn=conn)
-        cur.close()
-        conn.close()
+        with connect_to_db_as_admin() as conn:
+            with conn.cursor() as cur:
+                rows = _query_connected_providers(cur)
         # Deduplicate by org: one representative user per org is sufficient
         # since graph data is written per org credential owner.
         user_ids = list({org_id: user_id for user_id, org_id, _provider in rows}.values())

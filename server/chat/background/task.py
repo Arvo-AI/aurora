@@ -1099,6 +1099,23 @@ async def _run_jira_action(
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 
+def _action_is_generate_postmortem(action_id: Optional[str]) -> bool:
+    """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
+    if not action_id:
+        return False
+    try:
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM actions WHERE id = %s AND system_key = 'generate_postmortem'",
+                    (action_id,),
+                )
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("[BackgroundChat] _action_is_generate_postmortem lookup failed: %s", e)
+        return False
+
+
 async def _execute_background_chat(
     user_id: str,
     session_id: str,
@@ -1213,6 +1230,14 @@ async def _execute_background_chat(
                 logger.warning(f"[BackgroundChat] Could not fetch incident started_at: {_e}")
         logger.info("[BackgroundChat] incident_start_time=%r for incident %s", incident_start_time, context_incident_id)
 
+        # True when triggered by the "Generate Postmortem" action; gates save_postmortem.
+        # source is "postmortem_generation" when no action_id exists, "action" otherwise.
+        _tm_source = (trigger_metadata or {}).get("source", "")
+        _is_postmortem_action = _tm_source == "postmortem_generation" or (
+            _tm_source == "action"
+            and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"))
+        )
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
@@ -1227,10 +1252,14 @@ async def _execute_background_chat(
             model=ModelConfig.RCA_MODEL,
             mode=mode,
             is_background=True,
+            is_postmortem_action=_is_postmortem_action,
             rca_context=rca_context,
             permitted_tools=_resolve_permitted_tools(user_id),
         )
-        logger.info(f"[BackgroundChat] Created state with is_background=True, mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}, context_incident_id={context_incident_id}")
+        logger.info(
+            f"[BackgroundChat] Created state with is_background=True, is_postmortem_action={_is_postmortem_action}, "
+            f"mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}, context_incident_id={context_incident_id}"
+        )
         
         # Set user context for tools (AFTER state is created so we can pass it)
         set_user_context(

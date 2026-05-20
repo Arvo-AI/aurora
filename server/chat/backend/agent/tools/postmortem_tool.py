@@ -8,10 +8,20 @@ during regular chat for postmortem-related queries.
 
 import json
 import logging
+import uuid as _uuid_mod
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _is_valid_uuid(value: str) -> bool:
+    """Return True only if value is a well-formed UUID string."""
+    try:
+        _uuid_mod.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 class GetPostmortemArgs(BaseModel):
@@ -35,6 +45,19 @@ def get_postmortem(
 
     if not incident_id:
         return json.dumps({"error": "incident_id is required."})
+
+    if not _is_valid_uuid(incident_id):
+        logger.warning(
+            "[PostmortemTool] get_postmortem called with non-UUID incident_id=%r — rejecting",
+            incident_id,
+        )
+        return json.dumps({
+            "error": (
+                "incident_id must be the Aurora internal UUID (e.g. the id from the "
+                "incidents table).  You may have passed an external identifier such as "
+                "an incident.io ULID.  Check the incident context for the correct UUID."
+            )
+        })
 
     try:
         from utils.db.connection_pool import db_pool
@@ -83,6 +106,20 @@ def save_postmortem(
 
     if not incident_id:
         return json.dumps({"error": "incident_id is required."})
+
+    if not _is_valid_uuid(incident_id):
+        logger.warning(
+            "[PostmortemTool] save_postmortem called with non-UUID incident_id=%r — rejecting",
+            incident_id,
+        )
+        return json.dumps({
+            "error": (
+                "incident_id must be the Aurora internal UUID (e.g. the id from the "
+                "incidents table).  You may have passed an external identifier such as "
+                "an incident.io ULID or a descriptive string.  Check the incident "
+                "context for the correct UUID before retrying."
+            )
+        })
 
     if not content or not content.strip():
         return json.dumps({"error": "content cannot be empty."})

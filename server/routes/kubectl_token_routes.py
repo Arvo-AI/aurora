@@ -4,13 +4,15 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
 from psycopg2.extras import RealDictCursor
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.auth.stateless_auth import resolve_org_id, set_rls_context
 from utils.db.db_adapters import connect_to_db_as_user
 from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 
 logger = logging.getLogger(__name__)
 kubectl_token_bp = Blueprint('kubectl_token', __name__)
+
+_ORG_CONTEXT_REQUIRED = 'Organization context required'
 
 def generate_token():
     return f"aurora_kubectl_{secrets.token_urlsafe(48)}"
@@ -34,7 +36,7 @@ def create_token(user_id):
         expires_days = data.get('expires_days')
         token = generate_token()
         expires_at = datetime.now() + timedelta(days=expires_days) if expires_days else None
-        org_id = get_org_id_from_request()
+        org_id = resolve_org_id(user_id)
         if not org_id:
             return jsonify({'error': 'Organization context required to create kubectl tokens'}), 400
         conn = connect_to_db_as_user()
@@ -72,12 +74,14 @@ def list_tokens(user_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_tokens]")
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_tokens]")
+            if not org_id:
+                return jsonify({'error': _ORG_CONTEXT_REQUIRED}), 400
             cursor.execute("""
                 SELECT id, cluster_name, cluster_id, created_at, last_connected_at, expires_at, status, notes,
                        CONCAT(SUBSTRING(token, 1, 20), '...') as token_preview
-                FROM kubectl_agent_tokens WHERE user_id = %s ORDER BY created_at DESC
-            """, (user_id,))
+                FROM kubectl_agent_tokens WHERE org_id = %s ORDER BY created_at DESC
+            """, (org_id,))
             tokens = cursor.fetchall()
             cursor.close()
         finally:
@@ -100,14 +104,16 @@ def list_connections(user_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_connections]")
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:list_connections]")
+            if not org_id:
+                return jsonify({'error': _ORG_CONTEXT_REQUIRED}), 400
             cursor.execute("UPDATE active_kubectl_connections SET status = 'stale' WHERE last_heartbeat < NOW() - INTERVAL '3 minutes'")
             cursor.execute("UPDATE active_kubectl_connections SET status = 'active' WHERE last_heartbeat >= NOW() - INTERVAL '3 minutes'")
             conn.commit()
             query = """SELECT c.cluster_id, c.connected_at, c.last_heartbeat, c.agent_version, c.status, t.cluster_name
                        FROM active_kubectl_connections c JOIN kubectl_agent_tokens t ON c.token = t.token
-                       WHERE t.user_id = %s""" + (" AND c.token = %s" if token_filter else "") + " ORDER BY c.connected_at DESC"
-            cursor.execute(query, (user_id, token_filter) if token_filter else (user_id,))
+                       WHERE t.org_id = %s""" + (" AND c.token = %s" if token_filter else "") + " ORDER BY c.connected_at DESC"
+            cursor.execute(query, (org_id, token_filter) if token_filter else (org_id,))
             connections = cursor.fetchall()
             cursor.close()
         finally:
@@ -128,12 +134,14 @@ def disconnect_cluster(user_id, cluster_id):
         conn = connect_to_db_as_user()
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:disconnect_cluster]")
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[kubectl_token:disconnect_cluster]")
+            if not org_id:
+                return jsonify({'error': _ORG_CONTEXT_REQUIRED}), 400
             cursor.execute("""
                 SELECT c.token, t.cluster_name FROM active_kubectl_connections c
                 JOIN kubectl_agent_tokens t ON c.token = t.token
-                WHERE c.cluster_id = %s AND t.user_id = %s
-            """, (cluster_id, user_id))
+                WHERE c.cluster_id = %s AND t.org_id = %s
+            """, (cluster_id, org_id))
             
             result = cursor.fetchone()
             if not result:

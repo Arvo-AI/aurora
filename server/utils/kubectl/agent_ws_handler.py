@@ -32,7 +32,7 @@ def get_agent_websocket_by_cluster(user_id: str, cluster_identifier: str):
     Get websocket for cluster by cluster_id.
     
     Args:
-        user_id: User ID for ownership verification
+        user_id: User ID for org membership verification
         cluster_identifier: The cluster_id
     
     Returns:
@@ -41,10 +41,11 @@ def get_agent_websocket_by_cluster(user_id: str, cluster_identifier: str):
     conn = connect_to_db_as_admin()
     try:
         cursor = conn.cursor()
-        from utils.auth.stateless_auth import set_rls_context
+        from utils.auth.stateless_auth import set_rls_context, resolve_org_id
         set_rls_context(cursor, conn, user_id, log_prefix="[KubectlWS:resolve]")
+        org_id = resolve_org_id(user_id)
         cursor.execute("""
-            SELECT c.cluster_id, t.user_id
+            SELECT c.cluster_id, t.org_id
             FROM active_kubectl_connections c
             JOIN kubectl_agent_tokens t ON c.token = t.token
             WHERE c.cluster_id = %s AND c.status = 'active'
@@ -55,9 +56,9 @@ def get_agent_websocket_by_cluster(user_id: str, cluster_identifier: str):
             logger.warning(f"No active cluster found for identifier: {cluster_identifier}")
             return None
             
-        cluster_id, owner_id = result
-        if owner_id != user_id:
-            logger.warning(f"Unauthorized cluster access attempt by {user_id} for cluster {cluster_id}")
+        cluster_id, owner_org_id = result
+        if owner_org_id != org_id:
+            logger.warning(f"Unauthorized cluster access attempt by user {user_id} (org {org_id}) for cluster {cluster_id} (org {owner_org_id})")
             return None
         
         with _ws_lock:

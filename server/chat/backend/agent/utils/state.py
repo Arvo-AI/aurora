@@ -23,6 +23,9 @@ class State(BaseModel):
     is_background: bool = (
         False  # True for background chats (webhook-triggered, no user interaction)
     )
+    is_postmortem_action: bool = (
+        False  # True only when the session is the dedicated "Generate Postmortem" action
+    )
     rca_context: Optional[Dict[str, Any]] = (
         None  # RCA-specific context (source, providers) - used by prompt_builder
     )
