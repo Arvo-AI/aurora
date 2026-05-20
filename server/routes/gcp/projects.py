@@ -235,10 +235,25 @@ def sa_project_access_get(user_id):
         # per project sequentially — catastrophically slow for 100+ projects.
         if root_project:
             sa_email = _derive_sa_email(sa_owner_id, root_project)
+            result = _oauth_mode_project_list(credentials, sa_email, root_project)
         else:
-            sa_email = get_aurora_service_account_email(sa_owner_id)
+            # No root project means no SA has been provisioned yet.
+            # Just list projects without IAM checks (all will show enabled=False).
+            projects = get_project_list(credentials)
+            result = []
+            for p in projects:
+                pid = p.get('projectId')
+                if not pid:
+                    continue
+                result.append({
+                    "projectId": pid,
+                    "name": p.get('name', pid),
+                    "enabled": False,
+                    "hasPermission": True,
+                    "isRootProject": False,
+                })
+            result.sort(key=lambda x: x['name'])
 
-        result = _oauth_mode_project_list(credentials, sa_email, root_project)
         return jsonify({"projects": result, "root_project": root_project}), 200
 
     except ValueError as e:
@@ -289,7 +304,7 @@ def sa_project_access_post(user_id):
         if root_project:
             sa_email = _derive_sa_email(sa_owner_id, root_project)
         else:
-            sa_email = get_aurora_service_account_email(sa_owner_id)
+            return jsonify({"error": "No root project configured. Please select a root project first."}), 400
 
         update_service_account_project_access(credentials, sa_email, selections)
 
