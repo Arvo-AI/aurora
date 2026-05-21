@@ -54,9 +54,7 @@ def build_system_invariant(is_background: bool = False, strip_level: int = 0) ->
         strip = strip_level
 
         if strip >= 6:  # L6: replace identity+security with one-liner
-            return MINIMAL_IDENTITY + "\n\n" + load_core_prompt(
-                core_dir, segments=["knowledge_base"]
-            )
+            return MINIMAL_IDENTITY
 
         segments = ["identity", "security", "knowledge_base"]
         if strip < 4:  # L4 drops error retry/recovery logic (39 lines)
@@ -176,11 +174,21 @@ def build_prompt_segments(
         integration_index=integration_index,
         security_policy=security_policy,
         is_rca_background=is_background and not is_action,
+        strip_level=strip_level,
     )
 
 
 def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
     parts: List[str] = []
+    is_rca_background = segments.is_rca_background
+    strip = segments.strip_level
+
+    # L6: only system_invariant (minimal identity) + background_mode (header only)
+    if is_rca_background and strip >= 6:
+        if segments.background_mode:
+            parts.append(segments.background_mode)
+        parts.append(segments.system_invariant)
+        return "\n".join(parts)
 
     # Ordered optional segments
     for segment in (
@@ -203,7 +211,6 @@ def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt buil
     if segments.long_documents_note:
         parts.append(segments.long_documents_note)
 
-    is_rca_background = segments.is_rca_background
     if segments.terraform_validation and not is_rca_background:
         parts.append(segments.terraform_validation)
     if segments.failure_recovery and not is_rca_background:

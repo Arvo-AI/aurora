@@ -457,7 +457,7 @@ def run_background_chat(
     # is enabled, spawn sibling tasks at other levels. This task continues as
     # the baseline (level 0). Siblings get explicit strip_level so they won't fork.
     if strip_level is None and incident_id:
-        comparison_levels = [0, 1, 2, 3, 4, 5, 6]
+        comparison_levels = [0, 3, 6]
         if comparison_levels and len(comparison_levels) > 1:
             # Rename this (primary) session to include "L0" for easy identification
             try:
@@ -1263,6 +1263,39 @@ async def _execute_background_chat(
         # Slack/Google Chat messages are user-authored and should NOT be hidden.
         source = trigger_metadata.get("source", "") if trigger_metadata else ""
         is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat')
+
+        # At strip_level > 0, rebuild the prompt from the alert payload so
+        # build_rca_prompt can respect the strip level natively.
+        if strip_level > 0 and is_scaffold and trigger_metadata:
+            alert_payload = trigger_metadata.get("alert_payload")
+            if alert_payload and source:
+                try:
+                    from chat.background.rca_prompt_builder import (
+                        build_rca_prompt,
+                        build_datadog_rca_prompt,
+                        build_grafana_rca_prompt,
+                    )
+                    _BUILDERS = {
+                        "datadog": build_datadog_rca_prompt,
+                        "grafana": build_grafana_rca_prompt,
+                    }
+                    builder = _BUILDERS.get(source)
+                    if builder:
+                        initial_message, _new_rail = builder(
+                            alert_payload, providers=provider_preference,
+                            user_id=user_id, strip_level=strip_level,
+                        )
+                    else:
+                        initial_message, _new_rail = build_rca_prompt(
+                            source, alert_payload, providers=provider_preference,
+                            user_id=user_id, strip_level=strip_level,
+                        )
+                    if _new_rail:
+                        rail_text = _new_rail
+                    logger.info(f"[BackgroundChat] L{strip_level}: rebuilt prompt via builder ({len(initial_message)} chars)")
+                except Exception as e:
+                    logger.warning(f"[BackgroundChat] L{strip_level}: failed to rebuild prompt, using original: {e}")
+
         human_message = HumanMessage(
             content=initial_message,
             additional_kwargs={"is_rca_scaffold": is_scaffold},
@@ -1340,6 +1373,18 @@ async def _execute_background_chat(
             f"[BackgroundChat] Created state with is_background=True, is_postmortem_action={_is_postmortem_action}, "
             f"mode={mode}, model={state.model}, rca_context={'set' if rca_context else 'None'}, context_incident_id={context_incident_id}"
         )
+
+        if os.getenv("LOG_PROMPTS", "false").lower() in ("true", "1", "yes"):
+            logger.info(
+                f"[INITIAL_PROMPT] session={session_id} | model={state.model} | "
+                f"strip_level={strip_level} | chars={len(initial_message)} | "
+                f"est_tokens≈{len(initial_message) // 4}"
+            )
+            if os.getenv("LOG_PROMPTS_FULL", "false").lower() in ("true", "1", "yes"):
+                logger.info(
+                    f"[INITIAL_PROMPT_FULL] session={session_id}:\n{initial_message[:8000]}"
+                    + ("\n... [TRUNCATED]" if len(initial_message) > 8000 else "")
+                )
         
         # Set user context for tools (AFTER state is created so we can pass it)
         set_user_context(

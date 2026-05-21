@@ -421,6 +421,7 @@ def process_datadog_event(
                                         "monitor_id": payload.get("monitor_id")
                                         or payload.get("alert_id"),
                                         "status": status,
+                                        "alert_payload": payload,
                                     },
                                     incident_id=str(incident_id),
                                     rail_text=rail_text,

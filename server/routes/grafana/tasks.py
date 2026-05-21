@@ -521,7 +521,8 @@ def process_grafana_alert(
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
-                                                              "alert_title": per_alert_title, "alert_state": alert_state},
+                                                              "alert_title": per_alert_title, "alert_state": alert_state,
+                                                              "alert_payload": alert_payload},
                                             incident_id=str(incident_id) if incident_id else None,
                                             rail_text=rail_text,
                                         )

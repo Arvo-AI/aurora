@@ -77,6 +77,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 
         Level 3: Drop background_source_general mandatory steps + footer
         Level 5: Skip eager-loaded integration skills (agent uses tools directly)
+        Level 6: Only background_header (source/provider context) — everything else stripped
     """
     if not state:
         return ""
@@ -108,6 +109,10 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         },
         trailing_blank=True,
     )
+
+    if strip >= 6:
+        return "\n".join(parts)
+
     _append_background_segment(
         parts,
         "background_provider_tools",

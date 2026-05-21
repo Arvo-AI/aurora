@@ -9,6 +9,7 @@ from chat.backend.agent.utils.state import State
 import logging
 import json
 import asyncio
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -1129,6 +1130,38 @@ class Workflow:
                 if event_type == "on_chat_model_start":
                     _model_turn_tokens = 0
                     _model_turn_start = _time.perf_counter()
+                    if not hasattr(self, '_llm_call_count'):
+                        self._llm_call_count = 0
+                    self._llm_call_count += 1
+
+                    # Log prompt size when LOG_PROMPTS is enabled
+                    if os.getenv("LOG_PROMPTS", "false").lower() in ("true", "1", "yes"):
+                        try:
+                            _start_data = event.get("data", {})
+                            _start_messages = _start_data.get("messages") or _start_data.get("input", {}).get("messages", [])
+                            _total_chars = 0
+                            _msg_count = 0
+                            _role_chars: dict[str, int] = {}
+                            for _msg_batch in (_start_messages if isinstance(_start_messages, list) and _start_messages and isinstance(_start_messages[0], list) else [_start_messages]):
+                                for _msg in _msg_batch:
+                                    _msg_count += 1
+                                    _role = getattr(_msg, 'type', 'unknown') if hasattr(_msg, 'type') else 'unknown'
+                                    _c = getattr(_msg, 'content', '') if hasattr(_msg, 'content') else ''
+                                    if isinstance(_c, list):
+                                        _text = ''.join(p.get('text', '') if isinstance(p, dict) else str(p) for p in _c)
+                                    else:
+                                        _text = str(_c)
+                                    _total_chars += len(_text)
+                                    _role_chars[_role] = _role_chars.get(_role, 0) + len(_text)
+                            _breakdown = " | ".join(f"{r}={c//4}≈tok" for r, c in sorted(_role_chars.items(), key=lambda x: -x[1]))
+                            _tag = "[INITIAL_PROMPT]" if self._llm_call_count == 1 else f"[PROMPT_DEBUG turn={self._llm_call_count}]"
+                            logger.info(
+                                f"{_tag} "
+                                f"msgs={_msg_count} | total_chars={_total_chars} | "
+                                f"est_tokens≈{_total_chars // 4} | {_breakdown}"
+                            )
+                        except Exception as _e:
+                            logger.debug(f"[PROMPT_DEBUG] Failed to log prompt: {_e}")
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":

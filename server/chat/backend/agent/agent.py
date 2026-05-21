@@ -433,6 +433,8 @@ class Agent:
             
             
             # Create a custom callback for tracking LLM usage
+            _LOG_PROMPTS = os.getenv("LOG_PROMPTS", "false").lower() in ("true", "1", "yes")
+
             class AgentLLMUsageCallback(BaseCallbackHandler):
                 """Tracks LLM usage using provider-reported usage_metadata."""
                 def __init__(self, user_id: str, session_id: str, model_name: str, api_provider: str):
@@ -451,6 +453,60 @@ class Agent:
                             }
                     except Exception as e:
                         logging.warning(f"Error tracking agent LLM start: {e}")
+
+                def on_chat_model_start(self, serialized, messages, run_id=None, **kwargs):
+                    """Log the full prompt being sent to the LLM (gated by LOG_PROMPTS env var)."""
+                    try:
+                        if run_id:
+                            self.current_calls[run_id] = {'start_time': time.time()}
+
+                        if not _LOG_PROMPTS:
+                            return
+
+                        total_chars = 0
+                        msg_summary = []
+                        for batch in messages:
+                            for msg in batch:
+                                role = getattr(msg, 'type', 'unknown')
+                                content = getattr(msg, 'content', '')
+                                if isinstance(content, list):
+                                    text = ''.join(
+                                        p.get('text', '') if isinstance(p, dict) else str(p)
+                                        for p in content
+                                    )
+                                else:
+                                    text = str(content)
+                                char_count = len(text)
+                                total_chars += char_count
+                                msg_summary.append(f"  [{role}] {char_count} chars")
+
+                        est_tokens = total_chars // 4
+                        logging.info(
+                            f"[PROMPT_DEBUG] model={self.model_name} | "
+                            f"messages={sum(len(b) for b in messages)} | "
+                            f"total_chars={total_chars} | est_tokens≈{est_tokens}\n"
+                            + "\n".join(msg_summary)
+                        )
+
+                        if os.getenv("LOG_PROMPTS_FULL", "false").lower() in ("true", "1", "yes"):
+                            for batch in messages:
+                                for msg in batch:
+                                    role = getattr(msg, 'type', 'unknown')
+                                    content = getattr(msg, 'content', '')
+                                    if isinstance(content, list):
+                                        text = ''.join(
+                                            p.get('text', '') if isinstance(p, dict) else str(p)
+                                            for p in content
+                                        )
+                                    else:
+                                        text = str(content)
+                                    logging.info(
+                                        f"[PROMPT_FULL] [{role}] ({len(text)} chars):\n{text[:5000]}"
+                                        + ("\n... [TRUNCATED]" if len(text) > 5000 else "")
+                                    )
+
+                    except Exception as e:
+                        logging.warning(f"Error in prompt debug logging: {e}")
                 
                 def on_llm_end(self, response, run_id=None, **kwargs):
                     """Track LLM call end using provider-reported usage_metadata."""

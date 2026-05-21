@@ -495,6 +495,7 @@ def build_rca_prompt(
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
     integrations: Optional[Dict[str, bool]] = None,
+    strip_level: int = 0,
 ) -> tuple[str, str]:
     """Build a comprehensive, provider-aware RCA prompt.
 
@@ -632,6 +633,11 @@ def build_rca_prompt(
     # in the system prompt (background.py). No skill loading here — the user
     # message should contain only alert details and investigation context.
 
+    # L6: stop here — only alert details + providers, no topology/learn/instructions
+    if strip_level >= 6:
+        prompt_parts.append("\n## BEGIN INVESTIGATION NOW")
+        return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
+
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
         similar_context = _get_similar_good_rcas_context(
@@ -713,6 +719,7 @@ def build_grafana_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
+    **kwargs,
 ) -> tuple[str, str]:
     """Build RCA prompt from Grafana alert payload."""
     title = payload.get("title") or payload.get("ruleName") or "Unknown Alert"
@@ -736,13 +743,14 @@ def build_grafana_rca_prompt(
         'values': values_str,
     }
 
-    return build_rca_prompt('grafana', alert_details, providers, user_id)
+    return build_rca_prompt('grafana', alert_details, providers, user_id, **kwargs)
 
 
 def build_datadog_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,
     user_id: Optional[str] = None,
+    **kwargs,
 ) -> tuple[str, str]:
     """Build RCA prompt from Datadog alert payload."""
     title = payload.get("title") or payload.get("event_title") or payload.get("event", {}).get("title") or "Unknown Alert"
@@ -762,7 +770,7 @@ def build_datadog_rca_prompt(
         'scope': scope,
     }
 
-    return build_rca_prompt('datadog', alert_details, providers, user_id)
+    return build_rca_prompt('datadog', alert_details, providers, user_id, **kwargs)
 
 
 def build_dynatrace_rca_prompt(

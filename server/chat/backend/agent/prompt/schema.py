@@ -19,3 +19,4 @@ class PromptSegments:
     integration_index: str = ""  # Skills-based: compact index of connected integrations
     security_policy: str = ""  # Org-level command allow/deny policy
     is_rca_background: bool = False  # True when prompt is for a background RCA (not action)
+    strip_level: int = 0  # RCA strip level (0-6) for progressive prompt trimming
