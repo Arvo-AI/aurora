@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText, Building2, Shield, Workflow } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Building2, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
@@ -11,7 +11,6 @@ import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
 import { OrgSettings } from "@/components/OrgSettings";
 import { SecuritySettings } from "@/components/SecuritySettings";
-import { ActionsContent } from "@/app/actions/page";
 import { useUser } from "@/hooks/useAuthHooks";
 
 
@@ -20,7 +19,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security' | 'actions';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
@@ -62,12 +61,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       label: 'Security',
       icon: Shield,
       description: 'Agent command policies'
-    },
-    {
-      id: 'actions' as SettingsTab,
-      label: 'Actions',
-      icon: Workflow,
-      description: 'Background agent automations'
     },
   ];
 
@@ -123,13 +116,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return (
           <div className="p-6 h-full overflow-y-auto">
             <SecuritySettings />
-          </div>
-        );
-
-      case 'actions':
-        return (
-          <div className="p-6 h-full overflow-y-auto">
-            <ActionsContent />
           </div>
         );
 

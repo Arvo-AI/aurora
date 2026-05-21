@@ -706,7 +706,11 @@ export function ActionsContent() {
 // -- Page (redirects to settings) --
 
 export default function ActionsPage() {
-  return <ActionsContent />;
+  return (
+    <div className="max-w-4xl mx-auto py-8 px-4">
+      <ActionsContent />
+    </div>
+  );
 }
 
 function EditActionWrapper({ actionId, onBack, onSaved }: { readonly actionId: string; readonly onBack: () => void; readonly onSaved: () => void }) {
