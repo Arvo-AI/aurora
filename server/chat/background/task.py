@@ -1905,7 +1905,7 @@ def _send_action_completion_notification(
                         row = cur.fetchone()
                         if row:
                             action_name = row[0]
-                            started_at = row[1]
+                            started_at = row[1].replace(tzinfo=timezone.utc) if row[1] else None
             except Exception as e:
                 logger.warning("[ActionNotification] Failed to fetch action run details: %s", e)
 
