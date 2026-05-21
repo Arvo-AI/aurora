@@ -90,14 +90,15 @@ for understanding the production system.
 
 At the END of your investigation, you MUST call save_infrastructure_context() with a single
 document that covers:
-- All environments (production, staging, dev) and how they relate
+- All environments (for example production, staging, dev are common) and how they relate
 - Services in each environment, their dependencies, and how they communicate
 - CI/CD pipelines: what repo deploys where, through what mechanism
 - Databases, caches, queues, and shared infrastructure
 - Monitoring and alerting chains (what watches what, thresholds)
 - Network topology and security boundaries
+- Any other interconnected systems
 
-Write it so a coding agent can understand the full system topology in one read. Use markdown
+Write it so a coding agent can understand the full system topology in one read. If an org doesn't have all of these don't make up findings, only write about things actually there. Use markdown
 with clear sections. Be specific -- include names, regions, namespaces, ports, image tags.
 
 ## SIDE-EFFECT: INDIVIDUAL FINDINGS
