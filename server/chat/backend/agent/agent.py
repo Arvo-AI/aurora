@@ -481,10 +481,16 @@ class Agent:
                                 msg_summary.append(f"  [{role}] {char_count} chars")
 
                         est_tokens = total_chars // 4
+
+                        # Check for tool definitions in invocation_params
+                        invocation_params = kwargs.get('invocation_params', {})
+                        bound_tools = invocation_params.get('tools', [])
+                        tool_note = f" + {len(bound_tools)} tool schemas" if bound_tools else ""
+
                         logging.info(
                             f"[PROMPT_DEBUG] model={self.model_name} | "
                             f"messages={sum(len(b) for b in messages)} | "
-                            f"total_chars={total_chars} | est_tokens≈{est_tokens}\n"
+                            f"total_chars={total_chars} | est_tokens≈{est_tokens}{tool_note}\n"
                             + "\n".join(msg_summary)
                         )
 
@@ -663,6 +669,18 @@ class Agent:
                 system_prompt=system_prompt_text,
                 middleware=middlewares,
             )
+
+            if _LOG_PROMPTS:
+                tool_names = [getattr(t, 'name', '?') for t in tools]
+                tool_schemas_chars = sum(
+                    len(getattr(t, 'description', '')) + len(str(getattr(t, 'args_schema', {}).schema() if hasattr(getattr(t, 'args_schema', None), 'schema') else {}))
+                    for t in tools
+                )
+                logging.info(
+                    f"[PROMPT_DEBUG] tools bound: {len(tools)} tools | "
+                    f"schema_chars≈{tool_schemas_chars} | est_tokens≈{tool_schemas_chars // 4} | "
+                    f"names={tool_names}"
+                )
 
       
             try:         

@@ -457,7 +457,7 @@ def run_background_chat(
     # is enabled, spawn sibling tasks at other levels. This task continues as
     # the baseline (level 0). Siblings get explicit strip_level so they won't fork.
     if strip_level is None and incident_id:
-        comparison_levels = [0, 3, 6]
+        comparison_levels = [0, 6]
         if comparison_levels and len(comparison_levels) > 1:
             # Rename this (primary) session to include "L0" for easy identification
             try:
