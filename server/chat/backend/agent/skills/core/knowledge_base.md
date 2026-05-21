@@ -20,6 +20,5 @@ knowledge_base_search(query, limit) - Search user's uploaded documentation:
 
 INFRASTRUCTURE CONTEXT:
 get_infrastructure_context() - Retrieve the full infrastructure context document:
-- Call at the START of investigations involving services, deployments, or infrastructure
-- Returns a comprehensive document covering environments, services, dependencies, CI/CD, and monitoring
+- Returns a comprehensive document covering environments, services, dependencies, CI/CD, and monitoring. Gives a big picture of overall infrastructure context that can be helpful to understand an orgs setup.
 - Complements knowledge_base_search: KB has runbooks/procedures, this has full system topology
