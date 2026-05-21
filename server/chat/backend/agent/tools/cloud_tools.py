@@ -1427,7 +1427,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Suggest a code fix for an identified issue during RCA. "
                     "Use this when you identify a specific code change that would fix the root cause. "
                     "The fix is stored for user review before being applied. "
-                    "Parameters: file_path (path in repo), suggested_content (complete fixed file), "
+                    "CRITICAL: suggested_content MUST be the ENTIRE file contents after your change is applied. "
+                    "Do NOT pass only the changed lines, a snippet, or a diff fragment — that will produce a broken diff in the UI. "
+                    "If the file is large, read the full file first, make your edit, then pass the complete result. "
+                    "Parameters: file_path (path in repo), suggested_content (COMPLETE file after fix — every line), "
                     "fix_description (what this fix does), root_cause_summary (why this change is needed). "
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),

@@ -26,7 +26,12 @@ class GitHubFixArgs(BaseModel):
         description="Path to the file in the repository (e.g., 'config/deployment.yaml', 'src/app.py')"
     )
     suggested_content: str = Field(
-        description="The complete suggested file content with the fix applied. Must be the full file, not just the diff."
+        description=(
+            "The COMPLETE file contents after the fix is applied — every single line of the file. "
+            "NEVER pass only the changed lines, a code snippet, or a diff fragment. "
+            "If the original file is large, read it in full first, apply your change, "
+            "then pass the entire result here. Passing a partial file will produce a broken all-red diff in the UI."
+        )
     )
     fix_description: str = Field(
         description="Human-readable description of what this fix does (e.g., 'Increase memory limit from 256Mi to 512Mi')"
@@ -182,7 +187,12 @@ def github_fix(
     # Fetch original file content (optional - we proceed without it if unavailable)
     original_content = _get_file_content(owner, repo_name, file_path, branch, user_id)
     if original_content is None:
-        logger.warning(f"Could not fetch original content for {file_path}, proceeding without it")
+        logger.warning(f"[github_fix] Could not fetch original content for {file_path} — diff view will show all-green additions")
+    else:
+        logger.info(
+            f"[github_fix] original_content={len(original_content)} chars, "
+            f"suggested_content={len(suggested_content)} chars for {file_path}"
+        )
 
     # Generate commit message if not provided
     final_commit_message = commit_message or f"fix: {fix_description[:100]}"
