@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # How long to wait for a connection before giving up (seconds)
-_POOL_WAIT_TIMEOUT = float(os.getenv('DB_POOL_WAIT_TIMEOUT', '5.0'))
+_POOL_WAIT_TIMEOUT = 5.0
 
 
 class DatabaseConnectionPool:
