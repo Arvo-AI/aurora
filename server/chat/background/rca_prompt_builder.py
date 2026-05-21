@@ -635,7 +635,13 @@ def build_rca_prompt(
 
     # L6: stop here — only alert details + providers, no topology/learn/instructions
     if strip_level >= 6:
-        prompt_parts.append("\n## BEGIN INVESTIGATION NOW")
+        prompt_parts.append(
+            "\n## INVESTIGATION"
+            "\nYou are acting as an on-call SRE tasked with investigating to find"
+            " the specific and super fine-grained root cause of the alert."
+            " Do not guess or make assumptions, if you can't find the root cause"
+            " be persistent but be honest just like a professional senior SRE would."
+        )
         return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
 
     # Aurora Learn: Inject context from similar past incidents
