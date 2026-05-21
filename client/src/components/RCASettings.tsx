@@ -33,6 +33,7 @@ export function RCASettings() {
   const [preferences, setPreferences] = useState({
     rca_email_notifications: false,
     rca_email_start_notifications: false,
+    action_email_notifications: false,
   });
   const [savingPreferences, setSavingPreferences] = useState<Record<string, boolean>>({});
   const [isLoadingNotificationPref, setIsLoadingNotificationPref] = useState(true);
@@ -64,7 +65,7 @@ export function RCASettings() {
       if (!userId) return;
       
       try {
-        const keys = ['rca_email_notifications', 'rca_email_start_notifications'];
+        const keys = ['rca_email_notifications', 'rca_email_start_notifications', 'action_email_notifications'];
         const loaded: Record<string, boolean> = {};
 
         await Promise.all(keys.map(async (key) => {
@@ -393,6 +394,15 @@ export function RCASettings() {
             onChange={(checked) => handlePreferenceChange('rca_email_start_notifications', checked, 'RCA investigation start notifications')}
             isLoading={isLoadingNotificationPref || savingPreferences.rca_email_start_notifications}
             disabled={!preferences.rca_email_notifications}
+          />
+
+          <NotificationToggle
+            title="Action Completion Email Notifications"
+            description="Receive an email when Aurora Actions finish running (success or failure)"
+            icon={<Bell className="h-4 w-4" />}
+            checked={preferences.action_email_notifications}
+            onChange={(checked) => handlePreferenceChange('action_email_notifications', checked, 'Action completion notifications')}
+            isLoading={isLoadingNotificationPref || savingPreferences.action_email_notifications}
           />
 
           {/* Divider */}

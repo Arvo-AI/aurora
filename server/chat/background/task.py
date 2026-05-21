@@ -701,8 +701,10 @@ def run_background_chat(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message='Action blocked by safety guardrails',
                     )
+                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message='Action blocked by safety guardrails')
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status='success')
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
 
@@ -729,6 +731,7 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+                _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
             except Exception:
                 logger.debug("Failed to update action run status after timeout")
         return {
@@ -748,6 +751,7 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message=str(e), user_id=user_id)
+                _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message=str(e))
             except Exception:
                 logger.debug("Failed to update action run status during error handling")
         return {
@@ -1862,6 +1866,101 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
     except Exception as e:
         logger.error(f"[EmailNotification] Error fetching incident data: {e}")
         return None
+
+
+def _send_action_completion_notification(
+    user_id: str,
+    trigger_metadata: Dict[str, Any],
+    session_id: str,
+    status: str = 'success',
+    error_message: Optional[str] = None,
+) -> None:
+    """Send email notification when an action completes (success or error)."""
+    try:
+        if not _is_action_email_notification_enabled(user_id):
+            return
+
+        user_email = get_user_email(user_id)
+        if not user_email:
+            logger.warning("[ActionNotification] No email found for user %s", user_id)
+            return
+
+        action_id = trigger_metadata.get('action_id')
+        run_id = trigger_metadata.get('run_id')
+
+        action_name = "Unknown Action"
+        started_at = None
+        if run_id:
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification]")
+                        cur.execute(
+                            """SELECT a.name, ar.started_at
+                               FROM action_runs ar
+                               JOIN actions a ON a.id = ar.action_id
+                               WHERE ar.id = %s""",
+                            (run_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            action_name = row[0]
+                            started_at = row[1]
+            except Exception as e:
+                logger.warning("[ActionNotification] Failed to fetch action run details: %s", e)
+
+        action_data = {
+            'action_name': action_name,
+            'run_id': run_id,
+            'status': status,
+            'error': error_message,
+            'started_at': started_at,
+            'completed_at': datetime.now(timezone.utc),
+            'session_id': session_id,
+        }
+
+        # Send to primary + verified additional emails
+        all_emails = [user_email]
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
+                    cur.execute(
+                        "SELECT email FROM rca_notification_emails WHERE user_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
+                        (user_id,),
+                    )
+                    all_emails += [r[0] for r in cur.fetchall()]
+        except Exception:
+            pass
+
+        email_service = get_email_service()
+        for recipient in all_emails:
+            try:
+                email_service.send_action_completed_email(recipient, action_data)
+            except Exception as e:
+                logger.warning("[ActionNotification] Failed to send to %s: %s", recipient, e)
+
+        logger.info("[ActionNotification] Sent %s notification for action '%s' to %d recipient(s)", status, action_name, len(all_emails))
+    except Exception as e:
+        logger.error("[ActionNotification] Error sending action completion notification: %s", e)
+
+
+def _is_action_email_notification_enabled(user_id: str) -> bool:
+    """Check if user has action completion email notifications enabled."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:PrefCheck]")
+                cur.execute(
+                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'action_email_notifications'",
+                    (user_id,),
+                )
+                result = cur.fetchone()
+                if result and isinstance(result[0], bool):
+                    return result[0]
+        return False
+    except Exception:
+        return False
 
 
 def _send_rca_notification(user_id: str, incident_id: str, event_type: str, email_enabled: bool = False, slack_enabled: bool = False, google_chat_enabled: bool = False, session_id: Optional[str] = None) -> None:
