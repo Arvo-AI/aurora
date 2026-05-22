@@ -39,7 +39,7 @@ class FixEdit(BaseModel):
     old_string: str = Field(
         description=(
             "Exact text to match in the current file. Include enough surrounding "
-            "context (typically 1–3 lines above and below the change) to make the "
+            "context (typically 1-3 lines above and below the change) to make the "
             "match unique. Whitespace counts; if you copy from get_file_contents "
             "the indentation will be right."
         )
@@ -523,7 +523,7 @@ def _locate_with_chain(
             for ln, line in hints:
                 hint_block += f"  L{ln}: {line!r}\n"
             hint_block += (
-                "Pick the right one and include 1–3 surrounding lines as anchor context so "
+                "Pick the right one and include 1-3 surrounding lines as anchor context so "
                 "the match is unique. Then re-call github_fix."
             )
         else:
@@ -546,7 +546,7 @@ def _locate_with_chain(
     locs = ", ".join(f"L{n}" for n in match_lines) if match_lines else "multiple places"
     return [], (
         f"old_string matches {len(match_lines) or 'multiple'} places in the file "
-        f"({locs}). Extend old_string with 1–3 unique surrounding lines as anchor "
+        f"({locs}). Extend old_string with 1-3 unique surrounding lines as anchor "
         "context (e.g. the function header above, the closing brace below) and "
         "retry. Use replace_all=true only if you want every occurrence replaced."
     )
@@ -596,7 +596,7 @@ def _apply_edits(original: str, edits: list) -> tuple[Optional[str], Optional[st
             return None, (
                 f"edit {i}: old_string is {len(old_lf)/orig_lf_len:.0%} of the "
                 f"file ({len(old_lf)} of {orig_lf_len} chars). An anchored edit "
-                "should target a narrow window around the change — usually 1–3 "
+                "should target a narrow window around the change - usually 1-3 "
                 "lines of context above and below. Break this into smaller "
                 "targeted edits instead of regenerating the whole file."
             )
