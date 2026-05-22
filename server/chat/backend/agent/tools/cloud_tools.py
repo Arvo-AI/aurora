@@ -23,6 +23,7 @@ from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
+from .kubectl_clusters_tool import get_connected_clusters, GetConnectedClustersArgs
 from utils.auth.github_auth_router import is_github_connected
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs, is_jenkins_connected
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs, is_cloudbees_connected
@@ -1313,8 +1314,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Tailscale SSH tool for user {user_id}")
 
     if is_kubectl_onprem_connected(user_id):
+        tool_functions.append((get_connected_clusters, "get_connected_clusters"))
         tool_functions.append((on_prem_kubectl, "on_prem_kubectl"))
-        logging.info(f"Added on-prem kubectl tool for user {user_id}")
+        logging.info(f"Added on-prem kubectl tools for user {user_id}")
 
     # Slack tools (if Slack connected)
     try:
@@ -1412,6 +1414,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Returns repo names, default branches, and metadata summaries."
                 ),
                 args_schema=GetConnectedReposArgs
+            )
+        elif name == 'get_connected_clusters':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all on-prem Kubernetes clusters the user has connected via the Aurora kubectl agent. "
+                    "Call this first to discover available clusters and their cluster_id before using on_prem_kubectl. "
+                    "Returns cluster names, IDs, connection status, and metadata."
+                ),
+                args_schema=GetConnectedClustersArgs
             )
         elif name == 'github_rca':
             tool = StructuredTool.from_function(

@@ -8,10 +8,11 @@ connection_check:
   module: chat.backend.agent.tools.kubectl_onprem_tool
   function: is_kubectl_onprem_connected
 tools:
+  - get_connected_clusters
   - on_prem_kubectl
 index: "Infrastructure -- run kubectl on connected on-prem Kubernetes clusters"
 rca_priority: 8
-allowed-tools: on_prem_kubectl
+allowed-tools: get_connected_clusters, on_prem_kubectl
 metadata:
   author: aurora
   version: "1.0"
@@ -22,14 +23,20 @@ metadata:
 ## Overview
 On-prem Kubernetes cluster integration for running kubectl commands on connected clusters. Commands are relayed through the Aurora agent installed on the cluster.
 
-Connected clusters are listed by name and `cluster_id`. Use the `cluster_id` to target a specific cluster.
-
-### Connected Clusters
-{cluster_list}
+**IMPORTANT:** Always call `get_connected_clusters` first to discover available clusters and their `cluster_id` before running any kubectl commands.
 
 **Note:** For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands instead.
 
 ## Instructions
+
+### Tool: get_connected_clusters
+
+Discover available on-prem clusters. Call this before using `on_prem_kubectl`.
+
+**Usage:**
+`get_connected_clusters()`
+
+Returns cluster names, IDs, connection status, and metadata.
 
 ### Tool: on_prem_kubectl
 
@@ -38,21 +45,23 @@ Run kubectl commands on connected on-prem Kubernetes clusters.
 **Usage:**
 `on_prem_kubectl(cluster_id='CLUSTER_ID', command='get pods -n default')`
 
-Specify the cluster using the `cluster_id` from the connected clusters list.
+Specify the cluster using the `cluster_id` returned by `get_connected_clusters`.
 
 ### RCA Investigation Flow
 
-1. List pods and check status:
+1. Discover available clusters:
+   `get_connected_clusters()`
+2. List pods and check status:
    `on_prem_kubectl(cluster_id='ID', command='get pods -n NAMESPACE')`
-2. Check pod logs for errors:
+3. Check pod logs for errors:
    `on_prem_kubectl(cluster_id='ID', command='logs PODNAME -n NAMESPACE --tail=100')`
-3. Describe failing pods for events:
+4. Describe failing pods for events:
    `on_prem_kubectl(cluster_id='ID', command='describe pod PODNAME -n NAMESPACE')`
-4. Check recent events in the namespace:
+5. Check recent events in the namespace:
    `on_prem_kubectl(cluster_id='ID', command='get events -n NAMESPACE --sort-by=.lastTimestamp')`
-5. Check node status:
+6. Check node status:
    `on_prem_kubectl(cluster_id='ID', command='get nodes -o wide')`
-6. Check resource usage:
+7. Check resource usage:
    `on_prem_kubectl(cluster_id='ID', command='top pods -n NAMESPACE')`
 
 ### Important Rules
