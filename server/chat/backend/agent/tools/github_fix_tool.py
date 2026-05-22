@@ -6,8 +6,13 @@ fetches the current file from GitHub, applies the edits, stores the resulting
 full file body as the suggestion, and the user reviews + creates the PR from
 the UI.
 
-Replacer chain (exact → fuzzier) is ported from opencode/cline/gemini-cli
-edit tools to absorb common LLM whitespace/indent drift.
+Replacer chain (exact → fuzzier) is ported from opencode's edit tool, which
+in turn credits cline and gemini-cli. Original source:
+    https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/edit.ts
+Licensed under MIT — see opencode's LICENSE for terms. This file ports the
+replacer algorithms (LineTrimmed, BlockAnchor, WhitespaceNormalized,
+IndentationFlexible, EscapeNormalized, TrimmedBoundary, ContextAware,
+MultiOccurrence) and the Levenshtein-based similarity scoring to Python.
 """
 
 import logging
@@ -171,8 +176,10 @@ def _line_trimmed_replacer(content: str, find: str) -> Generator[str, None, None
         yield content[start:end]
 
 
-_SINGLE_CANDIDATE_SIMILARITY = 0.5
-_MULTIPLE_CANDIDATES_SIMILARITY = 0.5
+# Match opencode's battle-tested thresholds. Anchors plus the per-edit length
+# check (above) keep these from accepting wildly-different middle content.
+_SINGLE_CANDIDATE_SIMILARITY = 0.0
+_MULTIPLE_CANDIDATES_SIMILARITY = 0.3
 
 
 def _block_anchor_replacer(content: str, find: str) -> Generator[str, None, None]:
@@ -420,15 +427,66 @@ _REPLACERS: list[tuple[str, Replacer]] = [
 _REPLACE_ALL_SAFE = {"simple", "multi_occurrence"}
 
 
-def _replace_with_chain(content: str, old: str, new: str, replace_all: bool) -> tuple[Optional[str], Optional[str]]:
-    """Try each replacer until one yields a usable match. Returns (new_content, error)."""
+def _find_closest_lines(content: str, find: str, max_results: int = 3) -> list[tuple[int, str]]:
+    """Return up to ``max_results`` (1-based line_no, line) pairs from ``content``
+    most similar to the most distinctive (longest non-empty) line of ``find``.
+    Used to give the LLM concrete "did you mean this line?" hints."""
+    find_lines = [l for l in find.split("\n") if l.strip()]
+    if not find_lines:
+        return []
+    anchor = max(find_lines, key=len).strip()
+    if not anchor:
+        return []
+    scored: list[tuple[float, int, str]] = []
+    for i, line in enumerate(content.split("\n")):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        max_len = max(len(stripped), len(anchor))
+        sim = 1.0 - _levenshtein(stripped, anchor) / max_len
+        if sim > 0.3:
+            scored.append((sim, i + 1, line))
+    scored.sort(key=lambda t: -t[0])
+    return [(ln, line) for _sim, ln, line in scored[:max_results]]
+
+
+def _find_all_match_lines(content: str, needle: str, max_results: int = 10) -> list[int]:
+    """Return up to ``max_results`` distinct 1-based line numbers where
+    ``needle`` appears in ``content``. Multiple matches on the same line
+    collapse to one entry so the LLM doesn't see ``L5, L5, L5``."""
+    if not needle:
+        return []
+    seen: list[int] = []
+    start = 0
+    while len(seen) < max_results:
+        idx = content.find(needle, start)
+        if idx == -1:
+            break
+        ln = content.count("\n", 0, idx) + 1
+        if ln not in seen:
+            seen.append(ln)
+        start = idx + max(len(needle), 1)
+    return seen
+
+
+def _locate_with_chain(
+    content: str, old: str, new: str, replace_all: bool
+) -> tuple[list[tuple[int, int, str]], Optional[str]]:
+    """Find match spans for `old` in `content` via the replacer chain.
+
+    Returns (list of (start, end, replacement_text), error). Pure-locate
+    function; does NOT modify content. Callers apply spans atomically so
+    that a multi-edit batch can't have later edits accidentally match text
+    inserted by earlier ones — every edit anchors to the ORIGINAL file.
+    """
     if old == new:
-        return None, "old_string and new_string are identical (no-op)"
+        return [], "old_string and new_string are identical (no-op)"
     if not old:
-        return None, "old_string is empty"
+        return [], "old_string is empty"
 
     found_any = False
-    fuzzy_only = False  # True iff every match so far came from a fuzzy replacer
+    fuzzy_only = False
+    multi_match_candidate: Optional[str] = None
     for name, replacer in _REPLACERS:
         for candidate in replacer(content, old):
             idx = content.find(candidate)
@@ -438,40 +496,59 @@ def _replace_with_chain(content: str, old: str, new: str, replace_all: bool) -> 
 
             if replace_all:
                 if name not in _REPLACE_ALL_SAFE:
-                    # Fuzzy match + replace_all would only touch this one
-                    # variant — other occurrences with different whitespace /
-                    # indentation / escapes would be silently skipped. Refuse.
                     fuzzy_only = True
                     continue
-                return content.replace(candidate, new), None
+                spans: list[tuple[int, int, str]] = []
+                pos = 0
+                while True:
+                    p = content.find(candidate, pos)
+                    if p == -1:
+                        break
+                    spans.append((p, p + len(candidate), new))
+                    pos = p + len(candidate)
+                return spans, None
 
             last_idx = content.rfind(candidate)
             if idx != last_idx:
-                # multiple matches via this replacer — keep trying.
+                if multi_match_candidate is None:
+                    multi_match_candidate = candidate
                 continue
 
-            # If the escape-normalized replacer is what made this match, the
-            # LLM's new_string is probably escaped the same way — unescape it
-            # too so the file gets real newlines/tabs instead of backslash-n.
-            effective_new = _unescape_string(new) if name == "escape_normalized" else new
-            return content[:idx] + effective_new + content[idx + len(candidate):], None
+            return [(idx, idx + len(candidate), new)], None
 
     if not found_any:
-        return None, (
+        hints = _find_closest_lines(content, old)
+        if hints:
+            hint_block = "\nClosest lines in the file (copy verbatim — keep quotes, whitespace, indent):\n"
+            for ln, line in hints:
+                hint_block += f"  L{ln}: {line!r}\n"
+            hint_block += (
+                "Pick the right one and include 1–3 surrounding lines as anchor context so "
+                "the match is unique. Then re-call github_fix."
+            )
+        else:
+            hint_block = (
+                " Call get_file_contents for this file first, then copy old_string byte-for-byte "
+                "from the response and retry."
+            )
+        return [], (
             "old_string not found in the current file (tried exact, line-trimmed, "
             "block-anchor, whitespace-normalized, indentation-flexible, escape-"
-            "normalized, trimmed-boundary, and context-aware matching). Re-fetch "
-            "the file with get_file_contents and copy the exact text to replace."
+            "normalized, trimmed-boundary, and context-aware matching)." + hint_block
         )
     if replace_all and fuzzy_only:
-        return None, (
+        return [], (
             "replace_all=true requires old_string to match the file exactly. "
             "Fix the whitespace/indentation in old_string to match the file, "
             "or split into individual edits with replace_all=false."
         )
-    return None, (
-        "old_string matches multiple places in the file. Add more surrounding "
-        "context to make it unique, or set replace_all=true."
+    match_lines = _find_all_match_lines(content, multi_match_candidate or old)
+    locs = ", ".join(f"L{n}" for n in match_lines) if match_lines else "multiple places"
+    return [], (
+        f"old_string matches {len(match_lines) or 'multiple'} places in the file "
+        f"({locs}). Extend old_string with 1–3 unique surrounding lines as anchor "
+        "context (e.g. the function header above, the closing brace below) and "
+        "retry. Use replace_all=true only if you want every occurrence replaced."
     )
 
 
@@ -483,7 +560,12 @@ _OLD_STRING_RATIO_MIN_FILE = 500  # don't enforce on tiny files
 
 
 def _apply_edits(original: str, edits: list) -> tuple[Optional[str], Optional[str]]:
-    """Apply edits sequentially. Returns (new_content, error)."""
+    """Apply edits atomically against the original buffer.
+
+    Each edit is located independently in the ORIGINAL content (not the
+    running content), so edit N can never silently match text that edit
+    N-1 inserted. Overlapping spans across edits are rejected.
+    """
     if _has_mixed_line_endings(original):
         return None, (
             "file has mixed CRLF and LF line endings — refusing to apply edits "
@@ -493,6 +575,9 @@ def _apply_edits(original: str, edits: list) -> tuple[Optional[str], Optional[st
     line_ending = _detect_line_ending(original)
     content = _normalize_lf(original)
     orig_lf_len = len(content)
+
+    all_spans: list[tuple[int, int, str]] = []
+    span_owner: dict[int, int] = {}  # span start → edit index, for overlap errors
 
     for i, raw in enumerate(edits, 1):
         if isinstance(raw, dict):
@@ -516,12 +601,33 @@ def _apply_edits(original: str, edits: list) -> tuple[Optional[str], Optional[st
                 "targeted edits instead of regenerating the whole file."
             )
 
-        new_content, err = _replace_with_chain(content, old_lf, new_lf, replace_all)
-        if err is not None or new_content is None:
+        spans, err = _locate_with_chain(content, old_lf, new_lf, replace_all)
+        if err is not None:
             return None, f"edit {i}: {err}"
-        content = new_content
 
-    return _restore_line_ending(content, line_ending), None
+        for s, e, replacement in spans:
+            for ps, pe, _existing in all_spans:
+                if s < pe and e > ps:
+                    return None, (
+                        f"edit {i}: target region [{s}:{e}] overlaps a region "
+                        f"already claimed by edit {span_owner.get(ps, '?')}. "
+                        "Each edit must anchor to a distinct slice of the "
+                        "original file — combine them into one edit or rework "
+                        "the anchors."
+                    )
+            span_owner[s] = i
+            all_spans.append((s, e, replacement))
+
+    all_spans.sort(key=lambda t: t[0])
+    parts: list[str] = []
+    cursor = 0
+    for s, e, replacement in all_spans:
+        parts.append(content[cursor:s])
+        parts.append(replacement)
+        cursor = e
+    parts.append(content[cursor:])
+
+    return _restore_line_ending("".join(parts), line_ending), None
 
 
 # ---------------------------------------------------------------------------
