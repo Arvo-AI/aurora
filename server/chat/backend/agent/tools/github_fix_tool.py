@@ -98,6 +98,18 @@ def _restore_line_ending(text: str, ending: str) -> str:
     return text if ending == "\n" else text.replace("\n", "\r\n")
 
 
+def _has_mixed_line_endings(text: str) -> bool:
+    """True iff `text` contains both CRLF and standalone LF.
+
+    Normalizing a mixed-ending file to LF and restoring as CRLF (or vice versa)
+    would rewrite every line terminator and produce a giant diff for what
+    should be a tiny edit — so callers should refuse mixed input instead.
+    """
+    if "\r\n" not in text:
+        return False
+    return "\n" in text.replace("\r\n", "")
+
+
 # ---------------------------------------------------------------------------
 # Levenshtein (for BlockAnchorReplacer similarity scoring)
 # ---------------------------------------------------------------------------
@@ -183,10 +195,12 @@ def _block_anchor_replacer(content: str, find: str) -> Generator[str, None, None
     for i, line in enumerate(original_lines):
         if line.strip() != first:
             continue
+        # Don't break on the first matching closer — repeated closers (e.g.
+        # multiple `}` after one opener) mean the correct end may be further
+        # out. Collect every (open, close) pair and let _similarity rank them.
         for j in range(i + 2, len(original_lines)):
             if original_lines[j].strip() == last:
                 candidates.append((i, j))
-                break  # take first matching closer
 
     if not candidates:
         return
@@ -354,12 +368,15 @@ def _context_aware_replacer(content: str, find: str) -> Generator[str, None, Non
     for i, line in enumerate(content_lines):
         if line.strip() != first:
             continue
+        # Scan every matching closer; a closer further out may be the right
+        # one when there are repeated trailing anchors. The driver dedupes
+        # identical yields and detects multi-match ambiguity.
         for j in range(i + 2, len(content_lines)):
             if content_lines[j].strip() != last:
                 continue
             block_lines = content_lines[i:j + 1]
             if len(block_lines) != len(find_lines):
-                break
+                continue
             matching = 0
             total = 0
             for k in range(1, len(block_lines) - 1):
@@ -371,7 +388,6 @@ def _context_aware_replacer(content: str, find: str) -> Generator[str, None, Non
                         matching += 1
             if total == 0 or matching / total >= 0.5:
                 yield "\n".join(block_lines)
-            break
 
 
 def _multi_occurrence_replacer(content: str, find: str) -> Generator[str, None, None]:
@@ -468,6 +484,12 @@ _OLD_STRING_RATIO_MIN_FILE = 500  # don't enforce on tiny files
 
 def _apply_edits(original: str, edits: list) -> tuple[Optional[str], Optional[str]]:
     """Apply edits sequentially. Returns (new_content, error)."""
+    if _has_mixed_line_endings(original):
+        return None, (
+            "file has mixed CRLF and LF line endings — refusing to apply edits "
+            "because normalizing the buffer would rewrite every line terminator "
+            "and produce a huge diff. Normalize the file's line endings first."
+        )
     line_ending = _detect_line_ending(original)
     content = _normalize_lf(original)
     orig_lf_len = len(content)
