@@ -52,6 +52,7 @@ def build_system_invariant(is_background: bool = False, is_action: bool = False)
             "error_handling",
             "investigation",
             "behavioral_rules",
+            "interactive_load_skill",
         ])
 
     foreground_segments = [
