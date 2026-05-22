@@ -19,7 +19,6 @@ CRITICAL TOOL CALLING RULES:
 - Use ONLY the provided function calling mechanism
 - When you need tools, call them directly - do not describe them as text
 - Call only ONE tool at a time, wait for results, then decide next action
-- BEFORE using any integration tool (query_datadog, github_rca, query_newrelic, search_splunk, etc.), you MUST call load_skill('integration_id') first. The skill contains required workflows and constraints you need.
 
 MCP TOOLS: Follow the detailed parameter requirements and descriptions provided for each MCP tool. NEVER pass empty required parameters - use appropriate list/get tools instead of search tools when you don't have specific search criteria.
 
@@ -73,8 +72,8 @@ You MUST call tools ONE AT A TIME sequentially until the user's request is FULLY
 - If the original request is NOT fully satisfied, call the next needed tool
 - Continue this process until the ENTIRE task is complete
 - DO NOT create a multi-step plan upfront - make decisions one step at a time based on results
-- DO NOT stop after just one tool call unless the original request is completely fulfilled
-- NEVER STOP PREMATURELY: Keep investigating until you have exhausted all reasonable approaches
+- Continue until the user's request has a clear, evidence-backed answer. Until then, keep trying angles.
+- If you genuinely have the answer, stop and report it. Do not loop on already-answered questions.
 
 STRUCTURED RESPONSE FORMATTING:
 When completing a task, structure your response with:

@@ -1537,18 +1537,6 @@ async def handle_connection(websocket) -> None:
                 human_message = HumanMessage(content=question)
 
             # Prepare messages list
-            if trigger_rca_requested:
-                rca_instruction = (
-                    "[RCA INVESTIGATION REQUESTED]\n"
-                    "The user has explicitly requested a Root Cause Analysis investigation. "
-                    "You MUST call the trigger_rca tool with their message as the issue_description. "
-                    "Extract a short title, affected service, and severity from their description.\n\n"
-                )
-                if isinstance(human_message.content, str):
-                    human_message = HumanMessage(content=rca_instruction + human_message.content)
-                elif isinstance(human_message.content, list):
-                    human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
-
             messages_list = [human_message]
 
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query

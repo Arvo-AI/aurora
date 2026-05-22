@@ -38,10 +38,7 @@ Jira operates in one of two modes based on user preference (`jira_mode`):
 
 ### MANDATORY FIRST STEP -- CHANGE CONTEXT & KNOWLEDGE BASE
 
-**You MUST call Jira tools BEFORE any infrastructure or CI/CD investigation.**
-Skipping this step is a failure of the investigation.
-
-Your FIRST tool calls MUST be `jira_search_issues`.
+When the alert payload references a Jira ticket, or when context strongly suggests a known issue is in progress, call `jira_search_issues` early. When the alert is a fresh infrastructure signal, you can safely investigate metrics or logs first and consult Jira later.
 
 ### Tools
 
@@ -92,8 +89,8 @@ If a ticket mentions a DB migration, focus on DB connectivity. If a ticket menti
 - Jira filing happens automatically in a separate step after your investigation completes.
 - After Jira context, proceed to infrastructure/CI tools.
 
-## RCA Investigation (Mandatory First Step)
-**You MUST call Jira tools BEFORE any infrastructure investigation.**
+## RCA Investigation
+Use Jira search when the alert hints at human-in-progress work; otherwise it is fine to start with metrics/logs and consult Jira later.
 
 ### Step 1 -- Find related recent work:
 - `jira_search_issues(jql='text ~ "{escaped_service}" AND updated >= -7d ORDER BY updated DESC')` -- Recent tickets
