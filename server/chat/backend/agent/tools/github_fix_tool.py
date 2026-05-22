@@ -263,8 +263,8 @@ def _whitespace_normalized_replacer(content: str, find: str) -> Generator[str, N
                         m = re.search(pattern, line)
                         if m:
                             yield m.group(0)
-                    except re.error:
-                        pass
+                    except re.error as exc:
+                        logger.debug("Skipping invalid regex pattern in whitespace-normalized replacer: %s", exc)
 
     find_lines = find.split("\n")
     if len(find_lines) > 1:
