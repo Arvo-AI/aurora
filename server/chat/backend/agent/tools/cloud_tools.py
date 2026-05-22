@@ -1428,8 +1428,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Use this when you identify a specific code change that would fix the root cause. "
                     "The fix is stored for user review before being applied. "
                     "Parameters: file_path (path in repo), "
-                    "suggested_content (the ENTIRE updated file body — every line of the file, "
-                    "not just the changed lines; Aurora overwrites the whole file with this string), "
+                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                    "set replace_all=true if you want every occurrence replaced), "
                     "fix_description (what this fix does), root_cause_summary (why this change is needed). "
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),

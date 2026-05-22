@@ -42,7 +42,7 @@ Connected account: {username}
    - `diff` (requires `commit_sha`) — File-level changes for a specific commit
    - `pull_requests` — Merged PRs in the time window
    - Pass `incident_time` (ISO 8601) for automatic time window correlation
-3. `github_fix(file_path=..., suggested_content=..., fix_description=..., root_cause_summary=...)` — Suggest a code fix (stored for user review, not auto-applied)
+3. `github_fix(file_path=..., edits=[{old_string, new_string, replace_all?}, ...], fix_description=..., root_cause_summary=...)` — Suggest a code fix via anchored search-and-replace edits (stored for user review, not auto-applied). First call `get_file_contents` to read the current file so you can copy the exact `old_string` (with enough surrounding context to be unique).
 4. `github_apply_fix(suggestion_id=...)` — Create a PR from an approved fix (only after user reviews)
 5. `github_commit(repo=..., commit_message=...)` — Push Terraform files to GitHub
 
@@ -81,8 +81,9 @@ Shows file-level additions/deletions. Prioritize config/infra files (.yaml, .env
 Finds PRs merged in the time window; recently merged PRs are flagged.
 
 **Step 6 — Suggest fix:**
-`github_fix(file_path=..., suggested_content=..., fix_description=..., root_cause_summary=...)`
-Suggests a fix stored for user review. User can approve, then `github_apply_fix` creates a PR.
+First read the file with `get_file_contents(owner, repo, path)`. Then:
+`github_fix(file_path=..., edits=[{old_string: "...", new_string: "..."}], fix_description=..., root_cause_summary=...)`
+`old_string` must match the current file exactly (include 1–3 lines of surrounding context so the match is unique). Indentation counts. **Keep `old_string` narrow** — just the lines you're changing plus a little surrounding context. Do NOT pass the whole file as `old_string`; if a single edit covers more than ~half the file Aurora will reject it. For multi-section changes, send multiple smaller edits. Use `replace_all: true` only when `old_string` matches the file byte-for-byte and you want every occurrence touched. Aurora applies the edits server-side and stores the result for user review; `github_apply_fix` then creates the PR.
 
 ### Important Rules
 - Pass `incident_time` on every github_rca call for automatic time correlation.
