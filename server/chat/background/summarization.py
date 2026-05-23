@@ -241,12 +241,11 @@ If the correlated alerts are relevant, clearly indicate their relationship to th
         reasoning_block = ""
         if agent_reasoning and agent_reasoning.strip():
             reasoning_block = (
-                "\nAGENT REASONING (the investigating agent's own thoughts as shown "
-                "in the Thoughts panel — context, not direct evidence):\n"
+                "\nINVESTIGATOR NOTES (context only — do NOT cite as a source, use numeric evidence citations instead):\n"
                 f"{agent_reasoning}\n"
             )
 
-        prompt = f"""You are writing an incident report from alert data, the investigating agent's reasoning, and forensic evidence.
+        prompt = f"""You are writing an incident report from alert data, investigator notes, and forensic evidence.
 
 ALERT INFORMATION:
 - Source: {source_type}
@@ -261,22 +260,26 @@ INVESTIGATION EVIDENCE (cite using [n] markers):
 Write a 2-3 paragraph incident report:
 
 PARAGRAPH 1 — What Happened:
-State what occurred, when, and what was affected, using only facts present in the alert, agent reasoning, or evidence. Report as known facts, not as an investigation log.
+State what occurred, when, and what was affected, using only facts present in the provided sections. Report as known facts, not as an investigation log.
 
 PARAGRAPH 2 — Root Cause:
-- If evidence and agent reasoning together clearly support a specific root cause, state it and cite the supporting evidence.
+- If the numbered evidence clearly supports a specific root cause, state it and cite the supporting evidence with numeric markers like [3], [7].
   Example: "The root cause was a ConfigMap change that increased BATCH_SIZE from 1000 to 10000 [7], causing memory usage to exceed the 128Mi limit [9, 11]."
 - Otherwise the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
 
 PARAGRAPH 3 (if significant) — Impact & Timeline:
-Only the scope and timeline actually present in the alert, agent reasoning, or evidence.
+Only the scope and timeline actually present in the alert or evidence.
 
 ANTI-HALLUCINATION RULES (non-negotiable):
-- Use only facts present in the alert, agent reasoning, or cited evidence — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
+- Use only facts present in the provided sections — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
 - Empty or missing output from a generic probe is NOT evidence of a specific failure mode; never promote absence of data into a confident root cause.
-- Never fabricate a [n] citation — every marker MUST reference a real evidence row above.
+- Never fabricate a [n] citation — every marker MUST reference a real numbered evidence row above.
 - Treat purely temporal correlations as correlations, not causations.
-- If the agent reasoning says the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+- If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+
+CITATION RULES (non-negotiable):
+- ONLY cite numbered evidence items using their numeric index: [1], [3, 5], [7].
+- NEVER cite section headers. Do NOT write [Alert], [Agent Reasoning], [Investigator Notes], or any non-numeric citation.
 
 WRITING RULES:
 - Cite specific evidence that supports factual claims; group related citations [3, 5, 7]; cite only key supporting evidence.
@@ -291,7 +294,7 @@ After the report, add a "## Suggested Next Steps" paragraph with 2-4 concrete di
         reasoning_block = ""
         if agent_reasoning and agent_reasoning.strip():
             reasoning_block = (
-                "\nAGENT REASONING (Thoughts-panel content — context, not direct evidence):\n"
+                "\nINVESTIGATOR NOTES (context only — do NOT cite as a source):\n"
                 f"{agent_reasoning}\n"
             )
         prompt = f"""
@@ -310,10 +313,10 @@ INVESTIGATION TRANSCRIPT (chat log):
 Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known.
 
 ANTI-HALLUCINATION RULES (non-negotiable):
-- Use only facts present in the alert, agent reasoning, or transcript — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
+- Use only facts present in the provided sections — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
 - Empty or missing output from a generic probe is NOT evidence of a specific failure mode.
 - Treat purely temporal correlations as correlations, not causations.
-- If the agent reasoning says the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+- If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
 
 Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
