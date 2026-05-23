@@ -106,7 +106,7 @@ def require_feature(feature_name: str):
 
 
 def require_within_limit(metric_name: str, limit_key: str):
-    """Decorator that gates a route behind a usage limit."""
+    """Decorator that gates a route behind a usage limit with atomic increment."""
     def decorator(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
@@ -123,8 +123,32 @@ def require_within_limit(metric_name: str, limit_key: str):
             if limit == -1:  # unlimited
                 return f(*args, **kwargs)
 
-            current = get_usage_count(org_id, metric_name)
-            if current >= limit:
+            # Atomic: increment only if under limit, reject otherwise
+            today = date.today()
+            period_start = today.replace(day=1)
+            if today.month == 12:
+                period_end = today.replace(year=today.year + 1, month=1, day=1)
+            else:
+                period_end = today.replace(month=today.month + 1, day=1)
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Try conditional increment
+                    cursor.execute(
+                        """INSERT INTO org_usage (org_id, metric_name, usage_count, period_start, period_end)
+                           VALUES (%s, %s, 1, %s, %s)
+                           ON CONFLICT (org_id, metric_name, period_start)
+                           DO UPDATE SET usage_count = org_usage.usage_count + 1,
+                                         updated_at = CURRENT_TIMESTAMP
+                           WHERE org_usage.usage_count < %s
+                           RETURNING usage_count""",
+                        (org_id, metric_name, period_start, period_end, limit),
+                    )
+                    row = cursor.fetchone()
+                    conn.commit()
+
+            if not row:
+                current = get_usage_count(org_id, metric_name)
                 return jsonify({
                     "error": "Usage limit reached",
                     "metric": metric_name,

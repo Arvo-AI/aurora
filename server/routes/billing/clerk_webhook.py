@@ -26,11 +26,22 @@ CLERK_WEBHOOK_SECRET = os.getenv("CLERK_WEBHOOK_SECRET", "")
 
 def _verify_clerk_signature(payload: bytes, headers: dict) -> bool:
     """Verify Clerk webhook signature using Svix headers."""
+    import time
+
     svix_id = headers.get("svix-id")
     svix_timestamp = headers.get("svix-timestamp")
     svix_signature = headers.get("svix-signature")
 
     if not all([svix_id, svix_timestamp, svix_signature, CLERK_WEBHOOK_SECRET]):
+        return False
+
+    # Reject replayed events older than 5 minutes
+    try:
+        ts = int(svix_timestamp)
+        if abs(time.time() - ts) > 300:
+            logger.warning("[CLERK] Webhook timestamp too old: %s", svix_timestamp)
+            return False
+    except (ValueError, TypeError):
         return False
 
     secret = CLERK_WEBHOOK_SECRET
@@ -73,15 +84,29 @@ def _handle_user_created(data: dict):
         logger.warning("[CLERK] user.created missing id or email")
         return
 
+    import uuid as _uuid
+    slug = f"{email.split('@')[0]}-{_uuid.uuid4().hex[:8]}"
+
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
+            # Create user first (org FK on created_by requires user to exist)
+            cursor.execute(
+                """INSERT INTO users (id, email, name, role, password_hash)
+                   VALUES (%s, %s, %s, 'admin', 'clerk_managed')
+                   ON CONFLICT (id) DO UPDATE SET
+                     email = EXCLUDED.email,
+                     name = EXCLUDED.name,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (clerk_user_id, email, name),
+            )
+
             # Create org for the user
             cursor.execute(
                 """INSERT INTO organizations (name, slug, created_by)
                    VALUES (%s, %s, %s)
-                   ON CONFLICT DO NOTHING
+                   ON CONFLICT (slug) DO NOTHING
                    RETURNING id""",
-                (f"{name}'s Organization", email.split("@")[0], clerk_user_id),
+                (f"{name}'s Organization", slug, clerk_user_id),
             )
             org_row = cursor.fetchone()
 
@@ -95,16 +120,12 @@ def _handle_user_created(data: dict):
                 existing = cursor.fetchone()
                 org_id = existing[0] if existing else None
 
-            # Create user record (using clerk_user_id as our user ID)
-            cursor.execute(
-                """INSERT INTO users (id, email, name, org_id, role, password_hash)
-                   VALUES (%s, %s, %s, %s, 'admin', 'clerk_managed')
-                   ON CONFLICT (id) DO UPDATE SET
-                     email = EXCLUDED.email,
-                     name = EXCLUDED.name,
-                     updated_at = CURRENT_TIMESTAMP""",
-                (clerk_user_id, email, name, org_id),
-            )
+            # Link user to org
+            if org_id:
+                cursor.execute(
+                    "UPDATE users SET org_id = %s WHERE id = %s",
+                    (org_id, clerk_user_id),
+                )
 
             # Create free tier subscription for the org
             if org_id:

@@ -17,7 +17,24 @@ logger = logging.getLogger(__name__)
 
 billing_bp = Blueprint("billing", __name__, url_prefix="/api/billing")
 
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+_stripe_key = os.getenv("STRIPE_SECRET_KEY")
+if not _stripe_key:
+    logger.warning("[BILLING] STRIPE_SECRET_KEY not configured — billing API calls will fail")
+stripe.api_key = _stripe_key or ""
+
+
+def _require_org_admin(user_id: str, org_id: str):
+    """Check that user is an admin of the org. Returns error response or None."""
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT role FROM users WHERE id = %s AND org_id = %s",
+                (user_id, org_id),
+            )
+            row = cursor.fetchone()
+            if not row or row[0] != "admin":
+                return jsonify({"error": "Admin role required for billing operations"}), 403
+    return None
 
 STRIPE_PRICE_MAP = {
     "pro_monthly": os.getenv("STRIPE_PRICE_PRO_MONTHLY", ""),
@@ -69,7 +86,11 @@ def get_subscription(user_id: str):
 
     tier = PlanTier(sub["plan_tier"]) if sub["plan_tier"] in PlanTier.__members__.values() else PlanTier.FREE
     return jsonify({
-        **sub,
+        "plan_tier": sub["plan_tier"],
+        "status": sub["status"],
+        "billing_period_start": sub["billing_period_start"],
+        "billing_period_end": sub["billing_period_end"],
+        "cancel_at_period_end": sub["cancel_at_period_end"],
         "limits": PLAN_LIMITS[tier],
     })
 
@@ -112,7 +133,11 @@ def create_checkout_session(user_id: str):
     if not org_id:
         return jsonify({"error": "No organization context"}), 400
 
-    data = request.get_json()
+    admin_err = _require_org_admin(user_id, org_id)
+    if admin_err:
+        return admin_err
+
+    data = request.get_json(silent=True) or {}
     price_key = data.get("price_key")
     if price_key not in STRIPE_PRICE_MAP or not STRIPE_PRICE_MAP[price_key]:
         return jsonify({"error": "Invalid price selection"}), 400
@@ -121,34 +146,32 @@ def create_checkout_session(user_id: str):
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            sub = _get_org_subscription(cursor, org_id)
+            # Lock the row to prevent duplicate Stripe customer creation
+            cursor.execute(
+                "SELECT stripe_customer_id FROM org_subscriptions WHERE org_id = %s FOR UPDATE",
+                (org_id,),
+            )
+            locked_row = cursor.fetchone()
+            customer_id = locked_row[0] if locked_row and locked_row[0] else None
 
-    customer_id = sub["stripe_customer_id"] if sub else None
-
-    if not customer_id:
-        cursor_email = None
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
+            if not customer_id:
                 cursor.execute("SELECT email FROM users WHERE id = %s", (user_id,))
-                row = cursor.fetchone()
-                if row:
-                    cursor_email = row[0]
+                email_row = cursor.fetchone()
+                cursor_email = email_row[0] if email_row else None
 
-        customer = stripe.Customer.create(
-            email=cursor_email,
-            metadata={"org_id": org_id, "user_id": user_id},
-        )
-        customer_id = customer.id
+                customer = stripe.Customer.create(
+                    email=cursor_email,
+                    metadata={"org_id": org_id, "user_id": user_id},
+                )
+                customer_id = customer.id
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
                 cursor.execute(
                     "INSERT INTO org_subscriptions (org_id, stripe_customer_id, plan_tier, status) "
                     "VALUES (%s, %s, 'free', 'active') "
                     "ON CONFLICT (org_id) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id",
                     (org_id, customer_id),
                 )
-                conn.commit()
+            conn.commit()
 
     session = stripe.checkout.Session.create(
         customer=customer_id,
@@ -170,6 +193,10 @@ def create_portal_session(user_id: str):
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 400
+
+    admin_err = _require_org_admin(user_id, org_id)
+    if admin_err:
+        return admin_err
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
@@ -194,6 +221,10 @@ def cancel_subscription(user_id: str):
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 400
+
+    admin_err = _require_org_admin(user_id, org_id)
+    if admin_err:
+        return admin_err
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:

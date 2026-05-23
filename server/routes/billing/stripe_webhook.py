@@ -202,12 +202,15 @@ def handle_stripe_webhook():
 
     org_id = data_object.get("metadata", {}).get("org_id")
 
+    # Check idempotency without committing — only commit after handler succeeds
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            is_new = _record_event(cursor, conn, event_id, event_type, org_id, event["data"])
-
-    if not is_new:
-        return jsonify({"status": "already_processed"})
+            cursor.execute(
+                "SELECT 1 FROM stripe_events WHERE stripe_event_id = %s",
+                (event_id,),
+            )
+            if cursor.fetchone():
+                return jsonify({"status": "already_processed"})
 
     handlers = {
         "checkout.session.completed": _handle_checkout_completed,
@@ -225,5 +228,10 @@ def handle_stripe_webhook():
             return jsonify({"error": "Processing failed"}), 500
     else:
         logger.debug("[STRIPE] Unhandled event type: %s", event_type)
+
+    # Record event only after successful processing
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            _record_event(cursor, conn, event_id, event_type, org_id, event["data"])
 
     return jsonify({"status": "ok"})
