@@ -1,5 +1,7 @@
 import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
+import Google from "next-auth/providers/google"
+import GitHub from "next-auth/providers/github"
 
 const ROLE_REVALIDATE_SECONDS = 60 // re-check role/org every 60 seconds
 
@@ -98,16 +100,24 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           signal: loginController.signal,
         })
         clearTimeout(loginTimeout)
-        
+
         if (!response.ok) {
           console.error("Login failed:", response.status)
           return null
         }
-        
+
         const user = await response.json()
         return user // { id, email, name, role, orgId, orgName }
       }
-    })
+    }),
+    ...(process.env.GOOGLE_CLIENT_ID ? [Google({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    })] : []),
+    ...(process.env.GITHUB_ID ? [GitHub({
+      clientId: process.env.GITHUB_ID,
+      clientSecret: process.env.GITHUB_SECRET!,
+    })] : []),
   ],
   session: {
     strategy: "jwt",
@@ -118,7 +128,47 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     error: "/sign-in"
   },
   callbacks: {
-    async jwt({ token, user, trigger }) {
+    async signIn({ user, account }) {
+      // For OAuth providers (Google, GitHub): provision user in backend on first login
+      if (account?.provider && account.provider !== "credentials") {
+        const backendUrl = process.env.BACKEND_URL
+        if (!backendUrl) return true
+
+        try {
+          const headers: Record<string, string> = { "Content-Type": "application/json" }
+          const internalSecret = process.env.INTERNAL_API_SECRET
+          if (internalSecret) headers["X-Internal-Secret"] = internalSecret
+
+          const res = await fetch(`${backendUrl}/api/auth/oauth-provision`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              provider: account.provider,
+              provider_account_id: account.providerAccountId,
+              email: user.email,
+              name: user.name,
+              image: user.image,
+            }),
+          })
+
+          if (!res.ok && res.status !== 409) {
+            console.error("OAuth provision failed:", res.status)
+            return false
+          }
+
+          const data = await res.json()
+          user.id = data.id
+          user.role = data.role
+          user.orgId = data.orgId
+          user.orgName = data.orgName
+        } catch (err) {
+          console.error("OAuth provision error:", err)
+          return false
+        }
+      }
+      return true
+    },
+    async jwt({ token, user, account, trigger }) {
       if (user) {
         token.id = user.id
         token.email = user.email

@@ -3,6 +3,9 @@ Auth routes for user registration, login, and password management.
 Replaces the previous authentication system.
 """
 import logging
+
+logger = logging.getLogger(__name__)
+
 from routes.audit_routes import record_audit_event
 import hashlib
 import re
@@ -278,6 +281,97 @@ def setup_org(user_id):
     except Exception as e:
         logging.error(f"Error during org setup: {e}")
         return jsonify({"error": "Organization setup failed"}), 500
+
+
+@auth_bp.route('/oauth-provision', methods=['POST'])
+def oauth_provision():
+    """Provision or find user from OAuth sign-in (Google, GitHub).
+
+    Called by NextAuth signIn callback. Creates user+org+subscription on first login.
+    Returns existing user info on subsequent logins. Idempotent.
+    """
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    name = data.get("name", "")
+    provider = data.get("provider")
+    provider_account_id = data.get("provider_account_id")
+
+    if not email or not provider:
+        return jsonify({"error": "email and provider required"}), 400
+
+    import uuid as _uuid
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            # Check if user already exists by email
+            cursor.execute(
+                "SELECT id, role, org_id FROM users WHERE email = %s",
+                (email,),
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                user_id, role, org_id = existing
+                org_name = None
+                if org_id:
+                    cursor.execute("SELECT name FROM organizations WHERE id = %s", (org_id,))
+                    org_row = cursor.fetchone()
+                    org_name = org_row[0] if org_row else None
+                return jsonify({
+                    "id": user_id,
+                    "email": email,
+                    "name": name,
+                    "role": role,
+                    "orgId": org_id,
+                    "orgName": org_name,
+                })
+
+            # New user — create user + org + subscription
+            user_id = str(_uuid.uuid4())
+            slug = _name_to_slug(name or email.split("@")[0]) + "-" + _uuid.uuid4().hex[:6]
+
+            cursor.execute(
+                """INSERT INTO users (id, email, name, role, password_hash)
+                   VALUES (%s, %s, %s, 'admin', 'oauth_managed')""",
+                (user_id, email, name or email.split("@")[0]),
+            )
+
+            org_name = f"{name or email.split('@')[0]}'s Organization"
+            cursor.execute(
+                """INSERT INTO organizations (name, slug, created_by)
+                   VALUES (%s, %s, %s) RETURNING id""",
+                (org_name, slug, user_id),
+            )
+            org_row = cursor.fetchone()
+            org_id = org_row[0] if org_row else None
+
+            if org_id:
+                cursor.execute(
+                    "UPDATE users SET org_id = %s WHERE id = %s",
+                    (org_id, user_id),
+                )
+
+                # Create free tier subscription in SaaS mode
+                from utils.flags.feature_flags import is_saas_mode
+                if is_saas_mode():
+                    cursor.execute(
+                        """INSERT INTO org_subscriptions (org_id, stripe_customer_id, plan_tier, status)
+                           VALUES (%s, '', 'free', 'active')
+                           ON CONFLICT (org_id) DO NOTHING""",
+                        (org_id,),
+                    )
+
+            conn.commit()
+
+    logger.info("[AUTH] OAuth provisioned user %s (%s) via %s", user_id, email, provider)
+    return jsonify({
+        "id": user_id,
+        "email": email,
+        "name": name or email.split("@")[0],
+        "role": "admin",
+        "orgId": org_id,
+        "orgName": org_name,
+    }), 201
 
 
 @auth_bp.route('/login', methods=['POST'])

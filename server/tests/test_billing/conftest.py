@@ -133,11 +133,9 @@ def billing_app(mock_db_pool):
 
         from routes.billing.stripe_routes import billing_bp
         from routes.billing.stripe_webhook import stripe_webhook_bp
-        from routes.billing.clerk_webhook import clerk_webhook_bp
 
         application.register_blueprint(billing_bp)
         application.register_blueprint(stripe_webhook_bp)
-        application.register_blueprint(clerk_webhook_bp)
 
         yield application
 
