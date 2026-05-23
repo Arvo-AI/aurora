@@ -21,6 +21,8 @@ if not _stripe_key:
     logger.warning("[BILLING] STRIPE_SECRET_KEY not configured — billing API calls will fail")
 stripe.api_key = _stripe_key or ""
 
+_BILLING_CONFIGURED = bool(_stripe_key)
+
 
 def _require_org_admin(user_id: str, org_id: str):
     """Check that user is an admin of the org. Returns error response or None."""
@@ -131,6 +133,9 @@ def get_usage(user_id: str):
 @require_auth_only
 def create_checkout_session(user_id: str):
     """Create a Stripe Checkout session for plan upgrade."""
+    if not _BILLING_CONFIGURED:
+        return jsonify({"error": "Billing not configured"}), 503
+
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 400
@@ -194,6 +199,10 @@ def create_checkout_session(user_id: str):
         logger.error("[BILLING] Stripe checkout session creation failed: %s", e)
         return jsonify({"error": "Payment provider error"}), 502
 
+    if not session.url:
+        logger.error("[BILLING] Stripe checkout session created but no URL returned")
+        return jsonify({"error": "Payment provider error"}), 502
+
     return jsonify({"checkout_url": session.url})
 
 
@@ -201,6 +210,9 @@ def create_checkout_session(user_id: str):
 @require_auth_only
 def create_portal_session(user_id: str):
     """Create a Stripe Customer Portal session for managing subscription."""
+    if not _BILLING_CONFIGURED:
+        return jsonify({"error": "Billing not configured"}), 503
+
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 400
@@ -233,6 +245,9 @@ def create_portal_session(user_id: str):
 @require_auth_only
 def cancel_subscription(user_id: str):
     """Cancel subscription at end of billing period."""
+    if not _BILLING_CONFIGURED:
+        return jsonify({"error": "Billing not configured"}), 503
+
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": "No organization context"}), 400
@@ -243,22 +258,23 @@ def cancel_subscription(user_id: str):
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            sub = _get_org_subscription(cursor, org_id)
+            cursor.execute(
+                "SELECT stripe_subscription_id FROM org_subscriptions "
+                "WHERE org_id = %s AND stripe_subscription_id IS NOT NULL FOR UPDATE",
+                (org_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"error": "No active subscription"}), 404
 
-    if not sub or not sub.get("stripe_subscription_id"):
-        return jsonify({"error": "No active subscription"}), 404
+            subscription_id = row[0]
 
-    try:
-        stripe.Subscription.modify(
-            sub["stripe_subscription_id"],
-            cancel_at_period_end=True,
-        )
-    except stripe.StripeError as e:
-        logger.error("[BILLING] Stripe subscription cancel failed: %s", e)
-        return jsonify({"error": "Payment provider error"}), 502
+            try:
+                stripe.Subscription.modify(subscription_id, cancel_at_period_end=True)
+            except stripe.StripeError as e:
+                logger.error("[BILLING] Stripe subscription cancel failed: %s", e)
+                return jsonify({"error": "Payment provider error"}), 502
 
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE org_subscriptions SET cancel_at_period_end = TRUE, updated_at = CURRENT_TIMESTAMP "
                 "WHERE org_id = %s",

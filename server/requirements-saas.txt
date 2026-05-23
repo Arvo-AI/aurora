@@ -1,0 +1,3 @@
+# Additional dependencies for SaaS mode (AURORA_SAAS_MODE=true)
+# Install alongside the base: pip install -r requirements.txt -r requirements-saas.txt
+stripe>=8.0.0

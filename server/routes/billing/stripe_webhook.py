@@ -103,6 +103,7 @@ def _handle_subscription_updated(subscription: dict):
     tier = _tier_from_subscription(subscription)
     status = subscription.get("status", "active")
     cancel_at_period_end = subscription.get("cancel_at_period_end", False)
+    customer_id = subscription.get("customer")
 
     period_start = None
     period_end = None
@@ -117,14 +118,41 @@ def _handle_subscription_updated(subscription: dict):
                 """UPDATE org_subscriptions SET
                      plan_tier = %s,
                      status = %s,
+                     stripe_subscription_id = %s,
                      billing_period_start = COALESCE(%s, billing_period_start),
                      billing_period_end = COALESCE(%s, billing_period_end),
                      cancel_at_period_end = %s,
                      updated_at = CURRENT_TIMESTAMP
                    WHERE stripe_subscription_id = %s""",
-                (tier.value, status, period_start, period_end,
+                (tier.value, status, subscription_id, period_start, period_end,
                  cancel_at_period_end, subscription_id),
             )
+
+            # Fallback: if no row matched by subscription_id (webhook arrived before checkout
+            # completed), try matching by customer_id
+            if cursor.rowcount == 0 and customer_id:
+                logger.warning(
+                    "[STRIPE] subscription.updated: no row for sub_id=%s, trying customer_id=%s",
+                    subscription_id, customer_id,
+                )
+                cursor.execute(
+                    """UPDATE org_subscriptions SET
+                         plan_tier = %s,
+                         status = %s,
+                         stripe_subscription_id = %s,
+                         billing_period_start = COALESCE(%s, billing_period_start),
+                         billing_period_end = COALESCE(%s, billing_period_end),
+                         cancel_at_period_end = %s,
+                         updated_at = CURRENT_TIMESTAMP
+                       WHERE stripe_customer_id = %s AND stripe_subscription_id IS NULL""",
+                    (tier.value, status, subscription_id, period_start, period_end,
+                     cancel_at_period_end, customer_id),
+                )
+
+            if cursor.rowcount == 0:
+                logger.warning("[STRIPE] subscription.updated matched no rows: sub=%s cust=%s",
+                               subscription_id, customer_id)
+
             conn.commit()
 
     logger.info("[STRIPE] Updated subscription %s to tier=%s status=%s", subscription_id, tier.value, status)
@@ -195,14 +223,16 @@ def handle_stripe_webhook():
 
     org_id = data_object.get("metadata", {}).get("org_id")
 
-    # Atomic idempotency: INSERT with status='processing' claims the event.
-    # ON CONFLICT means another worker already claimed it.
+    # Atomic idempotency: INSERT claims new events, UPDATE reclaims failed ones for retry.
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO stripe_events (stripe_event_id, event_type, org_id, payload, status) "
-                "VALUES (%s, %s, %s, %s, 'processing') "
-                "ON CONFLICT (stripe_event_id) DO NOTHING RETURNING id",
+                """INSERT INTO stripe_events (stripe_event_id, event_type, org_id, payload, status)
+                   VALUES (%s, %s, %s, %s, 'processing')
+                   ON CONFLICT (stripe_event_id) DO UPDATE
+                     SET status = 'processing', processed_at = CURRENT_TIMESTAMP
+                     WHERE stripe_events.status = 'failed'
+                   RETURNING id""",
                 (event_id, event_type, org_id, json.dumps(event["data"])),
             )
             claimed = cursor.fetchone()

@@ -234,10 +234,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     uv pip install --upgrade pip setuptools wheel --system
 
 # Copy dependency files first for caching
-COPY requirements.txt /app/requirements.txt
+COPY requirements.txt requirements-saas.txt /app/
+ARG AURORA_SAAS_MODE=false
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r requirements.txt --system
+    uv pip install -r requirements.txt --system && \
+    if [ "$AURORA_SAAS_MODE" = "true" ]; then \
+      uv pip install -r requirements-saas.txt --system; \
+    fi
 
 # ============================================
 # Development Stage

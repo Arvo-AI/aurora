@@ -1,6 +1,11 @@
 "use client";
 
-import { SignIn } from "@clerk/nextjs";
+import dynamic from "next/dynamic";
+
+const SignIn = dynamic(
+  () => import("@clerk/nextjs").then((mod) => mod.SignIn),
+  { ssr: false, loading: () => <div className="animate-pulse h-96 w-80 bg-slate-100 rounded-lg" /> }
+);
 
 export default function SignInPage() {
   return (

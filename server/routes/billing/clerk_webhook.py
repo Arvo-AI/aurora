@@ -85,11 +85,8 @@ def _handle_user_created(data: dict):
         logger.warning("[CLERK] user.created missing id or email")
         return
 
-    slug = f"{email.split('@')[0]}-{_uuid.uuid4().hex[:8]}"
-
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            # Create user first (org FK on created_by requires user to exist)
             cursor.execute(
                 """INSERT INTO users (id, email, name, role, password_hash)
                    VALUES (%s, %s, %s, 'admin', 'clerk_managed')
@@ -100,19 +97,24 @@ def _handle_user_created(data: dict):
                 (clerk_user_id, email, name),
             )
 
-            # Create org for the user
-            cursor.execute(
-                """INSERT INTO organizations (name, slug, created_by)
-                   VALUES (%s, %s, %s)
-                   ON CONFLICT (slug) DO NOTHING
-                   RETURNING id""",
-                (f"{name}'s Organization", slug, clerk_user_id),
-            )
-            org_row = cursor.fetchone()
+            # Try to create org with up to 3 slug attempts to handle collisions
+            org_id = None
+            for _ in range(3):
+                slug = f"{email.split('@')[0]}-{_uuid.uuid4().hex[:8]}"
+                cursor.execute(
+                    """INSERT INTO organizations (name, slug, created_by)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (slug) DO NOTHING
+                       RETURNING id""",
+                    (f"{name}'s Organization", slug, clerk_user_id),
+                )
+                org_row = cursor.fetchone()
+                if org_row:
+                    org_id = org_row[0]
+                    break
 
-            if org_row:
-                org_id = org_row[0]
-            else:
+            # Fallback: check if this user already has an org (idempotent retry)
+            if not org_id:
                 cursor.execute(
                     "SELECT id FROM organizations WHERE created_by = %s LIMIT 1",
                     (clerk_user_id,),
@@ -120,21 +122,22 @@ def _handle_user_created(data: dict):
                 existing = cursor.fetchone()
                 org_id = existing[0] if existing else None
 
-            # Link user to org
-            if org_id:
-                cursor.execute(
-                    "UPDATE users SET org_id = %s WHERE id = %s",
-                    (org_id, clerk_user_id),
-                )
+            if not org_id:
+                logger.error("[CLERK] Failed to create org for user %s after retries", clerk_user_id)
+                conn.rollback()
+                raise RuntimeError(f"Failed to create org for user {clerk_user_id}")
 
-            # Create free tier subscription for the org
-            if org_id:
-                cursor.execute(
-                    """INSERT INTO org_subscriptions (org_id, stripe_customer_id, plan_tier, status)
-                       VALUES (%s, %s, 'free', 'active')
-                       ON CONFLICT (org_id) DO NOTHING""",
-                    (org_id, ""),
-                )
+            cursor.execute(
+                "UPDATE users SET org_id = %s WHERE id = %s",
+                (org_id, clerk_user_id),
+            )
+
+            cursor.execute(
+                """INSERT INTO org_subscriptions (org_id, stripe_customer_id, plan_tier, status)
+                   VALUES (%s, %s, 'free', 'active')
+                   ON CONFLICT (org_id) DO NOTHING""",
+                (org_id, ""),
+            )
 
             conn.commit()
 
