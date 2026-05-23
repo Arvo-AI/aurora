@@ -587,11 +587,15 @@ def run_background_chat(
                 mode=mode,
                 rail_text=rail_text,
             ))
-            pass
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
         
+        # Mark as successful immediately after asyncio.run returns.
+        # The worker process can be killed during post-processing (event loop
+        # teardown, MCP subprocess cleanup, etc.) so we must set this flag
+        # before any code that might trigger process exit.
+        completed_successfully = True
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
         
         # Update session status to completed
@@ -714,7 +718,6 @@ def run_background_chat(
             except Exception:
                 logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
-        completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
     
