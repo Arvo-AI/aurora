@@ -23,6 +23,9 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  experimental: {
+    turbopackMemoryLimit: 512 * 1024 * 1024,
+  },
   cacheMaxMemorySize: 0,
   poweredByHeader: false,
   webpack: (config, { isServer, dev }) => {

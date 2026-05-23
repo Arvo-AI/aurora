@@ -540,6 +540,7 @@ services:
     environment:
       # Next.js development configuration
       NODE_ENV: development
+      NODE_OPTIONS: "--max-old-space-size=1024"
       AURORA_ENV: ${AURORA_ENV}
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"

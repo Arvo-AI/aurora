@@ -1,9 +1,14 @@
 # ============================================
 # Development Stage
 # ============================================
-FROM oven/bun:1.2.22-alpine AS dev
+FROM node:22-alpine AS dev
 
 WORKDIR /app
+
+# Install bun for package management (uses bun.lock)
+RUN apk add --no-cache bash curl && \
+    curl -fsSL https://bun.sh/install | bash && \
+    ln -s /root/.bun/bin/bun /usr/local/bin/bun
 
 # Install dependencies first (will be overridden by volume mount in dev)
 COPY package.json bun.lock ./
@@ -18,7 +23,7 @@ EXPOSE 3000
 
 # Use the same entrypoint as prod to generate env-config.js at startup
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bun", "run", "dev"]
+CMD ["node", "node_modules/.bin/next", "dev", "--turbopack"]
 
 # ============================================
 # Production Builder Stage
