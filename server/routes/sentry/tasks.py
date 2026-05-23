@@ -32,24 +32,32 @@ _TRANSIENT_EXCEPTIONS = (
 logger = logging.getLogger(__name__)
 
 
-def _is_sentry_rca_enabled_for_resource(user_id: str, resource: str) -> bool:
+def _is_sentry_rca_enabled_for_resource(user_id: str, resource: str, cursor=None) -> bool:
     """Check if the user has RCA enabled for this Sentry webhook resource type."""
-    from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
-
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[SENTRY][RCAResourceCheck]")
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'sentry_rca_resources'",
-                    (user_id,),
-                )
-                row = cur.fetchone()
-                if row and row[0] is not None:
-                    allowed = row[0]
-                    if isinstance(allowed, list):
-                        return resource in allowed
+        if cursor:
+            cursor.execute(
+                "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'sentry_rca_resources'",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+        else:
+            from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
+
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[SENTRY][RCAResourceCheck]")
+                    cur.execute(
+                        "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'sentry_rca_resources'",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+
+        if row and row[0] is not None:
+            allowed = row[0]
+            if isinstance(allowed, list):
+                return resource in allowed
         # Default: only "issue" triggers RCA (backwards-compatible)
         return resource == "issue"
     except Exception:
@@ -411,7 +419,7 @@ def process_sentry_event(
                             is_background_chat_allowed,
                         )
 
-                        if not _is_sentry_rca_enabled_for_resource(user_id, resource):
+                        if not _is_sentry_rca_enabled_for_resource(user_id, resource, cursor=cursor):
                             logger.info("[SENTRY][WEBHOOK] Skipping RCA — resource '%s' not enabled for user %s", resource, user_id)
                         elif not is_background_chat_allowed(user_id):
                             logger.info("[SENTRY][WEBHOOK] Skipping background RCA — rate limited for user %s", user_id)

@@ -41,21 +41,23 @@ export function SentryWebhookStep({
       .finally(() => setLoadingPref(false));
   }, []);
 
-  const toggleResource = useCallback(async (resource: string, enabled: boolean) => {
-    const updated = enabled
-      ? [...rcaResources, resource]
-      : rcaResources.filter(r => r !== resource);
-    setRcaResources(updated);
-    try {
-      await fetch("/api/proxy/user-preferences", {
+  const toggleResource = useCallback((resource: string, enabled: boolean) => {
+    setRcaResources(prev => {
+      const updated = enabled
+        ? [...prev, resource]
+        : prev.filter(r => r !== resource);
+
+      fetch("/api/proxy/user-preferences", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "sentry_rca_resources", value: updated }),
+      }).catch(() => {
+        setRcaResources(prev);
       });
-    } catch {
-      setRcaResources(rcaResources);
-    }
-  }, [rcaResources]);
+
+      return updated;
+    });
+  }, []);
 
   const projectCount = status.accessibleProjects?.length ?? 0;
   const secretBadge = status.hasWebhookSecret
