@@ -445,7 +445,7 @@ def run_background_chat(
             only the externally-controlled fields should be checked for prompt
             injection; the internal instruction scaffolding should not. When
             omitted, falls back to initial_message (legacy behavior).
-        strip_level: Optional per-task RCA_PROMPT_STRIP_LEVEL override (0-6).
+        strip_level: Optional per-task RCA_PROMPT_STRIP_LEVEL override (0-7).
             Used by run_rca_comparison to test different prompt sizes in parallel.
 
     Returns:
@@ -457,7 +457,7 @@ def run_background_chat(
     # is enabled, spawn sibling tasks at other levels. This task continues as
     # the baseline (level 0). Siblings get explicit strip_level so they won't fork.
     if strip_level is None and incident_id:
-        comparison_levels = [0, 6]
+        comparison_levels = [0, 6, 7]
         if comparison_levels and len(comparison_levels) > 1:
             # Rename this (primary) session to include "L0" for easy identification
             try:

@@ -633,8 +633,12 @@ def build_rca_prompt(
     # in the system prompt (background.py). No skill loading here — the user
     # message should contain only alert details and investigation context.
 
-    # L6: stop here — only alert details + providers, no topology/learn/instructions
-    if strip_level >= 6:
+    # L7: alert data only — all behavioral guidance lives in the system prompt
+    if strip_level == 7:
+        return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
+
+    # L6: stop here — only alert details + providers + brief instruction
+    if strip_level == 6:
         prompt_parts.append(
             "\n## INVESTIGATION"
             "\nYou are acting as an on-call SRE tasked with investigating to find"

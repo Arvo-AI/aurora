@@ -43,7 +43,7 @@ def build_system_invariant(is_background: bool = False, strip_level: int = 0) ->
         Level 6: Replace identity+security with one-liner
     """
     from chat.backend.agent.skills.loader import load_core_prompt
-    from .rca_strip import MINIMAL_IDENTITY
+    from .rca_strip import MINIMAL_IDENTITY, build_l7_system_prompt
 
     core_dir = os.path.join(
         os.path.dirname(__file__), os.pardir, "skills", "core"
@@ -52,6 +52,9 @@ def build_system_invariant(is_background: bool = False, strip_level: int = 0) ->
 
     if is_background:
         strip = strip_level
+
+        if strip >= 7:  # L7: quality-focused modular sections
+            return build_l7_system_prompt()
 
         if strip >= 6:  # L6: replace identity+security with one-liner
             return MINIMAL_IDENTITY
