@@ -1,8 +1,10 @@
 "use client";
 
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Copy, Check, ExternalLink, Unplug } from "lucide-react";
 import type { SentryStatus } from "@/lib/services/sentry";
 import { SENTRY_PURPLE } from "./constants";
@@ -24,6 +26,37 @@ export function SentryWebhookStep({
   onDisconnect,
   loading,
 }: SentryWebhookStepProps) {
+  const [rcaResources, setRcaResources] = useState<string[]>(["issue"]);
+  const [loadingPref, setLoadingPref] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/proxy/user-preferences?key=sentry_rca_resources")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.value && Array.isArray(data.value)) {
+          setRcaResources(data.value);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingPref(false));
+  }, []);
+
+  const toggleResource = useCallback(async (resource: string, enabled: boolean) => {
+    const updated = enabled
+      ? [...rcaResources, resource]
+      : rcaResources.filter(r => r !== resource);
+    setRcaResources(updated);
+    try {
+      await fetch("/api/proxy/user-preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "sentry_rca_resources", value: updated }),
+      });
+    } catch {
+      setRcaResources(rcaResources);
+    }
+  }, [rcaResources]);
+
   const projectCount = status.accessibleProjects?.length ?? 0;
   const secretBadge = status.hasWebhookSecret
     ? <Badge variant="secondary" className="text-xs">Configured</Badge>
@@ -91,6 +124,35 @@ export function SentryWebhookStep({
           >
             Sentry Internal Integration Documentation <ExternalLink className="h-3 w-3" />
           </a>
+        </div>
+
+        <div className="border rounded-lg p-4 space-y-3">
+          <span className="font-semibold text-sm">RCA Investigation Triggers</span>
+          <p className="text-xs text-muted-foreground">Choose which Sentry event types trigger an automatic RCA investigation in Aurora.</p>
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium">Issues</span>
+                <p className="text-xs text-muted-foreground">Issue state changes (created, resolved, regression)</p>
+              </div>
+              <Switch
+                checked={rcaResources.includes("issue")}
+                onCheckedChange={(checked) => toggleResource("issue", checked)}
+                disabled={loadingPref}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium">Errors</span>
+                <p className="text-xs text-muted-foreground">Individual error/exception events (requires Business plan)</p>
+              </div>
+              <Switch
+                checked={rcaResources.includes("error")}
+                onCheckedChange={(checked) => toggleResource("error", checked)}
+                disabled={loadingPref}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="flex justify-end pt-2">
