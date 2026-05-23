@@ -52,7 +52,10 @@ export function SentryWebhookStep({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "sentry_rca_resources", value: updated }),
       }).catch(() => {
-        setRcaResources(prev);
+        // Reverse the optimistic update
+        setRcaResources(cur =>
+          enabled ? cur.filter(r => r !== resource) : [...cur, resource]
+        );
       });
 
       return updated;
