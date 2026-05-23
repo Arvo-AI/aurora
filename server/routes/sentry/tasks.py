@@ -61,6 +61,10 @@ def _is_sentry_rca_enabled_for_resource(user_id: str, resource: str, cursor=None
         # Default: only "issue" triggers RCA (backwards-compatible)
         return resource == "issue"
     except Exception:
+        logger.warning(
+            "[SENTRY][RCAResourceCheck] Failed to check preference for user %s resource=%s; defaulting to issue-only",
+            user_id, resource, exc_info=True,
+        )
         return resource == "issue"
 
 
