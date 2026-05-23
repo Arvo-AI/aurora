@@ -1,5 +1,6 @@
 """Email service for sending notifications via SMTP (SendGrid)."""
 
+import html as html_mod
 import logging
 import os
 import smtplib
@@ -7,6 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional, Dict, Any
 from datetime import datetime
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ class EmailService:
         self.from_name = os.getenv("SMTP_FROM_NAME", "Aurora SRE")
         self.frontend_url = os.getenv("FRONTEND_URL", "https://aurora-ai.net")
 
-        for env_var, attr in [("SMTP_HOST", "smtp_host"), ("SMTP_USER", "smtp_user"), ("SMTP_PASSWORD", "smtp_password")]:
+        for env_var, attr in [("SMTP_HOST", "smtp_host"), ("SMTP_USER", "smtp_user"), ("SMTP_PASSWORD", "smtp_password"), ("SMTP_FROM_EMAIL", "from_email")]:
             if not getattr(self, attr):
                 raise ValueError(f"EmailService configuration incomplete. Missing required environment variable: {env_var}")
 
@@ -142,6 +144,14 @@ class EmailService:
         started_str = self._format_timestamp(started_at)
         incident_url = self._get_incident_url(incident_id)
         sev_color = self._get_severity_color(severity)
+
+        # HTML-escape user-controlled values
+        alert_title = html_mod.escape(alert_title)
+        severity = html_mod.escape(severity)
+        service = html_mod.escape(service)
+        source_type = html_mod.escape(source_type)
+        started_str = html_mod.escape(started_str)
+        incident_url = html_mod.escape(incident_url, quote=True)
 
         subject = f"[Aurora] Investigating: {alert_title}"
 
@@ -271,12 +281,20 @@ View investigation: {incident_url}{self._text_footer()}"""
         incident_url = self._get_incident_url(incident_id)
         sev_color = self._get_severity_color(severity)
 
+        # HTML-escape user-controlled values
+        alert_title = html_mod.escape(alert_title)
+        severity = html_mod.escape(severity)
+        service = html_mod.escape(service)
+        source_type = html_mod.escape(source_type)
+        incident_url = html_mod.escape(incident_url, quote=True)
+
         subject = f"[Aurora] RCA Complete: {alert_title}"
 
         max_summary_length = 600
         summary_for_email = aurora_summary
         if len(aurora_summary) > max_summary_length:
             summary_for_email = aurora_summary[:max_summary_length] + '...'
+        summary_for_email = html_mod.escape(summary_for_email)
 
         text_body = f"""RCA COMPLETE
 
@@ -449,7 +467,11 @@ If you didn't request this, ignore this email.{self._text_footer()}"""
         status_icon = '&#10003;' if is_success else '&#10007;'
 
         subject = f"[Aurora] Action {status_label}: {action_name}"
-        session_url = f"{self.frontend_url}/actions?session={session_id}" if session_id else f"{self.frontend_url}/actions"
+        session_url = f"{self.frontend_url}/actions?session={quote(session_id, safe='')}" if session_id else f"{self.frontend_url}/actions"
+
+        # HTML-escape user-controlled values
+        action_name = html_mod.escape(action_name)
+        session_url = html_mod.escape(session_url, quote=True)
 
         text_body = f"""ACTION {status_label.upper()}
 
@@ -463,13 +485,14 @@ Duration: {duration_str}
 
         error_section = ""
         if error_msg:
+            safe_error = html_mod.escape(error_msg)
             error_section = f"""
                     <!-- Error Details -->
                     <tr>
                         <td style="padding: 0 40px 24px 40px;">
                             <div style="background-color: rgba(239, 68, 68, 0.08); border: 1px solid #3b1111; padding: 20px;">
                                 <div style="font-size: 10px; font-weight: 600; color: #ef4444; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px;">Error</div>
-                                <div style="font-size: 13px; color: #fca5a5; line-height: 1.6; font-family: 'SF Mono', 'Fira Code', monospace;">{error_msg}</div>
+                                <div style="font-size: 13px; color: #fca5a5; line-height: 1.6; font-family: 'SF Mono', 'Fira Code', monospace;">{safe_error}</div>
                             </div>
                         </td>
                     </tr>"""
