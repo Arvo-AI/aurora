@@ -703,7 +703,6 @@ export function ActionsContent() {
   );
 }
 
-// -- Page (redirects to settings) --
 
 export default function ActionsPage() {
   return (
