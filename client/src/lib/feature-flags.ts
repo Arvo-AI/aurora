@@ -5,6 +5,10 @@
 
 import { getEnv } from '@/lib/env';
 
+export const isSaasMode = () => {
+  return getEnv('NEXT_PUBLIC_SAAS_MODE') === 'true';
+};
+
 export const isPagerDutyOAuthEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH') === 'true';
 };

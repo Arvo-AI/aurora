@@ -3,6 +3,12 @@ Uses NEXT_PUBLIC_ENABLE_* variables shared with frontend for single source of tr
 """
 import os
 
+
+def is_saas_mode() -> bool:
+    """Check if running in SaaS mode (Clerk auth + Stripe billing)."""
+    return os.getenv("AURORA_SAAS_MODE", "false").lower() == "true"
+
+
 def is_ovh_enabled() -> bool:
     """Check if OVH integration is enabled via environment variable."""
     return os.getenv("NEXT_PUBLIC_ENABLE_OVH", "false").lower() == "true"

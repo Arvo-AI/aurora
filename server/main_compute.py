@@ -328,6 +328,16 @@ app.register_blueprint(admin_bp)  # RBAC admin routes
 from routes.org_routes import org_bp
 app.register_blueprint(org_bp)
 
+# --- Billing Routes (SaaS mode only) ---
+from utils.flags.feature_flags import is_saas_mode
+if is_saas_mode():
+    from routes.billing.stripe_routes import billing_bp
+    from routes.billing.stripe_webhook import stripe_webhook_bp
+    from routes.billing.clerk_webhook import clerk_webhook_bp
+    app.register_blueprint(billing_bp)
+    app.register_blueprint(stripe_webhook_bp)
+    app.register_blueprint(clerk_webhook_bp)
+
 # --- Command Policy Routes ---
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
@@ -661,6 +671,10 @@ def initialize_app():
         try:
             ensure_database_exists()
             initialize_tables()
+            if is_saas_mode():
+                from routes.billing.schema import ensure_billing_tables
+                with conn.cursor() as billing_cur:
+                    ensure_billing_tables(billing_cur, conn)
         finally:
             conn.autocommit = True
             with conn.cursor() as cur:

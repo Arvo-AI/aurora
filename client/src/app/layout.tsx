@@ -1,7 +1,6 @@
 import "./globals.css";
-import { SessionProvider } from "next-auth/react";
-import ClientShell from "./components/ClientShell";
 import ConditionalShell from "./components/ConditionalShell";
+import { AuthProvider } from "./components/AuthProvider";
 
 export default function RootLayout({
   children,
@@ -15,9 +14,9 @@ export default function RootLayout({
         <script src="/env-config.js" />
       </head>
       <body className="antialiased h-full">
-        <SessionProvider refetchOnWindowFocus={true}>
+        <AuthProvider>
           <ConditionalShell>{children}</ConditionalShell>
-        </SessionProvider>
+        </AuthProvider>
       </body>
     </html>
   );

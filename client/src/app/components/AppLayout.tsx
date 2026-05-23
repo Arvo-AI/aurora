@@ -6,7 +6,8 @@ import { useUser } from "@/hooks/useAuthHooks";
 import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
-import { Settings, LogOut } from "lucide-react";
+import { Settings, LogOut, CreditCard } from "lucide-react";
+import { isSaasMode } from "@/lib/feature-flags";
 import {
   Tooltip,
   TooltipContent,
@@ -53,6 +54,7 @@ const SidebarStrip = ({
   setIsSettingsModalOpen: (open: boolean) => void;
 }) => {
   const pathname = usePathname();
+  const router = useRouter();
   const { user } = useUser();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -149,6 +151,20 @@ const SidebarStrip = ({
                     <Settings className="h-4 w-4" />
                     Settings
                   </button>
+
+                  {/* Billing Button (SaaS mode only) */}
+                  {isSaasMode() && (
+                    <button
+                      onClick={() => {
+                        router.push("/billing");
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                    >
+                      <CreditCard className="h-4 w-4" />
+                      Billing
+                    </button>
+                  )}
                   
                   {/* Sign Out Button */}
                   <button
