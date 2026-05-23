@@ -28,7 +28,7 @@ def get_org_tier(org_id: str) -> PlanTier:
                     (org_id,),
                 )
                 row = cursor.fetchone()
-                if row and row[1] in ("active", "trialing"):
+                if row and row[1] in ("active", "trialing", "past_due"):
                     tier_val = row[0]
                     if tier_val in (t.value for t in PlanTier):
                         return PlanTier(tier_val)
@@ -122,6 +122,16 @@ def require_within_limit(metric_name: str, limit_key: str):
 
             if limit == -1:  # unlimited
                 return f(*args, **kwargs)
+
+            if limit <= 0:
+                return jsonify({
+                    "error": "Usage limit reached",
+                    "metric": metric_name,
+                    "current": 0,
+                    "limit": limit,
+                    "current_plan": tier.value,
+                    "upgrade_required": True,
+                }), 429
 
             # Atomic: increment only if under limit, reject otherwise
             today = date.today()

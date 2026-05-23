@@ -49,11 +49,14 @@ CREATE TABLE IF NOT EXISTS stripe_events (
     event_type TEXT NOT NULL,
     org_id VARCHAR(255) REFERENCES organizations(id) ON DELETE SET NULL,
     payload JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'processing',
     processed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_stripe_events_type
     ON stripe_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_stripe_events_status
+    ON stripe_events(status) WHERE status = 'failed';
 
 -- RLS policies for billing tables
 ALTER TABLE org_subscriptions ENABLE ROW LEVEL SECURITY;

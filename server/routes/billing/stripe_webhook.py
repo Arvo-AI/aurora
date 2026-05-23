@@ -49,18 +49,6 @@ def _tier_from_subscription(subscription) -> PlanTier:
     return PlanTier.FREE
 
 
-def _record_event(cursor, conn, event_id: str, event_type: str, org_id: str | None, payload: dict):
-    """Record a Stripe event for idempotency and audit."""
-    cursor.execute(
-        "INSERT INTO stripe_events (stripe_event_id, event_type, org_id, payload) "
-        "VALUES (%s, %s, %s, %s) ON CONFLICT (stripe_event_id) DO NOTHING RETURNING id",
-        (event_id, event_type, org_id, json.dumps(payload)),
-    )
-    result = cursor.fetchone()
-    conn.commit()
-    return result is not None  # True if new event, False if duplicate
-
-
 def _handle_checkout_completed(session: dict):
     """Handle checkout.session.completed — activate subscription."""
     org_id = session.get("metadata", {}).get("org_id")
@@ -71,7 +59,12 @@ def _handle_checkout_completed(session: dict):
         logger.warning("[STRIPE] checkout.session.completed missing org_id or subscription_id")
         return
 
-    subscription = stripe.Subscription.retrieve(subscription_id)
+    try:
+        subscription = stripe.Subscription.retrieve(subscription_id)
+    except stripe.StripeError as e:
+        logger.error("[STRIPE] Failed to retrieve subscription %s: %s", subscription_id, e)
+        raise
+
     tier = _tier_from_subscription(subscription)
 
     period_start = datetime.fromtimestamp(subscription.current_period_start, tz=timezone.utc)
@@ -189,7 +182,7 @@ def handle_stripe_webhook():
 
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
-    except stripe.error.SignatureVerificationError:
+    except stripe.SignatureVerificationError:
         logger.warning("[STRIPE] Invalid webhook signature")
         return jsonify({"error": "Invalid signature"}), 400
     except ValueError:
@@ -202,15 +195,21 @@ def handle_stripe_webhook():
 
     org_id = data_object.get("metadata", {}).get("org_id")
 
-    # Check idempotency without committing — only commit after handler succeeds
+    # Atomic idempotency: INSERT with status='processing' claims the event.
+    # ON CONFLICT means another worker already claimed it.
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT 1 FROM stripe_events WHERE stripe_event_id = %s",
-                (event_id,),
+                "INSERT INTO stripe_events (stripe_event_id, event_type, org_id, payload, status) "
+                "VALUES (%s, %s, %s, %s, 'processing') "
+                "ON CONFLICT (stripe_event_id) DO NOTHING RETURNING id",
+                (event_id, event_type, org_id, json.dumps(event["data"])),
             )
-            if cursor.fetchone():
-                return jsonify({"status": "already_processed"})
+            claimed = cursor.fetchone()
+            conn.commit()
+
+    if not claimed:
+        return jsonify({"status": "already_processed"})
 
     handlers = {
         "checkout.session.completed": _handle_checkout_completed,
@@ -225,13 +224,25 @@ def handle_stripe_webhook():
             handler(data_object)
         except Exception:
             logger.exception("[STRIPE] Error handling event %s (%s)", event_id, event_type)
+            # Mark event as failed so it can be retried
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE stripe_events SET status = 'failed' WHERE stripe_event_id = %s",
+                        (event_id,),
+                    )
+                    conn.commit()
             return jsonify({"error": "Processing failed"}), 500
     else:
         logger.debug("[STRIPE] Unhandled event type: %s", event_type)
 
-    # Record event only after successful processing
+    # Mark event as processed
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            _record_event(cursor, conn, event_id, event_type, org_id, event["data"])
+            cursor.execute(
+                "UPDATE stripe_events SET status = 'processed' WHERE stripe_event_id = %s",
+                (event_id,),
+            )
+            conn.commit()
 
     return jsonify({"status": "ok"})

@@ -6,12 +6,14 @@ becomes the canonical user_id used in X-User-ID headers.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
 import os
-from datetime import datetime, timezone
+import time
+import uuid as _uuid
 
 from flask import Blueprint, jsonify, request
 
@@ -26,11 +28,11 @@ CLERK_WEBHOOK_SECRET = os.getenv("CLERK_WEBHOOK_SECRET", "")
 
 def _verify_clerk_signature(payload: bytes, headers: dict) -> bool:
     """Verify Clerk webhook signature using Svix headers."""
-    import time
+    normalized = {k.lower(): v for k, v in headers.items()}
 
-    svix_id = headers.get("svix-id")
-    svix_timestamp = headers.get("svix-timestamp")
-    svix_signature = headers.get("svix-signature")
+    svix_id = normalized.get("svix-id")
+    svix_timestamp = normalized.get("svix-timestamp")
+    svix_signature = normalized.get("svix-signature")
 
     if not all([svix_id, svix_timestamp, svix_signature, CLERK_WEBHOOK_SECRET]):
         return False
@@ -48,7 +50,6 @@ def _verify_clerk_signature(payload: bytes, headers: dict) -> bool:
     if secret.startswith("whsec_"):
         secret = secret[6:]
 
-    import base64
     secret_bytes = base64.b64decode(secret)
     to_sign = f"{svix_id}.{svix_timestamp}.{payload.decode('utf-8')}".encode("utf-8")
     expected = base64.b64encode(
@@ -84,7 +85,6 @@ def _handle_user_created(data: dict):
         logger.warning("[CLERK] user.created missing id or email")
         return
 
-    import uuid as _uuid
     slug = f"{email.split('@')[0]}-{_uuid.uuid4().hex[:8]}"
 
     with db_pool.get_admin_connection() as conn:
