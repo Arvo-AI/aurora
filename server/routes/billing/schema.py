@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS org_subscriptions (
     stripe_subscription_id TEXT UNIQUE,
     plan_tier TEXT NOT NULL DEFAULT 'free',
     status TEXT NOT NULL DEFAULT 'active',
+    seat_count INTEGER NOT NULL DEFAULT 1,
     billing_period_start TIMESTAMPTZ,
     billing_period_end TIMESTAMPTZ,
     cancel_at_period_end BOOLEAN DEFAULT FALSE,

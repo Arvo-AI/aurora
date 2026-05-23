@@ -154,9 +154,9 @@ class TestGetSubscription:
         app = Flask(__name__)
         app.register_blueprint(sr.billing_bp)
 
-        # Simulate a pro subscription row
+        # Simulate a pro subscription row (8 columns: plan_tier, status, customer, sub_id, period_start, period_end, cancel, seat_count)
         from datetime import date
-        pool.set_results(("pro", "active", "cus_123", "sub_456", date(2024, 1, 1), date(2024, 2, 1), False))
+        pool.set_results(("pro", "active", "cus_123", "sub_456", date(2024, 1, 1), date(2024, 2, 1), False, 3))
 
         with app.test_client() as client:
             with patch.object(sr, "get_org_id_from_request", return_value="org_pro"), \

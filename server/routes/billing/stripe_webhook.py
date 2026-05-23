@@ -67,6 +67,12 @@ def _handle_checkout_completed(session: dict):
 
     tier = _tier_from_subscription(subscription)
 
+    # Extract seat count from subscription quantity
+    seat_count = 1
+    if subscription.get("items") and subscription["items"].get("data"):
+        item = subscription["items"]["data"][0]
+        seat_count = item.get("quantity", 1) or 1
+
     period_start = datetime.fromtimestamp(subscription.current_period_start, tz=timezone.utc)
     period_end = datetime.fromtimestamp(subscription.current_period_end, tz=timezone.utc)
 
@@ -75,19 +81,20 @@ def _handle_checkout_completed(session: dict):
             cursor.execute(
                 """INSERT INTO org_subscriptions
                    (org_id, stripe_customer_id, stripe_subscription_id, plan_tier, status,
-                    billing_period_start, billing_period_end)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    seat_count, billing_period_start, billing_period_end)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (org_id) DO UPDATE SET
                      stripe_customer_id = EXCLUDED.stripe_customer_id,
                      stripe_subscription_id = EXCLUDED.stripe_subscription_id,
                      plan_tier = EXCLUDED.plan_tier,
                      status = EXCLUDED.status,
+                     seat_count = EXCLUDED.seat_count,
                      billing_period_start = EXCLUDED.billing_period_start,
                      billing_period_end = EXCLUDED.billing_period_end,
                      cancel_at_period_end = FALSE,
                      updated_at = CURRENT_TIMESTAMP""",
                 (org_id, customer_id, subscription_id, tier.value, "active",
-                 period_start, period_end),
+                 seat_count, period_start, period_end),
             )
             conn.commit()
 
@@ -105,6 +112,12 @@ def _handle_subscription_updated(subscription: dict):
     cancel_at_period_end = subscription.get("cancel_at_period_end", False)
     customer_id = subscription.get("customer")
 
+    # Extract seat count from subscription quantity
+    seat_count = None
+    if subscription.get("items") and subscription["items"].get("data"):
+        item = subscription["items"]["data"][0]
+        seat_count = item.get("quantity")
+
     period_start = None
     period_end = None
     if subscription.get("current_period_start"):
@@ -119,12 +132,13 @@ def _handle_subscription_updated(subscription: dict):
                      plan_tier = %s,
                      status = %s,
                      stripe_subscription_id = %s,
+                     seat_count = COALESCE(%s, seat_count),
                      billing_period_start = COALESCE(%s, billing_period_start),
                      billing_period_end = COALESCE(%s, billing_period_end),
                      cancel_at_period_end = %s,
                      updated_at = CURRENT_TIMESTAMP
                    WHERE stripe_subscription_id = %s""",
-                (tier.value, status, subscription_id, period_start, period_end,
+                (tier.value, status, subscription_id, seat_count, period_start, period_end,
                  cancel_at_period_end, subscription_id),
             )
 
@@ -140,12 +154,13 @@ def _handle_subscription_updated(subscription: dict):
                          plan_tier = %s,
                          status = %s,
                          stripe_subscription_id = %s,
+                         seat_count = COALESCE(%s, seat_count),
                          billing_period_start = COALESCE(%s, billing_period_start),
                          billing_period_end = COALESCE(%s, billing_period_end),
                          cancel_at_period_end = %s,
                          updated_at = CURRENT_TIMESTAMP
                        WHERE stripe_customer_id = %s AND stripe_subscription_id IS NULL""",
-                    (tier.value, status, subscription_id, period_start, period_end,
+                    (tier.value, status, subscription_id, seat_count, period_start, period_end,
                      cancel_at_period_end, customer_id),
                 )
 

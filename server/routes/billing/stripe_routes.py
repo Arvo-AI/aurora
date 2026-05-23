@@ -51,7 +51,7 @@ _VALID_TIERS = {t.value for t in PlanTier}
 def _get_org_subscription(cursor, org_id: str) -> dict | None:
     cursor.execute(
         "SELECT plan_tier, status, stripe_customer_id, stripe_subscription_id, "
-        "billing_period_start, billing_period_end, cancel_at_period_end "
+        "billing_period_start, billing_period_end, cancel_at_period_end, seat_count "
         "FROM org_subscriptions WHERE org_id = %s",
         (org_id,),
     )
@@ -66,6 +66,7 @@ def _get_org_subscription(cursor, org_id: str) -> dict | None:
         "billing_period_start": row[4].isoformat() if row[4] else None,
         "billing_period_end": row[5].isoformat() if row[5] else None,
         "cancel_at_period_end": row[6],
+        "seat_count": row[7],
     }
 
 
@@ -95,6 +96,7 @@ def get_subscription(user_id: str):
         "billing_period_start": sub["billing_period_start"],
         "billing_period_end": sub["billing_period_end"],
         "cancel_at_period_end": sub["cancel_at_period_end"],
+        "seat_count": sub["seat_count"],
         "limits": PLAN_LIMITS[tier],
     })
 
@@ -184,11 +186,20 @@ def create_checkout_session(user_id: str):
                 )
             conn.commit()
 
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM users WHERE org_id = %s AND role != 'disabled'",
+                (org_id,),
+            )
+            count_row = cursor.fetchone()
+    seat_quantity = max(1, count_row[0] if count_row else 1)
+
     try:
         session = stripe.checkout.Session.create(
             customer=customer_id,
             payment_method_types=["card"],
-            line_items=[{"price": STRIPE_PRICE_MAP[price_key], "quantity": 1}],
+            line_items=[{"price": STRIPE_PRICE_MAP[price_key], "quantity": seat_quantity}],
             mode="subscription",
             success_url=f"{frontend_url}/billing?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{frontend_url}/billing?canceled=true",

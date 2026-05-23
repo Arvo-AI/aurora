@@ -383,6 +383,19 @@ def add_member(user_id):
         return jsonify({"error": "Invalid role"}), 400
 
     try:
+        from routes.billing.seats import check_seat_limit
+        allowed, current, limit = check_seat_limit(org_id)
+        if not allowed:
+            return jsonify({
+                "error": "Team member limit reached",
+                "current": current,
+                "limit": limit,
+                "upgrade_required": True,
+            }), 403
+    except ImportError:
+        pass
+
+    try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
@@ -418,6 +431,12 @@ def add_member(user_id):
 
                 record_audit_event(org_id, user_id, "add_member", "organization", org_id,
                                    {"target_user_id": target_user_id, "email": row[1], "role": role}, request)
+
+                try:
+                    from routes.billing.seats import sync_seat_count
+                    sync_seat_count(org_id)
+                except ImportError:
+                    pass
 
                 return jsonify({
                     "id": row[0],
@@ -488,6 +507,12 @@ def remove_member(user_id, target_user_id):
 
                 record_audit_event(org_id, user_id, "remove_member", "organization", org_id,
                                    {"target_user_id": target_user_id}, request)
+
+                try:
+                    from routes.billing.seats import sync_seat_count
+                    sync_seat_count(org_id)
+                except ImportError:
+                    pass
 
                 return jsonify({"removed": True})
     except Exception as e:
