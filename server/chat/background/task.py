@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user, get_user_preference
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -693,6 +693,8 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
+            action_status = None
+            action_error_msg = None
             try:
                 from services.actions.executor import update_action_run_status
                 if result.get("guardrail_blocked"):
@@ -701,12 +703,19 @@ def run_background_chat(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message='Action blocked by safety guardrails',
                     )
-                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message='Action blocked by safety guardrails')
+                    action_status = 'error'
+                    action_error_msg = 'Action blocked by safety guardrails'
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
-                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status='success')
+                    action_status = 'success'
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+            if action_status:
+                try:
+                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
+                except Exception as e:
+                    logger.warning(f"[BackgroundChat] Failed to send action notification email: {e}")
 
         # Dispatch on_incident actions configured for after_rca timing
         if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
@@ -1877,7 +1886,7 @@ def _send_action_completion_notification(
 ) -> None:
     """Send email notification when an action completes (success or error)."""
     try:
-        if not _is_action_email_notification_enabled(user_id):
+        if not get_user_preference(user_id, 'action_email_notifications', default=False):
             return
 
         user_email = get_user_email(user_id)
@@ -1944,22 +1953,6 @@ def _send_action_completion_notification(
         logger.error("[ActionNotification] Error sending action completion notification: %s", e)
 
 
-def _is_action_email_notification_enabled(user_id: str) -> bool:
-    """Check if user has action completion email notifications enabled."""
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:PrefCheck]")
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'action_email_notifications'",
-                    (user_id,),
-                )
-                result = cur.fetchone()
-                if result and isinstance(result[0], bool):
-                    return result[0]
-        return False
-    except Exception:
-        return False
 
 
 def _send_rca_notification(user_id: str, incident_id: str, event_type: str, email_enabled: bool = False, slack_enabled: bool = False, google_chat_enabled: bool = False, session_id: Optional[str] = None) -> None:
