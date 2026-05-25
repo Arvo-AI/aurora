@@ -274,6 +274,9 @@ def load_skills_for_role(user_id: str, role: Any) -> str:
     whose tools' capability_tags intersect role.tools, priority-ordered by
     rca_priority and capped at _SUBAGENT_SKILL_BUDGET tokens. Never raises."""
     try:
+        from chat.backend.agent.skills.loader import skills_disabled
+        if skills_disabled():
+            return ""
         from chat.backend.agent.skills.registry import SkillRegistry
         from chat.backend.agent.skills.loader import estimate_tokens
 

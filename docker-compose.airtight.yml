@@ -14,6 +14,8 @@ x-common-env: &common-env
   # Global
   AURORA_ENV: ${AURORA_ENV}
 
+  DISABLE_SKILLS: ${DISABLE_SKILLS:-}
+
   # Database - unified credentials
   POSTGRES_USER: ${POSTGRES_USER}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

@@ -191,6 +191,132 @@ from utils.cloud.cloud_utils import (
 )
 from chat.backend.agent.access import ModeAccessController
 
+
+class CloudExecArgs(BaseModel):
+    provider: Literal["aws", "gcp", "azure", "ovh", "scaleway", "tailscale"] = Field(
+        description=(
+            "Which cloud provider's CLI to invoke. kubectl/helm/terraform are NOT top-level "
+            "providers — pass them in the command instead under aws/gcp/azure "
+            "(e.g. provider='aws', command='kubectl get pods'). For on-prem K8s use on_prem_kubectl."
+        ),
+    )
+    command: str = Field(
+        description=(
+            "Full CLI command WITHOUT the leading provider binary. "
+            "Examples: provider='aws' command='ec2 describe-instances --region us-east-1'; "
+            "provider='gcp' command='kubectl get pods -n default'."
+        ),
+    )
+    output_file: Optional[str] = Field(
+        default=None,
+        description="Optional path to save raw stdout (useful for kubeconfig, large dumps).",
+    )
+    account_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "AWS only. Omit on the first investigative call to query all connected accounts; "
+            "once you've narrowed the issue to one account, pass its ID to target only that one."
+        ),
+    )
+
+
+class IacToolArgs(BaseModel):
+    action: Literal[
+        "write", "fmt", "validate", "refresh", "outputs",
+        "state_list", "state_show", "state_pull",
+        "plan", "apply", "destroy",
+    ] = Field(
+        description=(
+            "Which Terraform/IaC operation to run. 'write' creates/updates a .tf file. "
+            "'plan'/'apply'/'destroy' run Terraform CLI; 'apply' and 'destroy' are write actions "
+            "and are blocked in read-only modes."
+        ),
+    )
+    path: Optional[str] = Field(
+        default=None,
+        description="For 'write': relative path of the .tf file to create/update (e.g. 'main.tf').",
+    )
+    content: Optional[str] = Field(
+        default=None,
+        description="For 'write': full file contents to write.",
+    )
+    directory: Optional[str] = Field(
+        default=None,
+        description=(
+            "For CLI actions (plan/apply/validate/etc.): the Terraform workspace directory. "
+            "Defaults to the session's working directory if omitted."
+        ),
+    )
+    vars: Optional[Any] = Field(
+        default=None,
+        description="Optional dict of -var key=value pairs for plan/apply/destroy.",
+    )
+    auto_approve: Optional[bool] = Field(
+        default=None,
+        description="For apply/destroy: skip the interactive approval prompt.",
+    )
+
+
+class TerminalExecArgs(BaseModel):
+    command: str = Field(
+        description=(
+            "Shell command to run in the user's terminal pod. Use for file ops (cat/grep/sed), "
+            "git/npm/pip/make, helm/pulumi/ansible, or any one-off command not covered by "
+            "cloud_exec or iac_tool. Prefix with 'sh:' to force raw shell evaluation."
+        ),
+    )
+    working_dir: Optional[str] = Field(
+        default=None,
+        description="Working directory for the command. Defaults to the current session dir.",
+    )
+    timeout: Optional[int] = Field(
+        default=None,
+        description="Command timeout in seconds (default 300).",
+    )
+
+
+class AnalyzeZipArgs(BaseModel):
+    attachment_index: int = Field(
+        default=0,
+        description="Index of the uploaded ZIP attachment to analyze (0 = first attachment).",
+    )
+    operation: Literal["list", "extract", "analyze"] = Field(
+        default="list",
+        description=(
+            "'list' = enumerate paths and sizes; "
+            "'extract' = return contents of a single file (requires file_path); "
+            "'analyze' = detect project type (terraform, python, etc.) and key files."
+        ),
+    )
+    file_path: Optional[str] = Field(
+        default=None,
+        description="Required when operation='extract': path inside the ZIP to extract.",
+    )
+
+
+class OnPremKubectlArgs(BaseModel):
+    cluster_id: str = Field(
+        description=(
+            "Target cluster ID (UUID). Call list_onprem_clusters first to discover valid IDs — "
+            "this is NOT the cluster's human-readable name."
+        ),
+    )
+    command: str = Field(
+        description=(
+            "kubectl command, with or without the leading 'kubectl '. "
+            "Example: 'get pods -n kube-system' or 'kubectl describe node node-1'."
+        ),
+    )
+    timeout: Optional[int] = Field(
+        default=60,
+        description="Command timeout in seconds (default 60).",
+    )
+
+
+class ListOnPremClustersArgs(BaseModel):
+    pass
+
+
 # Thread-local storage for user context and WebSocket sender
 _context = threading.local()
 
@@ -1007,10 +1133,12 @@ def get_cloud_tools():
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
+    from chat.backend.agent.skills.loader import skills_disabled as _skills_disabled_for_cache
+    skills_flag = "1" if _skills_disabled_for_cache() else "0"
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:skills_off={skills_flag}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:skills_off={skills_flag}"
     
     if user_id:
         current_time = time.time()
@@ -1285,7 +1413,54 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     
     # Import on-prem kubectl tool
     from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
-    
+
+    def list_onprem_clusters(user_id: Optional[str] = None, **_kwargs) -> str:
+        if not user_id:
+            return json.dumps({"error": "User context required"})
+        try:
+            from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import set_rls_context
+
+            with db_pool.get_user_connection() as conn:
+                with conn.cursor() as cur:
+                    org_id = set_rls_context(cur, conn, user_id, log_prefix="[list_onprem_clusters]")
+                    # Without an org_id, RLS would silently hide every row;
+                    # surface a distinct error so the LLM doesn't read it as
+                    # "no clusters connected".
+                    if not org_id:
+                        return json.dumps({
+                            "status": "error",
+                            "error": "Could not resolve user/org context",
+                            "clusters": [],
+                        })
+                    cur.execute(
+                        """SELECT c.cluster_id, t.cluster_name
+                           FROM active_kubectl_connections c
+                           JOIN kubectl_agent_tokens t ON c.token = t.token
+                           WHERE (t.user_id = %s OR t.org_id = %s) AND c.status = 'active'
+                           ORDER BY t.cluster_name""",
+                        (user_id, org_id),
+                    )
+                    rows = cur.fetchall()
+            clusters = [{"cluster_id": cid, "cluster_name": name} for cid, name in rows]
+            if not clusters:
+                return json.dumps({
+                    "status": "ok",
+                    "clusters": [],
+                    "note": "No active on-prem clusters connected.",
+                })
+            return json.dumps({"status": "ok", "clusters": clusters})
+        except Exception as e:
+            logging.warning(f"list_onprem_clusters failed: {e}")
+            return json.dumps({
+                "status": "error",
+                "error": "Failed to fetch clusters",
+                "detail": str(e)[:200],
+                "clusters": [],
+            })
+
+    list_onprem_clusters.__name__ = "list_onprem_clusters"
+
     # List of (function, name) tuples
     tool_functions = [
         (run_iac_tool, "iac_tool"),
@@ -1301,6 +1476,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         (terminal_exec, "terminal_exec"),
         (tailscale_ssh, "tailscale_ssh"),
         (on_prem_kubectl, "on_prem_kubectl"),
+        (list_onprem_clusters, "list_onprem_clusters"),
         (analyze_zip_file, "analyze_zip_file"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
@@ -1593,17 +1769,84 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=GetThreadRepliesArgs,
             )
+        elif name == 'cloud_exec':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Invoke a cloud-provider CLI (aws/gcloud/az/kubectl/scw/ovhai). "
+                    "The provider arg picks which CLI; the command arg is everything after the binary "
+                    "(do NOT include the binary name itself). "
+                    "For AWS with multiple connected accounts: the FIRST investigative call should omit account_id "
+                    "to query across all accounts; once narrowed down, pass account_id to target one. "
+                    "Use on_prem_kubectl (not provider='kubectl') for clusters connected via the on-prem agent."
+                ),
+                args_schema=CloudExecArgs,
+            )
+        elif name == 'iac_tool':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Run a Terraform / IaC operation. Pick action from: "
+                    "write (create/update a .tf file; needs path+content), "
+                    "fmt/validate/plan (read-only checks), "
+                    "apply/destroy (mutating — blocked in read-only mode), "
+                    "refresh/outputs/state_list/state_show/state_pull (state inspection). "
+                    "For CLI actions pass directory (Terraform workspace) and optional vars dict."
+                ),
+                args_schema=IacToolArgs,
+            )
+        elif name == 'terminal_exec':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Run an arbitrary shell command in the user's terminal pod. "
+                    "Use for things not covered by cloud_exec or iac_tool: file ops (cat/grep/sed), "
+                    "git, npm, pip, make, helm, pulumi, ansible. Prefix command with 'sh:' to force raw shell."
+                ),
+                args_schema=TerminalExecArgs,
+            )
+        elif name == 'on_prem_kubectl':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Run a kubectl command against an on-prem Kubernetes cluster connected via the "
+                    "Aurora agent. Requires a valid cluster_id (UUID). "
+                    "If you don't already know the cluster_id, call list_onprem_clusters first to discover it. "
+                    "Use this instead of cloud_exec(provider='kubectl') for on-prem clusters."
+                ),
+                args_schema=OnPremKubectlArgs,
+            )
+        elif name == 'list_onprem_clusters':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List the on-prem Kubernetes clusters connected for this user/org. "
+                    "Returns each cluster's UUID (cluster_id) and human-readable name. "
+                    "Call this before on_prem_kubectl when you don't already know the cluster_id."
+                ),
+                args_schema=ListOnPremClustersArgs,
+            )
+        elif name == 'analyze_zip_file':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Inspect a ZIP attachment uploaded earlier in this conversation. "
+                    "operation='list' enumerates paths; 'extract' returns one file's contents "
+                    "(requires file_path); 'analyze' detects project type and key files. "
+                    "attachment_index picks which attachment (0 = first)."
+                ),
+                args_schema=AnalyzeZipArgs,
+            )
         else:
             tool = StructuredTool.from_function(final_func)
         tools.append(tool)
     
-    # Add analyze_zip tool for explicit use only (filtered elsewhere if not referenced)
-    tools.append(StructuredTool.from_function(
-        func=analyze_zip_file,
-        name="analyze_zip_file",
-        description="Analyze a ZIP attachment: list, extract a file, or detect project structure",
-    ))
-
     # Add RAG indexer for ZIPs
     tools.append(StructuredTool.from_function(
         func=rag_index_zip,
@@ -1616,8 +1859,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         args_schema=RAGIndexZipArgs,
     ))
 
-    # Add load_skill tool for on-demand integration guidance
-    if user_id:
+    from chat.backend.agent.skills.loader import skills_disabled as _skills_disabled
+    if user_id and not _skills_disabled():
         try:
             from chat.backend.agent.skills.load_skill_tool import load_skill as _load_skill, LoadSkillArgs
 

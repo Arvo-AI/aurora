@@ -120,7 +120,10 @@ replicaCounts:
 # ------------------------------------------------------------------------------
 config:
   AURORA_ENV: "production" # Environment: dev, staging, production
-  
+
+  # Set truthy to bypass integration skill markdown and unregister load_skill.
+  DISABLE_SKILLS: ""
+
   # --- Database ---
   POSTGRES_HOST: ""  # Auto-generated if empty: <release>-postgres
   POSTGRES_PORT: "5432"

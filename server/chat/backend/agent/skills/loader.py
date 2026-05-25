@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)", re.DOTALL)
 
 
+def skills_disabled() -> bool:
+    return os.getenv("DISABLE_SKILLS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class SkillMetadata:
     """Parsed frontmatter from a skill file."""
@@ -109,6 +113,10 @@ def load_core_prompt(directory: str, segments: Optional[List[str]] = None) -> st
 
     If segments is given, only those filenames (without .md) are loaded
     in the specified order. Otherwise all .md files are loaded in sorted order.
+
+    Must NOT be gated by skills_disabled(): callers include core identity and
+    RCA scaffolding loaders wrapped in lru_cache, which would freeze the empty
+    value. Gate at the caller layer instead.
     """
     if not os.path.isdir(directory):
         logger.warning(f"Core prompt directory not found: {directory}")

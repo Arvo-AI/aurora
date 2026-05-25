@@ -18,6 +18,7 @@ from .loader import (
     estimate_tokens,
     parse_skill_file,
     resolve_template,
+    skills_disabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,8 @@ class SkillRegistry:
         Build the compact always-loaded index string (~300 tokens).
         Only includes connected integrations.
         """
+        if skills_disabled():
+            return ""
         connected = self.get_connected_skills(user_id)
         if not connected:
             return ""
@@ -344,6 +347,8 @@ class SkillRegistry:
         Used in interactive chat so the agent has detailed guidance
         without needing to call load_skill explicitly.
         """
+        if skills_disabled():
+            return ""
         connected = self.get_connected_skills(user_id)
         if not connected:
             return ""
@@ -375,6 +380,15 @@ class SkillRegistry:
         _prevalidated_context: if provided, skip the connection check (caller
         already verified connectivity). Value is the connection context dict.
         """
+        if skills_disabled():
+            return SkillLoadResult(
+                skill_id=skill_id,
+                name=skill_id,
+                content="",
+                token_estimate=0,
+                tools=[],
+                is_connected=False,
+            )
         meta = self._skills.get(skill_id)
         body = self._bodies.get(skill_id)
 
@@ -433,6 +447,8 @@ class SkillRegistry:
         alert_details: alert payload used to derive dynamic template variables
         (service_name, recent_deploys, etc.)
         """
+        if skills_disabled():
+            return ""
         parts: List[str] = []
         tokens_used = 0
 
