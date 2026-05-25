@@ -6,7 +6,6 @@ This module provides comprehensive health checks for all Aurora services.
 import logging
 import time
 import os
-import uuid
 import requests
 import socket
 from datetime import datetime, timezone
@@ -14,10 +13,6 @@ from flask import Blueprint, jsonify
 import psycopg2
 import redis
 from celery_config import celery_app
-import websockets
-import asyncio
-import json
-import jwt as pyjwt
 
 
 logger = logging.getLogger(__name__)
@@ -106,11 +101,13 @@ def check_celery_health():
         logger.warning(f"Celery health check failed: {e}")
         return {"status": "unhealthy", "error": "Celery health check failed"}
 
-async def send_chatbot_test_message():
-    """Send a test message to the chatbot and verify the response."""
-    # CHATBOT_INTERNAL_URL is set by the Helm ConfigMap (e.g. http://aurora-chatbot:5007).
-    # It points at the HTTP health port (5007), not the WebSocket port (5006).
-    # Extract only the hostname; the WS port is always 5006.
+def check_chatbot_websocket():
+    """Check chatbot WebSocket service is accepting connections (TCP only).
+
+    Previous implementation sent a real query that triggered an LLM call,
+    blocking a gunicorn thread for 10+ seconds and exhausting the thread pool.
+    Now we just verify the port is open.
+    """
     internal_url = os.getenv('CHATBOT_INTERNAL_URL')
     if internal_url:
         from urllib.parse import urlparse
@@ -120,82 +117,14 @@ async def send_chatbot_test_message():
         host = os.getenv('CHATBOT_HOST', 'chatbot')
     port = 5006
 
-    # Mint a short-lived JWT matching the chatbot's expected format
-    # (see main_chatbot.py:_validate_ws_token). Skipped when INTERNAL_API_SECRET
-    # is unset (dev mode); the chatbot allows unauthenticated connections then.
-    internal_secret = os.getenv('INTERNAL_API_SECRET', '')
-    token_qs = ''
-    if internal_secret:
-        now = int(time.time())
-        token = pyjwt.encode(
-            {
-                "userId": "health-check",
-                "aud": "chatbot-ws",
-                "jti": str(uuid.uuid4()),
-                "iat": now,
-                "exp": now + 60,
-            },
-            internal_secret + "aurora:ws-token-signing",
-            algorithm="HS256",
-        )
-        token_qs = f"?token={token}"
-
-    uri = f"ws://{host}:{port}{token_qs}"
-    safe_uri = f"ws://{host}:{port}"
-
     try:
-        async with websockets.connect(uri, ping_interval=None) as websocket:
-            # Send init message
-            await websocket.send(json.dumps({
-                "type": "init",
-                "user_id": "health-check"
-            }))
-
-            # Send a test query
-            await websocket.send(json.dumps({
-                "query": "Hello",
-                "user_id": "health-check",
-                "session_id": "health_check_session"
-            }))
-
-            # Wait for a response
-            response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-            logger.info(f"Chatbot health check response: {response}")
-            
-            # Simple check for a valid JSON response
-            try:
-                response_data = json.loads(response)
-                if response_data.get("type") == "status" and response_data.get("data", {}).get("status") == "START":
-                    return {"status": "healthy", "message": "Chatbot connection and initial response successful"}
-                return {
-                    "status": "unhealthy",
-                    "error": (
-                        f"Unexpected chatbot response: type={response_data.get('type')!r} "
-                        f"status={response_data.get('data', {}).get('status')!r}"
-                    ),
-                }
-            except json.JSONDecodeError:
-                return {"status": "unhealthy", "error": "Invalid JSON response from chatbot"}
-
-    except asyncio.TimeoutError:
-        return {"status": "unhealthy", "error": f"Timeout waiting for chatbot response at {safe_uri}"}
-    except websockets.exceptions.ConnectionClosed as e:
-        return {"status": "unhealthy", "error": f"Chatbot connection closed unexpectedly at {safe_uri}"}
-    except Exception as e:
-        logger.warning("Chatbot WS health check failed at %s: %s", safe_uri, e)
-        return {
-            "status": "unhealthy",
-            "error": f"Chatbot health check failed at {safe_uri}. "
-                     f"WebSocket port is hardcoded to 5006 — if your chatbot uses a different port, update health_routes.py."
-        }
-
-def check_chatbot_websocket():
-    """Check chatbot WebSocket service by sending a test message."""
-    try:
-        return asyncio.run(send_chatbot_test_message())
-    except Exception as e:
-        logger.warning(f"Chatbot health check failed: {e}")
-        return {"status": "unhealthy", "error": "Chatbot WebSocket health check failed"}
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect((host, port))
+        return {"status": "healthy", "message": f"Chatbot accepting connections on {host}:{port}"}
+    except (socket.timeout, ConnectionRefusedError, OSError) as e:
+        logger.warning(f"Chatbot health check failed at {host}:{port}: {e}")
+        return {"status": "unhealthy", "error": f"Chatbot not reachable at {host}:{port}: {e}"}
 
 
 @health_bp.route('/', methods=['GET'])

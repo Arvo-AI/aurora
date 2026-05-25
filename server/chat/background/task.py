@@ -587,17 +587,18 @@ def run_background_chat(
                 mode=mode,
                 rail_text=rail_text,
             ))
-            pass
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
         
+        completed_successfully = True
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
         
         # Update session status to completed
         _update_session_status(session_id, "completed", user_id=user_id)
         
         # Update incident status to analyzed if incident_id provided
+        # (may already be done inside _execute_background_chat as crash protection)
         if incident_id:
             # Clear the Celery task ID since we're done
             try:
@@ -605,14 +606,24 @@ def run_background_chat(
                     with conn.cursor() as cursor:
                         set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ClearTaskID]")
                         cursor.execute(
-                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s AND rca_celery_task_id IS NOT NULL",
                             (incident_id,)
                         )
                         conn.commit()
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
-            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+            # Only update if still in 'running' (not already advanced by inner function)
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:StatusCheck]")
+                        cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
+                        row = cursor.fetchone()
+                        if row and row[0] == 'running':
+                            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to check/update incident status: {e}")
 
             # Post RCA-complete comment to linked JSM incident
             if (trigger_metadata or {}).get("source") == "opsgenie":
@@ -650,17 +661,29 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to determine severity: {e}")
             
-            # Regenerate incident summary now that RCA chat has completed
+            # Regenerate incident summary (skip if already enqueued by inner function)
+            should_enqueue = False
             try:
-                from chat.background.summarization import generate_incident_summary_from_chat
-                generate_incident_summary_from_chat.delay(
-                    incident_id=incident_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                )
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
-                _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SumCheck]")
+                        cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
+                        row = cursor.fetchone()
+                        should_enqueue = bool(row and row[0] != 'summarizing')
+            except Exception:
+                logger.warning("[BackgroundChat] Failed to check summarization state for incident %s", incident_id)
+
+            if should_enqueue:
+                try:
+                    from chat.background.summarization import generate_incident_summary_from_chat
+                    generate_incident_summary_from_chat.delay(
+                        incident_id=incident_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                except Exception:
+                    logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
+                    _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
             
             # Generate final complete visualization
             try:
@@ -714,7 +737,6 @@ def run_background_chat(
             except Exception:
                 logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
-        completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
     
@@ -1318,6 +1340,40 @@ async def _execute_background_chat(
                         logger.error(f"[BackgroundChat] ⚠️ WARNING: Incident {incident_id} aurora_status is already 'complete' before we set it! This indicates a race condition.")
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
+
+        # Mark session as completed in DB NOW, before asyncio.run() tears down
+        # the event loop (which can kill the process via MCP subprocess cleanup).
+        # The finally block only marks failed WHERE status='in_progress', so this
+        # protects against the worker dying during event loop shutdown.
+        _update_session_status(session_id, "completed", user_id=user_id)
+
+        # Also finalize the incident and enqueue post-RCA tasks here (inside the
+        # async function) because asyncio.run() may never return to the caller.
+        if incident_id:
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Finalize]")
+                        cursor.execute(
+                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                            (incident_id,)
+                        )
+                        conn.commit()
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to clear task ID: {e}")
+
+            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+
+            try:
+                from chat.background.summarization import generate_incident_summary_from_chat
+                generate_incident_summary_from_chat.delay(
+                    incident_id=incident_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+            except Exception as e:
+                logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
+                _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
 
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
         llm_context = _ensure_llm_context_history(session_id, user_id)
