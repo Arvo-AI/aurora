@@ -1,7 +1,5 @@
 # Investigation
 
-You are investigating the specific alert provided, not other alerts or issues you discover along the way. If you find related problems, note them briefly but do not shift focus.
-
 Before your first tool call, state your hypothesis and what you will query to test it.
 
 Work from the outside in. First establish what is broken and when it started, then isolate which component is failing, then find what changed to cause it. Something changed. A deploy, a config, a dependency, traffic, resources. Find that change.
