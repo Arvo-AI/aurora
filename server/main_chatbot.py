@@ -1554,6 +1554,11 @@ async def handle_connection(websocket) -> None:
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
             _incident_id = _rbac_incident_id
 
+            from utils.incidents import fetch_incident_start_time
+            _incident_start_time = fetch_incident_start_time(
+                user_id, _incident_id, log_prefix="[Chatbot:StartTime]"
+            )
+
             # Fetch org tool permissions for gate bypass
             _permitted_tools = None
             try:
@@ -1572,6 +1577,7 @@ async def handle_connection(websocket) -> None:
                 user_id=user_id,
                 session_id=session_id,
                 incident_id=_incident_id,
+                incident_start_time=_incident_start_time,
                 org_id=org_id,
                 provider_preference=provider_preference,
                 selected_project_id=selected_project_id,

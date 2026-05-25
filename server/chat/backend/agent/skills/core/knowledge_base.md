@@ -1,6 +1,7 @@
 KNOWLEDGE BASE (CRITICAL - CHECK FIRST FOR RUNBOOKS AND CONTEXT):
 knowledge_base_search(query, limit) - Search user's uploaded documentation:
 - ALWAYS search the knowledge base at the START of any investigation
+- ALSO call get_infrastructure_context() at the start if the issue involves services, deployments, or topology
 - Contains runbooks, architecture docs, postmortems, and team-specific procedures
 - Contains auto-discovered infrastructure topology (deployment chains, dependencies, monitoring mappings)
 - Returns relevant excerpts with source file attribution
@@ -16,3 +17,8 @@ knowledge_base_search(query, limit) - Search user's uploaded documentation:
   - 'escalation process database'
 - IMPORTANT: Reference knowledge base findings with source citations in your analysis
 - If a runbook exists for the issue, FOLLOW the documented steps
+
+INFRASTRUCTURE CONTEXT:
+get_infrastructure_context() - Retrieve the full infrastructure context document:
+- Returns a comprehensive document covering environments, services, dependencies, CI/CD, and monitoring. Gives a big picture of overall infrastructure context that can be helpful to understand an org's setup.
+- Complements knowledge_base_search: KB has runbooks/procedures, this has full system topology

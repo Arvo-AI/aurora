@@ -1409,11 +1409,26 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                     if isinstance(result, dict) and "content" in result:
                         content_items = result["content"]
                         if content_items and len(content_items) > 0:
-                            first_content = content_items[0]
-                            if isinstance(first_content, dict) and "text" in first_content:
-                                final_result = first_content["text"]
-                            else:
-                                final_result = str(result)
+                            parts = []
+                            for item in content_items:
+                                if isinstance(item, dict):
+                                    if "text" in item:
+                                        parts.append(item["text"])
+                                    elif "resource" in item and isinstance(item["resource"], dict):
+                                        res = item["resource"]
+                                        if "text" in res:
+                                            parts.append(res["text"])
+                                        elif "blob" in res:
+                                            import base64
+                                            try:
+                                                parts.append(base64.b64decode(res["blob"]).decode("utf-8"))
+                                            except Exception:
+                                                parts.append(f"[binary content, {len(res['blob'])} chars base64]")
+                                    else:
+                                        parts.append(str(item))
+                                else:
+                                    parts.append(str(item))
+                            final_result = "\n".join(parts) if parts else str(result)
                         else:
                             final_result = str(result)
                     else:

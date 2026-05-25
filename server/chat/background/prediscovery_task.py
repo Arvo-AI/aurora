@@ -75,22 +75,44 @@ def build_prediscovery_prompt(user_id: str, providers: List[str], integrations: 
     provider_list = ", ".join(providers) if providers else "none"
     integration_list = ", ".join(connected) if connected else "none"
 
-    return f"""# INFRASTRUCTURE PRE-DISCOVERY
+    return f"""# INFRASTRUCTURE CONTEXT GENERATION
 
-You are an infrastructure discovery agent. Your job is to query the connected external
-integrations and map how the organization's services, repos, pipelines, and monitoring
-are interconnected.
+You are an infrastructure discovery agent. Your PRIMARY goal is to produce a comprehensive
+infrastructure context document by investigating all connected integrations. This document
+will be consumed by coding agents (Claude Code, Codex, Cursor) as their source of truth
+for understanding the production system.
 
 ## CONNECTED INTEGRATIONS
 - Cloud providers: {provider_list}
 - Other integrations: {integration_list}
 
+## YOUR DELIVERABLE
+
+At the END of your investigation, you MUST call save_infrastructure_context() with a single
+document that covers:
+- All environments (for example production, staging, dev are common) and how they relate
+- Services in each environment, their dependencies, and how they communicate
+- CI/CD pipelines: what repo deploys where, through what mechanism
+- Databases, caches, queues, and shared infrastructure
+- Monitoring and alerting chains (what watches what, thresholds)
+- Network topology and security boundaries
+- Any other interconnected systems
+
+Write it so a coding agent can understand the full system topology in one read. If an org doesn't have all of these don't make up findings, only write about things actually there. Use markdown
+with clear sections. Be specific -- include names, regions, namespaces, ports, image tags.
+
+## SIDE-EFFECT: INDIVIDUAL FINDINGS
+
+As you investigate, ALSO call save_discovery_finding() for each logical chain you discover.
+These are indexed separately for semantic search during incident response.
+
 ## CRITICAL RULES
 
 - The local filesystem is Aurora's own code -- NEVER use terminal_exec to read local files (ls, cat, find, grep, env). There is nothing useful locally.
 - terminal_exec is ONLY allowed for SSH into manual VMs (e.g. ssh -i ~/.ssh/id_key user@ip).
-- Each finding must be a detailed paragraph describing real infrastructure you discovered by querying external APIs. Not a summary of how Aurora works.
+- Each finding must describe real infrastructure you discovered by querying external APIs.
 - Call save_discovery_finding after EVERY interconnection chain you discover.
+- Call save_infrastructure_context ONCE at the very end with the complete consolidated document.
 
 ## EXPLORATION STRATEGY
 
@@ -143,16 +165,11 @@ GOOD example:
     tags='github,jenkins,k8s,aws,datadog,payment-api'
   )
 
-BAD example (too brief, no real detail):
-  save_discovery_finding(
-    title='Aurora Platform - Connector Ecosystem',
-    content='Aurora supports GCP, AWS, Azure connectors...',
-    tags='connectors'
-  )
+## BEGIN EXPLORATION
 
-## BEGIN EXPLORATION NOW
-Start with cloud infrastructure to discover what services are running, then trace
-their deployment sources and monitoring. Call integration tools immediately."""
+Investigate all connected integrations. Build toward the consolidated document.
+Call save_discovery_finding() as you go. Once your investigation is complete, call
+save_infrastructure_context() with the full synthesized document."""
 
 
 @celery_app.task(

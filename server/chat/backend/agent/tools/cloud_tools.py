@@ -38,7 +38,10 @@ _viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
 # Strong references for fire-and-forget tasks so they aren't GC'd before completion.
 _background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
-from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
+# github_apply_fix is intentionally NOT exposed as an LLM-callable tool — it
+# creates a PR and must require explicit user approval via the Incidents UI's
+# "Create Pull Request" button. The route handler in incidents_routes.py
+# imports github_apply_fix directly.
 from .gitlab_tool import gitlab_tool, GitLabToolArgs
 from routes.gitlab.gitlab_api_utils import is_gitlab_connected
 from .cloud_exec_tool import cloud_exec
@@ -1386,7 +1389,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             effective_func = _github_rca_pinned
 
         # Apply forced context wrapper for critical tools that should never have parameters mixed up
-        if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix']:
+        if name in ['iac_tool', 'github_commit', 'github_fix']:
             context_wrapped = with_forced_context(effective_func)
             logging.info(f"Applied with_forced_context decorator to {name}")
         else:
@@ -1460,7 +1463,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Suggest a code fix for an identified issue during RCA. "
                     "Use this when you identify a specific code change that would fix the root cause. "
                     "The fix is stored for user review before being applied. "
-                    "Parameters: file_path (path in repo), suggested_content (complete fixed file), "
+                    "Parameters: file_path (path in repo), "
+                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                    "set replace_all=true if you want every occurrence replaced), "
                     "fix_description (what this fix does), root_cause_summary (why this change is needed). "
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),
@@ -1526,19 +1532,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Use during RCA to check if deployments correlate with incidents."
                 ),
                 args_schema=SpinnakerRCAArgs
-            )
-        elif name == 'github_apply_fix':
-            tool = StructuredTool.from_function(
-                func=final_func,
-                name=name,
-                description=(
-                    "Apply an approved fix suggestion by creating a branch and PR. "
-                    "Use this after the user has reviewed and approved a fix suggestion. "
-                    "Parameters: suggestion_id (ID of the fix suggestion to apply), "
-                    "use_edited_content (boolean, default true - use user-edited content if available), "
-                    "target_branch (optional base branch for PR, defaults to main)."
-                ),
-                args_schema=GitHubApplyFixArgs
             )
         elif name == 'trigger_rca':
             tool = StructuredTool.from_function(
@@ -1701,6 +1694,32 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
+    # Add get_infrastructure_context for all authenticated users
+    if user_id:
+        try:
+            from chat.backend.agent.tools.infra_context_tool import (
+                get_infrastructure_context,
+                GetInfraContextArgs,
+                GET_INFRA_CONTEXT_DESCRIPTION,
+            )
+
+            context_wrapped_ic = with_user_context(get_infrastructure_context)
+            notification_wrapped_ic = with_completion_notification(context_wrapped_ic)
+            if tool_capture:
+                final_ic_func = wrap_func_with_capture(notification_wrapped_ic, "get_infrastructure_context")
+            else:
+                final_ic_func = notification_wrapped_ic
+
+            tools.append(StructuredTool.from_function(
+                func=final_ic_func,
+                name="get_infrastructure_context",
+                description=GET_INFRA_CONTEXT_DESCRIPTION,
+                args_schema=GetInfraContextArgs,
+            ))
+            logging.info(f"Added get_infrastructure_context tool for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
+
     # Add discovery finding tool for prediscovery mode
     if mode_suffix == "prediscovery":
         try:
@@ -1726,6 +1745,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added save_discovery_finding tool for prediscovery mode")
         except Exception as e:
             logging.warning(f"Failed to add save_discovery_finding tool: {e}")
+
+        try:
+            from chat.backend.agent.tools.infra_context_tool import (
+                save_infrastructure_context,
+                SaveInfraContextArgs,
+                SAVE_INFRA_CONTEXT_DESCRIPTION,
+            )
+
+            context_wrapped_sic = with_user_context(save_infrastructure_context)
+            notification_wrapped_sic = with_completion_notification(context_wrapped_sic)
+            if tool_capture:
+                final_sic_func = wrap_func_with_capture(notification_wrapped_sic, "save_infrastructure_context")
+            else:
+                final_sic_func = notification_wrapped_sic
+
+            tools.append(StructuredTool.from_function(
+                func=final_sic_func,
+                name="save_infrastructure_context",
+                description=SAVE_INFRA_CONTEXT_DESCRIPTION,
+                args_schema=SaveInfraContextArgs,
+            ))
+            logging.info("Added save_infrastructure_context tool for prediscovery mode")
+        except Exception as e:
+            logging.warning(f"Failed to add save_infrastructure_context tool: {e}")
 
     # Add Splunk tools if connected
     if is_splunk_connected(user_id):

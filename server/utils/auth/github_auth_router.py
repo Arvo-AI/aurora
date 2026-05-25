@@ -7,7 +7,7 @@ Routing rules
 -------------
 For each call to :func:`get_auth_for_user_repo`:
 
-1. Look up the ``github_connected_repos`` row for ``(user_id,
+1. Look up the ``connected_repos`` row for ``(user_id,
    repo_full_name)``, joining ``user_github_installations`` and
    ``github_installations`` so we know in one round-trip whether the
    user still links a non-suspended installation for that repo.
@@ -106,7 +106,7 @@ def _lookup_repo_installation(
 
     A LEFT JOIN means a missing user link → ``has_active=False``, which
     sends the caller down the ``NoGitHubAuthError`` path. Returns
-    ``(None, False)`` when no ``github_connected_repos`` row exists for
+    ``(None, False)`` when no ``connected_repos`` row exists for
     this user/repo at all.
     """
 
@@ -119,7 +119,7 @@ def _lookup_repo_installation(
                 AND i.installation_id IS NOT NULL
                 AND i.suspended_at IS NULL
             ) AS has_active_installation
-        FROM github_connected_repos r
+        FROM connected_repos r
         LEFT JOIN user_github_installations u
             ON u.installation_id = r.installation_id
             AND u.user_id = r.user_id
@@ -131,7 +131,7 @@ def _lookup_repo_installation(
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            # ``github_connected_repos`` (the leading table in this join)
+            # ``connected_repos`` (the leading table in this join)
             # is RLS-protected; the auth router can be called from Celery
             # tasks where the connection pool's request-context RLS vars
             # never fired. Resolving + setting org_id explicitly keeps
@@ -263,7 +263,7 @@ def _backfill_repo_installation(
                 ):
                     return
                 cur.execute(
-                    """UPDATE github_connected_repos
+                    """UPDATE connected_repos
                           SET installation_id = %s,
                               updated_at = NOW()
                         WHERE user_id = %s
@@ -363,7 +363,7 @@ def get_any_auth_for_user(user_id: str) -> AuthResult:
 
     - ``get_auth_for_user_repo`` looks up the App installation tied to
       ONE specific ``(user_id, repo_full_name)`` pair via
-      ``github_connected_repos.installation_id``.
+      ``connected_repos.installation_id``.
     - ``get_any_auth_for_user`` looks up the FIRST non-suspended App
       installation linked to the user via ``user_github_installations``,
       regardless of repo.

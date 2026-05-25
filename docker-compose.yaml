@@ -570,7 +570,6 @@ services:
     volumes:
       - ./client:/app
       - /app/node_modules
-      - /app/.next
     depends_on:
       - aurora-server
 

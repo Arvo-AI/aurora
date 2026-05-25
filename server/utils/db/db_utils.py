@@ -1026,6 +1026,13 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_token ON kubectl_agent_tokens(token);
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_status ON kubectl_agent_tokens(status);
                 """,
+                "infrastructure_context": """
+                    CREATE TABLE IF NOT EXISTS infrastructure_context (
+                        org_id VARCHAR(255) PRIMARY KEY,
+                        content TEXT NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """,
                 "mcp_tokens": """
                     CREATE TABLE IF NOT EXISTS mcp_tokens (
                         id SERIAL PRIMARY KEY,
