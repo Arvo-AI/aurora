@@ -84,7 +84,6 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 
     source = rca_context.get('source', '').lower()
     providers = rca_context.get('providers', [])
-    integrations = rca_context.get('integrations', {})
 
     source_display = "USER-REPORTED INCIDENT" if source == "chat" else f"{source.upper()} alert"
     providers_display = ", ".join(providers) if providers else "None"
@@ -107,28 +106,21 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         leading_blank=True,
     )
 
-    # Load integration-specific RCA guidance from skill files
+    # Emit the connected-integrations index. Skill bodies are loaded on demand
+    # via `load_skill('id')` when the model decides it needs that integration's
+    # workflow — mirrors the foreground chat behavior.
     user_id = rca_context.get('user_id', '')
     if user_id:
         try:
             from chat.backend.agent.skills.registry import SkillRegistry
             registry = SkillRegistry.get_instance()
-            rca_skills_content = registry.load_skills_for_rca(
-                user_id=user_id,
-                source=source,
-                providers=providers,
-                integrations=integrations,
-                alert_details=rca_context.get('trigger_metadata', {}),
-            )
-            if rca_skills_content:
-                parts.extend(["", rca_skills_content])
+            integration_index = registry.build_index(user_id)
+            if integration_index:
+                parts.extend(["", integration_index])
         except Exception as e:
-            logger.warning(f"Failed to load RCA skills: {e}")
+            logger.warning(f"Failed to build RCA integration index: {e}")
     else:
-        logger.warning("Skipping RCA skill loading — user_id missing from rca_context")
-
-    # Integration-specific guidance (Splunk, Datadog, GitHub, Jira, etc.)
-    # now loaded from skill files above via SkillRegistry.load_skills_for_rca().
+        logger.warning("Skipping RCA integration index — user_id missing from rca_context")
 
     _append_background_segment(parts, "background_knowledge_base", leading_blank=True)
     _append_background_segment(parts, "background_vm_access", leading_blank=True)

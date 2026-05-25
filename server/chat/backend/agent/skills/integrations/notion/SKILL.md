@@ -302,11 +302,11 @@ These endpoints require specific Notion plans. All return `{"supported": false}`
 
 ## RCA Investigation Workflow
 
-**IMPORTANT: You MUST search Notion early in every RCA investigation.** The workspace contains past postmortems, runbooks, and action items that provide critical historical context. Do NOT skip this step.
+Notion often holds historical context, post-mortems, and team docs. Search Notion when you suspect a similar issue has been seen before. Skip it when the alert is clearly self-contained.
 
 **IMPORTANT: During RCA, Notion is READ-ONLY.** Do NOT create pages, export postmortems, create action items, or write to Notion. The engineer reviews your findings and exports via the UI after approving.
 
-**Step 1 (EARLY -- do this within your first 3 tool calls) -- Search Notion for historical context:**
+**Step 1 -- Search Notion for historical context:**
 `notion_search(query='<service_name>', types=['page'])` to find past postmortems or runbooks related to the affected service.
 Also try: `notion_search(query='<alert_type_or_keyword>')` for broader matches.
 

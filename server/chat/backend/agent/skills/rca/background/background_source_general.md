@@ -5,5 +5,3 @@ MANDATORY INVESTIGATION STEPS - DO NOT STOP UNTIL ALL ARE DONE:
 4. Check logs: cloud logging, kubectl logs, monitoring integrations, or SSH if accessible
 5. Identify root cause with evidence
 6. Provide remediation steps
-
-YOU MUST make 15-20+ tool calls. After EACH tool call, continue investigating.

@@ -249,7 +249,17 @@ def build_regional_rules() -> str:
 
 
 def build_ephemeral_rules(mode: Optional[str]) -> str:
-    if (mode or "agent").strip().lower() == "ask":
+    normalized = (mode or "agent").strip().lower()
+    if normalized == "rca":
+        return (
+            "━━━ CRITICAL: CURRENT MODE ━━━\n"
+            "MODE: RCA (READ-ONLY INVESTIGATION)\n\n"
+            "- This is read-only investigation. Use tools that read data: kubectl get/describe/logs/top, cloud_exec for read operations, query_datadog, search_splunk, etc.\n"
+            "- Do NOT create, modify, or delete resources during investigation.\n"
+            "- If you identify a fix, write your findings; another flow handles applying changes.\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+    if normalized == "ask":
         return (
             "━━━ CRITICAL: CURRENT MODE ━━━\n"
             "MODE: ASK (READ-ONLY)\n\n"

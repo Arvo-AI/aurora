@@ -23,7 +23,7 @@ from .provider_rules import (
 from .schema import PromptSegments
 
 
-def build_system_invariant(is_background: bool = False) -> str:
+def build_system_invariant(is_background: bool = False, is_action: bool = False) -> str:
     """Load core system prompt from modular markdown files under skills/core/.
 
     Segments are loaded in a fixed order that mirrors the original monolithic
@@ -32,6 +32,10 @@ def build_system_invariant(is_background: bool = False) -> str:
     In background RCA mode, Terraform/IaC, SSH setup, and cloud CLI discovery
     segments are omitted (~3,300 tokens) since background investigations are
     read-only and the freed budget is better spent on integration skills.
+
+    `interactive_load_skill` is appended only for foreground interactive chat,
+    where integration skills are loaded on demand. Background RCA and action
+    contexts pre-load skills, so the on-demand instruction does not apply.
     """
     from chat.backend.agent.skills.loader import load_core_prompt
 
@@ -48,9 +52,10 @@ def build_system_invariant(is_background: bool = False) -> str:
             "error_handling",
             "investigation",
             "behavioral_rules",
+            "interactive_load_skill",
         ])
 
-    return load_core_prompt(core_dir, segments=[
+    foreground_segments = [
         "identity",
         "security",
         "knowledge_base",
@@ -60,7 +65,11 @@ def build_system_invariant(is_background: bool = False) -> str:
         "error_handling",
         "investigation",
         "behavioral_rules",
-    ])
+    ]
+    if not is_action:
+        foreground_segments.append("interactive_load_skill")
+
+    return load_core_prompt(core_dir, segments=foreground_segments)
 
 
 def build_prompt_segments(
@@ -77,7 +86,10 @@ def build_prompt_segments(
     is_action = rca_context.get('source') == 'action'
 
     # Actions need tool_selection, cloud_access, ssh_access — use full invariant
-    system_invariant = build_system_invariant(is_background=is_background and not is_action)
+    system_invariant = build_system_invariant(
+        is_background=is_background and not is_action,
+        is_action=is_action,
+    )
 
     provider_context = build_provider_context_segment(
         provider_preference=provider_preference,
@@ -142,7 +154,9 @@ def build_prompt_segments(
         system_invariant=system_invariant,
         provider_constraints=provider_constraints,
         regional_rules=build_regional_rules(),
-        ephemeral_rules=build_ephemeral_rules(mode),
+        ephemeral_rules=build_ephemeral_rules(
+            "rca" if (is_background or getattr(state, "trigger_rca_requested", False)) else mode
+        ),
         long_documents_note=build_long_documents_note(has_zip_reference),
         provider_context=provider_context,
         prerequisite_checks=prerequisite_checks,

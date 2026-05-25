@@ -34,8 +34,7 @@ A runbook may give you the exact diagnostic steps. A past postmortem may reveal 
 
 ### MANDATORY FIRST STEP -- RUNBOOKS & PAST INCIDENTS
 
-**You MUST call Confluence tools BEFORE any infrastructure or CI/CD investigation.**
-Search Confluence for runbooks and prior postmortems BEFORE deep-diving into infrastructure.
+Confluence is your runbook lookup. Search it when the service has documented procedures for the kind of alert you are seeing. If the alert is novel or runbooks are unlikely to exist, you can skip Confluence and rely on direct investigation.
 
 ### Tools
 
