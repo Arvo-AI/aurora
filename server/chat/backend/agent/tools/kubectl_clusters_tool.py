@@ -46,7 +46,7 @@ def get_connected_clusters(**kwargs) -> str:
         if not rows:
             return json.dumps({
                 "clusters": [],
-                "message": "No on-prem Kubernetes clusters connected. Ask the user to install the Aurora kubectl agent on their cluster.",
+                "message": "No on-prem Kubernetes clusters connected. Connect a cluster via the connectors page.",
             })
 
         clusters = []
@@ -63,5 +63,5 @@ def get_connected_clusters(**kwargs) -> str:
 
         return json.dumps({"clusters": clusters})
     except Exception as e:
-        logger.exception(f"Error fetching connected clusters: {e}")
+        logger.exception("Error fetching connected clusters")
         return json.dumps({"error": f"Failed to fetch connected clusters: {e}"})

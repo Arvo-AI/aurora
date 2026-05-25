@@ -1301,7 +1301,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((trigger_action, "trigger_action"))
 
     # Connection-gated tools — only added when user has the connector configured
-    if is_github_connected(user_id):
+    def _safe_connected(check_fn, connector_name: str) -> bool:
+        try:
+            return bool(check_fn(user_id))
+        except Exception as e:
+            logging.warning(
+                "Skipping %s tools for user %s: connectivity check failed: %s",
+                connector_name, user_id, e,
+            )
+            return False
+
+    if _safe_connected(is_github_connected, "GitHub"):
         tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
         tool_functions.append((github_rca, "github_rca"))
@@ -1309,11 +1319,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((github_apply_fix, "github_apply_fix"))
         logging.info(f"Added GitHub tools for user {user_id}")
 
-    if is_tailscale_connected(user_id):
+    if _safe_connected(is_tailscale_connected, "Tailscale"):
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
         logging.info(f"Added Tailscale SSH tool for user {user_id}")
 
-    if is_kubectl_onprem_connected(user_id):
+    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem"):
         tool_functions.append((get_connected_clusters, "get_connected_clusters"))
         tool_functions.append((on_prem_kubectl, "on_prem_kubectl"))
         logging.info(f"Added on-prem kubectl tools for user {user_id}")
@@ -1326,7 +1336,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             get_thread_replies,
             is_slack_connected,
         )
-        if is_slack_connected(user_id):
+        if _safe_connected(is_slack_connected, "Slack"):
             tool_functions.append((list_slack_channels, "list_slack_channels"))
             tool_functions.append((get_channel_history, "get_channel_history"))
             tool_functions.append((get_thread_replies, "get_thread_replies"))
@@ -1334,13 +1344,13 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Slack tools: {e}")
 
-    if is_jenkins_connected(user_id):
+    if _safe_connected(is_jenkins_connected, "Jenkins"):
         tool_functions.append((jenkins_rca, "jenkins_rca"))
         logging.info(f"Added Jenkins RCA tool for user {user_id}")
-    if is_cloudbees_connected(user_id):
+    if _safe_connected(is_cloudbees_connected, "CloudBees"):
         tool_functions.append((cloudbees_rca, "cloudbees_rca"))
         logging.info(f"Added CloudBees RCA tool for user {user_id}")
-    if is_spinnaker_connected(user_id):
+    if _safe_connected(is_spinnaker_connected, "Spinnaker"):
         tool_functions.append((spinnaker_rca, "spinnaker_rca"))
         logging.info(f"Added Spinnaker RCA tool for user {user_id}")
 
