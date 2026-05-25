@@ -37,23 +37,29 @@ def build_system_invariant(is_background: bool = False, is_action: bool = False)
     where integration skills are loaded on demand. Background RCA and action
     contexts pre-load skills, so the on-demand instruction does not apply.
     """
-    from chat.backend.agent.skills.loader import load_core_prompt
+    from chat.backend.agent.skills.loader import load_core_prompt, skills_disabled
 
     core_dir = os.path.join(
         os.path.dirname(__file__), os.pardir, "skills", "core"
     )
     core_dir = os.path.normpath(core_dir)
 
+    # interactive_load_skill directs the LLM to call load_skill — which is
+    # unregistered when skills are off, so the directive would dangle.
+    skills_off = skills_disabled()
+
     if is_background:
-        return load_core_prompt(core_dir, segments=[
+        background_segments = [
             "identity",
             "security",
             "knowledge_base",
             "error_handling",
             "investigation",
             "behavioral_rules",
-            "interactive_load_skill",
-        ])
+        ]
+        if not skills_off:
+            background_segments.append("interactive_load_skill")
+        return load_core_prompt(core_dir, segments=background_segments)
 
     foreground_segments = [
         "identity",
@@ -66,7 +72,7 @@ def build_system_invariant(is_background: bool = False, is_action: bool = False)
         "investigation",
         "behavioral_rules",
     ]
-    if not is_action:
+    if not is_action and not skills_off:
         foreground_segments.append("interactive_load_skill")
 
     return load_core_prompt(core_dir, segments=foreground_segments)

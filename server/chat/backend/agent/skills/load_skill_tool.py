@@ -10,6 +10,8 @@ import logging
 import threading
 from pydantic import BaseModel, Field
 
+from .loader import skills_disabled
+
 logger = logging.getLogger(__name__)
 
 # Per-session tracking of already-loaded skills to avoid duplicate context
@@ -46,6 +48,8 @@ def load_skill(skill_id: str, **kwargs) -> str:
     reference (commands, workflows, rules, investigation steps). The
     CONNECTED INTEGRATIONS index in your system prompt lists available skills.
     """
+    if skills_disabled():
+        return "Skills are disabled — rely on the individual tool descriptions."
     user_id = kwargs.get("user_id")
     session_id = kwargs.get("session_id")
     if not user_id:
