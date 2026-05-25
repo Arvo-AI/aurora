@@ -1319,7 +1319,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((get_connected_repos, "get_connected_repos"))
         tool_functions.append((github_rca, "github_rca"))
         tool_functions.append((github_fix, "github_fix"))
-        tool_functions.append((github_apply_fix, "github_apply_fix"))
         logging.info(f"Added GitHub tools for user {user_id}")
 
     if _safe_connected(is_tailscale_connected, "Tailscale"):
