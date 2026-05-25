@@ -22,34 +22,43 @@ from .provider_rules import (
 )
 from .schema import PromptSegments
 
+_RCA_SECTIONS_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "rca_sections")
+)
+
+_RCA_SECTION_ORDER = [
+    "identity",
+    "investigation",
+    "context_mgmt",
+    "error_recovery",
+    "evidence_standard",
+    "conclusion_gate",
+]
+
+
+def _build_rca_system_prompt() -> str:
+    """Assemble the background RCA system prompt from rca_sections/*.md."""
+    parts = []
+    for name in _RCA_SECTION_ORDER:
+        path = os.path.join(_RCA_SECTIONS_DIR, f"{name}.md")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            parts.append(content)
+
+    return "\n\n".join(parts)
+
 
 def build_system_invariant(is_background: bool = False) -> str:
-    """Load core system prompt from modular markdown files under skills/core/.
-
-    Segments are loaded in a fixed order that mirrors the original monolithic
-    prompt so that cached prefixes remain stable across deployments.
-
-    In background RCA mode, Terraform/IaC, SSH setup, and cloud CLI discovery
-    segments are omitted (~3,300 tokens) since background investigations are
-    read-only and the freed budget is better spent on integration skills.
-    """
+    """Build the system prompt for interactive or background RCA mode."""
     from chat.backend.agent.skills.loader import load_core_prompt
 
-    core_dir = os.path.join(
-        os.path.dirname(__file__), os.pardir, "skills", "core"
-    )
-    core_dir = os.path.normpath(core_dir)
-
     if is_background:
-        return load_core_prompt(core_dir, segments=[
-            "identity",
-            "security",
-            "knowledge_base",
-            "error_handling",
-            "investigation",
-            "behavioral_rules",
-        ])
+        return _build_rca_system_prompt()
 
+    core_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), os.pardir, "skills", "core")
+    )
     return load_core_prompt(core_dir, segments=[
         "identity",
         "security",
