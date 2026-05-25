@@ -1885,7 +1885,6 @@ def _send_action_completion_notification(
             logger.warning("[ActionNotification] No email found for user %s", user_id)
             return
 
-        action_id = trigger_metadata.get('action_id')
         run_id = trigger_metadata.get('run_id')
 
         action_name = "Unknown Action"
@@ -1930,8 +1929,8 @@ def _send_action_completion_notification(
                         (user_id,),
                     )
                     all_emails += [r[0] for r in cur.fetchall()]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[ActionNotification] Failed to fetch additional recipients for user %s: %s", user_id, e)
 
         email_service = get_email_service()
         for recipient in all_emails:

@@ -1,5 +1,6 @@
 """Email service for sending RCA investigation notifications via SMTP."""
 
+import html
 import logging
 import os
 import smtplib
@@ -537,9 +538,9 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
         Returns:
             True if email sent successfully, False otherwise
         """
-        action_name = action_data.get('action_name', 'Unknown Action')
+        action_name = html.escape(action_data.get('action_name', 'Unknown Action'))
         status = action_data.get('status', 'success')
-        error_msg = action_data.get('error')
+        error_msg = html.escape(action_data.get('error')) if action_data.get('error') else None
         started_at = action_data.get('started_at')
         completed_at = action_data.get('completed_at')
         session_id = action_data.get('session_id')
@@ -561,7 +562,7 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
 
         subject = f"[Aurora] Action {status_label} - {action_name}"
 
-        session_url = f"{self.frontend_url}/actions?session={session_id}" if session_id else self.frontend_url
+        session_url = f"{self.frontend_url}/chat?sessionId={session_id}" if session_id else f"{self.frontend_url}/actions"
         logo_url = self._get_logo_url()
 
         text_body = f"""ACTION {status_label.upper()}
