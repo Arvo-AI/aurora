@@ -118,12 +118,12 @@ def check_chatbot_websocket():
     port = 5006
 
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3)
-        sock.connect((host, port))
-        sock.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect((host, port))
         return {"status": "healthy", "message": f"Chatbot accepting connections on {host}:{port}"}
     except (socket.timeout, ConnectionRefusedError, OSError) as e:
+        logger.warning(f"Chatbot health check failed at {host}:{port}: {e}")
         return {"status": "unhealthy", "error": f"Chatbot not reachable at {host}:{port}: {e}"}
 
 

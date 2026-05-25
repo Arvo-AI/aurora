@@ -135,7 +135,7 @@ class Workflow:
             for call_id in ongoing_calls:
                 if call_id in tool_capture.current_tool_calls:
                     tool_capture.current_tool_calls[call_id]['completed'] = True
-                    tool_capture.current_tool_calls[call_id]['completion_time'] = __import__('datetime').datetime.now()
+                    tool_capture.current_tool_calls[call_id]['completion_time'] = datetime.now(timezone.utc)
         logger.info(f"Timed out after {MAX_WAIT_TIME}s, force-marked {len(ongoing_calls)} tool calls as completed.")
 
     def _create_workflow(self) -> StateGraph:

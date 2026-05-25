@@ -661,14 +661,20 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to determine severity: {e}")
             
-            # Regenerate incident summary now that RCA chat has completed
+            # Regenerate incident summary (skip if already enqueued by inner function)
             try:
-                from chat.background.summarization import generate_incident_summary_from_chat
-                generate_incident_summary_from_chat.delay(
-                    incident_id=incident_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                )
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SumCheck]")
+                        cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
+                        row = cursor.fetchone()
+                        if row and row[0] != 'summarizing':
+                            from chat.background.summarization import generate_incident_summary_from_chat
+                            generate_incident_summary_from_chat.delay(
+                                incident_id=incident_id,
+                                user_id=user_id,
+                                session_id=session_id,
+                            )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
@@ -1360,7 +1366,7 @@ async def _execute_background_chat(
                     session_id=session_id,
                 )
             except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization: {e}")
+                logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
 
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
