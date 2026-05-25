@@ -3,6 +3,12 @@
 # ============================================
 FROM oven/bun:1.2.22-alpine AS dev
 
+# Install Node.js to run the dev server. Bun's JSC engine has known memory
+# retention under long-running Next.js dev loads (oven-sh/bun#27514, #29302),
+# causing OOM-kills in Docker Desktop. Bun is still used for `install` because
+# the leak only matters for long-lived processes.
+RUN apk add --no-cache nodejs npm
+
 WORKDIR /app
 
 # Install dependencies first (will be overridden by volume mount in dev)
@@ -18,7 +24,7 @@ EXPOSE 3000
 
 # Use the same entrypoint as prod to generate env-config.js at startup
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bun", "run", "dev"]
+CMD ["npm", "run", "dev"]
 
 # ============================================
 # Production Builder Stage
