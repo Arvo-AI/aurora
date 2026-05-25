@@ -662,22 +662,28 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to determine severity: {e}")
             
             # Regenerate incident summary (skip if already enqueued by inner function)
+            should_enqueue = False
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SumCheck]")
                         cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
                         row = cursor.fetchone()
-                        if row and row[0] != 'summarizing':
-                            from chat.background.summarization import generate_incident_summary_from_chat
-                            generate_incident_summary_from_chat.delay(
-                                incident_id=incident_id,
-                                user_id=user_id,
-                                session_id=session_id,
-                            )
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
-                _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
+                        should_enqueue = bool(row and row[0] != 'summarizing')
+            except Exception:
+                logger.warning("[BackgroundChat] Failed to check summarization state for incident %s", incident_id)
+
+            if should_enqueue:
+                try:
+                    from chat.background.summarization import generate_incident_summary_from_chat
+                    generate_incident_summary_from_chat.delay(
+                        incident_id=incident_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                except Exception:
+                    logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
+                    _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
             
             # Generate final complete visualization
             try:
