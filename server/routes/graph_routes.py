@@ -152,7 +152,7 @@ def get_infrastructure_context_api(user_id):
                 )
                 row = cur.fetchone()
     except Exception as e:
-        logger.exception(f"Failed to fetch infrastructure context: {e}")
+        logger.exception("Failed to fetch infrastructure context")
         return jsonify({"error": "Database error"}), 500
 
     if not row:

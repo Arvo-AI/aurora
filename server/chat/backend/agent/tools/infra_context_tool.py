@@ -49,6 +49,8 @@ def save_infrastructure_context(
         return "Error: User authentication required."
     if not content or len(content.strip()) < 100:
         return "Error: Content too short. Provide a comprehensive infrastructure document."
+    if len(content.strip()) > 100_000:
+        return "Error: Content too large (max 100k characters)."
 
     try:
         from utils.auth.stateless_auth import get_org_id_for_user
