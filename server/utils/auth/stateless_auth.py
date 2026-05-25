@@ -571,9 +571,8 @@ def get_user_email(user_id: str) -> Optional[str]:
     Returns:
         User email address or None if not found
     """
-    import os
     from utils.db.connection_pool import db_pool
-    
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -587,6 +586,8 @@ def get_user_email(user_id: str) -> Optional[str]:
                     return result[0]
 
                 # Fallback to user_tokens (OAuth providers store email here)
+                # user_tokens is RLS-protected — set context for Celery paths
+                set_rls_context(cursor, conn, user_id, log_prefix="[get_user_email]")
                 cursor.execute(
                     "SELECT email FROM user_tokens WHERE user_id = %s AND email IS NOT NULL LIMIT 1",
                     (user_id,)

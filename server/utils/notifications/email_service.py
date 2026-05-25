@@ -538,9 +538,11 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
         Returns:
             True if email sent successfully, False otherwise
         """
-        action_name = html.escape(action_data.get('action_name', 'Unknown Action'))
+        action_name = str(action_data.get('action_name', 'Unknown Action'))
         status = action_data.get('status', 'success')
-        error_msg = html.escape(action_data.get('error')) if action_data.get('error') else None
+        error_msg = str(action_data.get('error')) if action_data.get('error') else None
+        action_name_html = html.escape(action_name)
+        error_msg_html = html.escape(error_msg) if error_msg else None
         started_at = action_data.get('started_at')
         completed_at = action_data.get('completed_at')
         session_id = action_data.get('session_id')
@@ -579,7 +581,7 @@ Duration: {duration_str}
         if error_msg:
             error_section = f"""<div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 16px; margin-bottom: 32px;">
                                 <div style="font-size: 11px; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px;">Error</div>
-                                <div style="font-size: 14px; color: #7f1d1d; line-height: 1.5;">{error_msg}</div>
+                                <div style="font-size: 14px; color: #7f1d1d; line-height: 1.5;">{error_msg_html}</div>
                             </div>"""
 
         html_body = f"""{self._email_header_html(logo_url)}
@@ -588,7 +590,7 @@ Duration: {duration_str}
                     <!-- Content -->
                     <tr>
                         <td style="padding: 48px 40px;">
-                            {self._alert_title_card_html("Action", action_name)}
+                            {self._alert_title_card_html("Action", action_name_html)}
 
                             <!-- Status -->
                             <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
