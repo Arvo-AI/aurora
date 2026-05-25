@@ -77,8 +77,9 @@ export function SentryWebhookStep({
             <ol className="space-y-1 list-decimal list-inside">
               <li>Open your <strong>Aurora</strong> Internal Integration in Sentry (<strong>Settings &rarr; Custom Integrations</strong>).</li>
               <li>Confirm the <strong>Webhook URL</strong> field matches the URL above exactly.</li>
-              <li>Confirm <code>issue</code> and <code>error</code> are checked under <strong>Webhooks</strong>.</li>
-              <li>Save the integration. Aurora will start receiving alerts on the next event.</li>
+              <li>Under <strong>Webhooks</strong>, check <code>issue</code> to receive issue state changes (created, resolved, regression).</li>
+              <li>To also trigger RCA on individual error/exception events, check <code>error</code> under Webhooks (requires Sentry Business or Enterprise plan).</li>
+              <li>Save the integration. Aurora will trigger RCA automatically on the next event.</li>
             </ol>
           </div>
 
