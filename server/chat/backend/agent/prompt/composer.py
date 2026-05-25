@@ -22,8 +22,6 @@ from .provider_rules import (
 )
 from .schema import PromptSegments
 
-logger = logging.getLogger(__name__)
-
 _RCA_SECTIONS_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "rca_sections")
 )
