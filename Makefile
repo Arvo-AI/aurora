@@ -1,9 +1,9 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
+.PHONY: help dev dev-build down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
 
 # FRONTEND_DEV_RUNTIME=bun|node in .env selects frontend dev compose overrides (see .env.example).
 FRONTEND_DEV_RUNTIME ?= bun
 ifneq (,$(wildcard .env))
-  FRONTEND_DEV_RUNTIME := $(shell grep -E '^FRONTEND_DEV_RUNTIME=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d ' ' | head -1)
+  FRONTEND_DEV_RUNTIME := $(shell grep -E '^FRONTEND_DEV_RUNTIME=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d ' ' | tr -d '\r' | head -1)
 endif
 ifeq ($(FRONTEND_DEV_RUNTIME),)
   FRONTEND_DEV_RUNTIME := bun
