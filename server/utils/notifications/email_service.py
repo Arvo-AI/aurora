@@ -1,4 +1,4 @@
-"""Email service for sending notifications via SMTP (SendGrid)."""
+"""Email service for sending notifications via SMTP."""
 
 import html as html_mod
 import logging
@@ -34,7 +34,7 @@ class EmailService:
         self.smtp_password = os.getenv("SMTP_PASSWORD")
         self.from_email = os.getenv("SMTP_FROM_EMAIL")
         self.from_name = os.getenv("SMTP_FROM_NAME", "Aurora SRE")
-        self.frontend_url = os.getenv("FRONTEND_URL", "https://aurora-ai.net")
+        self.frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
         for env_var, attr in [("SMTP_HOST", "smtp_host"), ("SMTP_USER", "smtp_user"), ("SMTP_PASSWORD", "smtp_password"), ("SMTP_FROM_EMAIL", "from_email")]:
             if not getattr(self, attr):
@@ -115,7 +115,7 @@ class EmailService:
                     <tr>
                         <td style="text-align: center; padding: 16px 0;">
                             <div style="font-size: 11px; color: #404040; letter-spacing: 0.5px;">
-                                Aurora AI &bull; <a href="https://aurora-ai.net" style="color: #525252; text-decoration: none;">aurora-ai.net</a>
+                                Aurora &bull; <a href="{self.frontend_url}" style="color: #525252; text-decoration: none;">{self.frontend_url.replace('https://', '').replace('http://', '')}</a>
                             </div>
                         </td>
                     </tr>
@@ -127,7 +127,7 @@ class EmailService:
 </html>"""
 
     def _text_footer(self) -> str:
-        return "\n---\nAurora AI - https://aurora-ai.net\n"
+        return f"\n---\nAurora - {self.frontend_url}\n"
 
     def send_investigation_started_email(
         self,
@@ -145,7 +145,7 @@ class EmailService:
         incident_url = self._get_incident_url(incident_id)
         sev_color = self._get_severity_color(severity)
 
-        # HTML-escape user-controlled values
+
         alert_title = html_mod.escape(alert_title)
         severity = html_mod.escape(severity)
         service = html_mod.escape(service)
@@ -281,7 +281,7 @@ View investigation: {incident_url}{self._text_footer()}"""
         incident_url = self._get_incident_url(incident_id)
         sev_color = self._get_severity_color(severity)
 
-        # HTML-escape user-controlled values
+
         alert_title = html_mod.escape(alert_title)
         severity = html_mod.escape(severity)
         service = html_mod.escape(service)
@@ -467,9 +467,9 @@ If you didn't request this, ignore this email.{self._text_footer()}"""
         status_icon = '&#10003;' if is_success else '&#10007;'
 
         subject = f"[Aurora] Action {status_label}: {action_name}"
-        session_url = f"{self.frontend_url}/actions?session={quote(session_id, safe='')}" if session_id else f"{self.frontend_url}/actions"
+        session_url = f"{self.frontend_url}/chat?sessionId={quote(session_id, safe='')}" if session_id else f"{self.frontend_url}/actions"
 
-        # HTML-escape user-controlled values
+
         action_name = html_mod.escape(action_name)
         session_url = html_mod.escape(session_url, quote=True)
 
@@ -558,110 +558,10 @@ Duration: {duration_str}
         html_body = self._base_html(content, accent_color=accent)
         return self._send_email(to_email, subject, html_body, text_body)
 
-    def send_action_completed_email(
-        self,
-        to_email: str,
-        action_data: Dict[str, Any],
-    ) -> bool:
-        """Send email notification when an Aurora Action completes.
-
-        Args:
-            to_email: Recipient email address
-            action_data: Dictionary containing action details
-                - action_name: Name of the action
-                - run_id: Action run UUID
-                - status: 'success' or 'error'
-                - error: Optional error message
-                - started_at: When the action started
-                - completed_at: When the action finished
-                - session_id: Chat session ID (for link)
-
-        Returns:
-            True if email sent successfully, False otherwise
-        """
-        action_name = str(action_data.get('action_name', 'Unknown Action'))
-        status = action_data.get('status', 'success')
-        error_msg = str(action_data.get('error')) if action_data.get('error') else None
-        action_name_html = html_mod.escape(action_name)
-        error_msg_html = html_mod.escape(error_msg) if error_msg else None
-        started_at = action_data.get('started_at')
-        completed_at = action_data.get('completed_at')
-        session_id = action_data.get('session_id')
-
-        duration_str = 'Unknown'
-        if isinstance(started_at, datetime) and isinstance(completed_at, datetime):
-            duration = completed_at - started_at
-            minutes = int(duration.total_seconds() / 60)
-            if minutes < 1:
-                duration_str = 'Less than 1 minute'
-            elif minutes == 1:
-                duration_str = '1 minute'
-            else:
-                duration_str = f'{minutes} minutes'
-
-        is_success = status == 'success'
-        status_label = 'Completed Successfully' if is_success else 'Failed'
-        status_color = '#16a34a' if is_success else '#dc2626'
-
-        subject = f"[Aurora] Action {status_label} - {action_name}"
-
-        session_url = f"{self.frontend_url}/chat?sessionId={session_id}" if session_id else f"{self.frontend_url}/actions"
-        logo_url = self._get_logo_url()
-
-        text_body = f"""ACTION {status_label.upper()}
-
-Action: {action_name}
-Status: {status_label}
-Duration: {duration_str}
-"""
-        if error_msg:
-            text_body += f"Error: {error_msg}\n"
-        text_body += f"\nView details: {session_url}{self._text_footer()}"
-
-        error_section = ""
-        if error_msg:
-            error_section = f"""<div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 16px; margin-bottom: 32px;">
-                                <div style="font-size: 11px; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px;">Error</div>
-                                <div style="font-size: 14px; color: #7f1d1d; line-height: 1.5;">{error_msg_html}</div>
-                            </div>"""
-
-        html_body = f"""{self._email_header_html(logo_url)}
-{self._status_banner_html("Action " + status_label, f"Duration: {duration_str}")}
-
-                    <!-- Content -->
-                    <tr>
-                        <td style="padding: 48px 40px;">
-                            {self._alert_title_card_html("Action", action_name_html)}
-
-                            <!-- Status -->
-                            <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
-                                <tr>
-                                    <td style="padding: 20px 16px 20px 0; vertical-align: top; width: 50%; border-top: 1px solid #e5e5e5;">
-                                        <div style="font-size: 11px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px;">Status</div>
-                                        <span style="display: inline-block; background-color: {status_color}; color: #ffffff; padding: 6px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">{status_label}</span>
-                                    </td>
-                                    <td style="padding: 20px 0 20px 16px; vertical-align: top; width: 50%; border-top: 1px solid #e5e5e5;">
-                                        {self._detail_field_html("Duration", duration_str)}
-                                    </td>
-                                </tr>
-                            </table>
-
-                            {error_section}
-
-                            <!-- CTA Button -->
-                            {self._cta_button_html(session_url, "View Action Details")}
-                        </td>
-                    </tr>
-{self._email_footer_html()}"""
-
-        return self._send_email(to_email, subject, html_body, text_body)
-
-
 _email_service = None
 
 
 def get_email_service() -> EmailService:
-    """Get or create the EmailService singleton instance."""
     global _email_service
     if _email_service is None:
         _email_service = EmailService()
