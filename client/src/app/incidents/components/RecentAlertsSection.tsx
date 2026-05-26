@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { RecentIncident, incidentsService, AuroraStatus } from '@/lib/services/incidents';
+import { RecentIncident, incidentsService, AuroraStatus, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
 import { ChevronDown, Clock, Server, ArrowRight, Loader2, Check, X } from 'lucide-react';
 import Image from 'next/image';
 
@@ -29,11 +29,11 @@ function RecentAlertCard({
         {incident.sourceType !== 'chat' && (
           <div className="flex-shrink-0 mt-0.5 opacity-50">
             <Image 
-              src={`/${incident.sourceType}.svg`}
+              src={getSourceIconSrc(incident.sourceType)!}
               alt={incident.sourceType}
               width={16}
               height={16}
-              className={`object-contain${incident.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+              className={getSourceIconBgColor(incident.sourceType)}
             />
           </div>
         )}

@@ -549,6 +549,31 @@ def initialize_tables():
                     
                     CREATE INDEX IF NOT EXISTS idx_ingestion_in_progress ON cloud_ingestion_state(user_id, provider) WHERE in_progress = TRUE;
                 """,
+                "cloudwatch_alarms": """
+                    CREATE TABLE IF NOT EXISTS cloudwatch_alarms (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alarm_name TEXT,
+                        alarm_arn TEXT,
+                        state_value VARCHAR(50),
+                        previous_state_value VARCHAR(50),
+                        reason TEXT,
+                        account_id VARCHAR(50),
+                        region VARCHAR(100),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        sns_message_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    ALTER TABLE cloudwatch_alarms ADD COLUMN IF NOT EXISTS sns_message_id VARCHAR(255);
+
+                    CREATE INDEX IF NOT EXISTS idx_cloudwatch_alarms_user_id ON cloudwatch_alarms(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_cloudwatch_alarms_state ON cloudwatch_alarms(state_value);
+                    CREATE INDEX IF NOT EXISTS idx_cloudwatch_alarms_received_at ON cloudwatch_alarms(received_at DESC);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_cloudwatch_alarms_sns_dedup ON cloudwatch_alarms(sns_message_id, user_id) WHERE sns_message_id IS NOT NULL;
+                """,
                 "grafana_alerts": """
                     CREATE TABLE IF NOT EXISTS grafana_alerts (
                         id SERIAL PRIMARY KEY,
@@ -1359,6 +1384,7 @@ def initialize_tables():
             rls_tables.append("pagerduty_events")
 
             # Add monitoring tables
+            rls_tables.append("cloudwatch_alarms")
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
@@ -2609,6 +2635,7 @@ def initialize_tables():
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
+                "cloudwatch_alarms",
                 "mcp_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",

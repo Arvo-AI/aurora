@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { CorrelatedAlert, incidentsService } from '@/lib/services/incidents';
+import { CorrelatedAlert, incidentsService, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
 import { ChevronDown, Link2, Clock, Server, Zap, Target, Type } from 'lucide-react';
 import Image from 'next/image';
 
@@ -82,12 +82,12 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
         {/* Source icon */}
         {alert.sourceType !== 'chat' && (
           <div className="flex-shrink-0 mt-0.5">
-            <Image 
-              src={`/${alert.sourceType}.svg`}
+            <Image
+              src={getSourceIconSrc(alert.sourceType)!}
               alt={alert.sourceType}
               width={18}
               height={18}
-              className={`object-contain opacity-70${alert.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+              className={`${getSourceIconBgColor(alert.sourceType)} opacity-70`}
             />
           </div>
         )}

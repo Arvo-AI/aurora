@@ -94,6 +94,7 @@ celery_app.conf.update(
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
+        'routes.aws.cloudwatch_tasks',
         'tasks.github_webhook_tasks',
         'routes.github.github_repo_metadata',
         'services.actions.scheduler',

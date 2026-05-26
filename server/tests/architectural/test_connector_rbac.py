@@ -62,6 +62,7 @@ EXEMPT_FUNCTIONS: Set[str] = {
     "webhook",
     "github_webhook",
     "alert_webhook",
+    "cloudwatch_alarm_webhook",
     "deployment_webhook",
     # Setup scripts (static content, no user data)
     "home",

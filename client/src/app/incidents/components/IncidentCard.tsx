@@ -1,6 +1,6 @@
 'use client';
 
-import { Incident, AuroraStatus, Citation, incidentsService } from '@/lib/services/incidents';
+import { Incident, AuroraStatus, Citation, Suggestion, incidentsService, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
 import { Badge } from '@/components/ui/badge';
 import {
   ExternalLink,
@@ -33,7 +33,6 @@ import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
-import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -121,7 +120,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
-  const sourceIconSrc = alert.source === 'chat' ? null : `/${alert.source}.svg`;
+  const sourceIconSrc = getSourceIconSrc(alert.source);
+  const sourceIconBgColor = getSourceIconBgColor(alert.source);
 
   const [justResolved, setJustResolved] = useState(false);
 
@@ -392,7 +392,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   alt={alert.source}
                   width={20}
                   height={20}
-                  className={`object-contain${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
+                  className={sourceIconBgColor}
                 />
               )}
               {isSafeUrl(alert.sourceUrl) ? (

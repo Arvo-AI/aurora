@@ -587,6 +587,56 @@ def build_rca_prompt(
     return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
 
 
+def _format_cloudwatch_dimensions(dimensions: list) -> str:
+    """Format CloudWatch trigger dimensions into a comma-separated string."""
+    parts = []
+    for d in dimensions:
+        if not isinstance(d, dict):
+            continue
+        name = d.get('name') or d.get('Name')
+        value = d.get('value') or d.get('Value')
+        if name and value:
+            parts.append(f"{name}={value}")
+    return ", ".join(parts)
+
+
+def _build_cloudwatch_message(namespace: str, metric_name: str, reason: str, dim_str: str) -> str:
+    """Compose the CloudWatch alert message from metric info and reason."""
+    message = reason
+    if namespace and metric_name:
+        message = f"Metric: {namespace}/{metric_name}. {reason}"
+    if dim_str:
+        message += f" Dimensions: {dim_str}."
+    return message.strip()
+
+
+def build_cloudwatch_rca_prompt(
+    payload: Dict[str, Any],
+    providers: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+) -> tuple[str, str]:
+    """Build RCA prompt from a CloudWatch alarm payload."""
+    alarm_name = payload.get("AlarmName") or "Unknown Alarm"
+    state_value = payload.get("NewStateValue") or payload.get("state_value") or "ALARM"
+    reason = payload.get("NewStateReason") or payload.get("reason") or ""
+
+    trigger = payload.get("Trigger") or {}
+    namespace = trigger.get("Namespace") or ""
+    metric_name = trigger.get("MetricName") or ""
+    dim_str = _format_cloudwatch_dimensions(trigger.get("Dimensions") or [])
+    message = _build_cloudwatch_message(namespace, metric_name, reason, dim_str)
+
+    alert_details = {
+        "title": alarm_name,
+        "status": state_value,
+        "message": message,
+        "namespace": namespace,
+        "metric_name": metric_name,
+    }
+
+    return build_rca_prompt("cloudwatch", alert_details, providers, user_id)
+
+
 def build_grafana_rca_prompt(
     payload: Dict[str, Any],
     providers: Optional[List[str]] = None,

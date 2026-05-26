@@ -220,6 +220,7 @@ _OPEN_PREFIXES = (
     "/aws/setup-role",
     "/aws/setup-script-ps1",
     "/aws/setup-role-ps1",
+    "/aws/cloudwatch/webhook/",
 )
 
 @app.before_request

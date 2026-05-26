@@ -22,12 +22,13 @@ import { useToast } from '@/hooks/use-toast';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
-const ALERT_PROVIDERS = new Set(
-  connectorRegistry
+const ALERT_PROVIDERS = new Set([
+  ...connectorRegistry
     .getAll()
     .filter(c => c.category && ALERT_CATEGORIES.has(c.category))
     .map(c => c.id),
-);
+  'aws',
+]);
 
 interface IncidentsResponse { incidents: any[] }
 
