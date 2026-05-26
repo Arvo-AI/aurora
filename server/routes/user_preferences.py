@@ -66,7 +66,7 @@ def set_user_preferences(user_id):
         if not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
             return jsonify({"error": "Forbidden - editor or admin role required"}), 403
         store_org_preference(org_id, key, value)
-        logger.info(f"Stored org preference {key} for org {org_id} by user {user_id}")
+        logger.info("Stored org preference %s for org %s by user %s", key, org_id, user_id)
     else:
         store_user_preference(user_id, key, value)
         logger.info(f"Stored preference {key} for user {user_id}")

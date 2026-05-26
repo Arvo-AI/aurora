@@ -144,7 +144,7 @@ def add_rca_email(user_id):
             logger.error(f"{_LOG_PREFIX} Email service not configured: {e}")
             return jsonify({"error": "Email service not configured"}), 500
 
-        logger.info(f"{_LOG_PREFIX} Verification code sent to {email} for org {org_id}")
+        logger.info("%s Verification code sent to %s for org %s", _LOG_PREFIX, email, org_id)
         record_audit_event("", user_id, "add_notification_email", "rca_email", email, {"email": email}, request)
         return jsonify({"status": "success", "message": "Verification code sent to email"})
 
@@ -211,7 +211,7 @@ def verify_rca_email(user_id):
                 )
                 conn.commit()
 
-        logger.info(f"{_LOG_PREFIX} Email {email} verified for org {org_id}")
+        logger.info("%s Email %s verified for org %s", _LOG_PREFIX, email, org_id)
         record_audit_event("", user_id, "verify_notification_email", "rca_email", email, {"email": email}, request)
         return jsonify({"status": "success", "message": "Email verified successfully"})
 
@@ -276,7 +276,7 @@ def resend_verification_code(user_id):
             logger.error(f"{_LOG_PREFIX} Email service not configured: {e}")
             return jsonify({"error": "Email service not configured"}), 500
 
-        logger.info(f"{_LOG_PREFIX} Verification code resent to {email} for org {org_id}")
+        logger.info("%s Verification code resent to %s for org %s", _LOG_PREFIX, email, org_id)
         return jsonify({"status": "success", "message": "Verification code resent"})
 
     except Exception as e:
@@ -315,7 +315,7 @@ def toggle_rca_email(user_id, email_id: int):
                     return jsonify({"error": "Email not found or not verified"}), 404
                 conn.commit()
 
-        logger.info(f"{_LOG_PREFIX} Email ID {email_id} toggled to {is_enabled} for org {org_id}")
+        logger.info("%s Email ID %s toggled to %s for org %s", _LOG_PREFIX, email_id, is_enabled, org_id)
         record_audit_event("", user_id, "toggle_notification_email", "rca_email", str(email_id),
                            {"is_enabled": is_enabled}, request)
         return jsonify({"status": "success"})
@@ -346,7 +346,7 @@ def remove_rca_email(user_id, email_id: int):
                     return jsonify({"error": "Email not found"}), 404
                 conn.commit()
 
-        logger.info(f"{_LOG_PREFIX} Email ID {email_id} removed for org {org_id}")
+        logger.info("%s Email ID %s removed for org %s", _LOG_PREFIX, email_id, org_id)
         record_audit_event("", user_id, "remove_notification_email", "rca_email", str(email_id), {}, request)
         return jsonify({"status": "success"})
 
