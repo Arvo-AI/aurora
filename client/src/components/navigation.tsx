@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow, CreditCard } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { isSaasMode } from "@/lib/feature-flags"
 
 interface NavigationProps {
   isChatExpanded?: boolean;
@@ -324,7 +325,21 @@ export default function Navigation({
                           <Settings className="h-4 w-4" />
                           Settings
                         </button>
-                        
+
+                        {/* Billing Button (SaaS mode only) */}
+                        {isSaasMode() && (
+                          <button
+                            onClick={() => {
+                              router.push("/billing");
+                              setIsUserMenuOpen(false);
+                            }}
+                            className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                          >
+                            <CreditCard className="h-4 w-4" />
+                            Billing
+                          </button>
+                        )}
+
                         {/* Sign Out Button */}
                         <button
                           onClick={() => {
