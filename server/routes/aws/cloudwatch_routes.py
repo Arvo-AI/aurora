@@ -264,8 +264,8 @@ def _store_approved_topic(user_id: str, topic_arn: str) -> None:
         existing["approved_topic_arn"] = topic_arn
         store_tokens_in_db(user_id, existing, "cloudwatch")
         logger.info(
-            "[CLOUDWATCH] Bound TopicArn for user %s: %s",
-            sanitize(user_id), sanitize(topic_arn),
+            "[CLOUDWATCH] Bound TopicArn for user %s",
+            sanitize(user_id),
         )
     except Exception:
         logger.exception("[CLOUDWATCH] Failed to persist TopicArn binding for user %s", sanitize(user_id))
@@ -290,8 +290,8 @@ def _validate_topic_arn(user_id: str, sns_message: dict) -> bool:
 
     if topic_arn != approved:
         logger.warning(
-            "[CLOUDWATCH] TopicArn mismatch for user %s: got %s, expected %s",
-            sanitize(user_id), sanitize(topic_arn), sanitize(approved),
+            "[CLOUDWATCH] TopicArn mismatch for user %s: rejected unauthorized topic",
+            sanitize(user_id),
         )
         return False
 

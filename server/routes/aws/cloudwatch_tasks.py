@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # CloudWatch alarm states
 _ALARM_STATE = "ALARM"
 _OK_STATE = "OK"
-_INSUFFICIENT_DATA_STATE = "INSUFFICIENT_DATA"
 
 
 def _is_alarm_firing(state_value: str) -> bool:
