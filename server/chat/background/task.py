@@ -1927,19 +1927,23 @@ def _send_action_completion_notification(
             'session_id': session_id,
         }
 
-        # Send to primary + verified additional emails
+        # Send to primary email + org-wide notification recipients
         all_emails = [user_email]
         try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
-                    cur.execute(
-                        "SELECT email FROM rca_notification_emails WHERE user_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
-                        (user_id,),
-                    )
-                    all_emails += [r[0] for r in cur.fetchall()]
+            org_id = get_org_id_for_user(user_id)
+            if org_id:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
+                        cur.execute(
+                            "SELECT email FROM rca_notification_emails WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
+                            (org_id,),
+                        )
+                        all_emails += [r[0] for r in cur.fetchall()]
         except Exception as e:
-            logger.warning("[ActionNotification] Failed to fetch additional recipients for user %s: %s", user_id, e)
+            logger.warning("[ActionNotification] Failed to fetch additional recipients for org: %s", e)
+
+        all_emails = list(dict.fromkeys(all_emails))
 
         email_service = get_email_service()
         for recipient in all_emails:
