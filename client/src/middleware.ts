@@ -109,9 +109,16 @@ export default auth((req) => {
     backendOrigin ? backendOrigin.replace(/^http/, 'ws') : '',
   ].filter(Boolean).join(' ')
 
+  // Webpack dev HMR (FRONTEND_DEV_RUNTIME=node) needs unsafe-eval; Turbopack/bun does not.
+  const scriptSrc =
+    process.env.NODE_ENV === 'development' &&
+    process.env.FRONTEND_DEV_RUNTIME === 'node'
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline'"
+
   response.headers.set('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
+    scriptSrc,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",

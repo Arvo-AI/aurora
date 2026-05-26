@@ -1,0 +1,8 @@
+# Merged when FRONTEND_DEV_RUNTIME=node (see Makefile COMPOSE_DEV).
+# Anonymous /app/.next volume reduces bind-mount I/O; omit for bun (hot reload).
+services:
+  frontend:
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+      - /app/.next
