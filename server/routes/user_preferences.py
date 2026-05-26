@@ -2,16 +2,28 @@
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.stateless_auth import (
-    store_user_preference, 
+    store_user_preference,
     get_user_preference,
     get_credentials_from_db,
+    get_org_id_from_request,
+    get_org_id_for_user,
+    store_org_preference,
+    get_org_preference,
     set_rls_context,
 )
 from utils.log_sanitizer import sanitize
 from utils.auth.rbac_decorators import require_permission
+from utils.auth.enforcer import enforce_with_reload
 import json
 
-# Configure logging
+ORG_SCOPED_PREFERENCE_KEYS = frozenset({
+    'rca_email_notifications',
+    'rca_email_start_notifications',
+    'action_email_notifications',
+})
+
+EDITOR_ONLY_PREFERENCE_KEYS = ORG_SCOPED_PREFERENCE_KEYS
+
 logger = logging.getLogger(__name__)
 
 user_preferences_bp = Blueprint('user_preferences', __name__)
@@ -24,8 +36,13 @@ def get_user_preferences(user_id):
     if not key:
         logger.warning(f"Missing preference key for user {user_id}")
         return jsonify({"error": "Missing preference key"}), 400
-    
-    value = get_user_preference(user_id, key)
+
+    if key in ORG_SCOPED_PREFERENCE_KEYS:
+        org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+        value = get_org_preference(org_id, key) if org_id else None
+    else:
+        value = get_user_preference(user_id, key)
+
     logger.debug(f"Retrieved preference {key} for user {user_id}")
     return jsonify({"value": value})
 
@@ -37,13 +54,23 @@ def set_user_preferences(user_id):
     data = request.get_json()
     key = data.get('key')
     value = data.get('value')
-    
+
     if not key:
         logger.warning(f"Missing preference key for user {user_id}")
         return jsonify({"error": "Missing preference key"}), 400
-    
-    store_user_preference(user_id, key, value)
-    logger.info(f"Stored preference {key} for user {user_id}")
+
+    if key in ORG_SCOPED_PREFERENCE_KEYS:
+        org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+        if not org_id:
+            return jsonify({"error": "Could not resolve organization"}), 400
+        if not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
+            return jsonify({"error": "Forbidden - editor or admin role required"}), 403
+        store_org_preference(org_id, key, value)
+        logger.info("Stored org preference %s", key)
+    else:
+        store_user_preference(user_id, key, value)
+        logger.info(f"Stored preference {key} for user {user_id}")
+
     return jsonify({"status": "success"})
 
 @user_preferences_bp.route('/api/clear-session', methods=['POST'])
@@ -163,14 +190,29 @@ def set_batch_preferences(user_id):
     """Handle batch storage of user preferences."""
     data = request.get_json()
     preferences = data.get('preferences', {})
-    
+
     if not isinstance(preferences, dict):
         return jsonify({"error": "preferences must be a dictionary"}), 400
-    
+
+    protected_keys = set(preferences.keys()) & EDITOR_ONLY_PREFERENCE_KEYS
+    if protected_keys:
+        org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+        if not org_id:
+            return jsonify({"error": "Could not resolve organization"}), 400
+        if not enforce_with_reload(user_id, org_id, "notification_settings", "write"):
+            return jsonify({"error": "Forbidden - editor or admin role required for notification settings"}), 403
+
     try:
+        org_id = None
         for key, value in preferences.items():
-            store_user_preference(user_id, key, value)
-        
+            if key in ORG_SCOPED_PREFERENCE_KEYS:
+                if not org_id:
+                    org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
+                if org_id:
+                    store_org_preference(org_id, key, value)
+            else:
+                store_user_preference(user_id, key, value)
+
         logger.info(f"Stored {len(preferences)} preferences for user {user_id}")
         return jsonify({"status": "success", "count": len(preferences)})
     except Exception as e:

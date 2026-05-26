@@ -1,1 +1,0 @@
-- **ALWAYS have 3-4 backup data sources or diagnostic approaches ready**

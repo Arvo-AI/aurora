@@ -21,6 +21,16 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def is_tailscale_connected(user_id: str) -> bool:
+    """Check if Tailscale is connected for a user."""
+    from utils.auth.token_management import get_token_data
+    token_data = get_token_data(user_id, "tailscale")
+    if not token_data:
+        return False
+    auth_key = token_data.get("tailscale_auth_key") or token_data.get("auth_key")
+    return bool(auth_key or token_data.get("ssh_private_key"))
+
+
 def _is_pod_isolation_enabled() -> bool:
     """Check if pod isolation is enabled (K8s mode vs local dev)."""
     return os.getenv('ENABLE_POD_ISOLATION', 'true').lower() == 'true'

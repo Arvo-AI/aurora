@@ -32,6 +32,7 @@ _TRANSIENT_EXCEPTIONS = (
 logger = logging.getLogger(__name__)
 
 
+
 def extract_sentry_title(payload: Dict[str, Any], resource: str = "") -> str:
     """Extract alert title from a Sentry Integration Platform webhook payload.
 

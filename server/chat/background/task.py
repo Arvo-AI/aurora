@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user
+from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context, get_org_id_for_user, get_org_preference
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -587,17 +587,18 @@ def run_background_chat(
                 mode=mode,
                 rail_text=rail_text,
             ))
-            pass
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
         
+        completed_successfully = True
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
         
         # Update session status to completed
         _update_session_status(session_id, "completed", user_id=user_id)
         
         # Update incident status to analyzed if incident_id provided
+        # (may already be done inside _execute_background_chat as crash protection)
         if incident_id:
             # Clear the Celery task ID since we're done
             try:
@@ -605,14 +606,24 @@ def run_background_chat(
                     with conn.cursor() as cursor:
                         set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ClearTaskID]")
                         cursor.execute(
-                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s AND rca_celery_task_id IS NOT NULL",
                             (incident_id,)
                         )
                         conn.commit()
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
             
-            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+            # Only update if still in 'running' (not already advanced by inner function)
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:StatusCheck]")
+                        cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
+                        row = cursor.fetchone()
+                        if row and row[0] == 'running':
+                            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to check/update incident status: {e}")
 
             # Post RCA-complete comment to linked JSM incident
             if (trigger_metadata or {}).get("source") == "opsgenie":
@@ -650,17 +661,29 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to determine severity: {e}")
             
-            # Regenerate incident summary now that RCA chat has completed
+            # Regenerate incident summary (skip if already enqueued by inner function)
+            should_enqueue = False
             try:
-                from chat.background.summarization import generate_incident_summary_from_chat
-                generate_incident_summary_from_chat.delay(
-                    incident_id=incident_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                )
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to enqueue post-RCA summarization for incident {incident_id}: {e}")
-                _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SumCheck]")
+                        cursor.execute("SELECT aurora_status FROM incidents WHERE id = %s", (incident_id,))
+                        row = cursor.fetchone()
+                        should_enqueue = bool(row and row[0] != 'summarizing')
+            except Exception:
+                logger.warning("[BackgroundChat] Failed to check summarization state for incident %s", incident_id)
+
+            if should_enqueue:
+                try:
+                    from chat.background.summarization import generate_incident_summary_from_chat
+                    generate_incident_summary_from_chat.delay(
+                        incident_id=incident_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                except Exception:
+                    logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
+                    _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
             
             # Generate final complete visualization
             try:
@@ -693,6 +716,8 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
+            action_status = None
+            action_error_msg = None
             try:
                 from services.actions.executor import update_action_run_status
                 if result.get("guardrail_blocked"):
@@ -701,10 +726,19 @@ def run_background_chat(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message='Action blocked by safety guardrails',
                     )
+                    action_status = 'error'
+                    action_error_msg = 'Action blocked by safety guardrails'
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+                    action_status = 'success'
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+            if action_status:
+                try:
+                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
+                except Exception as e:
+                    logger.warning(f"[BackgroundChat] Failed to send action notification email: {e}")
 
         # Dispatch on_incident actions configured for after_rca timing
         if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
@@ -714,7 +748,6 @@ def run_background_chat(
             except Exception:
                 logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
-        completed_successfully = True
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
     
@@ -729,6 +762,7 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+                _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
             except Exception:
                 logger.debug("Failed to update action run status after timeout")
         return {
@@ -748,6 +782,7 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message=str(e), user_id=user_id)
+                _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message=str(e))
             except Exception:
                 logger.debug("Failed to update action run status during error handling")
         return {
@@ -1319,6 +1354,40 @@ async def _execute_background_chat(
         
         logger.info(f"[BackgroundChat] Workflow execution completed - all streams and tool calls finished")
 
+        # Mark session as completed in DB NOW, before asyncio.run() tears down
+        # the event loop (which can kill the process via MCP subprocess cleanup).
+        # The finally block only marks failed WHERE status='in_progress', so this
+        # protects against the worker dying during event loop shutdown.
+        _update_session_status(session_id, "completed", user_id=user_id)
+
+        # Also finalize the incident and enqueue post-RCA tasks here (inside the
+        # async function) because asyncio.run() may never return to the caller.
+        if incident_id:
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Finalize]")
+                        cursor.execute(
+                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                            (incident_id,)
+                        )
+                        conn.commit()
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to clear task ID: {e}")
+
+            _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+
+            try:
+                from chat.background.summarization import generate_incident_summary_from_chat
+                generate_incident_summary_from_chat.delay(
+                    incident_id=incident_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+            except Exception as e:
+                logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
+                _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
+
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
         llm_context = _ensure_llm_context_history(session_id, user_id)
         tool_calls = _extract_tool_calls_for_viz(session_id, user_id, llm_context)
@@ -1722,38 +1791,12 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
 
 
 def _is_rca_email_notification_enabled(user_id: str) -> bool:
-    """Check if user has RCA email notifications enabled.
-    
-    Args:
-        user_id: The user ID
-        
-    Returns:
-        True if email notifications are enabled, False otherwise
-    """
+    """Check if the org has RCA email notifications enabled."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCAEmailNotifCheck]")
-                cursor.execute(
-                    """
-                    SELECT preference_value 
-                    FROM user_preferences 
-                    WHERE user_id = %s AND preference_key = 'rca_email_notifications'
-                    """,
-                    (user_id,)
-                )
-                result = cursor.fetchone()
-                if result and result[0] is not None:
-                    value = result[0]
-                    # preference_value is JSONB, stored as boolean from frontend
-                    if isinstance(value, bool):
-                        return value
-                    # Unexpected format - log and default to False
-                    logger.warning(f"[EmailNotification] Unexpected preference format for rca_email_notifications: {type(value).__name__}, expected bool")
-        
-        # Default: notifications disabled (opt-in)
-        return False
-        
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return False
+        return bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
     except Exception as e:
         logger.error(f"[EmailNotification] Error checking notification preference: {e}")
         return False
@@ -1773,42 +1816,12 @@ def _has_google_chat_connected(user_id: str) -> bool:
 
 
 def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
-    """Check if user has RCA investigation start email notifications enabled.
-    
-    This is a separate preference from the general RCA email notifications, allowing users
-    to receive completion emails without being notified when investigations start.
-    
-    Args:
-        user_id: The user ID
-        
-    Returns:
-        True if email start notifications are enabled, False otherwise (default: False)
-    """
-    
+    """Check if the org has RCA investigation start email notifications enabled."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCAEmailStartNotifCheck]")
-                cursor.execute(
-                    """
-                    SELECT preference_value 
-                    FROM user_preferences 
-                    WHERE user_id = %s AND preference_key = 'rca_email_start_notifications'
-                    """,
-                    (user_id,)
-                )
-                result = cursor.fetchone()
-                if result and result[0] is not None:
-                    value = result[0]
-                    # preference_value is JSONB, stored as boolean from frontend
-                    if isinstance(value, bool):
-                        return value
-                    # Unexpected format - log and default to False
-                    logger.warning(f"[EmailNotification] Unexpected preference format for rca_email_start_notifications: {type(value).__name__}, expected bool")
-        
-        # Default: start notifications DISABLED (opt-in)
-        return False
-        
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return False
+        return bool(get_org_preference(org_id, 'rca_email_start_notifications', default=False))
     except Exception as e:
         logger.error(f"[EmailNotification] Error checking start notification preference: {e}")
         return False
@@ -1864,6 +1877,86 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
         return None
 
 
+def _send_action_completion_notification(
+    user_id: str,
+    trigger_metadata: Dict[str, Any],
+    session_id: str,
+    status: str = 'success',
+    error_message: Optional[str] = None,
+) -> None:
+    """Send email notification when an action completes (success or error)."""
+    try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return
+        if not get_org_preference(org_id, 'action_email_notifications', default=False):
+            return
+
+        run_id = trigger_metadata.get('run_id')
+
+        action_name = "Unknown Action"
+        started_at = None
+        if run_id:
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification]")
+                        cur.execute(
+                            """SELECT a.name, ar.started_at
+                               FROM action_runs ar
+                               JOIN actions a ON a.id = ar.action_id
+                               WHERE ar.id = %s""",
+                            (run_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            action_name = row[0]
+                            started_at = row[1].replace(tzinfo=timezone.utc) if row[1] else None
+            except Exception as e:
+                logger.warning("[ActionNotification] Failed to fetch action run details: %s", e)
+
+        action_data = {
+            'action_name': action_name,
+            'run_id': run_id,
+            'status': status,
+            'error': error_message,
+            'started_at': started_at,
+            'completed_at': datetime.now(timezone.utc),
+            'session_id': session_id,
+        }
+
+        # Send to org-wide configured notification recipients only
+        all_emails = []
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
+                    cur.execute(
+                        "SELECT email FROM rca_notification_emails WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
+                        (org_id,),
+                    )
+                    all_emails = [r[0] for r in cur.fetchall()]
+        except Exception as e:
+            logger.warning("[ActionNotification] Failed to fetch recipients for org: %s", e)
+
+        if not all_emails:
+            logger.info("[ActionNotification] No configured recipients for org %s, skipping", org_id)
+            return
+
+        email_service = get_email_service()
+        for recipient in all_emails:
+            try:
+                email_service.send_action_completed_email(recipient, action_data)
+            except Exception as e:
+                logger.warning("[ActionNotification] Failed to send to %s: %s", recipient, e)
+
+        logger.info("[ActionNotification] Sent %s notification for action '%s' to %d recipient(s)", status, action_name, len(all_emails))
+    except Exception as e:
+        logger.error("[ActionNotification] Error sending action completion notification: %s", e)
+
+
+
+
 def _send_rca_notification(user_id: str, incident_id: str, event_type: str, email_enabled: bool = False, slack_enabled: bool = False, google_chat_enabled: bool = False, session_id: Optional[str] = None) -> None:
     """Send RCA email, Slack, and Google Chat notifications.
     
@@ -1916,13 +2009,9 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
     # --- EMAIL NOTIFICATIONS ---
     if email_enabled:
         try:
-            # Get primary email
-            user_email = get_user_email(user_id)
-            if not user_email:
-                logger.warning(f"[EmailNotification] No email found for user {user_id}")
-            else:
-                # Get all verified additional emails
-                additional_emails = []
+            org_id = get_org_id_for_user(user_id)
+            all_emails = []
+            if org_id:
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
@@ -1930,18 +2019,18 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                             cursor.execute(
                                 """
                                 SELECT email FROM rca_notification_emails
-                                WHERE user_id = %s AND is_verified = TRUE AND is_enabled = TRUE
+                                WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE
                                 ORDER BY verified_at ASC
                                 """,
-                                (user_id,)
+                                (org_id,)
                             )
-                            rows = cursor.fetchall()
-                            additional_emails = [row[0] for row in rows]
+                            all_emails = [row[0] for row in cursor.fetchall()]
                 except Exception as e:
-                    logger.error(f"[EmailNotification] Failed to fetch additional emails for user {user_id}: {e}")
-                
-                # Combine all recipient emails
-                all_emails = [user_email] + additional_emails
+                    logger.error(f"[EmailNotification] Failed to fetch notification emails for org: {e}")
+
+            if not all_emails:
+                logger.info(f"[EmailNotification] No configured recipients for org, skipping email")
+            else:
                 logger.info(f"[EmailNotification] Sending {event_type} notification to {len(all_emails)} email(s): {', '.join(all_emails)}")
                 
                 # Send appropriate email to all recipients

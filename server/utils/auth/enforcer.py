@@ -54,6 +54,7 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "ssh_keys", "write"),
     ("editor", "*", "vms", "write"),
     ("editor", "*", "rca_emails", "write"),
+    ("editor", "*", "notification_settings", "write"),
     ("editor", "*", "graph", "write"),
     ("editor", "*", "actions", "write"),
 
