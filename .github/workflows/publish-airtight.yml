@@ -56,6 +56,12 @@ jobs:
         cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          docker system prune -af
+          df -h /
+
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -93,6 +99,7 @@ jobs:
           docker tag aurora_server:latest aurora_chatbot:latest
           docker tag aurora_server:latest aurora_mcp:latest
 
+          docker builder prune -af
           docker buildx build --platform ${{ matrix.platform }} \
             -f client/Dockerfile --target prod \
             -t aurora_frontend:latest --load \
