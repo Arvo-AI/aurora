@@ -44,8 +44,6 @@ def _extract_severity(state_value: str, payload: Dict[str, Any]) -> str:
         if "critical" in alarm_name:
             return "critical"
         return "high"
-    elif state == _INSUFFICIENT_DATA_STATE:
-        return "medium"
     return "unknown"
 
 
@@ -150,15 +148,19 @@ def _handle_resolved_alarm(
     alarm_db_id, state_value: str, payload: Dict[str, Any],
 ) -> None:
     """Correlate a resolved alarm back to its original incident and mark it resolved."""
+    account_id = payload.get("AWSAccountId") or payload.get("account_id") or ""
+    region = payload.get("Region") or payload.get("region") or ""
     cursor.execute(
         """
         SELECT id FROM incidents
         WHERE user_id = %s AND source_type = 'cloudwatch'
           AND alert_metadata::jsonb ->> 'alarm_name' = %s
+          AND (%s = '' OR alert_metadata::jsonb ->> 'account_id' = %s)
+          AND (%s = '' OR alert_metadata::jsonb ->> 'region' = %s)
           AND status NOT IN ('resolved', 'closed')
         ORDER BY started_at DESC LIMIT 1
         """,
-        (user_id, alarm_name),
+        (user_id, alarm_name, account_id, account_id, region, region),
     )
     row = cursor.fetchone()
     if row:

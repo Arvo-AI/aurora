@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from routes.aws.cloudwatch_tasks import process_cloudwatch_alarm
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import validate_user_exists, set_rls_context
-from utils.auth.token_management import store_tokens_in_db
+from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -243,6 +243,62 @@ def _set_cloudwatch_active(user_id: str, active: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# TopicArn binding helpers
+# ---------------------------------------------------------------------------
+
+def _get_approved_topic_arn(user_id: str) -> str | None:
+    """Retrieve the approved TopicArn stored for this user's CloudWatch connection."""
+    try:
+        data = get_token_data(user_id, "cloudwatch")
+        if data:
+            return data.get("approved_topic_arn")
+    except Exception:
+        logger.debug("[CLOUDWATCH] Could not retrieve token data for topic check")
+    return None
+
+
+def _store_approved_topic(user_id: str, topic_arn: str) -> None:
+    """Persist the TopicArn as the approved source for this user's CloudWatch webhook."""
+    try:
+        existing = get_token_data(user_id, "cloudwatch") or {}
+        existing["approved_topic_arn"] = topic_arn
+        store_tokens_in_db(user_id, existing, "cloudwatch")
+        logger.info(
+            "[CLOUDWATCH] Bound TopicArn for user %s: %s",
+            sanitize(user_id), sanitize(topic_arn),
+        )
+    except Exception:
+        logger.exception("[CLOUDWATCH] Failed to persist TopicArn binding for user %s", sanitize(user_id))
+
+
+def _validate_topic_arn(user_id: str, sns_message: dict) -> bool:
+    """Validate the TopicArn in an SNS message against the stored binding.
+
+    On first interaction (no binding stored yet), the topic is trusted and persisted.
+    On subsequent interactions, the topic must match.
+    Returns True if the message should be processed, False to reject.
+    """
+    topic_arn = sns_message.get("TopicArn") or ""
+    if not topic_arn:
+        logger.warning("[CLOUDWATCH] SNS message missing TopicArn for user %s", sanitize(user_id))
+        return False
+
+    approved = _get_approved_topic_arn(user_id)
+    if approved is None:
+        _store_approved_topic(user_id, topic_arn)
+        return True
+
+    if topic_arn != approved:
+        logger.warning(
+            "[CLOUDWATCH] TopicArn mismatch for user %s: got %s, expected %s",
+            sanitize(user_id), sanitize(topic_arn), sanitize(approved),
+        )
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Webhook helpers
 # ---------------------------------------------------------------------------
 
@@ -300,7 +356,8 @@ def _ensure_cloudwatch_connection(user_id: str) -> Tuple[bool, bool, bool]:
     if not row_exists:
         logger.info("[CLOUDWATCH] Auto-connecting user %s via webhook", sanitize(user_id))
         try:
-            store_tokens_in_db(user_id, {}, "cloudwatch")
+            existing = get_token_data(user_id, "cloudwatch") or {}
+            store_tokens_in_db(user_id, existing, "cloudwatch")
         except Exception:
             logger.exception("[CLOUDWATCH] Failed to auto-connect user %s", sanitize(user_id))
             return False, True, True
@@ -418,6 +475,9 @@ def cloudwatch_alarm_webhook(user_id: str):
             "[CLOUDWATCH] SNS signature verification failed for user %s", sanitize(user_id)
         )
         return jsonify({"error": "Invalid SNS signature"}), 403
+
+    if not _validate_topic_arn(user_id, sns_message):
+        return jsonify({"error": "TopicArn not authorized"}), 403
 
     sns_type = (
         request.headers.get(_SNS_TYPE_HEADER)
