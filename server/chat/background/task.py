@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user, get_org_preference
+from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context, get_org_id_for_user, get_org_preference
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
