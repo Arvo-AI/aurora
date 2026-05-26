@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user, get_user_preference
+from utils.auth.stateless_auth import get_user_email, get_credentials_from_db, set_rls_context, get_org_id_for_user, get_user_preference, get_org_preference
 from utils.notifications.slack_notification_service import (
     send_slack_investigation_started_notification,
     send_slack_investigation_completed_notification,
@@ -1735,38 +1735,12 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
 
 
 def _is_rca_email_notification_enabled(user_id: str) -> bool:
-    """Check if user has RCA email notifications enabled.
-    
-    Args:
-        user_id: The user ID
-        
-    Returns:
-        True if email notifications are enabled, False otherwise
-    """
+    """Check if the org has RCA email notifications enabled."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCAEmailNotifCheck]")
-                cursor.execute(
-                    """
-                    SELECT preference_value 
-                    FROM user_preferences 
-                    WHERE user_id = %s AND preference_key = 'rca_email_notifications'
-                    """,
-                    (user_id,)
-                )
-                result = cursor.fetchone()
-                if result and result[0] is not None:
-                    value = result[0]
-                    # preference_value is JSONB, stored as boolean from frontend
-                    if isinstance(value, bool):
-                        return value
-                    # Unexpected format - log and default to False
-                    logger.warning(f"[EmailNotification] Unexpected preference format for rca_email_notifications: {type(value).__name__}, expected bool")
-        
-        # Default: notifications disabled (opt-in)
-        return False
-        
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return False
+        return bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
     except Exception as e:
         logger.error(f"[EmailNotification] Error checking notification preference: {e}")
         return False
@@ -1786,42 +1760,12 @@ def _has_google_chat_connected(user_id: str) -> bool:
 
 
 def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
-    """Check if user has RCA investigation start email notifications enabled.
-    
-    This is a separate preference from the general RCA email notifications, allowing users
-    to receive completion emails without being notified when investigations start.
-    
-    Args:
-        user_id: The user ID
-        
-    Returns:
-        True if email start notifications are enabled, False otherwise (default: False)
-    """
-    
+    """Check if the org has RCA investigation start email notifications enabled."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCAEmailStartNotifCheck]")
-                cursor.execute(
-                    """
-                    SELECT preference_value 
-                    FROM user_preferences 
-                    WHERE user_id = %s AND preference_key = 'rca_email_start_notifications'
-                    """,
-                    (user_id,)
-                )
-                result = cursor.fetchone()
-                if result and result[0] is not None:
-                    value = result[0]
-                    # preference_value is JSONB, stored as boolean from frontend
-                    if isinstance(value, bool):
-                        return value
-                    # Unexpected format - log and default to False
-                    logger.warning(f"[EmailNotification] Unexpected preference format for rca_email_start_notifications: {type(value).__name__}, expected bool")
-        
-        # Default: start notifications DISABLED (opt-in)
-        return False
-        
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return False
+        return bool(get_org_preference(org_id, 'rca_email_start_notifications', default=False))
     except Exception as e:
         logger.error(f"[EmailNotification] Error checking start notification preference: {e}")
         return False
@@ -1886,12 +1830,10 @@ def _send_action_completion_notification(
 ) -> None:
     """Send email notification when an action completes (success or error)."""
     try:
-        if not get_user_preference(user_id, 'action_email_notifications', default=False):
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
             return
-
-        user_email = get_user_email(user_id)
-        if not user_email:
-            logger.warning("[ActionNotification] No email found for user %s", user_id)
+        if not get_org_preference(org_id, 'action_email_notifications', default=False):
             return
 
         run_id = trigger_metadata.get('run_id')
@@ -1927,23 +1869,23 @@ def _send_action_completion_notification(
             'session_id': session_id,
         }
 
-        # Send to primary email + org-wide notification recipients
-        all_emails = [user_email]
+        # Send to org-wide configured notification recipients only
+        all_emails = []
         try:
-            org_id = get_org_id_for_user(user_id)
-            if org_id:
-                with db_pool.get_admin_connection() as conn:
-                    with conn.cursor() as cur:
-                        set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
-                        cur.execute(
-                            "SELECT email FROM rca_notification_emails WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
-                            (org_id,),
-                        )
-                        all_emails += [r[0] for r in cur.fetchall()]
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
+                    cur.execute(
+                        "SELECT email FROM rca_notification_emails WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
+                        (org_id,),
+                    )
+                    all_emails = [r[0] for r in cur.fetchall()]
         except Exception as e:
-            logger.warning("[ActionNotification] Failed to fetch additional recipients for org: %s", e)
+            logger.warning("[ActionNotification] Failed to fetch recipients for org: %s", e)
 
-        all_emails = list(dict.fromkeys(all_emails))
+        if not all_emails:
+            logger.info("[ActionNotification] No configured recipients for org %s, skipping", org_id)
+            return
 
         email_service = get_email_service()
         for recipient in all_emails:
@@ -2011,13 +1953,9 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
     # --- EMAIL NOTIFICATIONS ---
     if email_enabled:
         try:
-            # Get primary email
-            user_email = get_user_email(user_id)
-            if not user_email:
-                logger.warning(f"[EmailNotification] No email found for user {user_id}")
-            else:
-                # Get all verified additional emails
-                additional_emails = []
+            org_id = get_org_id_for_user(user_id)
+            all_emails = []
+            if org_id:
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
@@ -2025,18 +1963,18 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                             cursor.execute(
                                 """
                                 SELECT email FROM rca_notification_emails
-                                WHERE user_id = %s AND is_verified = TRUE AND is_enabled = TRUE
+                                WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE
                                 ORDER BY verified_at ASC
                                 """,
-                                (user_id,)
+                                (org_id,)
                             )
-                            rows = cursor.fetchall()
-                            additional_emails = [row[0] for row in rows]
+                            all_emails = [row[0] for row in cursor.fetchall()]
                 except Exception as e:
-                    logger.error(f"[EmailNotification] Failed to fetch additional emails for user {user_id}: {e}")
-                
-                # Combine all recipient emails
-                all_emails = [user_email] + additional_emails
+                    logger.error(f"[EmailNotification] Failed to fetch notification emails for org: {e}")
+
+            if not all_emails:
+                logger.info(f"[EmailNotification] No configured recipients for org, skipping email")
+            else:
                 logger.info(f"[EmailNotification] Sending {event_type} notification to {len(all_emails)} email(s): {', '.join(all_emails)}")
                 
                 # Send appropriate email to all recipients

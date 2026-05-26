@@ -13,8 +13,7 @@ export interface RCAEmail {
 }
 
 export interface RCAEmailsResponse {
-  primary_email: string;
-  additional_emails: RCAEmail[];
+  emails: RCAEmail[];
 }
 
 /**

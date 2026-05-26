@@ -7,7 +7,8 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, Plus, Trash2, Check, Clock, RefreshCw, Mail, Zap } from "lucide-react";
-import { useAuth, useUser } from "@/hooks/useAuthHooks";
+import { useAuth } from "@/hooks/useAuthHooks";
+import { canWrite } from "@/lib/roles";
 import {
   Dialog,
   DialogContent,
@@ -38,8 +39,7 @@ export function RCASettings() {
   const [savingPreferences, setSavingPreferences] = useState<Record<string, boolean>>({});
   const [isLoadingNotificationPref, setIsLoadingNotificationPref] = useState(true);
 
-  const [primaryEmail, setPrimaryEmail] = useState<string>("");
-  const [additionalEmails, setAdditionalEmails] = useState<RCAEmail[]>([]);
+  const [orgEmails, setOrgEmails] = useState<RCAEmail[]>([]);
   const [isLoadingEmails, setIsLoadingEmails] = useState(true);
 
   // Add email state
@@ -56,8 +56,8 @@ export function RCASettings() {
   const [resendCooldown, setResendCooldown] = useState(0);
 
   const { toast } = useToast();
-  const { userId } = useAuth();
-  const { user } = useUser();
+  const { userId, role } = useAuth();
+  const canEditNotifications = canWrite(role);
 
   useEffect(() => {
     const loadNotificationPreferences = async () => {
@@ -97,12 +97,6 @@ export function RCASettings() {
   }, [userId]);
 
   useEffect(() => {
-    if (user?.emailAddresses?.[0]?.emailAddress) {
-      setPrimaryEmail(user.emailAddresses[0].emailAddress);
-    }
-  }, [user]);
-
-  useEffect(() => {
     if (resendCooldown > 0) {
       const timer = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000);
       return () => clearTimeout(timer);
@@ -115,8 +109,7 @@ export function RCASettings() {
     try {
       setIsLoadingEmails(true);
       const data = await listRCAEmails();
-      setPrimaryEmail(data.primary_email || "");
-      setAdditionalEmails(data.additional_emails);
+      setOrgEmails(data.emails);
     } catch (error) {
       console.error("Error loading emails:", error);
       toast({
@@ -281,37 +274,17 @@ export function RCASettings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Primary Email */}
-          <div className="space-y-2">
-            <Label htmlFor="primary-email" className="text-sm font-medium">
-              Primary Email
-            </Label>
-            <Input
-              id="primary-email"
-              type="email"
-              value={primaryEmail}
-              disabled
-              className="bg-muted"
-            />
-            <p className="text-xs text-muted-foreground">
-              Your primary email from your account
-            </p>
-          </div>
-
-          {/* Additional Email Recipients */}
-          <div className="space-y-4 pt-2">
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-medium text-sm">Additional Recipients</h4>
-                <p className="text-xs text-muted-foreground">
-                  These recipients receive all enabled notification types
-                </p>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                All org members who trigger actions or investigations will notify these recipients
+              </p>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setIsAddDialogOpen(true)}
                 className="flex items-center gap-2"
+                disabled={!canEditNotifications}
               >
                 <Plus className="h-4 w-4" />
                 Add Email
@@ -322,13 +295,13 @@ export function RCASettings() {
               <div className="flex items-center justify-center p-6">
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
               </div>
-            ) : additionalEmails.length === 0 ? (
+            ) : orgEmails.length === 0 ? (
               <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
                 No additional email addresses added
               </div>
             ) : (
               <div className="space-y-2">
-                {additionalEmails.map((email) => (
+                {orgEmails.map((email) => (
                   <div
                     key={email.id}
                     className="flex items-center justify-between p-3 border rounded-lg transition-colors hover:bg-muted/50"
@@ -352,16 +325,19 @@ export function RCASettings() {
                         <Switch
                           checked={email.is_enabled}
                           onCheckedChange={() => handleToggleEmail(email.id, email.is_enabled, email.email)}
+                          disabled={!canEditNotifications}
                         />
                       )}
-                      {!email.is_verified && (
+                      {!email.is_verified && canEditNotifications && (
                         <Button variant="ghost" size="sm" onClick={() => openVerifyDialog(email.email)}>
                           Verify
                         </Button>
                       )}
-                      <Button variant="ghost" size="sm" onClick={() => handleRemoveEmail(email.id, email.email)}>
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      {canEditNotifications && (
+                        <Button variant="ghost" size="sm" onClick={() => handleRemoveEmail(email.id, email.email)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -390,6 +366,7 @@ export function RCASettings() {
             checked={preferences.rca_email_notifications}
             onChange={(checked) => handlePreferenceChange('rca_email_notifications', checked)}
             isLoading={isLoadingNotificationPref || savingPreferences.rca_email_notifications}
+            disabled={!canEditNotifications}
           />
 
           <NotificationToggle
@@ -399,7 +376,7 @@ export function RCASettings() {
             checked={preferences.rca_email_start_notifications}
             onChange={(checked) => handlePreferenceChange('rca_email_start_notifications', checked)}
             isLoading={isLoadingNotificationPref || savingPreferences.rca_email_start_notifications}
-            disabled={!preferences.rca_email_notifications}
+            disabled={!canEditNotifications}
           />
         </CardContent>
       </Card>
@@ -423,6 +400,7 @@ export function RCASettings() {
             checked={preferences.action_email_notifications}
             onChange={(checked) => handlePreferenceChange('action_email_notifications', checked)}
             isLoading={isLoadingNotificationPref || savingPreferences.action_email_notifications}
+            disabled={!canEditNotifications}
           />
         </CardContent>
       </Card>
