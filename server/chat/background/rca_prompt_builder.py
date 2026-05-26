@@ -1,32 +1,19 @@
 """
 Shared RCA (Root Cause Analysis) prompt builder for background alert processing.
 
-This module creates provider-aware, persistence-focused RCA prompts that leverage
-all available tools and follow the detailed investigation guidelines in the system prompt.
+This module creates provider-aware RCA prompts that pair alert data with
+infrastructure context. Behavioral investigation guidance lives in the system
+prompt (rca_sections/). The user message contains only alert facts and context.
 
 Aurora Learn Integration:
 - When Aurora Learn is enabled, searches for similar past incidents with positive feedback
 - Injects context from helpful RCAs to improve new investigations
 """
 
-from functools import lru_cache
 from typing import Any, Dict, List, Optional
 import logging
-import os
 
 logger = logging.getLogger(__name__)
-
-RCA_SEGMENTS_DIR = os.path.normpath(
-    os.path.join(
-        os.path.dirname(__file__),
-        os.pardir,
-        "backend",
-        "agent",
-        "skills",
-        "rca",
-        "segments",
-    )
-)
 
 
 def build_alert_rail_text(alert_details: Dict[str, Any]) -> str:
@@ -50,59 +37,6 @@ def build_alert_rail_text(alert_details: Dict[str, Any]) -> str:
     if isinstance(message, str) and message.strip():
         parts.append(message.strip())
     return "\n\n".join(parts)
-
-
-@lru_cache(maxsize=32)
-def _load_rca_segment_template(segment_name: str) -> str:
-    """
-    Load an RCA markdown segment by name (filename without .md).
-
-    Segment content is cached in-process for performance.
-    """
-    try:
-        from chat.backend.agent.skills.loader import load_core_prompt
-
-        return load_core_prompt(RCA_SEGMENTS_DIR, segments=[segment_name]).strip()
-    except Exception as e:
-        logger.warning(f"Failed to load RCA segment '{segment_name}': {e}")
-        return ""
-
-
-def _render_rca_segment(segment_name: str, context: Optional[Dict[str, Any]] = None) -> str:
-    """Render an RCA segment with optional {variable} template substitutions."""
-    template = _load_rca_segment_template(segment_name)
-    if not template:
-        return ""
-
-    if not context:
-        return template
-
-    try:
-        from chat.backend.agent.skills.loader import resolve_template
-
-        return resolve_template(template, context)
-    except Exception as e:
-        logger.warning(f"Failed to render RCA segment '{segment_name}': {e}")
-        return template
-
-
-def _append_rca_segment(
-    prompt_parts: List[str],
-    segment_name: str,
-    context: Optional[Dict[str, Any]] = None,
-    leading_blank: bool = False,
-    trailing_blank: bool = False,
-) -> None:
-    """Append rendered segment to prompt_parts with optional surrounding blank lines."""
-    content = _render_rca_segment(segment_name, context=context)
-    if not content:
-        return
-
-    if leading_blank:
-        prompt_parts.append("")
-    prompt_parts.append(content)
-    if trailing_blank:
-        prompt_parts.append("")
 
 
 # ============================================================================
@@ -628,26 +562,6 @@ def build_rca_prompt(
         f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
     ])
 
-    # All integration guidance (GitHub, Jira, Confluence, Jenkins, CloudBees,
-    # provider investigation commands) loaded from skill files via SkillRegistry
-    # in the system prompt (background.py). No skill loading here — the user
-    # message should contain only alert details and investigation context.
-
-    # L7: alert data only — all behavioral guidance lives in the system prompt
-    if strip_level == 7:
-        return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
-
-    # L6: stop here — only alert details + providers + brief instruction
-    if strip_level == 6:
-        prompt_parts.append(
-            "\n## INVESTIGATION"
-            "\nYou are acting as an on-call SRE tasked with investigating to find"
-            " the specific and super fine-grained root cause of the alert."
-            " Do not guess or make assumptions, if you can't find the root cause"
-            " be persistent but be honest just like a professional senior SRE would."
-        )
-        return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
-
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
         similar_context = _get_similar_good_rcas_context(
@@ -669,59 +583,8 @@ def build_rca_prompt(
         if prediscovery_context:
             prompt_parts.append(prediscovery_context)
 
-    # Critical investigation requirements (modular markdown segments)
-    _append_rca_segment(
-        prompt_parts,
-        "critical_requirements_header",
-        leading_blank=True,
-        trailing_blank=True,
-    )
-
-    has_infra_providers = bool({'gcp', 'aws', 'azure', 'ovh', 'scaleway'}.intersection(set(providers_lower)))
-    has_jira = bool((integrations or {}).get('jira'))
-    has_confluence = bool((integrations or {}).get('confluence'))
-    after_context_label = 'Jira' if has_jira else 'Confluence' if has_confluence else 'change'
-    
-    # Add aggressive persistence prompts only if cost optimization is disabled
-    # The immediate action required due to the AgentExecutor which assumes agent is done when it sends a text chunk without a tool call.
-    if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true":
-        _append_rca_segment(
-            prompt_parts,
-            "persistence_and_immediate_action",
-            context={"after_context_label": after_context_label},
-            trailing_blank=True,
-        )
-    
-    depth_steps = []
-    if has_jira or has_confluence:
-        depth_steps.append("**Search Jira/Confluence first** for recent changes, open bugs, and runbooks")
-    depth_steps.extend([
-        "Start broad - understand the overall system state",
-        "Identify the affected component(s)",
-        "Drill down into specifics - logs, metrics, configurations",
-        "Check related/dependent resources",
-        "Look for recent changes that correlate with the issue",
-    ])
-    if has_infra_providers:
-        depth_steps.extend([
-            "Compare with healthy resources of the same type",
-            "Check resource quotas, limits, and constraints",
-            "Examine network connectivity and security rules",
-            "Verify IAM permissions and service accounts",
-        ])
-    depth_steps.append("Review historical patterns if available")
-    prompt_parts.append("### INVESTIGATION DEPTH:")
-    for i, step in enumerate(depth_steps, 1):
-        prompt_parts.append(f"{i}. {step}")
-
-    _append_rca_segment(prompt_parts, "error_resilience_intro", leading_blank=True)
-    if has_infra_providers:
-        _append_rca_segment(prompt_parts, "error_resilience_infra")
-    _append_rca_segment(prompt_parts, "error_resilience_outro")
-
-    _append_rca_segment(prompt_parts, "what_to_investigate", leading_blank=True)
-    _append_rca_segment(prompt_parts, "output_requirements", leading_blank=True)
-
+    # User message contains only alert data + context.
+    # All behavioral guidance lives in the system prompt (rca_sections/).
     return "\n".join(prompt_parts), build_alert_rail_text(alert_details)
 
 

@@ -184,7 +184,7 @@ def _handle_installation_event(
           (key by ``installation_id``).
         * ``deleted``: DELETE row by ``installation_id``. The
           ``user_github_installations`` join is cleared by ON DELETE
-          CASCADE. ``github_connected_repos.installation_id`` rows are
+          CASCADE. ``connected_repos.installation_id`` rows are
           intentionally NOT touched here — see Task 9 lazy cleanup in
           the auth router.
         * ``suspend``: ``UPDATE suspended_at = NOW()``.
@@ -278,7 +278,7 @@ def _handle_installation_event(
 
                 # Drop the parent row first. ``user_github_installations``
                 # has ``ON DELETE CASCADE`` so the user-link rows go with
-                # it. ``github_connected_repos.installation_id`` is a plain
+                # it. ``connected_repos.installation_id`` is a plain
                 # column with no FK, so we null it explicitly below to
                 # avoid leaving dangling references that would surface as
                 # "App-bound repo with no install" in the picker.
@@ -304,7 +304,7 @@ def _handle_installation_event(
                         )
                         continue
                     cur.execute(
-                        """UPDATE github_connected_repos
+                        """UPDATE connected_repos
                               SET installation_id = NULL,
                                   updated_at = NOW()
                             WHERE installation_id = %s
@@ -429,14 +429,14 @@ def _handle_installation_repositories_event(
     """Apply an ``installation_repositories.<action>`` webhook.
 
     Supported actions:
-        * ``added``: **NO-OP**. Aurora populates ``github_connected_repos``
+        * ``added``: **NO-OP**. Aurora populates ``connected_repos``
           lazily when a user fetches their installation's repos via the
           auth router (Task 9). Eagerly inserting per-user rows here
           would require iterating ``user_github_installations`` for every
           linked user, which is wasteful for installations with no
           active Aurora users yet.
         * ``removed``: DELETE matching rows from
-          ``github_connected_repos`` for ALL users that have this
+          ``connected_repos`` for ALL users that have this
           ``(installation_id, repo_full_name)`` pair. Multi-user
           installations exist; we must clean every user's view.
 
@@ -477,7 +477,7 @@ def _handle_installation_repositories_event(
                     if isinstance(full_name, str) and full_name:
                         repo_full_names.append(full_name)
 
-        # github_connected_repos is RLS-protected; the Celery worker has
+        # connected_repos is RLS-protected; the Celery worker has
         # no Flask request context so RLS vars are unset by default. Set
         # the RLS context per-user before DELETE so FORCE RLS doesn't
         # silently no-op the cleanup. An installation can be linked by
@@ -512,7 +512,7 @@ def _handle_installation_repositories_event(
                             )
                             continue
                         cur.execute(
-                            """DELETE FROM github_connected_repos
+                            """DELETE FROM connected_repos
                                 WHERE installation_id = %s
                                   AND repo_full_name = ANY(%s)""",
                             (installation_id, repo_full_names),

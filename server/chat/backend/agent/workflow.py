@@ -93,24 +93,30 @@ class Workflow:
         self._history_prefix_len: int = 0
 
     async def _wait_for_ongoing_tool_calls(self):
-        """Waits for any tool calls that are currently in progress to complete."""
+        """Waits briefly for any tool calls that are currently in progress to complete.
+        
+        MCP tool calls don't set the 'completed' flag via capture_tool_end,
+        so we use a short timeout and then force-clear remaining entries.
+        """
         tool_capture = getattr(self.agent, 'tool_capture_instance', None)
         if not tool_capture:
             logger.info("No tool capture instance found, cannot wait for tool calls.")
             return
 
-        # Initial check for ongoing calls
         with tool_capture.lock:
-            ongoing_calls = list(tool_capture.current_tool_calls.keys())
+            ongoing_calls = [
+                k for k, v in tool_capture.current_tool_calls.items()
+                if not v.get('completed')
+            ]
 
         if not ongoing_calls:
             logger.info("No ongoing tool calls detected at the start of wait.")
             return
 
         logger.info(f"Waiting for {len(ongoing_calls)} tool call(s) to complete: {ongoing_calls}")
-        
-        POLL_INTERVAL = 0.5  # seconds
-        MAX_WAIT_TIME = 30   # seconds
+
+        POLL_INTERVAL = 0.5
+        MAX_WAIT_TIME = 5
         time_waited = 0
 
         while time_waited < MAX_WAIT_TIME:
@@ -118,14 +124,20 @@ class Workflow:
             time_waited += POLL_INTERVAL
 
             with tool_capture.lock:
-                # Check if the initial ongoing calls are still present
-                still_ongoing = [call_id for call_id in ongoing_calls if call_id in tool_capture.current_tool_calls]
-            
+                still_ongoing = [call_id for call_id in ongoing_calls if call_id in tool_capture.current_tool_calls and not tool_capture.current_tool_calls[call_id].get('completed')]
+
             if not still_ongoing:
                 logger.info(f"All tracked tool calls have completed after {time_waited:.1f}s.")
                 return
-            
+
             logger.debug(f"Still waiting for {len(still_ongoing)} tool call(s): {still_ongoing}")
+
+        with tool_capture.lock:
+            for call_id in ongoing_calls:
+                if call_id in tool_capture.current_tool_calls:
+                    tool_capture.current_tool_calls[call_id]['completed'] = True
+                    tool_capture.current_tool_calls[call_id]['completion_time'] = datetime.now(timezone.utc)
+        logger.info(f"Timed out after {MAX_WAIT_TIME}s, force-marked {len(ongoing_calls)} tool calls as completed.")
 
     def _create_workflow(self) -> StateGraph:
         """Create and configure the workflow graph.

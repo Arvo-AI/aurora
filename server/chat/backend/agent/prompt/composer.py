@@ -22,52 +22,43 @@ from .provider_rules import (
 )
 from .schema import PromptSegments
 
+_RCA_SECTIONS_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "rca_sections")
+)
 
-def build_system_invariant(is_background: bool = False, strip_level: int = 0) -> str:
-    """Load core system prompt from modular markdown files under skills/core/.
+_RCA_SECTION_ORDER = [
+    "identity",
+    "investigation",
+    "context_mgmt",
+    "error_recovery",
+    "evidence_standard",
+    "conclusion_gate",
+]
 
-    Segments are loaded in a fixed order that mirrors the original monolithic
-    prompt so that cached prefixes remain stable across deployments.
 
-    In background RCA mode, Terraform/IaC, SSH setup, and cloud CLI discovery
-    segments are omitted (~3,300 tokens) since background investigations are
-    read-only and the freed budget is better spent on integration skills.
+def _build_rca_system_prompt() -> str:
+    """Assemble the background RCA system prompt from rca_sections/*.md."""
+    parts = []
+    for name in _RCA_SECTION_ORDER:
+        path = os.path.join(_RCA_SECTIONS_DIR, f"{name}.md")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            parts.append(content)
 
-    When strip_level > 0, progressively fewer core segments are included
-    in background RCA mode to A/B test investigation quality:
+    return "\n\n".join(parts)
 
-        Level 0: identity + security + knowledge_base + error_handling + investigation + behavioral_rules
-        Level 1: Drop behavioral_rules  (Terraform/zip/web search noise)
-        Level 2: Drop investigation      (prescriptive checklists)
-        Level 4: Drop error_handling     (retry/recovery logic)
-        Level 6: Replace identity+security with one-liner
-    """
+
+def build_system_invariant(is_background: bool = False) -> str:
+    """Build the system prompt for interactive or background RCA mode."""
     from chat.backend.agent.skills.loader import load_core_prompt
-    from .rca_strip import MINIMAL_IDENTITY, build_l7_system_prompt
-
-    core_dir = os.path.join(
-        os.path.dirname(__file__), os.pardir, "skills", "core"
-    )
-    core_dir = os.path.normpath(core_dir)
 
     if is_background:
-        strip = strip_level
+        return _build_rca_system_prompt()
 
-        if strip >= 7:  # L7: quality-focused modular sections
-            return build_l7_system_prompt()
-
-        if strip >= 6:  # L6: replace identity+security with one-liner
-            return MINIMAL_IDENTITY
-
-        segments = ["identity", "security", "knowledge_base"]
-        if strip < 4:  # L4 drops error retry/recovery logic (39 lines)
-            segments.append("error_handling")
-        if strip < 2:  # L2 drops "make 15-20 tool calls" checklists (40 lines)
-            segments.append("investigation")
-        if strip < 1:  # L1 drops Terraform/zip/web search noise (94 lines)
-            segments.append("behavioral_rules")
-        return load_core_prompt(core_dir, segments=segments)
-
+    core_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), os.pardir, "skills", "core")
+    )
     return load_core_prompt(core_dir, segments=[
         "identity",
         "security",
@@ -93,12 +84,10 @@ def build_prompt_segments(
     is_background = bool(state and getattr(state, 'is_background', False))
     rca_context = getattr(state, 'rca_context', None) or {}
     is_action = rca_context.get('source') == 'action'
-    strip_level = getattr(state, 'strip_level', 0) if state else 0
 
     # Actions need tool_selection, cloud_access, ssh_access — use full invariant
     system_invariant = build_system_invariant(
         is_background=is_background and not is_action,
-        strip_level=strip_level,
     )
 
     provider_context = build_provider_context_segment(
@@ -177,21 +166,12 @@ def build_prompt_segments(
         integration_index=integration_index,
         security_policy=security_policy,
         is_rca_background=is_background and not is_action,
-        strip_level=strip_level,
     )
 
 
 def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
     parts: List[str] = []
     is_rca_background = segments.is_rca_background
-    strip = segments.strip_level
-
-    # L6: only system_invariant (minimal identity) + background_mode (header only)
-    if is_rca_background and strip >= 6:
-        if segments.background_mode:
-            parts.append(segments.background_mode)
-        parts.append(segments.system_invariant)
-        return "\n".join(parts)
 
     # Ordered optional segments
     for segment in (

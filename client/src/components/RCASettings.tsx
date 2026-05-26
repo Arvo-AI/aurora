@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { Bell, Plus, Trash2, Check, Clock, RefreshCw, Mail } from "lucide-react";
-import { useAuth, useUser } from "@/hooks/useAuthHooks";
+import { Bell, Plus, Trash2, Check, Clock, RefreshCw, Mail, Zap } from "lucide-react";
+import { useAuth } from "@/hooks/useAuthHooks";
+import { canWrite } from "@/lib/roles";
 import {
   Dialog,
   DialogContent,
@@ -33,19 +34,19 @@ export function RCASettings() {
   const [preferences, setPreferences] = useState({
     rca_email_notifications: false,
     rca_email_start_notifications: false,
+    action_email_notifications: false,
   });
   const [savingPreferences, setSavingPreferences] = useState<Record<string, boolean>>({});
   const [isLoadingNotificationPref, setIsLoadingNotificationPref] = useState(true);
-  
-  const [primaryEmail, setPrimaryEmail] = useState<string>("");
-  const [additionalEmails, setAdditionalEmails] = useState<RCAEmail[]>([]);
+
+  const [orgEmails, setOrgEmails] = useState<RCAEmail[]>([]);
   const [isLoadingEmails, setIsLoadingEmails] = useState(true);
-  
+
   // Add email state
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [isAddingEmail, setIsAddingEmail] = useState(false);
-  
+
   // Verification dialog state
   const [isVerifyDialogOpen, setIsVerifyDialogOpen] = useState(false);
   const [verifyingEmail, setVerifyingEmail] = useState("");
@@ -53,18 +54,17 @@ export function RCASettings() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
-  
-  const { toast } = useToast();
-  const { userId } = useAuth();
-  const { user } = useUser();
 
-  // Load notification preferences
+  const { toast } = useToast();
+  const { userId, role } = useAuth();
+  const canEditNotifications = canWrite(role);
+
   useEffect(() => {
     const loadNotificationPreferences = async () => {
       if (!userId) return;
-      
+
       try {
-        const keys = ['rca_email_notifications', 'rca_email_start_notifications'];
+        const keys = ['rca_email_notifications', 'rca_email_start_notifications', 'action_email_notifications'];
         const loaded: Record<string, boolean> = {};
 
         await Promise.all(keys.map(async (key) => {
@@ -92,19 +92,10 @@ export function RCASettings() {
     loadNotificationPreferences();
   }, [userId]);
 
-  // Load email list
   useEffect(() => {
     loadEmails();
   }, [userId]);
 
-  // Set primary email from authenticated user
-  useEffect(() => {
-    if (user?.emailAddresses?.[0]?.emailAddress) {
-      setPrimaryEmail(user.emailAddresses[0].emailAddress);
-    }
-  }, [user]);
-
-  // Resend cooldown timer
   useEffect(() => {
     if (resendCooldown > 0) {
       const timer = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000);
@@ -112,14 +103,13 @@ export function RCASettings() {
     }
   }, [resendCooldown]);
 
-  const loadEmails = async () => {
+  const loadEmails = useCallback(async () => {
     if (!userId) return;
-    
+
     try {
       setIsLoadingEmails(true);
       const data = await listRCAEmails();
-      setPrimaryEmail(data.primary_email || "");
-      setAdditionalEmails(data.additional_emails);
+      setOrgEmails(data.emails);
     } catch (error) {
       console.error("Error loading emails:", error);
       toast({
@@ -130,12 +120,11 @@ export function RCASettings() {
     } finally {
       setIsLoadingEmails(false);
     }
-  };
+  }, [userId, toast]);
 
-  const handlePreferenceChange = async (key: string, enabled: boolean, label: string) => {
+  const handlePreferenceChange = async (key: string, enabled: boolean) => {
     if (!userId) return;
-    
-    // Optimistic update for smoother UI
+
     setPreferences(prev => ({ ...prev, [key]: enabled }));
     setSavingPreferences(prev => ({ ...prev, [key]: true }));
 
@@ -144,13 +133,8 @@ export function RCASettings() {
         `/api/proxy/user-preferences`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            key,
-            value: enabled,
-          }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, value: enabled }),
         }
       );
 
@@ -159,7 +143,6 @@ export function RCASettings() {
       }
     } catch (error) {
       console.error(`Error saving ${key} preference:`, error);
-      // Revert on error
       setPreferences(prev => ({ ...prev, [key]: !enabled }));
       toast({
         title: "Error",
@@ -174,50 +157,30 @@ export function RCASettings() {
   const handleAddEmail = async () => {
     if (!userId) return;
     if (!newEmail.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter an email address",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Please enter an email address", variant: "destructive" });
       return;
     }
 
-    // Simple email validation (length-capped per RFC 5321; `.` excluded from the middle class to avoid backtracking).
     const emailRegex = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/;
     if (newEmail.length > 320 || !emailRegex.test(newEmail)) {
-      toast({
-        title: "Error",
-        description: "Please enter a valid email address",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Please enter a valid email address", variant: "destructive" });
       return;
     }
 
     try {
       setIsAddingEmail(true);
       await addRCAEmail(newEmail.trim().toLowerCase());
-      
-      toast({
-        title: "Verification Code Sent",
-        description: `A verification code has been sent to ${newEmail}`,
-        variant: "default",
-      });
-      
-      // Close add dialog and open verify dialog
+
+      toast({ title: "Verification Code Sent", description: `A verification code has been sent to ${newEmail}` });
+
       setIsAddDialogOpen(false);
       setVerifyingEmail(newEmail.trim().toLowerCase());
       setIsVerifyDialogOpen(true);
       setNewEmail("");
-      
-      // Reload email list
+
       await loadEmails();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to add email";
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to add email", variant: "destructive" });
     } finally {
       setIsAddingEmail(false);
     }
@@ -226,37 +189,22 @@ export function RCASettings() {
   const handleVerifyEmail = async () => {
     if (!userId) return;
     if (!verificationCode.trim() || verificationCode.trim().length !== 6) {
-      toast({
-        title: "Error",
-        description: "Please enter a valid 6-digit code",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Please enter a valid 6-digit code", variant: "destructive" });
       return;
     }
 
     try {
       setIsVerifying(true);
       await verifyRCAEmail(verifyingEmail, verificationCode.trim());
-      
-      toast({
-        title: "Email Verified",
-        description: "Your email has been verified successfully",
-        variant: "default",
-      });
-      
+
+      toast({ title: "Email Verified", description: "Your email has been verified successfully" });
+
       setIsVerifyDialogOpen(false);
       setVerificationCode("");
       setVerifyingEmail("");
-      
-      // Reload email list
       await loadEmails();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to verify email";
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to verify email", variant: "destructive" });
     } finally {
       setIsVerifying(false);
     }
@@ -269,21 +217,10 @@ export function RCASettings() {
     try {
       setIsResending(true);
       await resendVerificationCode(verifyingEmail);
-      
-      toast({
-        title: "Code Resent",
-        description: "A new verification code has been sent",
-        variant: "default",
-      });
-      
+      toast({ title: "Code Resent", description: "A new verification code has been sent" });
       setResendCooldown(60);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to resend code";
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to resend code", variant: "destructive" });
     } finally {
       setIsResending(false);
     }
@@ -294,50 +231,26 @@ export function RCASettings() {
 
     try {
       await toggleRCAEmail(emailId, !currentStatus);
-      
       toast({
         title: !currentStatus ? "Email Enabled" : "Email Disabled",
-        description: `${emailAddress} will ${!currentStatus ? 'now' : 'no longer'} receive RCA notifications`,
-        variant: "default",
+        description: `${emailAddress} will ${!currentStatus ? 'now' : 'no longer'} receive notifications`,
       });
-      
-      // Reload email list
       await loadEmails();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to toggle email";
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to toggle email", variant: "destructive" });
     }
   };
 
   const handleRemoveEmail = async (emailId: number, emailAddress: string) => {
     if (!userId) return;
-    
-    if (!confirm(`Remove ${emailAddress} from RCA notifications?`)) {
-      return;
-    }
+    if (!confirm(`Remove ${emailAddress} from notifications?`)) return;
 
     try {
       await removeRCAEmail(emailId);
-      
-      toast({
-        title: "Email Removed",
-        description: "Email address has been removed",
-        variant: "default",
-      });
-      
-      // Reload email list
+      toast({ title: "Email Removed", description: "Email address has been removed" });
       await loadEmails();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to remove email";
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to remove email", variant: "destructive" });
     }
   };
 
@@ -349,131 +262,82 @@ export function RCASettings() {
 
   return (
     <div className="space-y-6 min-h-0">
-      {/* RCA Notifications Card */}
+      {/* Email Recipients Card */}
       <Card>
         <CardHeader>
-          <CardTitle>RCA Notifications</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            Notification Recipients
+          </CardTitle>
           <CardDescription>
-            Manage how you receive root cause analysis notifications
+            Manage who receives email notifications for investigations and actions
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Primary Email */}
-          <div className="space-y-2">
-            <Label htmlFor="primary-email" className="text-sm font-medium">
-              Primary Email
-            </Label>
-            <Input
-              id="primary-email"
-              type="email"
-              value={primaryEmail}
-              disabled
-              className="bg-muted"
-            />
-            <p className="text-xs text-muted-foreground">
-              Your primary email from your account
-            </p>
-          </div>
-
-          {/* Notification Toggles */}
-          <NotificationToggle
-            title="Email Notifications"
-            description="Receive email notifications when Aurora completes root cause analysis investigations"
-            icon={<Bell className="h-4 w-4" />}
-            checked={preferences.rca_email_notifications}
-            onChange={(checked) => handlePreferenceChange('rca_email_notifications', checked, 'RCA email notifications')}
-            isLoading={isLoadingNotificationPref || savingPreferences.rca_email_notifications}
-          />
-          
-          <NotificationToggle
-            title="Investigation Start Email Notifications"
-            description="Also receive an email when Aurora begins an investigation"
-            icon={<Bell className="h-4 w-4" />}
-            checked={preferences.rca_email_start_notifications}
-            onChange={(checked) => handlePreferenceChange('rca_email_start_notifications', checked, 'RCA investigation start notifications')}
-            isLoading={isLoadingNotificationPref || savingPreferences.rca_email_start_notifications}
-            disabled={!preferences.rca_email_notifications}
-          />
-
-          {/* Divider */}
-          <div className="border-t my-4" />
-
-          {/* Additional Email Recipients */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-medium flex items-center gap-2">
-                  <Mail className="h-4 w-4" />
-                  Additional Email Recipients
-                </h4>
-                <p className="text-sm text-muted-foreground">
-                  Add other email addresses to receive RCA notifications
-                </p>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                All org members who trigger actions or investigations will notify these recipients
+              </p>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setIsAddDialogOpen(true)}
                 className="flex items-center gap-2"
+                disabled={!canEditNotifications}
               >
                 <Plus className="h-4 w-4" />
                 Add Email
               </Button>
             </div>
 
-            {/* Email List */}
             {isLoadingEmails ? (
-              <div className="text-sm text-muted-foreground">Loading...</div>
-            ) : additionalEmails.length === 0 ? (
-              <div className="text-sm text-muted-foreground p-4 border rounded-lg text-center">
+              <div className="flex items-center justify-center p-6">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+              </div>
+            ) : orgEmails.length === 0 ? (
+              <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
                 No additional email addresses added
               </div>
             ) : (
               <div className="space-y-2">
-                {additionalEmails.map((email) => (
+                {orgEmails.map((email) => (
                   <div
                     key={email.id}
-                    className="flex items-center justify-between p-3 border rounded-lg"
+                    className="flex items-center justify-between p-3 border rounded-lg transition-colors hover:bg-muted/50"
                   >
-                    <div className="flex items-center gap-3 flex-1">
-                      <span className="text-sm">{email.email}</span>
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <span className="text-sm truncate">{email.email}</span>
                       {email.is_verified ? (
-                        <Badge variant="default" className="bg-green-500 flex items-center gap-1">
+                        <Badge variant="default" className="bg-green-600 shrink-0 flex items-center gap-1">
                           <Check className="h-3 w-3" />
                           Verified
                         </Badge>
                       ) : (
-                        <Badge variant="secondary" className="flex items-center gap-1">
+                        <Badge variant="secondary" className="shrink-0 flex items-center gap-1">
                           <Clock className="h-3 w-3" />
                           Pending
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       {email.is_verified && (
-                        <div className="flex items-center gap-2 px-2">
-                          <Switch
-                            checked={email.is_enabled}
-                            onCheckedChange={() => handleToggleEmail(email.id, email.is_enabled, email.email)}
-                          />
-                        </div>
+                        <Switch
+                          checked={email.is_enabled}
+                          onCheckedChange={() => handleToggleEmail(email.id, email.is_enabled, email.email)}
+                          disabled={!canEditNotifications}
+                        />
                       )}
-                      {!email.is_verified && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openVerifyDialog(email.email)}
-                        >
+                      {!email.is_verified && canEditNotifications && (
+                        <Button variant="ghost" size="sm" onClick={() => openVerifyDialog(email.email)}>
                           Verify
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRemoveEmail(email.id, email.email)}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      {canEditNotifications && (
+                        <Button variant="ghost" size="sm" onClick={() => handleRemoveEmail(email.id, email.email)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -483,13 +347,71 @@ export function RCASettings() {
         </CardContent>
       </Card>
 
+      {/* RCA Investigation Notifications */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="h-5 w-5" />
+            Investigation Notifications
+          </CardTitle>
+          <CardDescription>
+            Get notified when Aurora completes root cause analysis investigations
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <NotificationToggle
+            title="Investigation Complete"
+            description="Receive an email when Aurora finishes an RCA investigation"
+            icon={<Bell className="h-4 w-4" />}
+            checked={preferences.rca_email_notifications}
+            onChange={(checked) => handlePreferenceChange('rca_email_notifications', checked)}
+            isLoading={isLoadingNotificationPref || savingPreferences.rca_email_notifications}
+            disabled={!canEditNotifications}
+          />
+
+          <NotificationToggle
+            title="Investigation Started"
+            description="Also receive an email when Aurora begins an investigation"
+            icon={<Bell className="h-4 w-4" />}
+            checked={preferences.rca_email_start_notifications}
+            onChange={(checked) => handlePreferenceChange('rca_email_start_notifications', checked)}
+            isLoading={isLoadingNotificationPref || savingPreferences.rca_email_start_notifications}
+            disabled={!canEditNotifications}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Action Notifications */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="h-5 w-5" />
+            Action Notifications
+          </CardTitle>
+          <CardDescription>
+            Get notified when automated actions complete or fail
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <NotificationToggle
+            title="Action Complete"
+            description="Receive an email when an Aurora Action finishes running"
+            icon={<Zap className="h-4 w-4" />}
+            checked={preferences.action_email_notifications}
+            onChange={(checked) => handlePreferenceChange('action_email_notifications', checked)}
+            isLoading={isLoadingNotificationPref || savingPreferences.action_email_notifications}
+            disabled={!canEditNotifications}
+          />
+        </CardContent>
+      </Card>
+
       {/* Add Email Dialog */}
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add Email Address</DialogTitle>
+            <DialogTitle>Add Email Recipient</DialogTitle>
             <DialogDescription>
-              Enter an email address to receive RCA notifications. We'll send a verification code to confirm.
+              Add an email address to receive notifications. A verification code will be sent to confirm.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -579,4 +501,3 @@ export function RCASettings() {
     </div>
   );
 }
-

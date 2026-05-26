@@ -129,6 +129,39 @@ def delete_dependency(user_id, dep_id):
 
 
 # =========================================================================
+# Infrastructure Context
+# =========================================================================
+
+@graph_bp.route("/infrastructure/context", methods=["GET"])
+@require_permission("graph", "read")
+def get_infrastructure_context_api(user_id):
+    """GET /api/graph/infrastructure/context - Returns the consolidated infrastructure context."""
+    from utils.auth.stateless_auth import get_org_id_for_user
+    from utils.db.connection_pool import db_pool
+
+    try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return jsonify({"error": "No organization context"}), 400
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT content, updated_at FROM infrastructure_context WHERE org_id = %s",
+                    (org_id,),
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        logger.exception("Failed to fetch infrastructure context")
+        return jsonify({"error": "Database error"}), 500
+
+    if not row:
+        return jsonify({"content": None, "updated_at": None, "message": "No infrastructure context available yet."}), 200
+
+    return jsonify({"content": row[0], "updated_at": row[1].isoformat()}), 200
+
+
+# =========================================================================
 # Discovery
 # =========================================================================
 

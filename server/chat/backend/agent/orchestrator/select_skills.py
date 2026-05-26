@@ -47,7 +47,7 @@ _TOOL_METADATA: dict = {
     # Write tools — excluded from sub-agents
     "github_commit": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
     "github_fix": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
-    "github_apply_fix": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
+    # github_apply_fix is NOT exposed to agents — see note in cloud_tools.py.
     "iac_tool": {"capability_tags": ["iac"], "mutates": True, "cacheable": False},
     # Runbooks + knowledge base
     "confluence_runbook_parse": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},

@@ -541,6 +541,7 @@ async def _run(input_dict: dict) -> FindingRef:
             user_id=user_id,
             session_id=child_session_id,
             incident_id=incident_id,
+            incident_start_time=input_dict.get("parent_incident_start_time"),
             org_id=org_id,
             is_background=True,
             mode="ask",

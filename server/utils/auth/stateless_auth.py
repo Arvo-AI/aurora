@@ -571,14 +571,23 @@ def get_user_email(user_id: str) -> Optional[str]:
     Returns:
         User email address or None if not found
     """
-    import os
     from utils.db.connection_pool import db_pool
-    
+
     try:
-        # Try to get email from user_tokens table first (faster)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # No RLS needed — user_tokens not RLS-protected
+                # Check users table first (always has email for credential-based accounts)
+                cursor.execute(
+                    "SELECT email FROM users WHERE id = %s AND email IS NOT NULL LIMIT 1",
+                    (user_id,)
+                )
+                result = cursor.fetchone()
+                if result and result[0]:
+                    return result[0]
+
+                # Fallback to user_tokens (OAuth providers store email here)
+                # user_tokens is RLS-protected — set context for Celery paths
+                set_rls_context(cursor, conn, user_id, log_prefix="[get_user_email]")
                 cursor.execute(
                     "SELECT email FROM user_tokens WHERE user_id = %s AND email IS NOT NULL LIMIT 1",
                     (user_id,)
@@ -586,9 +595,7 @@ def get_user_email(user_id: str) -> Optional[str]:
                 result = cursor.fetchone()
                 if result and result[0]:
                     return result[0]
-        
-        # Auth.js doesn't have a separate API - email should be in database
-        # If not found, return None
+
         logger.warning(f"Could not find email for user {user_id}")
         return None
         
