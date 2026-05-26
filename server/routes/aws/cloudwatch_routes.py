@@ -286,6 +286,14 @@ def _validate_topic_arn(user_id: str, sns_message: dict) -> bool:
     approved = _get_approved_topic_arn(user_id)
     if approved is None:
         _store_approved_topic(user_id, topic_arn)
+        # Re-read to guard against a concurrent write binding a different topic.
+        stored = _get_approved_topic_arn(user_id)
+        if stored and stored != topic_arn:
+            logger.warning(
+                "[CLOUDWATCH] TopicArn race for user %s: rejected unauthorized topic",
+                sanitize(user_id),
+            )
+            return False
         return True
 
     if topic_arn != approved:
@@ -449,6 +457,15 @@ def get_webhook_url(user_id):
     })
 
 
+def _parse_notification_payload(sns_message: dict) -> dict:
+    """Extract the alarm payload from an SNS notification envelope."""
+    raw_message = sns_message.get("Message") or ""
+    try:
+        return json.loads(raw_message) if raw_message else sns_message
+    except Exception:
+        return sns_message
+
+
 @cloudwatch_bp.route("/aws/cloudwatch/webhook/<user_id>", methods=["POST"])
 def cloudwatch_alarm_webhook(user_id: str):
     """Receive SNS alarm notifications from CloudWatch for a specific user.
@@ -495,11 +512,7 @@ def cloudwatch_alarm_webhook(user_id: str):
         )
         return jsonify({"received": True})
 
-    raw_message = sns_message.get("Message") or ""
-    try:
-        payload = json.loads(raw_message) if raw_message else sns_message
-    except Exception:
-        payload = sns_message
+    payload = _parse_notification_payload(sns_message)
 
     skip_rca, should_skip, is_error = _ensure_cloudwatch_connection(user_id)
     if should_skip:
