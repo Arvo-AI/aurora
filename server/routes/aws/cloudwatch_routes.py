@@ -40,12 +40,8 @@ _SNS_TYPE_HEADER = "x-amz-sns-message-type"
 _SNS_SUBSCRIPTION_CONFIRMATION = "SubscriptionConfirmation"
 _SNS_NOTIFICATION = "Notification"
 
-# AWS SNS SubscribeURL pattern — prevents SSRF by ensuring we only fetch
+# AWS SNS hostname pattern — prevents SSRF by ensuring we only communicate with
 # legitimate Amazon-owned endpoints (includes China regions).
-_SNS_URL_PATTERN = re.compile(
-    r"^https://sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?[/?]"
-)
-
 _SNS_HOSTNAME_PATTERN = re.compile(
     r"^sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$"
 )
@@ -58,11 +54,9 @@ _SNS_HOSTNAME_PATTERN = re.compile(
 def _is_valid_sns_url(url: str) -> bool:
     """Verify a SubscribeURL is a legitimate AWS SNS endpoint (SSRF prevention).
 
-    Defense-in-depth: regex check + parsed URL structural validation to ensure
-    only HTTPS requests to genuine SNS hostnames are issued.
+    Defense-in-depth: parsed URL structural validation ensures only HTTPS
+    requests to genuine SNS hostnames are issued.
     """
-    if not _SNS_URL_PATTERN.match(url):
-        return False
     parsed = urlparse(url)
     if parsed.scheme != "https":
         return False

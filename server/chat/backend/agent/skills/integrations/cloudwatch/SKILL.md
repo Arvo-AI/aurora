@@ -51,8 +51,8 @@ The agent must never write or modify CloudWatch alarms during RCA.
 
 ## Alarm State Mapping
 
-| CloudWatch State | Aurora Severity |
+| CloudWatch State | Aurora Behavior |
 |---|---|
-| ALARM | high (critical if "critical" in alarm name) |
-| INSUFFICIENT_DATA | medium |
-| OK | low (resolution) |
+| ALARM | Creates incident — severity **high** (or **critical** if "critical" in alarm name) |
+| INSUFFICIENT_DATA | Creates incident — severity **medium** |
+| OK | Resolves matching open incident (no new incident created) |
