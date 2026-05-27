@@ -35,7 +35,6 @@ def save_connection_metadata(
     connection_method: Optional[str] = None,
     region: Optional[str] = None,
     workspace_id: Optional[str] = None,
-    shared_with_org: bool = False,
     status: str = "active",
 ) -> bool:
     """Insert or update a row in user_connections.
@@ -47,8 +46,8 @@ def save_connection_metadata(
     sql = """
         INSERT INTO user_connections (
             user_id, org_id, provider, account_id, role_arn, read_only_role_arn,
-            connection_method, region, workspace_id, shared_with_org, status, last_verified_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            connection_method, region, workspace_id, status, last_verified_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (user_id, provider, account_id)
         DO UPDATE SET
             org_id = COALESCE(EXCLUDED.org_id, user_connections.org_id),
@@ -57,7 +56,6 @@ def save_connection_metadata(
             connection_method = EXCLUDED.connection_method,
             region = COALESCE(EXCLUDED.region, user_connections.region),
             workspace_id = COALESCE(EXCLUDED.workspace_id, user_connections.workspace_id),
-            shared_with_org = EXCLUDED.shared_with_org,
             status = EXCLUDED.status,
             last_verified_at = EXCLUDED.last_verified_at;
     """
@@ -78,7 +76,6 @@ def save_connection_metadata(
                     connection_method,
                     region,
                     workspace_id,
-                    shared_with_org,
                     status,
                     datetime.now(timezone.utc),
                 ),
@@ -135,16 +132,13 @@ def set_connection_status(
 
 
 def list_active_connections(user_id: str) -> List[Dict]:
-    """Return active connections for a user (including org-shared connections).
-
-    Org-shared connections are only visible when shared_with_org is explicitly TRUE.
-    """
+    """Return active connections for a user (including org-shared connections)."""
     org_id = _resolve_org_id(user_id)
     if org_id:
         sql = """
             SELECT provider, account_id, connection_method, role_arn, read_only_role_arn, region, last_verified_at
             FROM user_connections
-            WHERE (user_id = %s OR (org_id = %s AND shared_with_org = TRUE)) AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END;
         """
         params = (user_id, org_id, user_id)
@@ -195,7 +189,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
         sql = """
             SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
             FROM user_connections
-            WHERE (user_id = %s OR (org_id = %s AND shared_with_org = TRUE)) AND provider = 'aws' AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
             LIMIT 1;
         """
@@ -235,7 +229,7 @@ def get_user_aws_connection(user_id: str) -> Optional[Dict]:
 
 
 def get_all_user_aws_connections(user_id: str) -> List[Dict]:
-    """Get all active AWS connections for a user (including explicitly org-shared).
+    """Get all active AWS connections for a user (including org-shared).
 
     Returns a list of connection dicts, one per connected AWS account.
     Each dict includes account_id, role_arn, read_only_role_arn, region,
@@ -246,7 +240,7 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
         sql = """
             SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
             FROM user_connections
-            WHERE (user_id = %s OR (org_id = %s AND shared_with_org = TRUE)) AND provider = 'aws' AND status = 'active'
+            WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
         """
         params = (user_id, org_id, user_id)
