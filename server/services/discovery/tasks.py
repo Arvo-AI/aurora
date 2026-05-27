@@ -375,6 +375,38 @@ def _get_oauth_project_ids(user_id):
     from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
     from utils.auth.stateless_auth import get_user_preference
 
+    # Multi-SA: prefer the union of accessible_project_ids across all rows in
+    # user_connections BEFORE attempting OAuth refresh — pure multi-SA users
+    # have no user_tokens row to refresh, so the refresh would short-circuit
+    # the multi-SA path with a misleading "reauthenticate" error.
+    try:
+        from utils.db.connection_utils import get_all_user_connections
+        gcp_conns = get_all_user_connections(user_id, "gcp") or []
+    except Exception as _e:
+        logger.warning("[Discovery] get_all_user_connections(gcp) failed: %s", _e)
+        gcp_conns = []
+
+    if gcp_conns:
+        seen = set()
+        union: list = []
+        for row in gcp_conns:
+            for pid in (row.get("accessible_project_ids") or []):
+                if isinstance(pid, str) and pid and pid not in seen:
+                    seen.add(pid)
+                    union.append(pid)
+        if not union:
+            for row in gcp_conns:
+                pid = row.get("project_id")
+                if isinstance(pid, str) and pid and pid not in seen:
+                    seen.add(pid)
+                    union.append(pid)
+        if union:
+            logger.info(
+                "[Discovery] Using %d GCP project(s) from user_connections for user %s",
+                len(union), user_id,
+            )
+            return union, None
+
     refreshed = _refresh_gcp(user_id, "gcp")
     if refreshed is None:
         err = "GCP token refresh failed: Reauthentication is needed. Please reconnect your GCP account."
@@ -436,6 +468,12 @@ def _get_all_gcp_project_ids(user_id):
 
         token_data = get_token_data(user_id, "gcp")
         if not token_data:
+            # Multi-SA users have no user_tokens row — _get_oauth_project_ids
+            # reads user_connections directly (Track C §10) and returns the
+            # union of accessible_project_ids.
+            from utils.db.connection_utils import get_all_user_connections
+            if get_all_user_connections(user_id, "gcp"):
+                return _get_oauth_project_ids(user_id)
             logger.warning("[Discovery] No GCP credentials found for user %s", user_id)
             return [], None
 
