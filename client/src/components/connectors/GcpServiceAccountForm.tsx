@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -76,6 +77,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
   const { toast } = useToast();
   const [saJsonText, setSaJsonText] = useState("");
   const [fileName, setFileName] = useState<string>("");
+  const [alias, setAlias] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -129,11 +131,15 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
     setSubmitError(null);
 
     try {
-      const response = await fetch("/api/gcp/service-account/connect", {
+      const trimmedAlias = alias.trim();
+      const response = await fetch("/api/proxy/gcp/service-accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ service_account_json: saJsonText }),
+        body: JSON.stringify({
+          service_account_json: saJsonText,
+          alias: trimmedAlias ? trimmedAlias : undefined,
+        }),
       });
 
       const text = await response.text();
@@ -166,18 +172,24 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
       const successPayload =
         payload && typeof payload === "object"
           ? (payload as {
+              account_id?: string;
               email?: string;
-              default_project_id?: string;
+              project_id?: string;
+              accessible_project_ids?: unknown;
               accessible_projects?: unknown;
             })
           : {};
-      const accessibleCount = Array.isArray(successPayload.accessible_projects)
-        ? successPayload.accessible_projects.length
-        : null;
-      const description = successPayload.email
+      const accessibleList = Array.isArray(successPayload.accessible_project_ids)
+        ? successPayload.accessible_project_ids
+        : Array.isArray(successPayload.accessible_projects)
+          ? successPayload.accessible_projects
+          : null;
+      const accessibleCount = accessibleList ? accessibleList.length : null;
+      const connectedAs = successPayload.account_id || successPayload.email;
+      const description = connectedAs
         ? accessibleCount !== null
-          ? `Connected as ${successPayload.email} — ${accessibleCount} project${accessibleCount === 1 ? "" : "s"} accessible.`
-          : `Connected as ${successPayload.email}.`
+          ? `Connected as ${connectedAs} — ${accessibleCount} project${accessibleCount === 1 ? "" : "s"} accessible.`
+          : `Connected as ${connectedAs}.`
         : "Service account connected successfully.";
 
       toast({
@@ -187,6 +199,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
 
       setSaJsonText("");
       setFileName("");
+      setAlias("");
 
       ProjectCache.invalidate("gcp");
       // Fire-and-forget: don't block dialog close on a potentially slow
@@ -272,6 +285,24 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
             {validation.error}
           </p>
         )}
+      </div>
+
+      <div className="grid gap-1.5">
+        <Label htmlFor="sa-alias" className="text-sm font-medium">
+          Alias (optional)
+        </Label>
+        <Input
+          id="sa-alias"
+          value={alias}
+          onChange={(event) => setAlias(event.target.value)}
+          placeholder="e.g. prod-readonly"
+          maxLength={120}
+          disabled={loading}
+          autoComplete="off"
+        />
+        <p className="text-xs text-muted-foreground">
+          A short, friendly label so you can recognize this account later.
+        </p>
       </div>
 
       <Alert>
