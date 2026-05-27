@@ -12,6 +12,7 @@ from chat.background.rca_prompt_builder import build_pagerduty_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import set_rls_context
+from utils.cloud.gcp_project_extraction import extract_gcp_project_from_alert
 
 logger = logging.getLogger(__name__)
 
@@ -589,6 +590,10 @@ def process_pagerduty_event(
                 # Preserve existing custom fields (e.g., runbook_link from custom field updates)
                 if "customFields" in existing_metadata:
                     alert_metadata["customFields"] = existing_metadata["customFields"]
+
+                pid = extract_gcp_project_from_alert(raw_payload, "pagerduty")
+                if pid:
+                    alert_metadata["gcp_project_id"] = pid
 
                 if event_type == "incident.triggered":
                     try:
