@@ -37,6 +37,21 @@ PROVIDER = "gcp"
 READ_ONLY_SCOPE = "https://www.googleapis.com/auth/cloud-platform.read-only"
 _LOG_PREFIX = "[GCP-SA]"
 
+# Validation error codes for _parse_add_sa_request. The dict maps code -> (message, http_status).
+# Returning a code (instead of a message dict) keeps the user-input taint out of the response body
+# so static analysis (CodeQL py/reflected-xss) cannot trace request data to jsonify().
+_VALIDATION_ERRORS: Dict[str, Tuple[str, int]] = {
+    "BAD_VISIBILITY": ("visibility must be 'private' or 'org'", 400),
+    "MISSING_SA_JSON": ("service_account_json is required", 400),
+    "INVALID_SA_JSON": ("service_account_json is not valid JSON", 400),
+    "BAD_SA_TYPE": ("service_account_json must be JSON object or string", 400),
+    "MISSING_SA_FIELDS": (
+        "service_account_json must contain client_email and project_id",
+        400,
+    ),
+    "BAD_ALIAS_TYPE": ("alias must be a string", 400),
+}
+
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -137,41 +152,39 @@ def list_service_accounts(user_id):
 
 
 def _parse_add_sa_request(body: Dict[str, Any]) -> Tuple[
-    Optional[Dict[str, Any]], Optional[str], Optional[str], Optional[Tuple[Dict[str, str], int]]
+    Optional[Dict[str, Any]], Optional[str], Optional[str], Optional[str]
 ]:
-    """Validate the POST body and return ``(sa_info, alias, visibility, error_response)``.
+    """Validate the POST body and return ``(sa_info, alias, visibility, error_code)``.
 
-    On any validation failure returns ``(None, None, None, (json_body, http_status))``
-    so the caller can ``return jsonify(*error_response)`` directly.
+    On any validation failure returns ``(None, None, None, "<CODE>")`` where
+    ``<CODE>`` is a key in ``_VALIDATION_ERRORS``. The caller maps the code to
+    a constant message — this prevents user input from flowing back into the
+    response body (CodeQL py/reflected-xss).
     """
     sa_raw = body.get("service_account_json")
     alias = body.get("alias")
     visibility = body.get("visibility") or "private"
 
     if visibility not in ("private", "org"):
-        return None, None, None, ({"error": "visibility must be 'private' or 'org'"}, 400)
+        return None, None, None, "BAD_VISIBILITY"
     if not sa_raw:
-        return None, None, None, ({"error": "service_account_json is required"}, 400)
+        return None, None, None, "MISSING_SA_JSON"
 
     if isinstance(sa_raw, str):
         try:
             sa_info = json.loads(sa_raw)
         except json.JSONDecodeError:
-            return None, None, None, ({"error": "service_account_json is not valid JSON"}, 400)
+            return None, None, None, "INVALID_SA_JSON"
     elif isinstance(sa_raw, dict):
         sa_info = sa_raw
     else:
-        return None, None, None, (
-            {"error": "service_account_json must be JSON object or string"}, 400,
-        )
+        return None, None, None, "BAD_SA_TYPE"
 
     if not sa_info.get("client_email") or not sa_info.get("project_id"):
-        return None, None, None, (
-            {"error": "service_account_json must contain client_email and project_id"}, 400,
-        )
+        return None, None, None, "MISSING_SA_FIELDS"
 
     if alias is not None and not isinstance(alias, str):
-        return None, None, None, ({"error": "alias must be a string"}, 400)
+        return None, None, None, "BAD_ALIAS_TYPE"
     if alias:
         alias = alias.strip()[:120] or None
 
@@ -182,11 +195,12 @@ def _parse_add_sa_request(body: Dict[str, Any]) -> Tuple[
 @require_permission("connectors", "write")
 def add_service_account(user_id):
     """Verify and store a new GCP service-account credential."""
-    sa_info, alias, visibility, err_resp = _parse_add_sa_request(
+    sa_info, alias, visibility, err_code = _parse_add_sa_request(
         request.get_json(silent=True) or {}
     )
-    if err_resp:
-        return jsonify(err_resp[0]), err_resp[1]
+    if err_code:
+        msg, status = _VALIDATION_ERRORS[err_code]
+        return jsonify({"error": msg}), status
 
     client_email = sa_info["client_email"]
     project_id = sa_info["project_id"]

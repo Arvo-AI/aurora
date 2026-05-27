@@ -1198,7 +1198,7 @@ def _cloud_exec_aws_multi_account(
         command,
     )
     if not allowed:
-        logger.warning(read_only_message)
+        logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
         return json.dumps({
             "success": False,
             "error": read_only_message,
@@ -1363,7 +1363,7 @@ def _cloud_exec_gcp_multi_sa(
         command,
     )
     if not allowed:
-        logger.warning(read_only_message)
+        logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
         return json.dumps({
             "success": False,
             "error": read_only_message,
@@ -1823,7 +1823,7 @@ Security & Compliance
                     command,
                 )
                 if not allowed:
-                    logger.warning(read_only_message)
+                    logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
                     return json.dumps({
                         "success": False,
                         "error": read_only_message,
@@ -2009,7 +2009,7 @@ Security & Compliance
             command,
         )
         if not allowed:
-            logger.warning(read_only_message)
+            logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
             return json.dumps({
                 "success": False,
                 "error": read_only_message,
