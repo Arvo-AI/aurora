@@ -1630,6 +1630,32 @@ def initialize_tables():
                 conn.rollback()
                 raise
 
+            # Multi-SA GCP columns: one row per (user, provider='gcp', client_email).
+            # All nullable / defaulted so existing AWS rows are unaffected.
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE user_connections
+                        ADD COLUMN IF NOT EXISTS account_alias VARCHAR(120),
+                        ADD COLUMN IF NOT EXISTS project_id VARCHAR(255),
+                        ADD COLUMN IF NOT EXISTS accessible_project_ids JSONB,
+                        ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private',
+                        ADD COLUMN IF NOT EXISTS secret_ref TEXT;
+                    """
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured multi-SA GCP columns (account_alias, project_id, "
+                    "accessible_project_ids, visibility, secret_ref) on user_connections."
+                )
+            except Exception as e:
+                logging.error(
+                    "FATAL: Failed to ensure multi-SA GCP columns on user_connections: %s",
+                    e,
+                )
+                conn.rollback()
+                raise
+
             # Add stateless migration columns to user_tokens if they don't exist
             try:
                 cursor.execute("""
