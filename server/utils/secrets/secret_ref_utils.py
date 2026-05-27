@@ -5,8 +5,10 @@ This module provides functions to store and retrieve secrets using HashiCorp
 Vault instead of storing actual token data in the database.
 """
 
+import hashlib
 import logging
 import json
+import os
 from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
@@ -476,3 +478,89 @@ def migrate_user_token_to_secret_ref(user_id: str, provider: str) -> bool:
 def delete_user_secret(user_id: str, provider: str) -> Tuple[bool, int]:
     """Delete a user's secret from Vault and clear its reference from the database."""
     return secret_manager.delete_user_secret(user_id, provider)
+
+
+# ------------------------------------------------------------------
+# Per-connection secret helpers (multi-account, e.g. multi-SA GCP)
+#
+# Distinct from user_tokens-based helpers above: these store one blob per
+# (user_id, provider, account_id) and return the secret_ref for the caller
+# to persist on its own row (e.g. user_connections.secret_ref).
+# ------------------------------------------------------------------
+
+
+def _connection_secret_name(user_id: str, provider: str, account_id: str) -> str:
+    """Build the backend-safe secret name for a per-connection blob.
+
+    Hashes account_id because GCP service-account emails contain ``@`` and ``.``
+    which AWS Secrets Manager (and some Vault paths) reject. user_id is sanitized
+    inline rather than hashed so operators can still recognize ownership.
+    """
+    env = os.environ.get("AURORA_ENV") or os.environ.get("APP_ENV") or "dev"
+    safe_env = ''.join(c for c in env.lower() if c.isalnum() or c == '-') or "dev"
+    safe_user_id = ''.join(c for c in user_id if c.isalnum() or c in '-_')
+    safe_provider = ''.join(c for c in provider.lower() if c.isalnum() or c == '-')
+    account_hash = hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:16]
+    return f"aurora-{safe_env}-{safe_user_id}-{safe_provider}-{account_hash}-conn"
+
+
+def store_connection_secret(
+    user_id: str,
+    provider: str,
+    account_id: str,
+    payload: Dict[str, Any],
+) -> Optional[str]:
+    """Store a per-connection secret blob and return its secret_ref.
+
+    Caller is responsible for persisting the returned ``secret_ref`` on the
+    relevant row (e.g. ``user_connections.secret_ref``).
+    Returns None on failure.
+    """
+    try:
+        secret_name = _connection_secret_name(user_id, provider, account_id)
+        payload_json = json.dumps(payload)
+        secret_ref = secret_manager.store_secret(secret_name, payload_json)
+        logger.info(
+            "Stored connection secret for provider %s account=%s",
+            safe_provider(provider),
+            account_id[:8] + "..." if len(account_id) > 8 else account_id,
+        )
+        return secret_ref
+    except Exception as e:
+        logger.error(
+            "Failed to store connection secret for provider %s: %s",
+            safe_provider(provider),
+            e,
+        )
+        return None
+
+
+def get_connection_secret(secret_ref: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a per-connection secret blob by its ``secret_ref``.
+
+    Returns the decoded dict, or None if the secret cannot be retrieved or
+    decoded. Never raises — callers treat None as "credentials unavailable".
+    """
+    if not secret_ref:
+        return None
+    try:
+        raw = secret_manager.get_secret(secret_ref)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"token": raw}
+    except Exception as e:
+        logger.error("Failed to retrieve connection secret: %s", e)
+        return None
+
+
+def delete_connection_secret(secret_ref: str) -> bool:
+    """Delete a per-connection secret by its ``secret_ref``.
+
+    Returns True on success or when ``secret_ref`` is empty (nothing to delete).
+    """
+    if not secret_ref:
+        return True
+    return secret_manager.delete_secret(secret_ref)
