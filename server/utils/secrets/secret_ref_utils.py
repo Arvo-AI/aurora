@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Optional, Dict, Any, Set, Tuple
 
 from utils.db.db_utils import connect_to_db_as_admin
 from utils.auth.stateless_auth import set_rls_context
-from utils.log_sanitizer import safe_provider
+from utils.log_sanitizer import safe_provider, hash_for_log
 from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.secrets.secret_cache import (
     get_cached_secret,
@@ -523,7 +523,7 @@ def store_connection_secret(
         logger.info(
             "Stored connection secret for provider %s account=%s",
             safe_provider(provider),
-            account_id[:8] + "..." if len(account_id) > 8 else account_id,
+            hash_for_log(account_id),
         )
         return secret_ref
     except Exception as e:

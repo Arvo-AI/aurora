@@ -16,6 +16,7 @@ from connectors.gcp_connector.gcp.project_selection import (
     ProjectSelectionStrategy,
     DefaultProjectSelectionStrategy,
 )
+from utils.log_sanitizer import hash_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -446,11 +447,12 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         if selected_project_id:
             row = find_connection_for_project(user_id, "gcp", selected_project_id)
             if row:
-                alias = row.get("account_alias") or (row.get("account_id") or "")[:32]
+                # Hash both identifiers — SA aliases and project IDs are
+                # user-controlled and CodeQL treats them as sensitive.
                 logger.info(
                     "[GCP-SA-Auth] Using SA %s for project %s",
-                    alias,
-                    selected_project_id,
+                    hash_for_log(row.get("account_alias") or row.get("account_id") or ""),
+                    hash_for_log(selected_project_id),
                 )
             else:
                 # Project was explicitly requested but no SA owns/has-access:
@@ -460,7 +462,7 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
                 # the first connected SA.
                 logger.warning(
                     "[GCP-SA-Auth] No SA matches project=%s; will fall through to legacy token store",
-                    selected_project_id,
+                    hash_for_log(selected_project_id),
                 )
         else:
             rows = get_all_user_connections(user_id, "gcp")

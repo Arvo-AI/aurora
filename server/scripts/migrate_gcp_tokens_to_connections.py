@@ -63,7 +63,7 @@ def _decode_secret(secret_ref: str) -> Optional[Dict[str, Any]]:
     try:
         raw = secret_manager.get_secret(secret_ref)
     except Exception as exc:
-        logger.warning("Failed to read secret %s: %s", secret_ref, type(exc).__name__)
+        logger.warning("Failed to read secret %s: %s", hash_for_log(secret_ref), type(exc).__name__)
         return None
     if not raw:
         return None

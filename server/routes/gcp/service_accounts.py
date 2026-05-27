@@ -206,13 +206,12 @@ def add_service_account(user_id):
         return jsonify({"error": "Failed to save connection metadata"}), 500
 
     logger.info(
-        "%s SA connected user=%s account=%s project=%s accessible=%d visibility=%s",
+        "%s SA connected user=%s account=%s project=%s accessible=%d",
         _LOG_PREFIX,
         hash_for_log(user_id),
         hash_for_log(client_email),
         hash_for_log(project_id),
         len(accessible),
-        visibility,
     )
 
     return jsonify(
