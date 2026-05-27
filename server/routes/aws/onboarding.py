@@ -326,6 +326,13 @@ def workspace_cleanup(user_id, workspace_id):
         if failed_accounts and len(failed_accounts) == len(aws_conns):
             return jsonify({"error": "Failed to disconnect AWS connections"}), 500
 
+        if failed_accounts:
+            return jsonify({
+                "success": False,
+                "message": "Some AWS accounts could not be disconnected.",
+                "failedAccounts": failed_accounts,
+            }), 207
+
         # Only wipe workspace discovery state and graph nodes if no active
         # AWS connections remain (partial disconnect should preserve state).
         remaining = get_all_user_aws_connections(user_id)
