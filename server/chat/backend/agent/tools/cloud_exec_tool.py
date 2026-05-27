@@ -56,6 +56,8 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
 
 logger = logging.getLogger(__name__)
 
+_READ_ONLY_BLOCKED_LOG = "Cloud command blocked in read-only/Ask mode (cmd_hash=%s)"
+
 
 def _extract_serial_port_pagination_hint(stderr_text: str) -> Optional[str]:
     """
@@ -1198,7 +1200,7 @@ def _cloud_exec_aws_multi_account(
         command,
     )
     if not allowed:
-        logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
+        logger.warning(_READ_ONLY_BLOCKED_LOG, hash_for_log(command))
         return json.dumps({
             "success": False,
             "error": read_only_message,
@@ -1363,7 +1365,7 @@ def _cloud_exec_gcp_multi_sa(
         command,
     )
     if not allowed:
-        logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
+        logger.warning(_READ_ONLY_BLOCKED_LOG, hash_for_log(command))
         return json.dumps({
             "success": False,
             "error": read_only_message,
@@ -1823,7 +1825,7 @@ Security & Compliance
                     command,
                 )
                 if not allowed:
-                    logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
+                    logger.warning(_READ_ONLY_BLOCKED_LOG, hash_for_log(command))
                     return json.dumps({
                         "success": False,
                         "error": read_only_message,
@@ -2009,7 +2011,7 @@ Security & Compliance
             command,
         )
         if not allowed:
-            logger.warning("Cloud command blocked in read-only/Ask mode (cmd_hash=%s)", hash_for_log(command))
+            logger.warning(_READ_ONLY_BLOCKED_LOG, hash_for_log(command))
             return json.dumps({
                 "success": False,
                 "error": read_only_message,
