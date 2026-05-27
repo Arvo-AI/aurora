@@ -561,6 +561,39 @@ def build_rca_prompt(
         f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
     ])
 
+    # Enumerate connected GCP service accounts (multi-SA) so the agent knows
+    # which projects are reachable and can pick the right project_id.
+    if user_id and 'gcp' in providers_lower:
+        try:
+            from utils.db.connection_utils import get_all_user_connections
+            gcp_conns = get_all_user_connections(user_id, 'gcp') or []
+            if gcp_conns:
+                lines = ["- GCP service accounts:"]
+                for conn in gcp_conns:
+                    alias = (
+                        conn.get('account_alias')
+                        or conn.get('account_id')
+                        or 'unknown'
+                    )
+                    if isinstance(alias, str) and len(alias) > 80:
+                        alias = alias[:77] + '...'
+                    home = conn.get('project_id') or 'unknown'
+                    accessible = conn.get('accessible_project_ids') or []
+                    # Drop the home project from the accessible list to avoid noise.
+                    extra = [p for p in accessible if p and p != home]
+                    if extra:
+                        extra_str = ", ".join(extra[:10])
+                        if len(extra) > 10:
+                            extra_str += f", +{len(extra) - 10} more"
+                        lines.append(
+                            f"    - {alias} (home project: {home}; accessible: {extra_str})"
+                        )
+                    else:
+                        lines.append(f"    - {alias} (home project: {home})")
+                prompt_parts.append("\n".join(lines))
+        except Exception as _e:
+            logger.debug("Skipping GCP SA enumeration in RCA prompt: %s", type(_e).__name__)
+
     # Aurora Learn: Inject context from similar past incidents
     if user_id:
         similar_context = _get_similar_good_rcas_context(
