@@ -1,4 +1,5 @@
 """Account management routes for connected accounts."""
+import json
 import logging
 from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_auth_only
@@ -119,11 +120,12 @@ def get_connected_accounts(user_id, target_user_id):
             executor.shutdown(wait=False, cancel_futures=True)
         
         # ------------------------------
-        # 2) Role-based connections (user_connections – AWS today)
+        # 2) Role-based / multi-account connections (user_connections)
         # ------------------------------
         cursor.execute(
             """
-            SELECT provider, account_id, role_arn, last_verified_at
+            SELECT provider, account_id, role_arn, last_verified_at,
+                   account_alias, project_id, accessible_project_ids
             FROM user_connections
             WHERE (user_id = %s OR org_id = %s) AND status = 'active'
             ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
@@ -131,7 +133,34 @@ def get_connected_accounts(user_id, target_user_id):
             (user_id, org_id, user_id),
         )
 
-        for provider, account_id, role_arn, last_verified in cursor.fetchall():
+        gcp_accounts_list: list = []
+        for (
+            provider,
+            account_id,
+            role_arn,
+            last_verified,
+            account_alias,
+            project_id,
+            accessible_project_ids,
+        ) in cursor.fetchall():
+            if provider == "gcp":
+                # Collect every GCP SA — frontend uses the list, not the
+                # single-account shape.
+                accessible_list = accessible_project_ids
+                if isinstance(accessible_list, str):
+                    try:
+                        accessible_list = json.loads(accessible_list)
+                    except Exception:
+                        accessible_list = []
+                gcp_accounts_list.append({
+                    "email": account_id,
+                    "project_id": project_id,
+                    "alias": account_alias,
+                    "authType": "service_account",
+                    "accessibleProjectIds": accessible_list or [],
+                })
+                continue
+
             if provider in accounts:
                 continue
 
@@ -145,16 +174,34 @@ def get_connected_accounts(user_id, target_user_id):
                 account_info["accountId"] = account_id
                 account_info["roleArn"] = role_arn
                 account_info["name"] = "AWS Account"
-            elif provider == "gcp":
-                account_info["projectId"] = account_id
-                account_info["name"] = "Google Cloud"
-                account_info["displayText"] = account_id or "Google Cloud"
             elif provider == "azure":
                 account_info["subscriptionId"] = account_id
                 account_info["name"] = "Azure"
                 account_info["displayText"] = account_id or "Azure Subscription"
 
             accounts[provider] = account_info
+
+        # Rebuild the GCP entry from the per-account rows + the legacy entry
+        # (which may have been set above from a user_tokens row).
+        if gcp_accounts_list or "gcp" in accounts:
+            legacy = accounts.get("gcp") or {}
+            primary = gcp_accounts_list[0] if gcp_accounts_list else None
+            accounts["gcp"] = {
+                "isConnected": True,
+                "name": "Google Cloud",
+                "displayText": (
+                    (primary["alias"] or primary["email"] or legacy.get("displayText") or "Google Cloud")
+                    if primary
+                    else (legacy.get("displayText") or "Google Cloud")
+                ),
+                "count": len(gcp_accounts_list),
+                "accounts": gcp_accounts_list,
+                "authType": (
+                    "service_account" if gcp_accounts_list
+                    else legacy.get("authType")
+                ),
+                "email": primary["email"] if primary else legacy.get("email"),
+            }
 
         # ------------------------------
         # 3) Webhook-based connectors (Grafana — no secret_ref)
