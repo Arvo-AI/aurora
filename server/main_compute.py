@@ -566,11 +566,13 @@ from routes.gcp import bp as gcp_auth_bp
 from routes.gcp.projects import gcp_projects_bp
 from routes.gcp.billing import gcp_billing_bp
 from routes.gcp.root_project import root_project_bp
+from routes.gcp.service_accounts import gcp_service_accounts_bp
 
 app.register_blueprint(gcp_auth_bp)
 app.register_blueprint(gcp_projects_bp)
 app.register_blueprint(gcp_billing_bp)
 app.register_blueprint(root_project_bp)
+app.register_blueprint(gcp_service_accounts_bp)
 
 # --- AWS Routes ---
 # AWS blueprint already registered above with url_prefix="/aws_api"
