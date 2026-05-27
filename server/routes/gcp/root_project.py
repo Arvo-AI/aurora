@@ -11,6 +11,10 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.rbac_decorators import require_permission
 from connectors.gcp_connector.auth.oauth import get_credentials
+from connectors.gcp_connector.auth.multi_sa import (
+    load_gcp_credentials_for_project,
+    load_gcp_connections_with_creds,
+)
 from connectors.gcp_connector.gcp.projects import check_billing_enabled
 from routes.gcp.root_project_tasks import setup_root_project_async
 from googleapiclient.discovery import build
@@ -49,12 +53,22 @@ def set_root_project(user_id):
         if not project_id:
             return jsonify({"error": "Missing project_id"}), 400
 
-        # Get user credentials
-        token_data = get_credentials_from_db(user_id, 'gcp')
-        if not token_data:
-            return jsonify({"error": "No GCP credentials found"}), 401
-
-        credentials = get_credentials(token_data)
+        # Prefer the SA that owns/has-access to the requested project; fall
+        # back to any active multi-SA connection; finally fall back to legacy
+        # OAuth/single-SA credentials in user_tokens.
+        credentials = None
+        pair = load_gcp_credentials_for_project(user_id, project_id)
+        if pair:
+            credentials = pair[1]
+        else:
+            multi = load_gcp_connections_with_creds(user_id)
+            if multi:
+                credentials = multi[0][1]
+            else:
+                token_data = get_credentials_from_db(user_id, 'gcp')
+                if not token_data:
+                    return jsonify({"error": "No GCP credentials found"}), 401
+                credentials = get_credentials(token_data)
 
         # Validate the project
         validation_result = validate_root_project(credentials, project_id)
