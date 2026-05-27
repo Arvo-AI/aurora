@@ -416,14 +416,88 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
     normalized_mode = (mode or '').strip().lower()
-    
+
     from utils.auth.token_management import get_token_data
     from connectors.gcp_connector.auth.oauth import get_credentials
     from connectors.gcp_connector.gcp.projects import get_project_list, select_best_project
     from google.oauth2 import service_account as google_service_account
     from google.auth.transport.requests import Request as GoogleAuthRequest
 
-    token_data = get_token_data(user_id, "gcp")
+    # ------------------------------------------------------------------
+    # Multi-SA credential lookup (three-tier priority).
+    #
+    # 1. selected_project_id → find_connection_for_project()
+    # 2. else → first active row from get_all_user_connections()
+    # 3. else (pre-migration) → fall back to legacy get_token_data()
+    #
+    # When a user_connections row is found, we synthesise a token_data dict
+    # that matches the shape returned by get_token_data() for the SA branch
+    # below, so the rest of the function is unchanged.
+    # ------------------------------------------------------------------
+    token_data = None
+    try:
+        from utils.db.connection_utils import (
+            get_all_user_connections,
+            find_connection_for_project,
+        )
+        from utils.secrets.secret_ref_utils import get_connection_secret
+
+        row = None
+        if selected_project_id:
+            row = find_connection_for_project(user_id, "gcp", selected_project_id)
+            if row:
+                alias = row.get("account_alias") or (row.get("account_id") or "")[:32]
+                logger.info(
+                    "[GCP-SA-Auth] Using SA %s for project %s",
+                    alias,
+                    selected_project_id,
+                )
+            else:
+                # Project was explicitly requested but no SA owns/has-access:
+                # do NOT silently fall back to an arbitrary SA — that would
+                # mint a token against the wrong project's default. Only the
+                # legacy single-SA path (selected_project_id=None) may pick
+                # the first connected SA.
+                logger.warning(
+                    "[GCP-SA-Auth] No SA matches project=%s; will fall through to legacy token store",
+                    selected_project_id,
+                )
+        else:
+            rows = get_all_user_connections(user_id, "gcp")
+            if rows:
+                row = rows[0]
+
+        if row is not None and row.get("secret_ref"):
+            sa_payload = get_connection_secret(row["secret_ref"])
+            if sa_payload:
+                # Normalise to the token_data shape consumed by the SA branch.
+                sa_json_str = (
+                    sa_payload.get("service_account_json")
+                    if isinstance(sa_payload, dict) and "service_account_json" in sa_payload
+                    else json.dumps(sa_payload)
+                )
+                token_data = {
+                    "auth_type": GCP_AUTH_TYPE_SA,
+                    "service_account_json": sa_json_str,
+                    "client_email": row.get("account_id"),
+                    "default_project_id": row.get("project_id"),
+                    "accessible_projects": [
+                        {"project_id": pid}
+                        for pid in (row.get("accessible_project_ids") or [])
+                    ],
+                }
+    except Exception as e:
+        # Never let the new lookup break legacy auth — fall through to
+        # get_token_data() below.
+        logger.warning(
+            "[GCP-SA-Auth] user_connections lookup failed (error_type=%s); "
+            "falling back to legacy token store",
+            type(e).__name__,
+        )
+        token_data = None
+
+    if token_data is None:
+        token_data = get_token_data(user_id, "gcp")
     if not token_data:
         raise ValueError("No GCP token data for user")
 
