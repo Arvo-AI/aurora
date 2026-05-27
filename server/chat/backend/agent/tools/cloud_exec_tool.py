@@ -1270,6 +1270,77 @@ def _cloud_exec_aws_multi_account(
     })
 
 
+_GCP_CLI_PREFIXES = ("gcloud", "kubectl", "gsutil", "bq", "terraform", "helm")
+
+
+def _run_gcp_sa_command(
+    user_id: str,
+    conn: dict,
+    command: str,
+    provider_preference: Optional[str],
+    timeout: Optional[int],
+) -> Tuple[bool, str]:
+    """Execute ``command`` against the SA in ``conn``. Returns ``(ok, block_text)``.
+
+    The returned block is already wrapped with a per-SA header for inclusion in
+    the multi-SA fan-out output.
+    """
+    project_id = conn.get("project_id")
+    sa_email = conn.get("account_id") or "unknown"
+    alias_or_email = conn.get("account_alias") or sa_email
+
+    if not project_id:
+        # Without a distinct project_id, two SAs would collide on the
+        # ADC-file cache key and silently reuse the first SA's tempfile.
+        logger.warning(
+            "Multi-SA fan-out skipping sa=%s with no project_id",
+            hash_for_log(sa_email),
+        )
+        return False, (
+            f"[sa: {alias_or_email}]\n"
+            f"<error>Connection record is missing project_id; reconnect this service account.</error>"
+        )
+
+    try:
+        ok, resolved_project_id, _auth_method, isolated_env = (
+            setup_gcp_environment_isolated(
+                user_id,
+                selected_project_id=project_id,
+                provider_preference=provider_preference,
+            )
+        )
+        if not ok or not isolated_env:
+            return False, (
+                f"[project: {project_id} / sa: {alias_or_email}]\n"
+                f"<error>Failed to set up GCP environment for project {project_id}</error>"
+            )
+
+        effective_project = resolved_project_id or project_id
+        cmd = command.strip()
+        if not any(cmd.startswith(p) for p in _GCP_CLI_PREFIXES):
+            cmd = f"gcloud {cmd}"
+        if cmd.startswith("gcloud") and effective_project and "--project" not in cmd \
+                and "gcloud config" not in cmd:
+            cmd += f" --project={effective_project}"
+
+        result = terminal_run(
+            shlex.split(cmd), capture_output=True, text=True,
+            timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+        )
+        ok_run = result.returncode == 0
+        output = (result.stdout if ok_run else (result.stderr or result.stdout)).strip()
+        return ok_run, f"[project: {effective_project} / sa: {alias_or_email}]\n{output}"
+    except Exception as e:
+        logger.exception(
+            "Multi-SA exec failed for project=%s sa=%s",
+            project_id, hash_for_log(sa_email),
+        )
+        return False, (
+            f"[project: {project_id} / sa: {alias_or_email}]\n"
+            f"<error>{str(e)[:300]}</error>"
+        )
+
+
 def _cloud_exec_gcp_multi_sa(
     user_id: str,
     connections: list,
@@ -1302,10 +1373,9 @@ def _cloud_exec_gcp_multi_sa(
             "provider": "gcp",
         })
 
-    # output_file is intentionally not supported in fan-out mode: there is no
-    # single canonical output to persist when N SAs run the command. Force the
-    # caller (LLM) to pick a project so the single-SA path writes the file.
     if output_file:
+        # No single canonical output exists when N SAs run the command — force
+        # the caller (LLM) to pick a project so the single-SA path writes it.
         return json.dumps({
             "success": False,
             "error": (
@@ -1320,79 +1390,13 @@ def _cloud_exec_gcp_multi_sa(
 
     blocks: list[str] = []
     overall_success = True
-
     for conn in connections:
-        project_id = conn.get("project_id")
-        sa_email = conn.get("account_id") or "unknown"
-        alias_or_email = conn.get("account_alias") or sa_email
-
-        # Without a distinct project_id, two SAs would collide on the
-        # ADC-file cache key (user_id, project_id or "") and silently reuse
-        # the first SA's tempfile. Skip the row — it indicates a malformed
-        # connection record anyway.
-        if not project_id:
-            logger.warning(
-                "Multi-SA fan-out skipping sa=%s with no project_id",
-                hash_for_log(sa_email),
-            )
-            blocks.append(
-                f"[sa: {alias_or_email}]\n"
-                f"<error>Connection record is missing project_id; reconnect this service account.</error>"
-            )
+        ok, block = _run_gcp_sa_command(
+            user_id, conn, command, provider_preference, timeout,
+        )
+        if not ok:
             overall_success = False
-            continue
-
-        try:
-            ok, resolved_project_id, _auth_method, isolated_env = (
-                setup_gcp_environment_isolated(
-                    user_id,
-                    selected_project_id=project_id,
-                    provider_preference=provider_preference,
-                )
-            )
-            if not ok or not isolated_env:
-                blocks.append(
-                    f"[project: {project_id} / sa: {alias_or_email}]\n"
-                    f"<error>Failed to set up GCP environment for project {project_id}</error>"
-                )
-                overall_success = False
-                continue
-
-            effective_project = resolved_project_id or project_id
-            cmd = command.strip()
-            if not cmd.startswith("gcloud") and not cmd.startswith("kubectl") \
-                    and not cmd.startswith("gsutil") and not cmd.startswith("bq") \
-                    and not cmd.startswith("terraform") and not cmd.startswith("helm"):
-                cmd = f"gcloud {cmd}"
-            if cmd.startswith("gcloud") and effective_project and "--project" not in cmd \
-                    and "gcloud config" not in cmd:
-                cmd += f" --project={effective_project}"
-
-            effective_timeout = get_command_timeout(cmd, timeout)
-            cmd_args = shlex.split(cmd)
-            result = terminal_run(
-                cmd_args, capture_output=True, text=True,
-                timeout=effective_timeout, env=isolated_env,
-            )
-            if result.returncode == 0:
-                output = result.stdout.strip()
-            else:
-                output = (result.stderr or result.stdout).strip()
-                overall_success = False
-
-            blocks.append(
-                f"[project: {effective_project} / sa: {alias_or_email}]\n{output}"
-            )
-        except Exception as e:
-            logger.exception(
-                "Multi-SA exec failed for project=%s sa=%s",
-                project_id, hash_for_log(sa_email),
-            )
-            overall_success = False
-            blocks.append(
-                f"[project: {project_id} / sa: {alias_or_email}]\n"
-                f"<error>{str(e)[:300]}</error>"
-            )
+        blocks.append(block)
 
     elapsed = time.perf_counter() - fn_start if fn_start else 0
     logger.info(
@@ -1408,6 +1412,66 @@ def _cloud_exec_gcp_multi_sa(
         "provider": "gcp",
         "output": "\n\n".join(blocks),
     })
+
+
+def _maybe_fan_out_gcp_multi_sa(
+    *,
+    user_id: Optional[str],
+    account_id: Optional[str],
+    project_id: Optional[str],
+    original_command: str,
+    provider_preference: Optional[str],
+    timeout: Optional[int],
+    output_file: Optional[str],
+    fn_start: float,
+) -> Optional[str]:
+    """Return a fan-out response JSON when multi-SA dispatch applies, else None.
+
+    Fans out only when no account_id / project_id / context project is set AND
+    more than one active GCP SA is connected. Single-SA users fall through to
+    the legacy path.
+    """
+    if account_id or project_id or not user_id:
+        return None
+    from utils.cloud.cloud_utils import get_selected_project_id
+    try:
+        if get_selected_project_id():
+            return None
+    except Exception:
+        pass
+    from utils.db.connection_utils import get_all_user_connections
+    all_gcp_conns = get_all_user_connections(user_id, "gcp")
+    if len(all_gcp_conns) <= 1:
+        return None
+    return _cloud_exec_gcp_multi_sa(
+        user_id=user_id,
+        connections=all_gcp_conns,
+        command=original_command,
+        provider_preference=provider_preference,
+        timeout=timeout,
+        output_file=output_file,
+        fn_start=fn_start,
+    )
+
+
+def _resolve_gcp_target_project(
+    *,
+    user_id: Optional[str],
+    account_id: Optional[str],
+    project_id: Optional[str],
+) -> Optional[str]:
+    """Pick the project ID to bind a single-SA GCP exec to (or None for default)."""
+    if account_id and user_id:
+        from utils.db.connection_utils import get_user_connection
+        conn_row = get_user_connection(user_id, "gcp", account_id)
+        return conn_row.get("project_id") if conn_row else None
+    if project_id:
+        return project_id
+    from utils.cloud.cloud_utils import get_selected_project_id
+    try:
+        return get_selected_project_id()
+    except Exception:
+        return None
 
 
 def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None, project_id: Optional[str] = None) -> str:
@@ -1589,51 +1653,23 @@ Security & Compliance
                 "provider": normalized_provider,
             })
         else:
-            # GCP multi-SA dispatch:
-            #   1. account_id (SA email) explicit → single-SA path for that SA
-            #   2. project_id explicit → single-SA path resolved via that project
-            #   3. selected_project_id in context (Track C) → single-SA path
-            #   4. multiple active SAs → fan out via _cloud_exec_gcp_multi_sa
-            #   5. else (0 or 1 SA) → legacy single-SA path
-            from utils.db.connection_utils import (
-                get_all_user_connections,
-                get_user_connection,
-                find_connection_for_project,
+            fanout_response = _maybe_fan_out_gcp_multi_sa(
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+                original_command=original_command,
+                provider_preference=provider_preference,
+                timeout=timeout,
+                output_file=output_file,
+                fn_start=fn_start,
             )
-            from utils.cloud.cloud_utils import get_selected_project_id
-
-            gcp_target_project = None
-            if account_id:
-                conn_row = get_user_connection(user_id, "gcp", account_id) if user_id else None
-                if conn_row:
-                    gcp_target_project = conn_row.get("project_id")
-            elif project_id:
-                conn_row = find_connection_for_project(user_id, "gcp", project_id) if user_id else None
-                if conn_row:
-                    gcp_target_project = project_id
-                else:
-                    gcp_target_project = project_id  # let setup attempt anyway
-            else:
-                ctx_project = None
-                try:
-                    ctx_project = get_selected_project_id()
-                except Exception:
-                    ctx_project = None
-                if ctx_project:
-                    gcp_target_project = ctx_project
-                else:
-                    # No specific project — fan out if multiple SAs are connected
-                    all_gcp_conns = get_all_user_connections(user_id, "gcp") if user_id else []
-                    if len(all_gcp_conns) > 1:
-                        return _cloud_exec_gcp_multi_sa(
-                            user_id=user_id,
-                            connections=all_gcp_conns,
-                            command=original_command,
-                            provider_preference=provider_preference,
-                            timeout=timeout,
-                            output_file=output_file,
-                            fn_start=fn_start,
-                        )
+            if fanout_response is not None:
+                return fanout_response
+            gcp_target_project = _resolve_gcp_target_project(
+                user_id=user_id,
+                account_id=account_id,
+                project_id=project_id,
+            )
 
             effective_selected_project = gcp_target_project or selected_project_id
             success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(

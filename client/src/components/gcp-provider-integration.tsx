@@ -30,7 +30,7 @@ interface GcpProviderEntry {
   authType?: string;
 }
 
-export default function GcpProviderIntegration({ onDisconnect: _onDisconnect }: GcpProviderIntegrationProps) {
+export default function GcpProviderIntegration({ onDisconnect: _onDisconnect }: Readonly<GcpProviderIntegrationProps>) {
   const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -41,7 +41,7 @@ export default function GcpProviderIntegration({ onDisconnect: _onDisconnect }: 
   const { accounts } = useConnectedAccounts();
   const gcpEntry = accounts.gcp as GcpProviderEntry | undefined;
   const gcpAccounts: GcpAccountSummary[] = useMemo(
-    () => (Array.isArray(gcpEntry?.accounts) ? gcpEntry!.accounts : []),
+    () => (Array.isArray(gcpEntry?.accounts) ? gcpEntry.accounts : []),
     [gcpEntry],
   );
   const authType: 'oauth' | 'service_account' | null =

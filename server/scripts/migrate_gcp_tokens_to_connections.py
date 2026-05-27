@@ -25,7 +25,10 @@ if _SERVER not in sys.path:
 from google.oauth2 import service_account as google_sa  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 
-from utils.db.connection_utils import save_connection_metadata  # noqa: E402
+from utils.db.connection_utils import (  # noqa: E402
+    GcpConnectionExtras,
+    save_connection_metadata,
+)
 from utils.db.db_utils import connect_to_db_as_admin  # noqa: E402
 from utils.log_sanitizer import hash_for_log  # noqa: E402
 from utils.secrets.secret_ref_utils import (  # noqa: E402
@@ -176,12 +179,14 @@ def migrate(dry_run: bool) -> Tuple[int, int, int]:
             user_id,
             "gcp",
             client_email,
-            project_id=project_id,
-            accessible_project_ids=accessible,
-            visibility="private",
-            secret_ref=new_ref,
             connection_method="service_account",
             status="active",
+            gcp_extras=GcpConnectionExtras(
+                project_id=project_id,
+                accessible_project_ids=accessible,
+                visibility="private",
+                secret_ref=new_ref,
+            ),
         )
         if not ok:
             logger.warning(

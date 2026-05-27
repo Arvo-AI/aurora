@@ -78,109 +78,105 @@ def _from_sentry_tag_pairs(pairs: Any) -> Optional[str]:
     return None
 
 
+def _scan_string_node(node: str) -> Optional[str]:
+    m = _PROJECTS_PATH_RE.search(node)
+    return _valid(m.group(1)) if m else None
+
+
 def _scan_strings(node: Any, depth: int = 0) -> Optional[str]:
     """Walk arbitrary structure looking for ``projects/<id>/`` strings."""
     if depth > 6:
         return None
     try:
         if isinstance(node, str):
-            m = _PROJECTS_PATH_RE.search(node)
-            if m:
-                pid = _valid(m.group(1))
-                if pid:
-                    return pid
-            return None
+            return _scan_string_node(node)
         if isinstance(node, dict):
-            for v in node.values():
-                found = _scan_strings(v, depth + 1)
-                if found:
-                    return found
+            children: Iterable = node.values()
+        elif isinstance(node, (list, tuple)):
+            children = node
+        else:
             return None
-        if isinstance(node, (list, tuple)):
-            for v in node:
-                found = _scan_strings(v, depth + 1)
-                if found:
-                    return found
-            return None
+        for child in children:
+            found = _scan_strings(child, depth + 1)
+            if found:
+                return found
     except Exception:
         return None
     return None
 
 
+def _from_datadog(payload: dict) -> Optional[str]:
+    return _from_tag_list(payload.get("tags") or [])
+
+
+def _from_grafana(payload: dict) -> Optional[str]:
+    for key in ("commonLabels", "labels", "groupLabels"):
+        pid = _from_mapping(payload.get(key))
+        if pid:
+            return pid
+    alerts = payload.get("alerts")
+    if isinstance(alerts, list):
+        for alert in alerts:
+            if isinstance(alert, dict):
+                pid = _from_mapping(alert.get("labels"))
+                if pid:
+                    return pid
+    return None
+
+
+def _from_sentry(payload: dict) -> Optional[str]:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    issue = data.get("issue") if isinstance(data.get("issue"), dict) else {}
+    event = data.get("event") if isinstance(data.get("event"), dict) else {}
+    for tag_holder in (issue, event, payload):
+        if not isinstance(tag_holder, dict):
+            continue
+        pid = _from_sentry_tag_pairs(tag_holder.get("tags"))
+        if pid:
+            return pid
+        contexts = tag_holder.get("contexts")
+        if isinstance(contexts, dict):
+            pid = _from_mapping(contexts.get("gcp"))
+            if pid:
+                return pid
+    return None
+
+
+def _from_pagerduty(payload: dict) -> Optional[str]:
+    for key in ("custom_details", "details", "payload"):
+        pid = _from_mapping(payload.get(key))
+        if pid:
+            return pid
+    return None
+
+
+_SOURCE_EXTRACTORS = {
+    "datadog": _from_datadog,
+    "grafana": _from_grafana,
+    "sentry": _from_sentry,
+    "pagerduty": _from_pagerduty,
+}
+
+
 def extract_gcp_project_from_alert(payload: dict, source: str) -> Optional[str]:
     """Pull a GCP project ID out of an alert payload.
 
-    Handles:
-      - Datadog:   payload['tags'] = ["project_id:foo", "gcp_project:foo", ...]
-      - Grafana:   payload['commonLabels']/['labels'] = {"gcp_project": ...} or
-                   {"project_id": ...}
-      - Sentry:    payload['data']['issue']['tags'] (list of [k,v]) /
-                   contexts.gcp.project_id
-      - PagerDuty: payload['custom_details'] dict + generic scan
-      - Generic fallback: scan all string values for ``projects/<id>/`` patterns.
-
-    Returns None when no valid project ID can be extracted.
+    Handles Datadog tags, Grafana labels, Sentry contexts/tags, PagerDuty
+    custom_details, and a generic ``projects/<id>/`` scan fallback. Returns
+    None when no valid project ID can be extracted.
     """
     if not isinstance(payload, dict):
         return None
-
     try:
-        src = (source or "").lower()
-
-        # --- Datadog ----------------------------------------------------------
-        if src == "datadog":
-            pid = _from_tag_list(payload.get("tags") or [])
+        extractor = _SOURCE_EXTRACTORS.get((source or "").lower())
+        if extractor:
+            pid = extractor(payload)
             if pid:
                 return pid
-
-        # --- Grafana ----------------------------------------------------------
-        if src == "grafana":
-            for key in ("commonLabels", "labels", "groupLabels"):
-                pid = _from_mapping(payload.get(key))
-                if pid:
-                    return pid
-            # alerts: [{ labels: {...} }, ...]
-            alerts = payload.get("alerts")
-            if isinstance(alerts, list):
-                for alert in alerts:
-                    if isinstance(alert, dict):
-                        pid = _from_mapping(alert.get("labels"))
-                        if pid:
-                            return pid
-
-        # --- Sentry -----------------------------------------------------------
-        if src == "sentry":
-            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-            issue = data.get("issue") if isinstance(data.get("issue"), dict) else {}
-            event = data.get("event") if isinstance(data.get("event"), dict) else {}
-            for tag_holder in (issue, event, payload):
-                if not isinstance(tag_holder, dict):
-                    continue
-                pid = _from_sentry_tag_pairs(tag_holder.get("tags"))
-                if pid:
-                    return pid
-                contexts = tag_holder.get("contexts")
-                if isinstance(contexts, dict):
-                    gcp_ctx = contexts.get("gcp")
-                    pid = _from_mapping(gcp_ctx)
-                    if pid:
-                        return pid
-
-        # --- PagerDuty --------------------------------------------------------
-        if src == "pagerduty":
-            for key in ("custom_details", "details", "payload"):
-                pid = _from_mapping(payload.get(key))
-                if pid:
-                    return pid
-
-        # --- Generic top-level mapping check ---------------------------------
         pid = _from_mapping(payload)
         if pid:
             return pid
-
-        # --- Generic fallback: scan for ``projects/<id>/`` patterns ----------
         return _scan_strings(payload)
-
     except Exception as e:
         logger.debug(
             "extract_gcp_project_from_alert failed for source=%s: %s",

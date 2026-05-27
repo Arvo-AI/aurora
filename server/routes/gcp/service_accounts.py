@@ -17,6 +17,7 @@ from googleapiclient.errors import HttpError
 
 from utils.auth.rbac_decorators import require_permission
 from utils.db.connection_utils import (
+    GcpConnectionExtras,
     deactivate_all_connections,
     deactivate_connection,
     get_all_user_connections,
@@ -135,43 +136,60 @@ def list_service_accounts(user_id):
     return jsonify({"service_accounts": [_strip_secret_ref(r) for r in rows]}), 200
 
 
-@gcp_service_accounts_bp.route("/api/gcp/service-accounts", methods=["POST"])
-@require_permission("connectors", "write")
-def add_service_account(user_id):
-    """Verify and store a new GCP service-account credential."""
-    body = request.get_json(silent=True) or {}
+def _parse_add_sa_request(body: Dict[str, Any]) -> Tuple[
+    Optional[Dict[str, Any]], Optional[str], Optional[str], Optional[Tuple[Dict[str, str], int]]
+]:
+    """Validate the POST body and return ``(sa_info, alias, visibility, error_response)``.
+
+    On any validation failure returns ``(None, None, None, (json_body, http_status))``
+    so the caller can ``return jsonify(*error_response)`` directly.
+    """
     sa_raw = body.get("service_account_json")
     alias = body.get("alias")
     visibility = body.get("visibility") or "private"
 
     if visibility not in ("private", "org"):
-        return jsonify({"error": "visibility must be 'private' or 'org'"}), 400
-
+        return None, None, None, ({"error": "visibility must be 'private' or 'org'"}, 400)
     if not sa_raw:
-        return jsonify({"error": "service_account_json is required"}), 400
+        return None, None, None, ({"error": "service_account_json is required"}, 400)
 
-    # Accept either a dict or a JSON string
     if isinstance(sa_raw, str):
         try:
             sa_info = json.loads(sa_raw)
         except json.JSONDecodeError:
-            return jsonify({"error": "service_account_json is not valid JSON"}), 400
+            return None, None, None, ({"error": "service_account_json is not valid JSON"}, 400)
     elif isinstance(sa_raw, dict):
         sa_info = sa_raw
     else:
-        return jsonify({"error": "service_account_json must be JSON object or string"}), 400
+        return None, None, None, (
+            {"error": "service_account_json must be JSON object or string"}, 400,
+        )
 
-    client_email = sa_info.get("client_email")
-    project_id = sa_info.get("project_id")
-    if not client_email or not project_id:
-        return jsonify(
-            {"error": "service_account_json must contain client_email and project_id"}
-        ), 400
+    if not sa_info.get("client_email") or not sa_info.get("project_id"):
+        return None, None, None, (
+            {"error": "service_account_json must contain client_email and project_id"}, 400,
+        )
 
     if alias is not None and not isinstance(alias, str):
-        return jsonify({"error": "alias must be a string"}), 400
+        return None, None, None, ({"error": "alias must be a string"}, 400)
     if alias:
         alias = alias.strip()[:120] or None
+
+    return sa_info, alias, visibility, None
+
+
+@gcp_service_accounts_bp.route("/api/gcp/service-accounts", methods=["POST"])
+@require_permission("connectors", "write")
+def add_service_account(user_id):
+    """Verify and store a new GCP service-account credential."""
+    sa_info, alias, visibility, err_resp = _parse_add_sa_request(
+        request.get_json(silent=True) or {}
+    )
+    if err_resp:
+        return jsonify(err_resp[0]), err_resp[1]
+
+    client_email = sa_info["client_email"]
+    project_id = sa_info["project_id"]
 
     ok, accessible, err = _verify_and_enumerate(sa_info, project_id)
     if not ok:
@@ -192,13 +210,15 @@ def add_service_account(user_id):
         user_id,
         PROVIDER,
         client_email,
-        account_alias=alias,
-        project_id=project_id,
-        accessible_project_ids=accessible,
-        visibility=visibility,
-        secret_ref=secret_ref,
         connection_method="service_account",
         status="active",
+        gcp_extras=GcpConnectionExtras(
+            account_alias=alias,
+            project_id=project_id,
+            accessible_project_ids=accessible,
+            visibility=visibility,
+            secret_ref=secret_ref,
+        ),
     )
     if not saved:
         # Best-effort cleanup of the orphaned secret

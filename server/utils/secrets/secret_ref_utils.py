@@ -526,11 +526,10 @@ def store_connection_secret(
             hash_for_log(account_id),
         )
         return secret_ref
-    except Exception as e:
-        logger.error(
-            "Failed to store connection secret for provider %s: %s",
+    except Exception:
+        logger.exception(
+            "Failed to store connection secret for provider %s",
             safe_provider(provider),
-            e,
         )
         return None
 
@@ -551,8 +550,8 @@ def get_connection_secret(secret_ref: str) -> Optional[Dict[str, Any]]:
             return json.loads(raw)
         except json.JSONDecodeError:
             return {"token": raw}
-    except Exception as e:
-        logger.error("Failed to retrieve connection secret: %s", e)
+    except Exception:
+        logger.exception("Failed to retrieve connection secret")
         return None
 
 

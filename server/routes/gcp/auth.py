@@ -162,8 +162,8 @@ def _cleanup_multi_sa_connections(user_id: str) -> None:
     """
     try:
         ok, secret_refs = deactivate_all_connections(user_id, "gcp")
-    except Exception as e:
-        logging.error("force-disconnect: failed to deactivate user_connections: %s", e)
+    except Exception:
+        logging.exception("force-disconnect: failed to deactivate user_connections")
         return
 
     for ref in secret_refs:

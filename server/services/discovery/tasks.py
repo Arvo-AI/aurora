@@ -356,76 +356,36 @@ def _get_sa_project_ids(token_data, user_id):
     return project_ids, None
 
 
-def _get_oauth_project_ids(user_id):
-    """Return project IDs via the Cloud Resource Manager API (OAuth path).
-
-    Proactively refreshes the access token before use so a near-expired token
-    doesn't cause the enumeration call to fail.
-
-    Only returns projects that were explicitly set up during GCP post-auth
-    (stored as the ``gcp_connected_projects`` user preference).  This prevents
-    stale or unintended projects from being scanned when the OAuth account has
-    access to more projects than the user connected in Aurora.  Falls back to
-    the full billing-filtered enumeration when the preference has not been set
-    yet (e.g. accounts connected before this preference was introduced).
-
-    Returns:
-        Tuple of (project_ids: list[str], credential_error: str | None).
-    """
-    from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
-    from utils.auth.stateless_auth import get_user_preference
-
-    # Multi-SA: prefer the union of accessible_project_ids across all rows in
-    # user_connections BEFORE attempting OAuth refresh — pure multi-SA users
-    # have no user_tokens row to refresh, so the refresh would short-circuit
-    # the multi-SA path with a misleading "reauthenticate" error.
+def _multi_sa_project_ids(user_id) -> list:
+    """Return the union of accessible project IDs across all GCP user_connections rows."""
     try:
         from utils.db.connection_utils import get_all_user_connections
         gcp_conns = get_all_user_connections(user_id, "gcp") or []
     except Exception as _e:
         logger.warning("[Discovery] get_all_user_connections(gcp) failed: %s", _e)
-        gcp_conns = []
+        return []
+    if not gcp_conns:
+        return []
 
-    if gcp_conns:
-        seen = set()
-        union: list = []
-        for row in gcp_conns:
-            for pid in (row.get("accessible_project_ids") or []):
-                if isinstance(pid, str) and pid and pid not in seen:
-                    seen.add(pid)
-                    union.append(pid)
-        if not union:
-            for row in gcp_conns:
-                pid = row.get("project_id")
-                if isinstance(pid, str) and pid and pid not in seen:
-                    seen.add(pid)
-                    union.append(pid)
-        if union:
-            logger.info(
-                "[Discovery] Using %d GCP project(s) from user_connections for user %s",
-                len(union), user_id,
-            )
-            return union, None
+    seen: set = set()
+    union: list = []
+    for row in gcp_conns:
+        for pid in (row.get("accessible_project_ids") or []):
+            if isinstance(pid, str) and pid and pid not in seen:
+                seen.add(pid)
+                union.append(pid)
+    if union:
+        return union
+    for row in gcp_conns:
+        pid = row.get("project_id")
+        if isinstance(pid, str) and pid and pid not in seen:
+            seen.add(pid)
+            union.append(pid)
+    return union
 
-    refreshed = _refresh_gcp(user_id, "gcp")
-    if refreshed is None:
-        err = "GCP token refresh failed: Reauthentication is needed. Please reconnect your GCP account."
-        logger.warning("[Discovery] %s (user=%s)", err, user_id)
-        return [], err
 
-    # If the user has a stored allowlist of connected projects, use it directly
-    # instead of enumerating every project the OAuth token can see.
-    connected_projects = get_user_preference(user_id, "gcp_connected_projects")
-    if connected_projects and isinstance(connected_projects, list):
-        project_ids = [p for p in connected_projects if isinstance(p, str) and p]
-        logger.info(
-            "[Discovery] Using stored gcp_connected_projects (%d) for user %s",
-            len(project_ids), user_id,
-        )
-        return project_ids, None
-
-    # Fallback: enumerate all projects the OAuth token can see (legacy path for
-    # accounts that predate the gcp_connected_projects preference).
+def _oauth_full_enumeration(refreshed) -> list:
+    """Full OAuth enumeration with billing filter — legacy path."""
     from connectors.gcp_connector.auth_compatibility import get_credentials, get_project_list
     from connectors.gcp_connector.billing import has_active_billing
 
@@ -442,8 +402,53 @@ def _get_oauth_project_ids(user_id):
                 project_ids.append(pid)
         except Exception:
             project_ids.append(pid)
+    return project_ids
 
-    logger.info("[Discovery] Found %d GCP projects (OAuth, full enumeration) for user %s", len(project_ids), user_id)
+
+def _get_oauth_project_ids(user_id):
+    """Return project IDs via the Cloud Resource Manager API (OAuth path).
+
+    Resolution order:
+      1. Multi-SA union from ``user_connections`` (pure-SA users have no
+         user_tokens row to refresh; trying that first would surface a
+         misleading "reauthenticate" error).
+      2. Stored ``gcp_connected_projects`` user preference (allowlist set
+         during post-auth).
+      3. Full billing-filtered OAuth enumeration (legacy accounts).
+
+    Returns ``(project_ids: list[str], credential_error: str | None)``.
+    """
+    from utils.auth.token_refresh import refresh_token_if_needed as _refresh_gcp
+    from utils.auth.stateless_auth import get_user_preference
+
+    union = _multi_sa_project_ids(user_id)
+    if union:
+        logger.info(
+            "[Discovery] Using %d GCP project(s) from user_connections for user %s",
+            len(union), user_id,
+        )
+        return union, None
+
+    refreshed = _refresh_gcp(user_id, "gcp")
+    if refreshed is None:
+        err = "GCP token refresh failed: Reauthentication is needed. Please reconnect your GCP account."
+        logger.warning("[Discovery] %s (user=%s)", err, user_id)
+        return [], err
+
+    connected_projects = get_user_preference(user_id, "gcp_connected_projects")
+    if connected_projects and isinstance(connected_projects, list):
+        project_ids = [p for p in connected_projects if isinstance(p, str) and p]
+        logger.info(
+            "[Discovery] Using stored gcp_connected_projects (%d) for user %s",
+            len(project_ids), user_id,
+        )
+        return project_ids, None
+
+    project_ids = _oauth_full_enumeration(refreshed)
+    logger.info(
+        "[Discovery] Found %d GCP projects (OAuth, full enumeration) for user %s",
+        len(project_ids), user_id,
+    )
     return project_ids, None
 
 

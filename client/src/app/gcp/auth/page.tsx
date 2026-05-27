@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -26,8 +27,9 @@ interface ServiceAccount {
   account_alias: string | null;
   project_id: string | null;
   accessible_project_ids: string[];
-  visibility: "private" | "org" | string;
-  status: "active" | "inactive" | string;
+  // Free-form so the backend can introduce new values without breaking the UI.
+  visibility: string;
+  status: string;
   last_verified_at: string | null;
 }
 
@@ -45,9 +47,9 @@ function formatTimestamp(value: string | null): string {
 }
 
 function dispatchProviderChanged() {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent("providerStateChanged"));
-  void fetchConnectedAccounts(true).catch(() => {});
+  if (typeof globalThis.window === "undefined") return;
+  globalThis.window.dispatchEvent(new CustomEvent("providerStateChanged"));
+  fetchConnectedAccounts(true).catch(() => {});
   ProjectCache.invalidate("gcp");
 }
 
@@ -82,7 +84,7 @@ export default function GcpAuthPage() {
   }, []);
 
   useEffect(() => {
-    void loadServiceAccounts();
+    loadServiceAccounts().catch(() => {});
   }, [loadServiceAccounts]);
 
   // Disconnect deletes the Vault secret, so inactive rows cannot be
@@ -129,9 +131,9 @@ export default function GcpAuthPage() {
 
   const handleDisconnectAll = async () => {
     if (active.length === 0) return;
-    const confirmed = typeof window === "undefined"
+    const confirmed = typeof globalThis.window === "undefined"
       ? true
-      : window.confirm(`Disconnect all ${active.length} GCP service account(s)?`);
+      : globalThis.confirm(`Disconnect all ${active.length} GCP service account(s)?`);
     if (!confirmed) return;
 
     setPendingAction("disconnect-all");
@@ -162,6 +164,88 @@ export default function GcpAuthPage() {
     dispatchProviderChanged();
     await loadServiceAccounts();
   };
+
+  let saListContent: ReactNode;
+  if (loading) {
+    saListContent = (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    );
+  } else if (active.length === 0) {
+    saListContent = (
+      <p className="text-sm text-muted-foreground py-4">
+        No active service accounts yet. Add one below.
+      </p>
+    );
+  } else {
+    saListContent = (
+      <div className="divide-y rounded-md border">
+        {active.map((sa) => {
+          const isExpanded = expandedProjects.has(sa.account_id);
+          const accessibleCount = sa.accessible_project_ids?.length ?? 0;
+          return (
+            <div key={sa.account_id} className="p-4 space-y-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-sm truncate">
+                    {sa.account_alias || sa.account_id}
+                  </div>
+                  {sa.account_alias && (
+                    <div className="text-xs text-muted-foreground truncate">
+                      {sa.account_id}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                    {sa.project_id && (
+                      <Badge variant="secondary" className="text-xs font-mono">
+                        {sa.project_id}
+                      </Badge>
+                    )}
+                    <Badge
+                      variant={sa.visibility === "org" ? "default" : "outline"}
+                      className="text-xs"
+                    >
+                      {sa.visibility === "org" ? "Org" : "Private"}
+                    </Badge>
+                    <button
+                      type="button"
+                      onClick={() => toggleProjects(sa.account_id)}
+                      className="text-xs underline text-muted-foreground hover:text-foreground"
+                    >
+                      {accessibleCount} project{accessibleCount === 1 ? "" : "s"}
+                    </button>
+                    <span className="text-xs text-muted-foreground">
+                      Verified {formatTimestamp(sa.last_verified_at)}
+                    </span>
+                  </div>
+                  {isExpanded && accessibleCount > 0 && (
+                    <ul className="mt-2 text-xs text-muted-foreground font-mono space-y-0.5 max-h-40 overflow-auto">
+                      {sa.accessible_project_ids.map((pid) => (
+                        <li key={pid}>{pid}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDelete(sa)}
+                  disabled={pendingAction === `delete:${sa.account_id}`}
+                >
+                  {pendingAction === `delete:${sa.account_id}` ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto py-8 px-4 max-w-4xl">
@@ -222,80 +306,7 @@ export default function GcpAuthPage() {
               {error}
             </div>
           )}
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-            </div>
-          ) : active.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">
-              No active service accounts yet. Add one below.
-            </p>
-          ) : (
-            <div className="divide-y rounded-md border">
-              {active.map((sa) => {
-                const isExpanded = expandedProjects.has(sa.account_id);
-                const accessibleCount = sa.accessible_project_ids?.length ?? 0;
-                return (
-                  <div key={sa.account_id} className="p-4 space-y-2">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-medium text-sm truncate">
-                          {sa.account_alias || sa.account_id}
-                        </div>
-                        {sa.account_alias && (
-                          <div className="text-xs text-muted-foreground truncate">
-                            {sa.account_id}
-                          </div>
-                        )}
-                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                          {sa.project_id && (
-                            <Badge variant="secondary" className="text-xs font-mono">
-                              {sa.project_id}
-                            </Badge>
-                          )}
-                          <Badge
-                            variant={sa.visibility === "org" ? "default" : "outline"}
-                            className="text-xs"
-                          >
-                            {sa.visibility === "org" ? "Org" : "Private"}
-                          </Badge>
-                          <button
-                            type="button"
-                            onClick={() => toggleProjects(sa.account_id)}
-                            className="text-xs underline text-muted-foreground hover:text-foreground"
-                          >
-                            {accessibleCount} project{accessibleCount === 1 ? "" : "s"}
-                          </button>
-                          <span className="text-xs text-muted-foreground">
-                            Verified {formatTimestamp(sa.last_verified_at)}
-                          </span>
-                        </div>
-                        {isExpanded && accessibleCount > 0 && (
-                          <ul className="mt-2 text-xs text-muted-foreground font-mono space-y-0.5 max-h-40 overflow-auto">
-                            {sa.accessible_project_ids.map((pid) => (
-                              <li key={pid}>{pid}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDelete(sa)}
-                        disabled={pendingAction === `delete:${sa.account_id}`}
-                      >
-                        {pendingAction === `delete:${sa.account_id}` ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {saListContent}
         </CardContent>
       </Card>
 

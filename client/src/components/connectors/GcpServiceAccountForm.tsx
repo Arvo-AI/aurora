@@ -138,7 +138,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
         credentials: "include",
         body: JSON.stringify({
           service_account_json: saJsonText,
-          alias: trimmedAlias ? trimmedAlias : undefined,
+          alias: trimmedAlias || undefined,
         }),
       });
 
@@ -179,18 +179,22 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
               accessible_projects?: unknown;
             })
           : {};
-      const accessibleList = Array.isArray(successPayload.accessible_project_ids)
-        ? successPayload.accessible_project_ids
-        : Array.isArray(successPayload.accessible_projects)
-          ? successPayload.accessible_projects
-          : null;
+      let accessibleList: unknown[] | null = null;
+      if (Array.isArray(successPayload.accessible_project_ids)) {
+        accessibleList = successPayload.accessible_project_ids;
+      } else if (Array.isArray(successPayload.accessible_projects)) {
+        accessibleList = successPayload.accessible_projects;
+      }
       const accessibleCount = accessibleList ? accessibleList.length : null;
       const connectedAs = successPayload.account_id || successPayload.email;
-      const description = connectedAs
-        ? accessibleCount !== null
-          ? `Connected as ${connectedAs} — ${accessibleCount} project${accessibleCount === 1 ? "" : "s"} accessible.`
-          : `Connected as ${connectedAs}.`
-        : "Service account connected successfully.";
+      let description: string;
+      if (!connectedAs) {
+        description = "Service account connected successfully.";
+      } else if (accessibleCount !== null) {
+        description = `Connected as ${connectedAs} — ${accessibleCount} project${accessibleCount === 1 ? "" : "s"} accessible.`;
+      } else {
+        description = `Connected as ${connectedAs}.`;
+      }
 
       toast({
         title: "GCP connected",

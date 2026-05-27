@@ -3,6 +3,7 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Tuple
 
@@ -11,6 +12,24 @@ from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize, safe_provider, hash_for_log
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GcpConnectionExtras:
+    """Per-SA fields used only by GCP multi-SA rows.
+
+    Bundled so ``save_connection_metadata`` stays under the 13-parameter cap —
+    AWS callers omit the argument entirely.
+    """
+    account_alias: Optional[str] = None
+    project_id: Optional[str] = None
+    accessible_project_ids: Optional[List[str]] = None
+    visibility: Optional[str] = None
+    secret_ref: Optional[str] = None
+
+# Shared SQL fragments used by multiple GCP-helper queries.
+_WHERE_USER_ONLY = "user_id = %s"
+_WHERE_USER_OR_ORG_SHARED = "(user_id = %s OR (org_id = %s AND visibility = 'org'))"
 
 
 def _resolve_org_id(user_id: str) -> Optional[str]:
@@ -37,25 +56,21 @@ def save_connection_metadata(
     region: Optional[str] = None,
     workspace_id: Optional[str] = None,
     status: str = "active",
-    account_alias: Optional[str] = None,
-    project_id: Optional[str] = None,
-    accessible_project_ids: Optional[List[str]] = None,
-    visibility: Optional[str] = None,
-    secret_ref: Optional[str] = None,
+    gcp_extras: Optional[GcpConnectionExtras] = None,
 ) -> bool:
     """Insert or update a row in user_connections.
 
-    Uses an UPSERT so callers can invoke freely. New GCP-multi-SA columns
-    (account_alias, project_id, accessible_project_ids, visibility, secret_ref)
-    are optional; COALESCE preserves existing values when callers (e.g. AWS)
-    don't pass them.
+    Uses an UPSERT so callers can invoke freely. ``gcp_extras`` carries the
+    multi-SA-only fields (alias / project / accessible_projects / visibility /
+    secret_ref); COALESCE preserves existing values when omitted (e.g. AWS).
 
     Returns True on success, False otherwise.
     """
     org_id = _resolve_org_id(user_id)
+    extras = gcp_extras or GcpConnectionExtras()
     accessible_json = (
-        json.dumps(accessible_project_ids)
-        if accessible_project_ids is not None
+        json.dumps(extras.accessible_project_ids)
+        if extras.accessible_project_ids is not None
         else None
     )
     sql = """
@@ -103,18 +118,18 @@ def save_connection_metadata(
                     workspace_id,
                     status,
                     datetime.now(timezone.utc),
-                    account_alias,
-                    project_id,
+                    extras.account_alias,
+                    extras.project_id,
                     accessible_json,
-                    visibility,
-                    secret_ref,
+                    extras.visibility,
+                    extras.secret_ref,
                 ),
             )
         conn.commit()
         logger.info("[CONN-META] Upsert successful user=%s provider=%s account=%s", hash_for_log(user_id), safe_provider(provider), hash_for_log(account_id))
         return True
-    except Exception as e:
-        logger.error("Failed to save connection metadata: %s", e)
+    except Exception:
+        logger.exception("Failed to save connection metadata")
         if conn:
             conn.rollback()
         return False
@@ -401,44 +416,56 @@ def delete_connection_secret(
 # ---------------------------------------------------------------------------
 
 
-def _row_to_connection_dict(row) -> Dict:
-    """Decode a SELECT row from the standard GCP-helper column list.
+def _gcp_visibility_clause(user_id: str) -> Tuple[str, Tuple]:
+    """Build the SQL WHERE clause + params for GCP visibility scoping.
 
-    Normalizes ``accessible_project_ids`` to ``List[str]``. The column may have
-    been written as either ``["foo", "bar"]`` (new shape) or as the legacy
-    dict shape ``[{"project_id": "foo", "name": "Foo"}]`` from older code.
+    Returns ``(where_fragment, params_tuple)`` — own private rows always
+    visible, plus org-shared rows in the same org when ``org_id`` resolves.
     """
-    accessible = row[3]
-    if isinstance(accessible, str):
+    org_id = _resolve_org_id(user_id)
+    if org_id is None:
+        return _WHERE_USER_ONLY, (user_id,)
+    return _WHERE_USER_OR_ORG_SHARED, (user_id, org_id)
+
+
+def _normalize_accessible_projects(raw, account_id_for_log: str) -> List[str]:
+    """Coerce ``accessible_project_ids`` (str|list[str|dict]|other) to ``List[str]``.
+
+    Tolerates the legacy ``[{"project_id": "foo"}]`` shape and JSON-encoded
+    strings. Silently dropping malformed values would surface to the LLM as
+    "this SA has zero accessible projects" — a confusing symptom of a data
+    issue, so we log a warning.
+    """
+    if isinstance(raw, str):
         try:
-            accessible = json.loads(accessible)
+            raw = json.loads(raw)
         except Exception as _exc:
-            # Silently dropping malformed JSON would surface to the LLM as
-            # "this SA has zero accessible projects" — a confusing symptom
-            # for what is really a data-integrity problem.
             logger.warning(
                 "[CONN-META] Failed to decode accessible_project_ids JSON for account=%s: %s",
-                hash_for_log(row[0] or ""),
+                hash_for_log(account_id_for_log),
                 _exc,
             )
-            accessible = []
-    if isinstance(accessible, list):
-        normalized = []
-        for item in accessible:
-            if isinstance(item, str) and item:
-                normalized.append(item)
-            elif isinstance(item, dict):
-                pid = item.get("project_id") or item.get("projectId")
-                if pid:
-                    normalized.append(pid)
-        accessible = normalized
-    else:
-        accessible = []
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    for item in raw:
+        if isinstance(item, str) and item:
+            out.append(item)
+        elif isinstance(item, dict):
+            pid = item.get("project_id") or item.get("projectId")
+            if pid:
+                out.append(pid)
+    return out
+
+
+def _row_to_connection_dict(row) -> Dict:
+    """Decode a SELECT row from the standard GCP-helper column list."""
     return {
         "account_id": row[0],
         "account_alias": row[1],
         "project_id": row[2],
-        "accessible_project_ids": accessible,
+        "accessible_project_ids": _normalize_accessible_projects(row[3], row[0] or ""),
         "visibility": row[4],
         "secret_ref": row[5],
         "status": row[6],
@@ -458,14 +485,7 @@ def get_all_user_connections(user_id: str, provider: str) -> List[Dict]:
     Includes org-shared rows when ``visibility = 'org'``; private rows from
     other users in the same org are excluded.
     """
-    org_id = _resolve_org_id(user_id)
-    if org_id is None:
-        where = "user_id = %s"
-        params = (user_id,)
-    else:
-        # Own private rows + any org-shared rows in the same org.
-        where = "(user_id = %s OR (org_id = %s AND visibility = 'org'))"
-        params = (user_id, org_id)
+    where, params = _gcp_visibility_clause(user_id)
 
     sql = f"""
         SELECT {_GCP_SELECT_COLUMNS}
@@ -481,12 +501,11 @@ def get_all_user_connections(user_id: str, provider: str) -> List[Dict]:
             cur.execute(sql, (*params, provider, user_id))
             rows = cur.fetchall()
         return [_row_to_connection_dict(r) for r in rows]
-    except Exception as e:
-        logger.error(
-            "Error listing connections for user=%s provider=%s: %s",
+    except Exception:
+        logger.exception(
+            "Error listing connections for user=%s provider=%s",
             hash_for_log(user_id),
             safe_provider(provider),
-            e,
         )
         return []
     finally:
@@ -501,13 +520,7 @@ def get_user_connection(
 
     Honors org sharing: org-shared rows in the same org are visible.
     """
-    org_id = _resolve_org_id(user_id)
-    if org_id is None:
-        where = "user_id = %s"
-        params = (user_id,)
-    else:
-        where = "(user_id = %s OR (org_id = %s AND visibility = 'org'))"
-        params = (user_id, org_id)
+    where, params = _gcp_visibility_clause(user_id)
 
     sql = f"""
         SELECT {_GCP_SELECT_COLUMNS}
@@ -523,12 +536,11 @@ def get_user_connection(
             cur.execute(sql, (*params, provider, account_id))
             row = cur.fetchone()
         return _row_to_connection_dict(row) if row else None
-    except Exception as e:
-        logger.error(
-            "Error fetching connection user=%s provider=%s: %s",
+    except Exception:
+        logger.exception(
+            "Error fetching connection user=%s provider=%s",
             hash_for_log(user_id),
             safe_provider(provider),
-            e,
         )
         return None
     finally:
@@ -549,13 +561,7 @@ def find_connection_for_project(
     if not project_id:
         return None
 
-    org_id = _resolve_org_id(user_id)
-    if org_id is None:
-        where = "user_id = %s"
-        params = (user_id,)
-    else:
-        where = "(user_id = %s OR (org_id = %s AND visibility = 'org'))"
-        params = (user_id, org_id)
+    where, params = _gcp_visibility_clause(user_id)
 
     # accessible_project_ids may be stored in either shape:
     #   ["foo", "bar"]                              ← canonical (new code)
@@ -598,13 +604,12 @@ def find_connection_for_project(
             )
             row = cur.fetchone()
         return _row_to_connection_dict(row) if row else None
-    except Exception as e:
-        logger.error(
-            "Error finding connection for project=%s user=%s provider=%s: %s",
+    except Exception:
+        logger.exception(
+            "Error finding connection for project=%s user=%s provider=%s",
             hash_for_log(project_id),
             hash_for_log(user_id),
             safe_provider(provider),
-            e,
         )
         return None
     finally:
@@ -656,8 +661,8 @@ def deactivate_connection(
             hash_for_log(account_id),
         )
         return True, secret_ref
-    except Exception as e:
-        logger.error("[CONN-META] Failed to deactivate connection: %s", e)
+    except Exception:
+        logger.exception("[CONN-META] Failed to deactivate connection")
         if conn:
             conn.rollback()
         return False, None
@@ -704,8 +709,8 @@ def deactivate_all_connections(
             safe_provider(provider),
         )
         return True, refs
-    except Exception as e:
-        logger.error("[CONN-META] Failed to deactivate all connections: %s", e)
+    except Exception:
+        logger.exception("[CONN-META] Failed to deactivate all connections")
         if conn:
             conn.rollback()
         return False, []

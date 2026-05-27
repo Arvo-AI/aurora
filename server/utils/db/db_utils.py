@@ -1648,10 +1648,9 @@ def initialize_tables():
                     "Ensured multi-SA GCP columns (account_alias, project_id, "
                     "accessible_project_ids, visibility, secret_ref) on user_connections."
                 )
-            except Exception as e:
-                logging.error(
-                    "FATAL: Failed to ensure multi-SA GCP columns on user_connections: %s",
-                    e,
+            except Exception:
+                logging.exception(
+                    "FATAL: Failed to ensure multi-SA GCP columns on user_connections"
                 )
                 conn.rollback()
                 raise

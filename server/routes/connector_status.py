@@ -13,7 +13,7 @@ import base64
 import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 from flask import Blueprint, jsonify
@@ -645,6 +645,30 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True}
 
 
+def _gcp_multi_sa_status(user_id: str) -> Optional[Dict[str, Any]]:
+    """Return multi-SA status payload or ``None`` when no rows / lookup failed."""
+    try:
+        from utils.db.connection_utils import get_all_user_connections
+
+        connections = get_all_user_connections(user_id, "gcp")
+    except Exception as exc:
+        logger.debug("[STATUS] gcp user_connections lookup failed: %s", exc)
+        return None
+    if not connections:
+        return None
+    primary = connections[0]
+    response: Dict[str, Any] = {
+        "connected": True,
+        "authType": "service_account",
+        "count": len(connections),
+    }
+    if primary.get("account_id"):
+        response["clientEmail"] = primary["account_id"]
+    if primary.get("project_id"):
+        response["defaultProjectId"] = primary["project_id"]
+    return response
+
+
 def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
     """GCP credential-existence check.
 
@@ -655,24 +679,9 @@ def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
     """
     user_id = creds.get("_user_id")
     if user_id:
-        try:
-            from utils.db.connection_utils import get_all_user_connections
-
-            connections = get_all_user_connections(user_id, "gcp")
-            if connections:
-                primary = connections[0]
-                response: Dict[str, Any] = {
-                    "connected": True,
-                    "authType": "service_account",
-                    "count": len(connections),
-                }
-                if primary.get("account_id"):
-                    response["clientEmail"] = primary["account_id"]
-                if primary.get("project_id"):
-                    response["defaultProjectId"] = primary["project_id"]
-                return response
-        except Exception as exc:
-            logger.debug("[STATUS] gcp user_connections lookup failed: %s", exc)
+        multi_sa = _gcp_multi_sa_status(user_id)
+        if multi_sa:
+            return multi_sa
 
     # ── Legacy fallback: OAuth/single-SA stored in user_tokens ──────
     from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
