@@ -11,6 +11,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_datadog_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils.cloud.gcp_project_extraction import extract_gcp_project_from_alert
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,10 @@ def process_datadog_event(
                     alert_metadata["priority"] = payload.get("priority")
                 if payload.get("snapshot"):
                     alert_metadata["snapshotUrl"] = payload.get("snapshot")
+
+                pid = extract_gcp_project_from_alert(payload, "datadog")
+                if pid:
+                    alert_metadata["gcp_project_id"] = pid
 
                 try:
                     correlator = AlertCorrelator()
