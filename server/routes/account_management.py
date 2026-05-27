@@ -301,16 +301,16 @@ def delete_connected_account(user_id, target_user_id, provider):
         # --------------------------------------------------------------
         if provider_lc == "aws":
             from utils.db.connection_utils import (
-                list_active_connections,
+                get_all_user_aws_connections,
                 delete_connection_secret,
             )
 
-            active = list_active_connections(user_id)
+            active = get_all_user_aws_connections(user_id)
             if not active:
                 logging.info("No active AWS connections found for user %s", user_id)
 
-            for conn in active:
-                acc_id = conn["account_id"]
+            for aws_conn in active:
+                acc_id = aws_conn["account_id"]
                 _ok = delete_connection_secret(user_id, "aws", acc_id)
                 try:
                     from utils.auth.stateless_auth import invalidate_cached_aws_creds

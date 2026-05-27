@@ -139,10 +139,11 @@ class STSAssumeRoleClient:
                 f"This is a security requirement to prevent unauthorized role assumption."
             )
         
-        # Cache key includes role, external_id, and policy hash for security
+        # Cache key MUST include user_id to prevent cross-tenant credential leakage
         import hashlib
         policy_hash = hashlib.md5(session_policy.encode()).hexdigest()[:8] if session_policy else "full"
-        cache_key = f"{role_arn}:{external_id}:{policy_hash}"
+        uid = user_id or "anonymous"
+        cache_key = f"{uid}:{role_arn}:{external_id}:{policy_hash}"
         current_time = int(time.time())
         
         # Check cache first (leave 60s buffer before expiration)

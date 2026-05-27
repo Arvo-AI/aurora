@@ -392,7 +392,8 @@ def initialize_tables():
                         read_only_role_arn VARCHAR(512),
                         connection_method VARCHAR(50),
                         region VARCHAR(50),
-                        status VARCHAR(20) DEFAULT 'active', -- active | not_connected | error
+                        shared_with_org BOOLEAN NOT NULL DEFAULT FALSE,
+                        status VARCHAR(20) DEFAULT 'active',
                         last_verified_at TIMESTAMP,
                         UNIQUE(user_id, provider, account_id)
                     );
@@ -1655,6 +1656,22 @@ def initialize_tables():
                 )
                 conn.rollback()
                 raise
+
+            # Add shared_with_org flag — connections are private by default,
+            # only visible to org members when owner explicitly shares.
+            try:
+                cursor.execute(
+                    "ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS shared_with_org BOOLEAN NOT NULL DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured shared_with_org column exists on user_connections table."
+                )
+            except Exception as e:
+                logging.warning(
+                    "Failed to ensure shared_with_org column in user_connections: %s", e
+                )
+                conn.rollback()
 
             # Add stateless migration columns to user_tokens if they don't exist
             try:

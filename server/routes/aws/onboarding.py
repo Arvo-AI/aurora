@@ -304,23 +304,27 @@ def workspace_cleanup(user_id, workspace_id):
             return jsonify({"error": "Access denied"}), 403
 
         from utils.db.connection_utils import (
-            get_user_aws_connection,
+            get_all_user_aws_connections,
             delete_connection_secret,
         )
-        
-        aws_conn = get_user_aws_connection(user_id)
-        if not aws_conn:
+
+        aws_conns = get_all_user_aws_connections(user_id)
+        if not aws_conns:
             return jsonify({
-                "success": True, 
+                "success": True,
                 "message": "AWS connection already disconnected."
             })
 
-        account_id = aws_conn.get('account_id')
-        if account_id:
-            success = delete_connection_secret(user_id, "aws", account_id)
-            if not success:
-                logger.error("Failed to delete AWS connection for user %s account %s", user_id, account_id)
-                return jsonify({"error": "Failed to disconnect AWS connection"}), 500
+        failed_accounts = []
+        for aws_conn in aws_conns:
+            account_id = aws_conn.get('account_id')
+            if account_id:
+                if not delete_connection_secret(user_id, "aws", account_id):
+                    failed_accounts.append(account_id)
+                    logger.error("Failed to delete AWS connection for user %s account %s", user_id, account_id)
+
+        if failed_accounts and len(failed_accounts) == len(aws_conns):
+            return jsonify({"error": "Failed to disconnect AWS connections"}), 500
         
         try:
             from utils.db.connection_pool import db_pool
@@ -348,10 +352,7 @@ def workspace_cleanup(user_id, workspace_id):
         # Delete discovered infrastructure nodes from Memgraph
         try:
             from services.graph.memgraph_client import get_memgraph_client
-            if account_id:
-                get_memgraph_client().delete_services_for_aws_account(user_id, account_id)
-            else:
-                get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            get_memgraph_client().delete_services_for_provider(user_id, "aws")
         except Exception as e:
             logger.warning(
                 "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
@@ -433,7 +434,7 @@ def bulk_register_aws_accounts(user_id, workspace_id):
         results = []
         for entry in data["accounts"]:
             if not isinstance(entry, dict):
-                results.append({"accountId": "unknown", "success": False, "error": "Each entry must be a JSON object"})
+                results.append({"accountId": None, "success": False, "error": "Each entry must be a JSON object"})
                 continue
             role_arn = (entry.get("roleArn") or "").strip()
             account_id = (entry.get("accountId") or "").strip()
