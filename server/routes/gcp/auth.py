@@ -9,7 +9,9 @@ from connectors.gcp_connector.gcp_post_auth_tasks import gcp_post_auth_setup_tas
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_admin
+from utils.db.connection_utils import deactivate_all_connections
 from utils.secrets.secret_cache import clear_secret_cache
+from utils.secrets.secret_ref_utils import delete_connection_secret
 from time import time
 import os
 
@@ -152,6 +154,32 @@ def get_gcp_setup_status(user_id, task_id):
         return jsonify({"error": "Failed to fetch task status"}), 500
 
 
+def _cleanup_multi_sa_connections(user_id: str) -> None:
+    """Deactivate every user_connections GCP row and delete each Vault secret.
+
+    Best-effort: failures are logged but never raised, since this runs alongside
+    the legacy user_tokens cleanup and must not regress the existing contract.
+    """
+    try:
+        ok, secret_refs = deactivate_all_connections(user_id, "gcp")
+    except Exception as e:
+        logging.error("force-disconnect: failed to deactivate user_connections: %s", e)
+        return
+
+    for ref in secret_refs:
+        try:
+            delete_connection_secret(ref)
+        except Exception as e:
+            logging.warning("force-disconnect: failed to delete connection secret: %s", e)
+
+    if ok:
+        logging.info(
+            "force-disconnect: deactivated %d GCP user_connections rows for user %s",
+            len(secret_refs),
+            user_id,
+        )
+
+
 @gcp_auth_bp.route("/api/gcp/force-disconnect", methods=["POST"])
 @require_permission("connectors", "write")
 def force_disconnect_gcp(user_id):
@@ -221,6 +249,8 @@ def force_disconnect_gcp(user_id):
             logging.info(f"Cleared secret cache for user {user_id}")
         except Exception as e:
             logging.warning(f"Failed to clear secret cache: {e}")
+
+    _cleanup_multi_sa_connections(user_id)
 
     # Delete discovered infrastructure nodes from Memgraph
     try:
