@@ -2366,6 +2366,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Cloudflare tools (treating as not connected): {e}")
 
+    # Add alert payload drill-down tool for RCA sessions with an incident
+    incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+    if incident_id and is_background:
+        try:
+            from .alert_payload_tool import get_alert_field, GetAlertFieldArgs, GET_ALERT_FIELD_DESCRIPTION
+            _ctx = with_user_context(get_alert_field)
+            _notif = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notif, "get_alert_field") if tool_capture else _notif
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name="get_alert_field",
+                description=GET_ALERT_FIELD_DESCRIPTION,
+                args_schema=GetAlertFieldArgs,
+            ))
+            logging.info(f"Added get_alert_field tool for incident {incident_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add get_alert_field tool: {e}")
+
     logging.info(f"Created {len(tools)} Aurora native tools")
     
     # Add real MCP tools if available

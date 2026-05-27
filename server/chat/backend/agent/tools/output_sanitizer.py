@@ -9,10 +9,11 @@ import json
 
 logger = logging.getLogger(__name__)
 
-def truncate_json_fields(data, max_field_length=10000):
+def truncate_json_fields(data, max_field_length=10000, max_list_items=None):
     """
     Recursively truncate string fields in JSON data while preserving the JSON structure.
     Only truncates individual string values, not the entire JSON object.
+    When max_list_items is set, lists longer than that are sliced with a trailing note.
     """
     if isinstance(data, str):
         if len(data) > max_field_length:
@@ -21,14 +22,17 @@ def truncate_json_fields(data, max_field_length=10000):
     elif isinstance(data, dict):
         truncated_dict = {}
         for key, value in data.items():
-            # Truncate the key if it's too long
             safe_key = str(key) if key is not None else "null_key"
-            if len(safe_key) > 200:  # Reasonable limit for keys
+            if len(safe_key) > 200:
                 safe_key = safe_key[:200] + "..."
-            truncated_dict[safe_key] = truncate_json_fields(value, max_field_length)
+            truncated_dict[safe_key] = truncate_json_fields(value, max_field_length, max_list_items)
         return truncated_dict
     elif isinstance(data, list):
-        return [truncate_json_fields(item, max_field_length) for item in data]
+        if max_list_items and len(data) > max_list_items:
+            items = [truncate_json_fields(item, max_field_length, max_list_items) for item in data[:max_list_items]]
+            items.append(f"... [{len(data) - max_list_items} more items]")
+            return items
+        return [truncate_json_fields(item, max_field_length, max_list_items) for item in data]
     else:
         return data
 

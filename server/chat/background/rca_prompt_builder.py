@@ -11,6 +11,7 @@ Aurora Learn Integration:
 """
 
 from typing import Any, Dict, List, Optional
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1239,3 +1240,123 @@ def build_incidentio_rca_prompt(
     }
 
     return build_rca_prompt('incidentio', alert_details, providers, user_id)
+
+
+# ============================================================================
+# Unified Raw Payload RCA Prompt Builder (v2)
+# ============================================================================
+
+PAYLOAD_CHAR_THRESHOLD = 10_000
+
+
+def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
+    """Extract attacker-controllable text from a raw payload for guardrail evaluation."""
+    _RAIL_FIELDS = (
+        'title', 'message', 'body', 'description', 'text', 'summary',
+        'alert_title', 'event_title', 'ruleName', 'name', 'condition_name',
+    )
+    parts: List[str] = []
+
+    def _collect(obj: Any, depth: int = 0) -> None:
+        if depth > 2:
+            return
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if isinstance(val, str) and key.lower().rstrip('_') in _RAIL_FIELDS:
+                    stripped = val.strip()
+                    if stripped:
+                        parts.append(stripped)
+                elif isinstance(val, (dict, list)):
+                    _collect(val, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj[:5]:
+                _collect(item, depth + 1)
+
+    _collect(payload)
+    combined = "\n\n".join(parts)
+    return combined[:3000]
+
+
+def build_rca_prompt_v2(
+    source: str,
+    title: str,
+    payload: Dict[str, Any],
+    user_id: Optional[str] = None,
+) -> tuple[str, str]:
+    """Build an RCA prompt by passing the raw webhook payload directly.
+
+    This is an alternative to the per-provider build_*_rca_prompt() functions.
+    Instead of manually extracting fields, we pass the raw JSON so the LLM
+    parses it directly. Payloads under PAYLOAD_CHAR_THRESHOLD are passed
+    verbatim; larger ones get per-field truncation so the agent can drill
+    down via the get_alert_field tool.
+
+    Args:
+        source: Provider name (grafana, datadog, incidentio, etc.)
+        title: Alert title (already extracted by the caller for incident creation)
+        payload: The raw webhook payload dict
+        user_id: For provider lookup, Aurora Learn, and prediscovery context
+
+    Returns:
+        (prompt, rail_text) tuple
+    """
+    from chat.backend.agent.tools.output_sanitizer import truncate_json_fields
+
+    providers = get_user_providers(user_id) if user_id else []
+
+    serialized = json.dumps(payload, ensure_ascii=False, default=str)
+    payload_size = len(serialized)
+
+    if payload_size <= PAYLOAD_CHAR_THRESHOLD:
+        json_content = serialized
+        truncation_note = ""
+    else:
+        truncated = truncate_json_fields(payload, max_field_length=250, max_list_items=10)
+        json_content = json.dumps(truncated, ensure_ascii=False, default=str)
+        if len(json_content) > 15_000:
+            json_content = json_content[:15_000] + "\n... [payload truncated at 15000 chars]"
+        truncation_note = (
+            "Some field values were truncated. Use the `get_alert_field` tool "
+            "with a dot-separated path to retrieve full values.\n"
+        )
+
+    prompt_parts = [
+        f"# ROOT CAUSE ANALYSIS REQUIRED - {source.upper()} ALERT",
+        "",
+        f"## ALERT: {title}",
+        "",
+        "## CONNECTED INFRASTRUCTURE:",
+        f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
+        "",
+        "## WEBHOOK PAYLOAD:",
+        truncation_note + "<alert_payload>",
+        json_content,
+        "</alert_payload>",
+    ]
+
+    # Aurora Learn: inject context from similar past incidents
+    alert_service = ""
+    if user_id:
+        similar_context = _get_similar_good_rcas_context(
+            user_id=user_id,
+            alert_title=title,
+            alert_service=alert_service,
+            source_type=source,
+        )
+        if similar_context:
+            prompt_parts.append(similar_context)
+
+    # Prediscovery: inject infrastructure topology context
+    if user_id:
+        prediscovery_context = _get_prediscovery_context(
+            user_id=user_id,
+            alert_title=title,
+            alert_service=alert_service,
+        )
+        if prediscovery_context:
+            prompt_parts.append(prediscovery_context)
+
+    prompt = "\n".join(prompt_parts)
+    rail_text = _extract_rail_text_from_payload(payload)
+
+    return prompt, rail_text

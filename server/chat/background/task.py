@@ -403,6 +403,125 @@ def _build_rca_context(
     }
 
 
+def _spawn_v2_comparison(
+    user_id: str,
+    incident_id: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    provider_preference: Optional[List[str]],
+    mode: str,
+) -> None:
+    """Spawn a sibling RCA task using build_rca_prompt_v2 for A/B comparison.
+
+    Retrieves the raw webhook payload from the DB (via incident → source event table),
+    builds a v2 prompt, creates a duplicate incident + session prefixed [V2], and fires
+    the sibling run_background_chat task with prompt_version='v2'.
+    """
+    from chat.background.rca_prompt_builder import build_rca_prompt_v2
+    from chat.backend.agent.tools.alert_payload_tool import _SOURCE_TABLE_MAP
+
+    alert_title = (trigger_metadata or {}).get("alert_title", "Investigation")
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:V2Fork]")
+
+            # Look up the incident to get source_type, source_alert_id, and org_id
+            cursor.execute(
+                "SELECT source_type, source_alert_id, org_id FROM incidents WHERE id = %s",
+                (incident_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                logger.warning(f"[BackgroundChat:V2Fork] Incident {incident_id} not found")
+                return
+            source_type, source_alert_id, org_id = row[0], row[1], row[2]
+
+            # Retrieve the raw payload from the source event table
+            table = _SOURCE_TABLE_MAP.get(source_type)
+            if not table:
+                logger.warning(f"[BackgroundChat:V2Fork] Unknown source_type '{source_type}', skipping v2")
+                return
+
+            # Try direct ID lookup first (works for most providers where
+            # source_alert_id = event table row ID)
+            payload_row = None
+            cursor.execute(f"SELECT payload FROM {table} WHERE id = %s", (source_alert_id,))
+            payload_row = cursor.fetchone()
+
+            # Fallback: query by user/org + most recent entry (handles Grafana
+            # where source_alert_id is a CRC hash, not the row ID)
+            if not payload_row or not payload_row[0]:
+                cursor.execute(
+                    f"SELECT payload FROM {table} WHERE user_id = %s AND org_id = %s "
+                    f"ORDER BY received_at DESC LIMIT 1",
+                    (user_id, org_id),
+                )
+                payload_row = cursor.fetchone()
+
+            if not payload_row or not payload_row[0]:
+                logger.warning(f"[BackgroundChat:V2Fork] No payload in {table} for source_alert_id={source_alert_id}")
+                return
+
+            raw_payload = payload_row[0]
+            if isinstance(raw_payload, str):
+                raw_payload = json.loads(raw_payload)
+
+            # Build v2 prompt
+            v2_prompt, v2_rail_text = build_rca_prompt_v2(
+                source=source_type,
+                title=alert_title,
+                payload=raw_payload,
+                user_id=user_id,
+            )
+
+            # Create a separate incident for the v2 run.
+            # Use a negative epoch-ms as source_alert_id to avoid unique constraint conflicts.
+            v2_source_alert_id = -int(datetime.now(timezone.utc).timestamp() * 1000) % (2**31)
+            sibling_title = f"[V2] {alert_title}"[:200]
+            cursor.execute(
+                """INSERT INTO incidents
+                   (user_id, org_id, source_type, source_alert_id, alert_title,
+                    alert_service, severity, status, started_at, alert_metadata)
+                   SELECT user_id, org_id, source_type,
+                          %s,
+                          %s, alert_service, severity, 'investigating',
+                          started_at, alert_metadata
+                   FROM incidents WHERE id = %s
+                   RETURNING id""",
+                (v2_source_alert_id, sibling_title, incident_id),
+            )
+            sibling_row = cursor.fetchone()
+            if not sibling_row:
+                logger.warning("[BackgroundChat:V2Fork] Failed to create sibling incident")
+                return
+            sibling_incident_id = str(sibling_row[0])
+        conn.commit()
+
+    # Create a session for the v2 run
+    sibling_session_id = create_background_chat_session(
+        user_id=user_id,
+        title=sibling_title,
+        trigger_metadata={**(trigger_metadata or {}), "prompt_version": "v2", "comparison_run": True},
+        incident_id=sibling_incident_id,
+        question=v2_prompt,
+    )
+
+    # Fire the sibling task
+    run_background_chat.delay(
+        user_id=user_id,
+        session_id=sibling_session_id,
+        initial_message=v2_prompt,
+        trigger_metadata=trigger_metadata,
+        provider_preference=provider_preference,
+        incident_id=sibling_incident_id,
+        send_notifications=False,
+        mode=mode,
+        rail_text=v2_rail_text,
+        prompt_version="v2",
+    )
+    logger.info(f"[BackgroundChat:V2Fork] Spawned v2 comparison for incident {incident_id} → {sibling_incident_id}")
+
+
 @celery_app.task(
     bind=True, 
     name="chat.background.run_background_chat",
@@ -420,6 +539,7 @@ def run_background_chat(
     send_notifications: bool = True,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -450,8 +570,60 @@ def run_background_chat(
     """
     from celery.exceptions import SoftTimeLimitExceeded
     
-    logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
+    # ─── A/B Comparison: fork a v2 sibling if this is the primary (v1) run ───
+    if prompt_version is None and incident_id:
+        try:
+            # Rename the primary session/incident with [V1] for easy identification
+            alert_title = (trigger_metadata or {}).get("alert_title", "Investigation")
+            v1_title = f"[V1] {alert_title}"[:200]
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:V1Label]")
+                    cursor.execute(
+                        "UPDATE chat_sessions SET title = %s WHERE id = %s",
+                        (v1_title, session_id),
+                    )
+                    cursor.execute(
+                        "UPDATE incidents SET alert_title = %s WHERE id = %s",
+                        (v1_title, incident_id),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to label v1 session: {e}")
+
+        try:
+            _spawn_v2_comparison(
+                user_id=user_id,
+                incident_id=incident_id,
+                trigger_metadata=trigger_metadata,
+                provider_preference=provider_preference,
+                mode=mode,
+            )
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to spawn v2 comparison: {e}")
+
+    logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id} (prompt_version={prompt_version or 'v1'})")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
+
+    # Eagerly persist the initial user message so it's visible in the UI immediately
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:EagerMsg]")
+                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                row = cursor.fetchone()
+                messages = row[0] if row and row[0] else []
+                if isinstance(messages, str):
+                    messages = json.loads(messages)
+                if not any(m.get("sender") == "user" for m in messages):
+                    messages.append({"sender": "user", "text": initial_message, "message_number": 1})
+                    cursor.execute(
+                        "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
+                        (json.dumps(messages), session_id),
+                    )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[BackgroundChat] Failed to eagerly persist user message: {e}")
     
     completed_successfully = False
     
