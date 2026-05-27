@@ -21,6 +21,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_grafana_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils.cloud.gcp_project_extraction import extract_gcp_project_from_alert
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +368,10 @@ def process_grafana_alert(
                             per_alert_rule_uid = single_alert.get("ruleUID") or single_alert.get("ruleUid")
                             if per_alert_rule_uid:
                                 alert_metadata["ruleUID"] = per_alert_rule_uid
+
+                            pid = extract_gcp_project_from_alert(alert_payload, "grafana")
+                            if pid:
+                                alert_metadata["gcp_project_id"] = pid
 
                             # Try to correlate with an existing open incident (time/similarity/topology based)
                             correlation_result = None
