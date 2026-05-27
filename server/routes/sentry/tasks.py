@@ -14,6 +14,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_sentry_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils.cloud.gcp_project_extraction import extract_gcp_project_from_alert
 from utils.payload_timestamp import extract_alert_fired_at
 
 # Exceptions that warrant retrying the task — DB connectivity hiccups,
@@ -155,6 +156,10 @@ def _build_alert_metadata(payload: Dict[str, Any], resource: str) -> Dict[str, A
     triggered_rule = data.get("triggered_rule")
     if triggered_rule:
         meta["triggeredRule"] = triggered_rule
+
+    pid = extract_gcp_project_from_alert(payload, "sentry")
+    if pid:
+        meta["gcp_project_id"] = pid
 
     return {k: v for k, v in meta.items() if v is not None}
 
