@@ -130,17 +130,21 @@ def clear_gcp_cache_for_user(user_id: str) -> None:
     ]:
         os.environ.pop(var, None)
     
-    # Also drop any cached SA ADC file for this user from cloud_exec_tool's
-    # in-memory cache so the next tool call rewrites it from the fresh Vault
-    # payload.
+    # Also drop any cached SA ADC files for this user from cloud_exec_tool's
+    # in-memory cache so the next tool call rewrites them from the fresh Vault
+    # payload. The cache is keyed (user_id, project_id) tuples, so a single
+    # pop(user_id) silently never matches — we have to scan and evict every
+    # tuple whose first element is this user_id.
     try:
         from chat.backend.agent.tools.cloud_exec_tool import _sa_adc_file_cache
-        stale_path = _sa_adc_file_cache.pop(user_id, None)
-        if stale_path and os.path.exists(stale_path):
-            try:
-                os.remove(stale_path)
-            except Exception as e:
-                logger.debug(f"Could not remove cached SA ADC file {stale_path}: {e}")
+        stale_keys = [k for k in _sa_adc_file_cache if isinstance(k, tuple) and k and k[0] == user_id]
+        for key in stale_keys:
+            stale_path = _sa_adc_file_cache.pop(key, None)
+            if stale_path and os.path.exists(stale_path):
+                try:
+                    os.remove(stale_path)
+                except Exception as e:
+                    logger.debug(f"Could not remove cached SA ADC file {stale_path}: {e}")
     except Exception as e:
         logger.debug(f"Could not clear SA ADC file cache for user {user_id}: {e}")
 
