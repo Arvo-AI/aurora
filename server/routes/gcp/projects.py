@@ -1,5 +1,6 @@
 """GCP project management routes."""
 import logging
+from typing import Optional
 from flask import Blueprint, request, jsonify
 from utils.auth.stateless_auth import get_user_preference
 from utils.auth.rbac_decorators import require_permission
@@ -15,10 +16,53 @@ from connectors.gcp_connector.auth.service_accounts import (
     GCP_AUTH_TYPE_SA,
 )
 from connectors.gcp_connector.billing import has_active_billing
+from connectors.gcp_connector.auth.multi_sa import load_gcp_connections_with_creds
 from googleapiclient.discovery import build
 from utils.secrets.secret_ref_utils import get_token_owner_id
 
 gcp_projects_bp = Blueprint("gcp_projects", __name__)
+
+def _multi_sa_project_list(user_id: str) -> Optional[list]:
+    """Aggregate projects across every active GCP SA connection.
+
+    Returns ``None`` when no multi-SA connections exist (caller should fall back
+    to the legacy single-token path). Returns ``[]`` when SAs exist but none
+    expose any accessible projects.
+    """
+    sa_creds_pairs = load_gcp_connections_with_creds(user_id)
+    if not sa_creds_pairs:
+        return None
+
+    # Deduplicate by projectId; first SA to see a project wins.
+    seen: dict = {}
+    for conn, creds in sa_creds_pairs:
+        try:
+            projects = get_project_list(creds) or []
+        except Exception as e:
+            logging.warning(
+                "[GCP] get_project_list failed for sa=%s: %s",
+                (conn.get("account_id") or "")[:12] + "...",
+                type(e).__name__,
+            )
+            continue
+        for project in projects:
+            pid = project.get("projectId")
+            if not pid or pid in seen:
+                continue
+            try:
+                billing_active = has_active_billing(pid, creds)
+            except Exception:
+                billing_active = False
+            seen[pid] = {
+                "projectId": pid,
+                "name": project.get("name", pid),
+                "projectNumber": project.get("projectNumber"),
+                "lifecycleState": project.get("lifecycleState", "UNKNOWN"),
+                "billingEnabled": billing_active,
+                "available": billing_active,
+            }
+    return list(seen.values())
+
 
 @gcp_projects_bp.route("/api/gcp/projects", methods=["POST"])
 @require_permission("connectors", "read")
@@ -28,53 +72,42 @@ def get_projects(user_id):
         logging.info("Fetching GCP projects with billing status")
         provider = "gcp"
 
-        # Refresh token if needed before proceeding
-        try:
-            refresh_token_if_needed(user_id, provider)
-        except Exception as e:
-            logging.error(f"Token refresh failed: {e}", exc_info=True)
-            return jsonify({"error": "Token refresh failed"}), 401
+        # Multi-SA path: aggregate projects across every connected SA. Falls
+        # through to the legacy single-token path when no user_connections rows
+        # exist (OAuth users, pre-migration).
+        project_list = _multi_sa_project_list(user_id)
 
-        logging.info(f"Received user id:'{user_id}' successfully.")
-        token_data = get_token_data(user_id, provider)
-        if not token_data:
-            logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
-            return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
-        credentials = get_credentials(token_data)
-        logging.info(f"Credentials successfully retrieved for user_id:'{user_id}'")
+        if project_list is None:
+            # Legacy fallback — single token in user_tokens.
+            try:
+                refresh_token_if_needed(user_id, provider)
+            except Exception as e:
+                logging.error(f"Token refresh failed: {e}", exc_info=True)
+                return jsonify({"error": "Token refresh failed"}), 401
 
-        projects = get_project_list(credentials)
-        logging.info(f"Returning {len(projects)} accessible projects")
-        if not projects:
+            token_data = get_token_data(user_id, provider)
+            if not token_data:
+                logging.warning(f"No token data found for user_id: {user_id}, provider: {provider}")
+                return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
+            credentials = get_credentials(token_data)
+            projects = get_project_list(credentials)
+            project_list = []
+            for project in projects:
+                pid = project.get("projectId")
+                if not pid:
+                    continue
+                billing_active = has_active_billing(pid, credentials)
+                project_list.append({
+                    "projectId": pid,
+                    "name": project.get("name", pid),
+                    "projectNumber": project.get("projectNumber"),
+                    "lifecycleState": project.get("lifecycleState", "UNKNOWN"),
+                    "billingEnabled": billing_active,
+                    "available": billing_active,
+                })
+
+        if not project_list:
             return jsonify({"message": "No projects found for the authenticated user.", "projects": []}), 200
-
-        logging.info(f"Found {len(projects)} GCP projects. Checking billing status...")
-
-        # Process each project to include billing status
-        project_list = []
-        for project in projects:
-            project_id = project.get('projectId')
-            project_name = project.get('name', project_id)
-            project_number = project.get('projectNumber')
-            lifecycle_state = project.get('lifecycleState', 'UNKNOWN')
-            
-            if not project_id:
-                continue
-
-            # Check billing status for this project
-            billing_active = has_active_billing(project_id, credentials)
-            
-            project_info = {
-                "projectId": project_id,
-                "name": project_name,
-                "projectNumber": project_number,
-                "lifecycleState": lifecycle_state,
-                "billingEnabled": billing_active,
-                "available": billing_active  # Projects are only available if billing is enabled
-            }
-            
-            project_list.append(project_info)
-            logging.info(f"Project {project_id}: billing_enabled={billing_active}")
 
         # Sort projects: billing-enabled projects first, then by name
         project_list.sort(key=lambda x: (not x["billingEnabled"], x["name"]))
@@ -98,10 +131,42 @@ def get_projects(user_id):
         return jsonify({"error": "Failed to fetch GCP projects"}), 500
 
 
+def _synthesize_multi_sa_token(user_id):
+    """Build a SA-mode token_data dict from user_connections rows.
+
+    Mirrors the legacy single-SA shape so downstream code (_sa_mode_project_list,
+    get_gcp_auth_type) works unchanged. Returns None when the user has no
+    active multi-SA connections.
+
+    Uses get_all_user_connections (metadata only) rather than
+    load_gcp_connections_with_creds — we only need the project list, not the
+    parsed google-auth Credentials objects (which require an SA key parse per
+    row).
+    """
+    from utils.db.connection_utils import get_all_user_connections
+    rows = get_all_user_connections(user_id, "gcp")
+    if not rows:
+        return None
+    accessible = []
+    seen = set()
+    for conn in rows:
+        for pid in (conn.get("accessible_project_ids") or []):
+            if pid and pid not in seen:
+                seen.add(pid)
+                accessible.append({"project_id": pid, "name": pid})
+    return {"auth_type": "service_account", "accessible_projects": accessible}
+
+
 def _load_gcp_token(user_id):
-    """Fetch GCP token data; return (token_data, None) or (None, error_response)."""
+    """Fetch GCP token data; return (token_data, None) or (None, error_response).
+
+    Prefers multi-SA when present, falls back to the legacy single-token path.
+    """
     token_data = get_token_data(user_id, "gcp")
     if not token_data:
+        synth = _synthesize_multi_sa_token(user_id)
+        if synth is not None:
+            return synth, None
         logging.warning("No token data found for user_id: %s, provider: gcp", sanitize(user_id))
         return None, (jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401)
     return token_data, None
