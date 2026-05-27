@@ -26,3 +26,7 @@ metadata:
 - Check services: `cloud_exec('gcp', 'kubectl get svc -n NAMESPACE')`
 - Check HPA: `cloud_exec('gcp', 'kubectl get hpa -n NAMESPACE')`
 - Check PVC status: `cloud_exec('gcp', 'kubectl get pvc -n NAMESPACE')`
+
+## Multi-service-account guidance
+
+When an alert tag includes a project ID (`project_id:foo` in tags, `gcp_project` in labels, or `projects/foo/...` in resource names), pass `project_id='foo'` to `cloud_exec('gcp', ...)`. To enumerate across all connected projects, omit `project_id` — Aurora will fan out across every active service account.
