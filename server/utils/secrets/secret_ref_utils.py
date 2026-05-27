@@ -496,7 +496,7 @@ def _connection_secret_name(user_id: str, provider: str, account_id: str) -> str
     which AWS Secrets Manager (and some Vault paths) reject. user_id is sanitized
     inline rather than hashed so operators can still recognize ownership.
     """
-    env = os.environ.get("AURORA_ENV") or os.environ.get("APP_ENV") or "dev"
+    env = os.environ.get("AURORA_ENV") or "dev"
     safe_env = ''.join(c for c in env.lower() if c.isalnum() or c == '-') or "dev"
     safe_user_id = ''.join(c for c in user_id if c.isalnum() or c in '-_')
     safe_provider = ''.join(c for c in provider.lower() if c.isalnum() or c == '-')
