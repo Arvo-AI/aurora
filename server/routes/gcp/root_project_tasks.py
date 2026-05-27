@@ -20,9 +20,30 @@ def setup_root_project_async(self, user_id: str, project_id: str) -> dict:
 
     token_data = get_credentials_from_db(user_id, "gcp")
     if not token_data:
-        error_message = f"No GCP credentials found for user {user_id}"
-        logger.error(error_message)
-        raise ValueError(error_message)
+        # Multi-SA users have no user_tokens row. Synthesize an SA-mode
+        # token_data from the user_connections row that owns project_id.
+        from connectors.gcp_connector.auth.multi_sa import (
+            load_gcp_credentials_for_project,
+            load_gcp_connections_with_creds,
+        )
+        pair = load_gcp_credentials_for_project(user_id, project_id) or (
+            (load_gcp_connections_with_creds(user_id) or [(None, None)])[0]
+        )
+        if not pair or not pair[0]:
+            error_message = f"No GCP credentials found for user {user_id}"
+            logger.error(error_message)
+            raise ValueError(error_message)
+        conn = pair[0]
+        accessible = [
+            {"project_id": pid, "name": pid}
+            for pid in (conn.get("accessible_project_ids") or [])
+            if pid
+        ]
+        token_data = {
+            "auth_type": GCP_AUTH_TYPE_SA,
+            "client_email": conn.get("account_id"),
+            "accessible_projects": accessible,
+        }
 
     # Service-account mode: Aurora never created a per-user SA to provision
     # against the root project. The uploaded SA is already the working
