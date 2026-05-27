@@ -188,12 +188,12 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
       const accessibleCount = accessibleList ? accessibleList.length : null;
       const connectedAs = successPayload.account_id || successPayload.email;
       let description: string;
-      if (!connectedAs) {
-        description = "Service account connected successfully.";
-      } else if (accessibleCount !== null) {
+      if (connectedAs && accessibleCount !== null) {
         description = `Connected as ${connectedAs} — ${accessibleCount} project${accessibleCount === 1 ? "" : "s"} accessible.`;
-      } else {
+      } else if (connectedAs) {
         description = `Connected as ${connectedAs}.`;
+      } else {
+        description = "Service account connected successfully.";
       }
 
       toast({

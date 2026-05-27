@@ -47,7 +47,7 @@ function formatTimestamp(value: string | null): string {
 }
 
 function dispatchProviderChanged() {
-  if (typeof globalThis.window === "undefined") return;
+  if (globalThis.window === undefined) return;
   globalThis.window.dispatchEvent(new CustomEvent("providerStateChanged"));
   fetchConnectedAccounts(true).catch(() => {});
   ProjectCache.invalidate("gcp");
@@ -131,7 +131,7 @@ export default function GcpAuthPage() {
 
   const handleDisconnectAll = async () => {
     if (active.length === 0) return;
-    const confirmed = typeof globalThis.window === "undefined"
+    const confirmed = globalThis.window === undefined
       ? true
       : globalThis.confirm(`Disconnect all ${active.length} GCP service account(s)?`);
     if (!confirmed) return;

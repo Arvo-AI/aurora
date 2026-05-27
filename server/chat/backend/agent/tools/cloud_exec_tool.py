@@ -1437,8 +1437,12 @@ def _maybe_fan_out_gcp_multi_sa(
     try:
         if get_selected_project_id():
             return None
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(
+            "Failed to resolve selected GCP project in _maybe_fan_out_gcp_multi_sa; "
+            "continuing with fallback fan-out decision. Error: %s",
+            e,
+        )
     from utils.db.connection_utils import get_all_user_connections
     all_gcp_conns = get_all_user_connections(user_id, "gcp")
     if len(all_gcp_conns) <= 1:
