@@ -1151,6 +1151,22 @@ def _action_is_generate_postmortem(action_id: Optional[str]) -> bool:
         return False
 
 
+def _latest_gcp_project_for_incident(cursor, incident_id) -> Optional[str]:
+    """Fetch the most recent gcp_project_id seen on an alert for this incident.
+
+    Caller must have RLS context set on the cursor (this runs in Celery, no
+    Flask request context). incident_alerts is RLS-protected.
+    """
+    cursor.execute(
+        "SELECT alert_metadata->>'gcp_project_id' FROM incident_alerts "
+        "WHERE incident_id = %s AND alert_metadata ? 'gcp_project_id' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (incident_id,),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 async def _execute_background_chat(
     user_id: str,
     session_id: str,
@@ -1273,6 +1289,27 @@ async def _execute_background_chat(
             and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"))
         )
 
+        # Look up the most recent GCP project tied to this incident's alerts so
+        # downstream cloud tools can default to the right project without the
+        # agent having to guess. Falls back to None on any failure.
+        selected_gcp_project_id: Optional[str] = None
+        if context_incident_id:
+            try:
+                with db_pool.get_admin_connection() as _gcp_conn:
+                    with _gcp_conn.cursor() as _gcp_cur:
+                        set_rls_context(
+                            _gcp_cur, _gcp_conn, user_id,
+                            log_prefix="[BackgroundChat:GcpProject]",
+                        )
+                        selected_gcp_project_id = _latest_gcp_project_for_incident(
+                            _gcp_cur, context_incident_id
+                        )
+            except Exception as _e:
+                logger.warning(
+                    "[BackgroundChat] Could not fetch gcp_project_id for incident: %s", _e
+                )
+                selected_gcp_project_id = None
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         state = State(
@@ -1281,7 +1318,7 @@ async def _execute_background_chat(
             incident_id=context_incident_id,
             incident_start_time=incident_start_time,
             provider_preference=provider_preference,
-            selected_project_id=None,
+            selected_project_id=selected_gcp_project_id,
             messages=[human_message],
             question=rail_question,
             model=ModelConfig.RCA_MODEL,
@@ -1301,7 +1338,7 @@ async def _execute_background_chat(
             user_id=user_id,
             session_id=session_id,
             provider_preference=provider_preference,
-            selected_project_id=None,
+            selected_project_id=selected_gcp_project_id,
             mode=mode,
             state=state,  # Pass state so incident_id is available in context
             workflow=wf,  # Pass workflow so RCA context updates can be injected
