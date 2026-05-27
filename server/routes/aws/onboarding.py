@@ -325,40 +325,42 @@ def workspace_cleanup(user_id, workspace_id):
 
         if failed_accounts and len(failed_accounts) == len(aws_conns):
             return jsonify({"error": "Failed to disconnect AWS connections"}), 500
-        
-        try:
-            from utils.db.connection_pool import db_pool
-            with db_pool.get_admin_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    """UPDATE workspaces SET aws_discovery_summary = NULL,
-                       aws_discovery_artifact_bucket = NULL,
-                       aws_discovery_artifact_key = NULL,
-                       updated_at = CURRENT_TIMESTAMP
-                       WHERE id = %s""",
-                    (workspace_id,),
+
+        # Only wipe workspace discovery state and graph nodes if no active
+        # AWS connections remain (partial disconnect should preserve state).
+        remaining = get_all_user_aws_connections(user_id)
+        if not remaining:
+            try:
+                from utils.db.connection_pool import db_pool
+                with db_pool.get_admin_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """UPDATE workspaces SET aws_discovery_summary = NULL,
+                           aws_discovery_artifact_bucket = NULL,
+                           aws_discovery_artifact_key = NULL,
+                           updated_at = CURRENT_TIMESTAMP
+                           WHERE id = %s""",
+                        (workspace_id,),
+                    )
+                    conn.commit()
+            except Exception as db_exc:
+                logger.warning("Failed to clear workspace discovery fields for %s: %s", sanitize(workspace_id), db_exc)
+
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
+                    sanitize(user_id),
+                    sanitize(str(e)),
                 )
-                conn.commit()
-        except Exception as db_exc:
-            logger.warning("Failed to clear workspace discovery fields for %s: %s", sanitize(workspace_id), db_exc)
-            # Don't fail the request - connection is already removed from user_connections
 
         message = (
             "Aurora has disconnected AWS. "
             "Please manually remove any IAM roles in your AWS console if you no longer need them. "
             "You can now restart the onboarding flow from scratch."
         )
-
-        # Delete discovered infrastructure nodes from Memgraph
-        try:
-            from services.graph.memgraph_client import get_memgraph_client
-            get_memgraph_client().delete_services_for_provider(user_id, "aws")
-        except Exception as e:
-            logger.warning(
-                "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
-                sanitize(user_id),
-                sanitize(str(e)),
-            )
 
         return jsonify({"success": True, "message": message})
 
