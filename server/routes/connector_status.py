@@ -646,13 +646,39 @@ def _check_credentials_only(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _check_gcp_credentials(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """GCP credential-existence check that also surfaces the auth mode
-    (OAuth vs service-account) so the frontend can label the connection.
+    """GCP credential-existence check.
+
+    Prefers the multi-SA ``user_connections`` rows (one per service account).
+    Falls back to the legacy OAuth/single-SA ``user_tokens`` blob when no
+    user_connections rows exist (transition period until the migration is
+    complete).
     """
+    user_id = creds.get("_user_id")
+    if user_id:
+        try:
+            from utils.db.connection_utils import get_all_user_connections
+
+            connections = get_all_user_connections(user_id, "gcp")
+            if connections:
+                primary = connections[0]
+                response: Dict[str, Any] = {
+                    "connected": True,
+                    "authType": "service_account",
+                    "count": len(connections),
+                }
+                if primary.get("account_id"):
+                    response["clientEmail"] = primary["account_id"]
+                if primary.get("project_id"):
+                    response["defaultProjectId"] = primary["project_id"]
+                return response
+        except Exception as exc:
+            logger.debug("[STATUS] gcp user_connections lookup failed: %s", exc)
+
+    # ── Legacy fallback: OAuth/single-SA stored in user_tokens ──────
     from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
 
     auth_type = get_gcp_auth_type(creds)
-    response: Dict[str, Any] = {"connected": True, "authType": auth_type}
+    response = {"connected": True, "authType": auth_type}
     if auth_type == GCP_AUTH_TYPE_SA:
         if creds.get("client_email"):
             response["clientEmail"] = creds["client_email"]
@@ -860,6 +886,16 @@ def _check_all_connectors(
                         (user_id, org_id, provider),
                     )
                     if cur.fetchone():
+                        # Provider-specific checker may enrich the connected
+                        # response (e.g. GCP multi-SA returns count/authType
+                        # from user_connections). Pass a sentinel creds dict
+                        # so the checker can opt in via creds.get("_user_id").
+                        checker = PROVIDER_CHECKERS.get(provider)
+                        if checker:
+                            try:
+                                return provider, checker({"_user_id": token_owner_id})
+                            except Exception as exc:
+                                logger.warning("[STATUS] %s enrich check raised: %s", provider, exc)
                         return provider, {"connected": True}
             return provider, {"connected": False}
         creds["_user_id"] = token_owner_id
