@@ -218,6 +218,17 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
                 GCP_AUTH_TYPE_SA,
             )
             token_data = get_token_data(user_id, "gcp")
+            if not token_data:
+                # Multi-SA users have no user_tokens row — synthesize an
+                # SA-mode payload from user_connections for the target project.
+                from connectors.gcp_connector.auth.multi_sa import load_sa_json_for_project
+                sa_info = load_sa_json_for_project(user_id, project_id)
+                if sa_info:
+                    import json as _json
+                    token_data = {
+                        "auth_type": GCP_AUTH_TYPE_SA,
+                        "service_account_json": _json.dumps(sa_info),
+                    }
             # SA mode uses service_account_json; OAuth mode uses refresh_token.
             # create_local_credentials_file handles both.
             has_creds = token_data and (
