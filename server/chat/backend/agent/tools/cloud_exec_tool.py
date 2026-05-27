@@ -461,29 +461,45 @@ def setup_aws_environments_all_accounts(user_id: str):
 # GCE metadata server and can inflate a ~1s 403 into a 60s timeout. Writing
 # the SA JSON once per user and pointing GOOGLE_APPLICATION_CREDENTIALS at it
 # gives gcloud a concrete, refreshable credential source.
-_sa_adc_file_cache: dict[str, str] = {}
+_sa_adc_file_cache: dict[tuple, str] = {}
 
 
-def _get_sa_adc_file(user_id: str) -> Optional[str]:
-    """Return a tempfile path containing the user's SA JSON (cached per user)."""
-    cached = _sa_adc_file_cache.get(user_id)
+def _get_sa_adc_file(user_id: str, selected_project_id: Optional[str] = None) -> Optional[str]:
+    """Return a tempfile path containing the right SA's JSON for this project.
+
+    Cached per (user_id, selected_project_id) so multi-SA users get a distinct
+    ADC file per project — different SAs must never share a tempfile.
+    """
+    cache_key = (user_id, selected_project_id or "")
+    cached = _sa_adc_file_cache.get(cache_key)
     if cached and os.path.exists(cached):
         return cached
     try:
-        from utils.auth.token_management import get_token_data
-        from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
-        token_data = get_token_data(user_id, "gcp")
-        if not token_data or get_gcp_auth_type(token_data) != GCP_AUTH_TYPE_SA:
-            return None
-        sa_json = token_data.get("service_account_json")
-        if not sa_json:
-            return None
-        # Sanity-check that the stored JSON parses before writing it.
-        json.loads(sa_json)
+        # Multi-SA first: pick the SA that owns/has-access to the project, or
+        # the first connected SA when no project is specified.
+        from connectors.gcp_connector.auth.multi_sa import load_sa_json_for_project
+        sa_info = load_sa_json_for_project(user_id, selected_project_id)
+
+        sa_json_text: Optional[str] = None
+        if sa_info:
+            sa_json_text = json.dumps(sa_info)
+        else:
+            # Legacy single-SA fallback (user_tokens).
+            from utils.auth.token_management import get_token_data
+            from connectors.gcp_connector.auth import GCP_AUTH_TYPE_SA, get_gcp_auth_type
+            token_data = get_token_data(user_id, "gcp")
+            if not token_data or get_gcp_auth_type(token_data) != GCP_AUTH_TYPE_SA:
+                return None
+            sa_json_text = token_data.get("service_account_json")
+            if not sa_json_text:
+                return None
+            # Sanity-check that the stored JSON parses before writing it.
+            json.loads(sa_json_text)
+
         fd, path = tempfile.mkstemp(suffix=".json", prefix="gcp_sa_adc_")
         with os.fdopen(fd, "w") as f:
-            f.write(sa_json)
-        _sa_adc_file_cache[user_id] = path
+            f.write(sa_json_text)
+        _sa_adc_file_cache[cache_key] = path
         logger.info("Wrote SA ADC file for local GCP tooling")
         return path
     except Exception as e:
@@ -555,7 +571,7 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             # to GCE metadata-server probing when the access token hits a 403
             # (that probe hangs in non-GCE environments and turns fast API
             # errors into 60s timeouts).
-            adc_file = _get_sa_adc_file(user_id)
+            adc_file = _get_sa_adc_file(user_id, selected_project_id=selected_project_id)
             if adc_file:
                 isolated_env["GOOGLE_APPLICATION_CREDENTIALS"] = adc_file
         else:
@@ -1254,7 +1270,147 @@ def _cloud_exec_aws_multi_account(
     })
 
 
-def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None) -> str:
+def _cloud_exec_gcp_multi_sa(
+    user_id: str,
+    connections: list,
+    command: str,
+    provider_preference: Optional[str] = None,
+    timeout: Optional[int] = None,
+    output_file: Optional[str] = None,
+    fn_start: float = 0,
+) -> str:
+    """Run a gcloud/kubectl command across every connected GCP SA, sequentially.
+
+    Mirrors the AWS multi-account fan-out but with per-SA env isolation and
+    sequential execution (v1). Each SA's output is wrapped with a header so
+    the agent can attribute results to the right project.
+    """
+    current_mode = get_mode_from_context()
+    allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
+        current_mode,
+        is_read_only_command(command),
+        command,
+    )
+    if not allowed:
+        logger.warning(read_only_message)
+        return json.dumps({
+            "success": False,
+            "error": read_only_message,
+            "code": "READ_ONLY_MODE",
+            "multi_sa": True,
+            "command": command,
+            "provider": "gcp",
+        })
+
+    # output_file is intentionally not supported in fan-out mode: there is no
+    # single canonical output to persist when N SAs run the command. Force the
+    # caller (LLM) to pick a project so the single-SA path writes the file.
+    if output_file:
+        return json.dumps({
+            "success": False,
+            "error": (
+                "output_file is not supported with multi-SA fan-out — "
+                "pass project_id='<your-gcp-project>' to target one SA."
+            ),
+            "code": "MULTI_SA_OUTPUT_FILE_UNSUPPORTED",
+            "multi_sa": True,
+            "command": command,
+            "provider": "gcp",
+        })
+
+    blocks: list[str] = []
+    overall_success = True
+
+    for conn in connections:
+        project_id = conn.get("project_id")
+        sa_email = conn.get("account_id") or "unknown"
+        alias_or_email = conn.get("account_alias") or sa_email
+
+        # Without a distinct project_id, two SAs would collide on the
+        # ADC-file cache key (user_id, project_id or "") and silently reuse
+        # the first SA's tempfile. Skip the row — it indicates a malformed
+        # connection record anyway.
+        if not project_id:
+            logger.warning(
+                "Multi-SA fan-out skipping sa=%s with no project_id",
+                hash_for_log(sa_email),
+            )
+            blocks.append(
+                f"[sa: {alias_or_email}]\n"
+                f"<error>Connection record is missing project_id; reconnect this service account.</error>"
+            )
+            overall_success = False
+            continue
+
+        try:
+            ok, resolved_project_id, _auth_method, isolated_env = (
+                setup_gcp_environment_isolated(
+                    user_id,
+                    selected_project_id=project_id,
+                    provider_preference=provider_preference,
+                )
+            )
+            if not ok or not isolated_env:
+                blocks.append(
+                    f"[project: {project_id} / sa: {alias_or_email}]\n"
+                    f"<error>Failed to set up GCP environment for project {project_id}</error>"
+                )
+                overall_success = False
+                continue
+
+            effective_project = resolved_project_id or project_id
+            cmd = command.strip()
+            if not cmd.startswith("gcloud") and not cmd.startswith("kubectl") \
+                    and not cmd.startswith("gsutil") and not cmd.startswith("bq") \
+                    and not cmd.startswith("terraform") and not cmd.startswith("helm"):
+                cmd = f"gcloud {cmd}"
+            if cmd.startswith("gcloud") and effective_project and "--project" not in cmd \
+                    and "gcloud config" not in cmd:
+                cmd += f" --project={effective_project}"
+
+            effective_timeout = get_command_timeout(cmd, timeout)
+            cmd_args = shlex.split(cmd)
+            result = terminal_run(
+                cmd_args, capture_output=True, text=True,
+                timeout=effective_timeout, env=isolated_env,
+            )
+            if result.returncode == 0:
+                output = result.stdout.strip()
+            else:
+                output = (result.stderr or result.stdout).strip()
+                overall_success = False
+
+            blocks.append(
+                f"[project: {effective_project} / sa: {alias_or_email}]\n{output}"
+            )
+        except Exception as e:
+            logger.exception(
+                "Multi-SA exec failed for project=%s sa=%s",
+                project_id, hash_for_log(sa_email),
+            )
+            overall_success = False
+            blocks.append(
+                f"[project: {project_id} / sa: {alias_or_email}]\n"
+                f"<error>{str(e)[:300]}</error>"
+            )
+
+    elapsed = time.perf_counter() - fn_start if fn_start else 0
+    logger.info(
+        "TIME: cloud_exec GCP multi-SA (%d SAs) completed in %.2fs",
+        len(connections), elapsed,
+    )
+
+    return json.dumps({
+        "success": overall_success,
+        "multi_sa": True,
+        "sas_queried": len(connections),
+        "command": command,
+        "provider": "gcp",
+        "output": "\n\n".join(blocks),
+    })
+
+
+def cloud_exec(provider: str, command: str, user_id: Optional[str] = None, session_id: Optional[str] = None, provider_preference: Optional[str] = None, timeout: Optional[int] = None, output_file: Optional[str] = None, account_id: Optional[str] = None, project_id: Optional[str] = None) -> str:
     """Run arbitrary command against *provider* (gcloud/kubectl/gsutil for GCP, aws/kubectl for AWS).
 
 CLI is very versatile and can be used to do the following things. It should be priority over IaC tools unless it can't be done or better done with IaC.
@@ -1433,8 +1589,56 @@ Security & Compliance
                 "provider": normalized_provider,
             })
         else:
-            # GCP isolated setup (default)
-            success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
+            # GCP multi-SA dispatch:
+            #   1. account_id (SA email) explicit → single-SA path for that SA
+            #   2. project_id explicit → single-SA path resolved via that project
+            #   3. selected_project_id in context (Track C) → single-SA path
+            #   4. multiple active SAs → fan out via _cloud_exec_gcp_multi_sa
+            #   5. else (0 or 1 SA) → legacy single-SA path
+            from utils.db.connection_utils import (
+                get_all_user_connections,
+                get_user_connection,
+                find_connection_for_project,
+            )
+            from utils.cloud.cloud_utils import get_selected_project_id
+
+            gcp_target_project = None
+            if account_id:
+                conn_row = get_user_connection(user_id, "gcp", account_id) if user_id else None
+                if conn_row:
+                    gcp_target_project = conn_row.get("project_id")
+            elif project_id:
+                conn_row = find_connection_for_project(user_id, "gcp", project_id) if user_id else None
+                if conn_row:
+                    gcp_target_project = project_id
+                else:
+                    gcp_target_project = project_id  # let setup attempt anyway
+            else:
+                ctx_project = None
+                try:
+                    ctx_project = get_selected_project_id()
+                except Exception:
+                    ctx_project = None
+                if ctx_project:
+                    gcp_target_project = ctx_project
+                else:
+                    # No specific project — fan out if multiple SAs are connected
+                    all_gcp_conns = get_all_user_connections(user_id, "gcp") if user_id else []
+                    if len(all_gcp_conns) > 1:
+                        return _cloud_exec_gcp_multi_sa(
+                            user_id=user_id,
+                            connections=all_gcp_conns,
+                            command=original_command,
+                            provider_preference=provider_preference,
+                            timeout=timeout,
+                            output_file=output_file,
+                            fn_start=fn_start,
+                        )
+
+            effective_selected_project = gcp_target_project or selected_project_id
+            success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(
+                user_id, effective_selected_project, provider_preference,
+            )
             if not success:
                 return json.dumps({"error": f"Failed to setup GCP environment with {provider_preference} authentication", "final_command": command})
             resource_id = project_id
