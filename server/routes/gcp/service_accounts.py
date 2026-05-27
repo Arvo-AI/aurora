@@ -110,17 +110,24 @@ def _verify_and_enumerate(
     except Exception as exc:
         return False, [], f"Verification failed: {type(exc).__name__}"
 
-    # 2. Best-effort enumeration of all accessible projects
+    # 2. Best-effort enumeration of all accessible projects (paginated — orgs
+    # with browser/viewer at folder level routinely return >hundreds of pages)
     accessible: List[str] = []
     try:
-        resp = crm.projects().list().execute()
-        for proj in resp.get("projects") or []:
-            pid = proj.get("projectId")
-            if not pid:
-                continue
-            if (proj.get("lifecycleState") or "ACTIVE") != "ACTIVE":
-                continue
-            accessible.append(pid)
+        page_token: Optional[str] = None
+        while True:
+            req_kwargs = {"pageToken": page_token} if page_token else {}
+            resp = crm.projects().list(**req_kwargs).execute()
+            for proj in resp.get("projects") or []:
+                pid = proj.get("projectId")
+                if not pid:
+                    continue
+                if (proj.get("lifecycleState") or "ACTIVE") != "ACTIVE":
+                    continue
+                accessible.append(pid)
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
     except Exception as exc:
         logger.info(
             "%s projects.list failed for project=%s (%s) — falling back to home project",
@@ -278,7 +285,13 @@ def delete_service_account(user_id, sa_email):
 
     if secret_ref:
         try:
-            delete_connection_secret(secret_ref)
+            if not delete_connection_secret(secret_ref):
+                logger.warning(
+                    "%s Secret cleanup failed (delete returned False) user=%s account=%s",
+                    _LOG_PREFIX,
+                    hash_for_log(user_id),
+                    hash_for_log(sa_email),
+                )
         except Exception as exc:
             logger.warning(
                 "%s Secret cleanup failed user=%s account=%s: %s",
@@ -311,7 +324,12 @@ def disconnect_all_service_accounts(user_id):
         if not ref:
             continue
         try:
-            delete_connection_secret(ref)
+            if not delete_connection_secret(ref):
+                logger.warning(
+                    "%s Bulk secret cleanup failed (delete returned False) user=%s",
+                    _LOG_PREFIX,
+                    hash_for_log(user_id),
+                )
         except Exception as exc:
             logger.warning(
                 "%s Bulk secret cleanup failed user=%s: %s",

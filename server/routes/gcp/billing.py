@@ -38,7 +38,7 @@ def billing(user_id):
                 return jsonify({"error": "No GCP credentials found. Please authenticate with GCP."}), 401
             creds_list = [("legacy", get_credentials(token_data))]
 
-        processed_projects = []
+        processed_projects: set[str] = set()
         for sa_label, credentials in creds_list:
             try:
                 projects = get_project_list(credentials) or []
@@ -53,14 +53,14 @@ def billing(user_id):
                     if is_bigquery_enabled(project_id, credentials):
                         logging.info(f"Storing billing data for project: {project_id}")
                         store_bigquery_data(credentials, project_id, user_id)
-                        processed_projects.append(project_id)
+                        processed_projects.add(project_id)
                     else:
                         logging.info(f"BigQuery not enabled for project: {project_id}, skipping")
                 except ValueError as e:
                     if "Permission Denied" in str(e):
                         logging.warning(f"Permission denied for project {project_id}, skipping.")
                         continue
-                    raise e
+                    raise
                 except Exception as e:
                     logging.warning(f"Error checking project {project_id}: {e}. Skipping.")
                     continue

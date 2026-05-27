@@ -1160,7 +1160,7 @@ def _latest_gcp_project_for_incident(cursor, incident_id) -> Optional[str]:
     cursor.execute(
         "SELECT alert_metadata->>'gcp_project_id' FROM incident_alerts "
         "WHERE incident_id = %s AND alert_metadata ? 'gcp_project_id' "
-        "ORDER BY created_at DESC LIMIT 1",
+        "ORDER BY received_at DESC LIMIT 1",
         (incident_id,),
     )
     row = cursor.fetchone()

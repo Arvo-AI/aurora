@@ -3,6 +3,7 @@ Celery tasks for scheduled infrastructure discovery.
 """
 
 import logging
+from typing import List, Optional, Tuple
 
 from celery_config import celery_app
 from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
@@ -405,7 +406,7 @@ def _oauth_full_enumeration(refreshed) -> list:
     return project_ids
 
 
-def _get_oauth_project_ids(user_id):
+def _get_oauth_project_ids(user_id) -> Tuple[List[str], Optional[str]]:
     """Return project IDs via the Cloud Resource Manager API (OAuth path).
 
     Resolution order:

@@ -73,6 +73,11 @@ def save_connection_metadata(
         if extras.accessible_project_ids is not None
         else None
     )
+    # Visibility is bound twice: the VALUES position uses COALESCE-with-default
+    # so a brand-new INSERT satisfies the column's NOT NULL DEFAULT 'private',
+    # while DO UPDATE uses the raw param so a NULL passed by the caller actually
+    # preserves the existing row's visibility (e.g. an org-flipped SA isn't
+    # silently reset to 'private' by a metadata refresh).
     sql = """
         INSERT INTO user_connections (
             user_id, org_id, provider, account_id, role_arn, read_only_role_arn,
@@ -96,7 +101,7 @@ def save_connection_metadata(
             account_alias = COALESCE(EXCLUDED.account_alias, user_connections.account_alias),
             project_id = COALESCE(EXCLUDED.project_id, user_connections.project_id),
             accessible_project_ids = COALESCE(EXCLUDED.accessible_project_ids, user_connections.accessible_project_ids),
-            visibility = COALESCE(EXCLUDED.visibility, user_connections.visibility),
+            visibility = COALESCE(%s, user_connections.visibility),
             secret_ref = COALESCE(EXCLUDED.secret_ref, user_connections.secret_ref);
     """
     conn = None
@@ -123,6 +128,7 @@ def save_connection_metadata(
                     accessible_json,
                     extras.visibility,
                     extras.secret_ref,
+                    extras.visibility,  # 2nd binding for DO UPDATE's COALESCE
                 ),
             )
         conn.commit()
@@ -526,6 +532,7 @@ def get_user_connection(
         SELECT {_GCP_SELECT_COLUMNS}
         FROM user_connections
         WHERE {where} AND provider = %s AND account_id = %s AND status = 'active'
+        ORDER BY (user_id = %s) DESC, id DESC
         LIMIT 1;
     """
     conn = None
@@ -533,7 +540,7 @@ def get_user_connection(
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:getOne]")
-            cur.execute(sql, (*params, provider, account_id))
+            cur.execute(sql, (*params, provider, account_id, user_id))
             row = cur.fetchone()
         return _row_to_connection_dict(row) if row else None
     except Exception:

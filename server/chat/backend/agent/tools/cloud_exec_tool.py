@@ -1303,6 +1303,7 @@ def _run_gcp_sa_command(
             f"<error>Connection record is missing project_id; reconnect this service account.</error>"
         )
 
+    isolated_env: Optional[dict] = None
     try:
         ok, resolved_project_id, _auth_method, isolated_env = (
             setup_gcp_environment_isolated(
@@ -1341,6 +1342,21 @@ def _run_gcp_sa_command(
             f"[project: {project_id} / sa: {alias_or_email}]\n"
             f"<error>{str(e)[:300]}</error>"
         )
+    finally:
+        # Eagerly remove the per-call CLOUDSDK_CONFIG tempdir. setup_gcp_environment_isolated
+        # registers an atexit cleanup as a safety-net, but in long-running workers a multi-SA
+        # fan-out across N accounts would otherwise leak N ".gcloud-*" dirs until process exit.
+        if isolated_env:
+            tmpdir = isolated_env.get("_gcloud_tmpdir") or isolated_env.get("CLOUDSDK_CONFIG")
+            if tmpdir and os.path.basename(tmpdir).startswith(".gcloud-"):
+                try:
+                    import shutil
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                except Exception as cleanup_err:
+                    logger.debug(
+                        "Multi-SA tempdir cleanup failed for %s: %s",
+                        tmpdir, cleanup_err,
+                    )
 
 
 def _cloud_exec_gcp_multi_sa(
@@ -1416,6 +1432,9 @@ def _cloud_exec_gcp_multi_sa(
     })
 
 
+_INLINE_PROJECT_FLAG = re.compile(r"(?:^|\s)--project(?:=|\s+)(\S+)")
+
+
 def _maybe_fan_out_gcp_multi_sa(
     *,
     user_id: Optional[str],
@@ -1430,10 +1449,15 @@ def _maybe_fan_out_gcp_multi_sa(
     """Return a fan-out response JSON when multi-SA dispatch applies, else None.
 
     Fans out only when no account_id / project_id / context project is set AND
-    more than one active GCP SA is connected. Single-SA users fall through to
-    the legacy path.
+    no ``--project`` flag is embedded in the command AND more than one active
+    GCP SA is connected. Single-SA users fall through to the legacy path.
     """
     if account_id or project_id or not user_id:
+        return None
+    # If the caller put --project=foo (or --project foo) directly in the command,
+    # treat that as an explicit target — don't fan out and run the same command
+    # against every other SA where it would simply fail.
+    if _INLINE_PROJECT_FLAG.search(original_command or ""):
         return None
     from utils.cloud.cloud_utils import get_selected_project_id
     try:

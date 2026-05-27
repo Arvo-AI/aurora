@@ -138,7 +138,7 @@ def get_connected_accounts(user_id, target_user_id):
             provider,
             account_id,
             role_arn,
-            last_verified,
+            _last_verified,
             account_alias,
             project_id,
             accessible_project_ids,
