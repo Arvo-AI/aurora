@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, RefreshCw, LogOut } from 'lucide-react';
 import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem';
 import { fetchProjects, saveProjects } from '@/components/cloud-provider/projects/projectUtils';
+import { useSetAsRoot } from '@/components/cloud-provider/projects/useSetAsRoot';
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -87,38 +88,7 @@ export default function AzureProviderIntegration({ onDisconnect }: AzureProvider
     }
   }
 
-  async function handleSetAsRoot(providerId: string, projectId: string): Promise<void> {
-    if (!userId) return;
-
-    try {
-      const response = await fetch('/api/provider-root-project/azure', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to set root subscription');
-      }
-
-      await loadProjects(true);
-
-      toast({
-        title: "Success",
-        description: "Root subscription updated successfully",
-      });
-    } catch (error: any) {
-      console.error('Error setting root subscription:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to set root subscription",
-        variant: "destructive",
-      });
-    }
-  }
+  const { setAsRoot: handleSetAsRoot } = useSetAsRoot(userId, () => loadProjects(true), 'subscription');
 
   async function handleDisconnect(): Promise<void> {
     if (!userId) return;
