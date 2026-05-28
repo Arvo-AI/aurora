@@ -77,24 +77,25 @@ def _is_gcp_service_account_mode(user_id: str) -> bool:
 
 
 def get_gcp_disabled_projects(user_id: Optional[str]) -> List[str]:
-    """Return SA-mode disabled-project IDs for ``user_id`` (empty if none/unknown).
+    """Return SA-mode disabled-project IDs for ``user_id``.
 
-    Fails open (returns ``[]``) on DB errors so the prompt build / cloud_exec
-    hot paths don't crash; the failure is logged for observability. The hard
-    enforcement layer in cloud_exec catches mistakes the prompt instruction
-    would otherwise have prevented.
+    Fails closed: raises on lookup error so the cloud_exec wrapper guard
+    refuses commands instead of silently treating a DB failure as
+    "no disabled projects" and re-allowing access. Callers that only
+    use this for soft prompt context (no enforcement) should wrap in
+    try/except locally.
     """
     if not user_id:
         return []
+    from utils.auth.stateless_auth import get_user_preference
     try:
-        from utils.auth.stateless_auth import get_user_preference
         disabled = get_user_preference(user_id, "gcp_sa_disabled_projects", default=[]) or []
-        return [pid for pid in disabled if isinstance(pid, str) and pid]
     except Exception:
         logger.exception(
-            "Failed to read gcp_sa_disabled_projects for user %s; failing open", user_id,
+            "Failed to read gcp_sa_disabled_projects for user %s; failing closed", user_id,
         )
-        return []
+        raise
+    return [pid for pid in disabled if isinstance(pid, str) and pid]
 
 
 def build_provider_context_segment(
@@ -152,9 +153,19 @@ def build_provider_context_segment(
 
     # The disabled-projects pref only has meaning in SA mode (Aurora doesn't
     # write it for OAuth users). Gate on auth mode so a stale pref left over
-    # from a SA→OAuth switch doesn't falsely restrict OAuth-mode access.
+    # from a SA→OAuth switch doesn't falsely restrict OAuth-mode access. The
+    # prompt block is informational only — the wrapper guard in cloud_exec
+    # is the hard enforcement layer, so we swallow lookup failures here to
+    # avoid crashing prompt build (and chat) on a transient DB blip.
     if "gcp" in normalized and user_id and _is_gcp_service_account_mode(user_id):
-        disabled_gcp = get_gcp_disabled_projects(user_id)
+        try:
+            disabled_gcp = get_gcp_disabled_projects(user_id)
+        except Exception:
+            logger.exception(
+                "Skipping disabled-projects prompt segment for user %s; cloud_exec guard still enforces",
+                user_id,
+            )
+            disabled_gcp = []
         if disabled_gcp:
             parts.append(
                 "- DISABLED GCP PROJECTS: the user has disabled "

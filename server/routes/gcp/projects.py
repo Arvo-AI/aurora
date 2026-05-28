@@ -249,7 +249,11 @@ def sa_project_access_post(user_id):
                 pid = p.get('projectId') or p.get('id')
                 if pid and not bool(p.get('enabled')):
                     disabled_ids.append(pid)
-            store_user_preference(user_id, 'gcp_sa_disabled_projects', disabled_ids)
+            if not store_user_preference(user_id, 'gcp_sa_disabled_projects', disabled_ids):
+                return jsonify({
+                    "success": False,
+                    "error": "Failed to persist project selection. Please retry.",
+                }), 500
             return jsonify({"success": True}), 200
 
         selections = {}

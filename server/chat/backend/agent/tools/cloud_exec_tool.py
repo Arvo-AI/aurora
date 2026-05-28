@@ -1762,7 +1762,23 @@ Security & Compliance
         # is only meaningful in SA mode, so skip the DB read for OAuth users.
         if provider.lower() == 'gcp' and auth_method == 'service_account':
             from chat.backend.agent.prompt.provider_rules import get_gcp_disabled_projects
-            disabled_projects = get_gcp_disabled_projects(user_id)
+            try:
+                disabled_projects = get_gcp_disabled_projects(user_id)
+            except Exception:
+                logger.exception(
+                    "cloud_exec: failed to load gcp_sa_disabled_projects for user %s; refusing command",
+                    hash_for_log(user_id),
+                )
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        "Could not verify the user's GCP disabled-projects list. "
+                        "Refusing the command until the access check succeeds — please retry."
+                    ),
+                    "code": "GCP_ACCESS_CHECK_FAILED",
+                    "final_command": command,
+                    "provider": "gcp",
+                })
             hit = next(
                 (pid for pid in disabled_projects
                  if re.search(rf"(?<![A-Za-z0-9-]){re.escape(pid)}(?![A-Za-z0-9-])", command)),
