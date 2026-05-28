@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import logging
 from typing import Any, List, Optional, Tuple
-
-logger = logging.getLogger(__name__)
 
 
 # Providers that support CLI execution via cloud_exec.
@@ -62,47 +59,10 @@ def build_provider_constraints(provider_preference: Optional[Any]) -> Tuple[str,
     return provider_text, provider_restrictions, provider_constraints
 
 
-def _is_gcp_service_account_mode(user_id: str) -> bool:
-    """True iff ``user_id`` has a GCP token in service-account mode."""
-    try:
-        from utils.auth.token_management import get_token_data
-        from connectors.gcp_connector.auth.service_accounts import (
-            get_gcp_auth_type, GCP_AUTH_TYPE_SA,
-        )
-        token_data = get_token_data(user_id, "gcp")
-        return bool(token_data) and get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA
-    except Exception:
-        logger.exception("Failed to resolve GCP auth mode for user %s", user_id)
-        return False
-
-
-def get_gcp_disabled_projects(user_id: Optional[str]) -> List[str]:
-    """Return SA-mode disabled-project IDs for ``user_id``.
-
-    Fails closed: raises on lookup error so the cloud_exec wrapper guard
-    refuses commands instead of silently treating a DB failure as
-    "no disabled projects" and re-allowing access. Callers that only
-    use this for soft prompt context (no enforcement) should wrap in
-    try/except locally.
-    """
-    if not user_id:
-        return []
-    from utils.auth.stateless_auth import get_user_preference
-    try:
-        disabled = get_user_preference(user_id, "gcp_sa_disabled_projects", default=[]) or []
-    except Exception:
-        logger.exception(
-            "Failed to read gcp_sa_disabled_projects for user %s; failing closed", user_id,
-        )
-        raise
-    return [pid for pid in disabled if isinstance(pid, str) and pid]
-
-
 def build_provider_context_segment(
     provider_preference: Optional[Any],
     selected_project_id: Optional[str],
     mode: Optional[str] = None,
-    user_id: Optional[str] = None,
 ) -> str:
     normalized = _normalize_providers(provider_preference)
 
@@ -150,31 +110,6 @@ def build_provider_context_segment(
                 )
     # Provider-specific reference guides are now in skill files.
     # The agent loads them on-demand via load_skill().
-
-    # The disabled-projects pref only has meaning in SA mode (Aurora doesn't
-    # write it for OAuth users). Gate on auth mode so a stale pref left over
-    # from a SA→OAuth switch doesn't falsely restrict OAuth-mode access. The
-    # prompt block is informational only — the wrapper guard in cloud_exec
-    # is the hard enforcement layer, so we swallow lookup failures here to
-    # avoid crashing prompt build (and chat) on a transient DB blip.
-    if "gcp" in normalized and user_id and _is_gcp_service_account_mode(user_id):
-        try:
-            disabled_gcp = get_gcp_disabled_projects(user_id)
-        except Exception:
-            logger.exception(
-                "Skipping disabled-projects prompt segment for user %s; cloud_exec guard still enforces",
-                user_id,
-            )
-            disabled_gcp = []
-        if disabled_gcp:
-            parts.append(
-                "- DISABLED GCP PROJECTS: the user has disabled "
-                f"{', '.join(disabled_gcp)} in Aurora. Treat these as off-limits: "
-                "do NOT run any cloud_exec command that targets them via --project, "
-                "references them in --filter, or surfaces their data in responses. "
-                "If the user asks about one of these projects, reply that the project "
-                "is disabled in their Aurora connector and ask them to re-enable it.\n"
-            )
 
     return "".join(parts)
 

@@ -1754,53 +1754,6 @@ Security & Compliance
                 if 'delete' in command and '--quiet' not in command and '-q' not in command:
                     command += " --quiet"
 
-        # GCP SA-mode disabled-project guard: refuse commands that mention
-        # any project the user has disabled in Aurora's connector UI. The
-        # auto-injected --project=<root> doesn't trigger this (root is enabled),
-        # but explicit references like --project=<disabled>, projectId:<disabled>,
-        # or the bare project ID anywhere in the command are blocked. The pref
-        # is only meaningful in SA mode, so skip the DB read for OAuth users.
-        if provider.lower() == 'gcp' and auth_method == 'service_account':
-            from chat.backend.agent.prompt.provider_rules import get_gcp_disabled_projects
-            try:
-                disabled_projects = get_gcp_disabled_projects(user_id)
-            except Exception:
-                logger.exception(
-                    "cloud_exec: failed to load gcp_sa_disabled_projects for user %s; refusing command",
-                    hash_for_log(user_id),
-                )
-                return json.dumps({
-                    "success": False,
-                    "error": (
-                        "Could not verify the user's GCP disabled-projects list. "
-                        "Refusing the command until the access check succeeds — please retry."
-                    ),
-                    "code": "GCP_ACCESS_CHECK_FAILED",
-                    "final_command": command,
-                    "provider": "gcp",
-                })
-            hit = next(
-                (pid for pid in disabled_projects
-                 if re.search(rf"(?<![A-Za-z0-9-]){re.escape(pid)}(?![A-Za-z0-9-])", command)),
-                None,
-            )
-            if hit:
-                logger.warning(
-                    "cloud_exec blocked: GCP project %s is disabled for user %s",
-                    hash_for_log(hit), hash_for_log(user_id),
-                )
-                return json.dumps({
-                    "success": False,
-                    "error": (
-                        f"GCP project '{hit}' is disabled in this user's Aurora "
-                        "connector. Re-enable it in the GCP Project Management "
-                        "dialog to access it."
-                    ),
-                    "code": "GCP_PROJECT_DISABLED",
-                    "final_command": command,
-                    "provider": "gcp",
-                })
-
         logger.info(f"Executing command: {command}")
 
         current_mode = get_mode_from_context()

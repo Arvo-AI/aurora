@@ -92,7 +92,6 @@ def build_prompt_segments(
         provider_preference=provider_preference,
         selected_project_id=getattr(state, 'selected_project_id', None) if state else None,
         mode=mode,
-        user_id=getattr(state, 'user_id', None) if state else None,
     )
 
     prerequisite_checks = build_prerequisite_segment(

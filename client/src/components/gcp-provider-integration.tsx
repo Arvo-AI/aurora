@@ -219,7 +219,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
                 isLoading={togglingProjectId === project.projectId}
                 onToggle={handleToggle}
                 onSetAsRoot={handleSetAsRoot}
-                showToggle={true}
+                showToggle={authType !== 'service_account'}
               />
             ))}
           </div>
