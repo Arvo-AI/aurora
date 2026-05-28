@@ -99,7 +99,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
     }
   };
 
-  // force-bypass ProjectCache; it holds the previous isRootProject flag.
+  // Force-refresh: ProjectCache holds the stale isRootProject flag.
   const { setAsRoot: handleSetAsRoot } = useSetAsRoot(userId, () => loadProjects(true));
 
   const handleDisconnect = async () => {

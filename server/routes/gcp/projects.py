@@ -193,9 +193,7 @@ def sa_project_access_get(user_id):
         # Aurora doesn't manage IAM bindings in SA mode — the uploaded SA already
         # has whatever roles the user granted it directly in GCP.
         if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-            # If the user hasn't picked a root project yet, surface the SA key's
-            # default project as the effective root so the UI shows it from the
-            # first load rather than waiting for the user to click "Set as Root".
+            # Fall back to SA key's default project so the UI shows a root on first load.
             effective_root = root_project or token_data.get('default_project_id')
             result = _sa_mode_project_list(token_data, effective_root)
             return jsonify({"projects": result, "root_project": effective_root}), 200
