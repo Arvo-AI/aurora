@@ -181,7 +181,7 @@ def trigger_rca(
             create_background_chat_session,
             run_background_chat,
         )
-        from chat.background.rca_prompt_builder import build_chat_rca_prompt
+        from chat.background.rca_prompt_builder import build_rca_prompt
 
         trigger_metadata = {"source": "chat", "incident_id": incident_id}
 
@@ -191,9 +191,16 @@ def trigger_rca(
             trigger_metadata=trigger_metadata, incident_id=incident_id,
         )
 
-        rca_prompt, rail_text = build_chat_rca_prompt(
-            description=issue_description, title=incident_title,
-            service=service, severity=severity, user_id=user_id,
+        payload: dict = {
+            "title": incident_title,
+            "status": "investigating",
+            "description": issue_description,
+            "service": service,
+            "severity": severity,
+        }
+
+        rca_prompt, rail_text = build_rca_prompt(
+            "chat", incident_title, payload, user_id=user_id,
         )
 
         task = run_background_chat.delay(

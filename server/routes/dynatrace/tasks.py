@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_dynatrace_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import get_user_preference
@@ -187,7 +187,7 @@ def process_dynatrace_problem(
                 trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
                 incident_id=str(incident_id),
             )
-            rca_prompt, rail_text = build_dynatrace_rca_prompt(payload, user_id=user_id)
+            rca_prompt, rail_text = build_rca_prompt("dynatrace", title, payload, user_id=user_id)
             task = run_background_chat.delay(
                 user_id=user_id, session_id=session_id,
                 initial_message=rca_prompt,

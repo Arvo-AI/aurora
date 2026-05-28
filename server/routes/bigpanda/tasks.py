@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import get_user_preference
@@ -87,11 +88,6 @@ def _build_alert_metadata(
 
 def _should_trigger_rca(user_id: str) -> bool:
     return get_user_preference(user_id, "bigpanda_rca_enabled", default=False)
-
-
-def _build_rca_prompt(incident: dict[str, Any], alerts: list[dict[str, Any]], user_id: str | None = None) -> tuple[str, str]:
-    from chat.background.rca_prompt_builder import build_bigpanda_rca_prompt
-    return build_bigpanda_rca_prompt(incident, alerts, user_id=user_id)
 
 
 @celery_app.task(
@@ -269,7 +265,7 @@ def process_bigpanda_event(
                 trigger_metadata={"source": "bigpanda", "incident_id": incident_id},
                 incident_id=str(aurora_incident_id),
             )
-            rca_prompt, rail_text = _build_rca_prompt(incident, alerts, user_id=user_id)
+            rca_prompt, rail_text = build_rca_prompt("bigpanda", title, raw_payload or {"incident": incident, "alerts": alerts}, user_id=user_id)
             task = run_background_chat.delay(
                 user_id=user_id, session_id=session_id,
                 initial_message=rca_prompt,

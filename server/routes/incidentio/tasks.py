@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_incidentio_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -414,7 +414,7 @@ def _trigger_rca_pipeline(
             incident_id=str(incident_id),
         )
 
-        rca_prompt, rail_text = build_incidentio_rca_prompt(payload, user_id=user_id)
+        rca_prompt, rail_text = build_rca_prompt("incidentio", fields["incident_name"], payload, user_id=user_id)
 
         task = run_background_chat.delay(
             user_id=user_id,

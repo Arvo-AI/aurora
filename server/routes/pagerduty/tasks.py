@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_pagerduty_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import set_rls_context
@@ -348,8 +348,8 @@ def trigger_delayed_rca(
 
                         event_data = consolidated_payload.get("event", {})
                         incident_data = event_data.get("data", {})
-                        rca_prompt, rail_text = build_pagerduty_rca_prompt(
-                            incident_data, user_id=user_id
+                        rca_prompt, rail_text = build_rca_prompt(
+                            "pagerduty", incident_title, incident_data, user_id=user_id
                         )
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         rca_prompt = (

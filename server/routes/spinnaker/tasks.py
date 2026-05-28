@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import set_rls_context
@@ -59,12 +60,6 @@ def _extract_execution_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
         "stages": payload.get("stages"),
         "parameters": payload.get("parameters"),
     }
-
-
-def _build_rca_prompt(payload: Dict[str, Any], user_id: Optional[str] = None) -> tuple[str, str]:
-    """Build an RCA prompt from a deployment failure."""
-    from chat.background.rca_prompt_builder import build_spinnaker_rca_prompt
-    return build_spinnaker_rca_prompt(payload, user_id=user_id)
 
 
 @celery_app.task(
@@ -342,7 +337,7 @@ def _trigger_rca(
                 },
                 incident_id=str(incident_id),
             )
-            rca_prompt, rail_text = _build_rca_prompt(payload, user_id=user_id)
+            rca_prompt, rail_text = build_rca_prompt("spinnaker", alert_title, payload, user_id=user_id)
             task = run_background_chat.delay(
                 user_id=user_id,
                 session_id=session_id,

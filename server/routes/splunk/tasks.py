@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_splunk_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -345,8 +345,8 @@ def process_splunk_alert(
                                 )
 
                                 # Build comprehensive RCA prompt with provider context
-                                rca_prompt, rail_text = build_splunk_rca_prompt(
-                                    payload, user_id=user_id
+                                rca_prompt, rail_text = build_rca_prompt(
+                                    "splunk", alert_title, payload, user_id=user_id
                                 )
 
                                 # Start RCA task and immediately store task ID

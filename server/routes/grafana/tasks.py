@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_grafana_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -517,7 +517,7 @@ def process_grafana_alert(
                                             user_id=user_id, title=chat_title,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
                                         )
-                                        rca_prompt, rail_text = build_grafana_rca_prompt(alert_payload, user_id=user_id)
+                                        rca_prompt, rail_text = build_rca_prompt("grafana", per_alert_title, alert_payload, user_id=user_id)
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
