@@ -341,6 +341,8 @@ def _task_belongs_to_user(task_info, user_id):
 
 def _get_sa_project_ids(token_data, user_id):
     """Return project IDs from a service-account GCP token."""
+    from utils.auth.stateless_auth import get_user_preference
+
     accessible = token_data.get("accessible_projects") or []
     project_ids = [
         p.get("project_id") or p.get("projectId")
@@ -352,6 +354,9 @@ def _get_sa_project_ids(token_data, user_id):
         default = token_data.get("default_project_id")
         if default:
             project_ids = [default]
+    disabled = set(get_user_preference(user_id, 'gcp_sa_disabled_projects', default=[]) or [])
+    if disabled:
+        project_ids = [pid for pid in project_ids if pid not in disabled]
     logger.info("[Discovery] Found %d GCP projects (SA) for user %s", len(project_ids), user_id)
     return project_ids, None
 

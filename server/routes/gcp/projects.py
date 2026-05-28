@@ -1,7 +1,7 @@
 """GCP project management routes."""
 import logging
 from flask import Blueprint, request, jsonify
-from utils.auth.stateless_auth import get_user_preference
+from utils.auth.stateless_auth import get_user_preference, store_user_preference
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.token_refresh import refresh_token_if_needed
 from connectors.gcp_connector.auth.oauth import get_credentials
@@ -117,9 +117,10 @@ def _refresh_and_reload_gcp_token(user_id):
     return get_token_data(user_id, "gcp"), None
 
 
-def _sa_mode_project_list(token_data, root_project):
+def _sa_mode_project_list(token_data, root_project, disabled_ids):
     """Build project list for service-account mode (no IAM enumeration)."""
     accessible = token_data.get("accessible_projects") or []
+    disabled = set(disabled_ids or [])
     result = []
     for proj in accessible:
         pid = proj.get("project_id")
@@ -128,7 +129,7 @@ def _sa_mode_project_list(token_data, root_project):
         result.append({
             "projectId": pid,
             "name": proj.get("name") or pid,
-            "enabled": True,
+            "enabled": pid not in disabled,
             "hasPermission": True,
             "isRootProject": pid == root_project,
         })
@@ -193,7 +194,8 @@ def sa_project_access_get(user_id):
         # Aurora doesn't manage IAM bindings in SA mode — the uploaded SA already
         # has whatever roles the user granted it directly in GCP.
         if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-            result = _sa_mode_project_list(token_data, root_project)
+            disabled_ids = get_user_preference(user_id, 'gcp_sa_disabled_projects', default=[]) or []
+            result = _sa_mode_project_list(token_data, root_project, disabled_ids)
             return jsonify({"projects": result, "root_project": root_project}), 200
 
         # Resolve SA owner before refresh — after a refresh the token may be
@@ -228,14 +230,22 @@ def sa_project_access_post(user_id):
         if err:
             return err
 
-        # SA mode: nothing to persist — Aurora does not manage IAM bindings.
-        if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-            return jsonify({"success": True}), 200
-
         data = request.get_json() or {}
         projects = data.get("projects")
         if projects is None:
             return jsonify({"error": "projects required"}), 400
+
+        # SA mode: Aurora doesn't manage IAM bindings, but persist the user's
+        # enable/disable selection so disabled projects are skipped downstream
+        # (e.g. discovery) and the UI reflects the saved state on reload.
+        if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+            disabled_ids = []
+            for p in projects:
+                pid = p.get('projectId') or p.get('id')
+                if pid and not bool(p.get('enabled')):
+                    disabled_ids.append(pid)
+            store_user_preference(user_id, 'gcp_sa_disabled_projects', disabled_ids)
+            return jsonify({"success": True}), 200
 
         selections = {}
         for p in projects:
