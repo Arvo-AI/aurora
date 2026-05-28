@@ -117,8 +117,10 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
         throw new Error(error.error || 'Failed to set root project');
       }
 
-      // Refresh projects to get updated root project status
-      await loadProjects();
+      // Refresh projects to get updated root project status — force-bypass the
+      // ProjectCache, which still holds the old isRootProject flag from the
+      // previous fetch.
+      await loadProjects(true);
       
       toast({
         title: "Success",
@@ -254,7 +256,6 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
                 onToggle={handleToggle}
                 onSetAsRoot={handleSetAsRoot}
                 showToggle={true}
-                hideRootControls={authType === 'service_account'}
               />
             ))}
           </div>
