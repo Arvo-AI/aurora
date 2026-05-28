@@ -1675,7 +1675,6 @@ Security & Compliance
                 logger.info(f"Using explicit project: {region_or_project}")
             else:
                 # Extract the project from the command if specified
-                import re
                 project_match = re.search(r'--project[=\s]+([^\s]+)', command)
                 if project_match:
                     specified_project = project_match.group(1)
@@ -1696,7 +1695,6 @@ Security & Compliance
                 logger.info(f"Using explicit region: {region_or_project}")
             else:
                 # Extract the region from the command if specified
-                import re
                 region_match = re.search(r'--region[=\s]+([^\s]+)', command)
                 if region_match:
                     specified_region = region_match.group(1)
@@ -2216,7 +2214,6 @@ Security & Compliance
             return any(flag in lowered for flag in ["--filter", "--query", "--limit", "--page-size", "--max-items"])
 
         def _build_projection_command(provider_name: str, cmd: str) -> Tuple[Optional[str], Optional[str]]:
-            import re
             lowered = cmd.lower()
             if provider_name.lower() in ['gcp', 'gcloud']:
                 if " list" in lowered:

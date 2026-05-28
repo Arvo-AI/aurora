@@ -74,10 +74,10 @@ export default function GcpAuthPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="oauth" className="w-full">
+          <Tabs defaultValue="service-account" className="w-full">
             <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="service-account">Service Account (Recommended)</TabsTrigger>
               <TabsTrigger value="oauth">OAuth</TabsTrigger>
-              <TabsTrigger value="service-account">Service Account</TabsTrigger>
             </TabsList>
 
             <TabsContent value="oauth" className="mt-6 space-y-4">

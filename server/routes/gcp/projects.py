@@ -193,8 +193,10 @@ def sa_project_access_get(user_id):
         # Aurora doesn't manage IAM bindings in SA mode — the uploaded SA already
         # has whatever roles the user granted it directly in GCP.
         if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
-            result = _sa_mode_project_list(token_data, root_project)
-            return jsonify({"projects": result, "root_project": root_project}), 200
+            # Fall back to SA key's default project so the UI shows a root on first load.
+            effective_root = root_project or token_data.get('default_project_id')
+            result = _sa_mode_project_list(token_data, effective_root)
+            return jsonify({"projects": result, "root_project": effective_root}), 200
 
         # Resolve SA owner before refresh — after a refresh the token may be
         # stored under user_id (creating a duplicate row), which would cause
