@@ -359,21 +359,27 @@ def build_rca_prompt(
 
     providers = get_user_providers(user_id) if user_id else []
 
-    serialized = json.dumps(payload, ensure_ascii=False, default=str)
-    payload_size = len(serialized)
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        payload_size = len(serialized)
 
-    if payload_size <= PAYLOAD_CHAR_THRESHOLD:
-        json_content = serialized
+        if payload_size <= PAYLOAD_CHAR_THRESHOLD:
+            json_content = serialized
+            truncation_note = ""
+        else:
+            truncated = truncate_json_fields(payload, max_field_length=250, max_list_items=10)
+            json_content = json.dumps(truncated, ensure_ascii=False, default=str)
+            if len(json_content) > 15_000:
+                truncated = truncate_json_fields(payload, max_field_length=10, max_list_items=1)
+                json_content = json.dumps(truncated, indent=2, ensure_ascii=False, default=str)
+            truncation_note = (
+                "Some field values were truncated. Use the `get_alert_field` tool "
+                "with a dot-separated path to retrieve full values.\n"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to serialize alert payload: {e}")
+        json_content = f"[Payload could not be serialized — use get_alert_field to inspect fields. Keys: {list(payload.keys())[:20]}]"
         truncation_note = ""
-    else:
-        truncated = truncate_json_fields(payload, max_field_length=250, max_list_items=10)
-        json_content = json.dumps(truncated, ensure_ascii=False, default=str)
-        if len(json_content) > 15_000:
-            json_content = json_content[:15_000] + "\n... [payload truncated at 15000 chars]"
-        truncation_note = (
-            "Some field values were truncated. Use the `get_alert_field` tool "
-            "with a dot-separated path to retrieve full values.\n"
-        )
 
     prompt_parts = [
         f"# ROOT CAUSE ANALYSIS REQUIRED - {source.upper()} ALERT",
