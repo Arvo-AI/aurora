@@ -1771,7 +1771,7 @@ Security & Compliance
             if hit:
                 logger.warning(
                     "cloud_exec blocked: GCP project %s is disabled for user %s",
-                    hash_for_log(hit), user_id,
+                    hash_for_log(hit), hash_for_log(user_id),
                 )
                 return json.dumps({
                     "success": False,

@@ -234,6 +234,11 @@ def sa_project_access_post(user_id):
         projects = data.get("projects")
         if projects is None:
             return jsonify({"error": "projects required"}), 400
+        if not isinstance(projects, list):
+            return jsonify({"error": "projects must be a list"}), 400
+        for i, p in enumerate(projects):
+            if not isinstance(p, dict):
+                return jsonify({"error": "each project must be an object", "index": i}), 400
 
         # SA mode: Aurora doesn't manage IAM bindings, but persist the user's
         # enable/disable selection so disabled projects are skipped downstream

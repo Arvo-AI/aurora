@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # Providers that support CLI execution via cloud_exec.
@@ -59,8 +62,28 @@ def build_provider_constraints(provider_preference: Optional[Any]) -> Tuple[str,
     return provider_text, provider_restrictions, provider_constraints
 
 
+def _is_gcp_service_account_mode(user_id: str) -> bool:
+    """True iff ``user_id`` has a GCP token in service-account mode."""
+    try:
+        from utils.auth.token_management import get_token_data
+        from connectors.gcp_connector.auth.service_accounts import (
+            get_gcp_auth_type, GCP_AUTH_TYPE_SA,
+        )
+        token_data = get_token_data(user_id, "gcp")
+        return bool(token_data) and get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA
+    except Exception:
+        logger.exception("Failed to resolve GCP auth mode for user %s", user_id)
+        return False
+
+
 def get_gcp_disabled_projects(user_id: Optional[str]) -> List[str]:
-    """Return SA-mode disabled-project IDs for ``user_id`` (empty if none/unknown)."""
+    """Return SA-mode disabled-project IDs for ``user_id`` (empty if none/unknown).
+
+    Fails open (returns ``[]``) on DB errors so the prompt build / cloud_exec
+    hot paths don't crash; the failure is logged for observability. The hard
+    enforcement layer in cloud_exec catches mistakes the prompt instruction
+    would otherwise have prevented.
+    """
     if not user_id:
         return []
     try:
@@ -68,6 +91,9 @@ def get_gcp_disabled_projects(user_id: Optional[str]) -> List[str]:
         disabled = get_user_preference(user_id, "gcp_sa_disabled_projects", default=[]) or []
         return [pid for pid in disabled if isinstance(pid, str) and pid]
     except Exception:
+        logger.exception(
+            "Failed to read gcp_sa_disabled_projects for user %s; failing open", user_id,
+        )
         return []
 
 
@@ -124,7 +150,10 @@ def build_provider_context_segment(
     # Provider-specific reference guides are now in skill files.
     # The agent loads them on-demand via load_skill().
 
-    if "gcp" in normalized:
+    # The disabled-projects pref only has meaning in SA mode (Aurora doesn't
+    # write it for OAuth users). Gate on auth mode so a stale pref left over
+    # from a SA→OAuth switch doesn't falsely restrict OAuth-mode access.
+    if "gcp" in normalized and user_id and _is_gcp_service_account_mode(user_id):
         disabled_gcp = get_gcp_disabled_projects(user_id)
         if disabled_gcp:
             parts.append(
