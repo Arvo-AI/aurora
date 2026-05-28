@@ -59,10 +59,23 @@ def build_provider_constraints(provider_preference: Optional[Any]) -> Tuple[str,
     return provider_text, provider_restrictions, provider_constraints
 
 
+def get_gcp_disabled_projects(user_id: Optional[str]) -> List[str]:
+    """Return SA-mode disabled-project IDs for ``user_id`` (empty if none/unknown)."""
+    if not user_id:
+        return []
+    try:
+        from utils.auth.stateless_auth import get_user_preference
+        disabled = get_user_preference(user_id, "gcp_sa_disabled_projects", default=[]) or []
+        return [pid for pid in disabled if isinstance(pid, str) and pid]
+    except Exception:
+        return []
+
+
 def build_provider_context_segment(
     provider_preference: Optional[Any],
     selected_project_id: Optional[str],
     mode: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     normalized = _normalize_providers(provider_preference)
 
@@ -110,6 +123,18 @@ def build_provider_context_segment(
                 )
     # Provider-specific reference guides are now in skill files.
     # The agent loads them on-demand via load_skill().
+
+    if "gcp" in normalized:
+        disabled_gcp = get_gcp_disabled_projects(user_id)
+        if disabled_gcp:
+            parts.append(
+                "- DISABLED GCP PROJECTS: the user has disabled "
+                f"{', '.join(disabled_gcp)} in Aurora. Treat these as off-limits: "
+                "do NOT run any cloud_exec command that targets them via --project, "
+                "references them in --filter, or surfaces their data in responses. "
+                "If the user asks about one of these projects, reply that the project "
+                "is disabled in their Aurora connector and ask them to re-enable it.\n"
+            )
 
     return "".join(parts)
 

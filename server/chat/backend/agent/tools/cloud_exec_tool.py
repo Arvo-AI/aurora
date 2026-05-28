@@ -1675,7 +1675,6 @@ Security & Compliance
                 logger.info(f"Using explicit project: {region_or_project}")
             else:
                 # Extract the project from the command if specified
-                import re
                 project_match = re.search(r'--project[=\s]+([^\s]+)', command)
                 if project_match:
                     specified_project = project_match.group(1)
@@ -1696,7 +1695,6 @@ Security & Compliance
                 logger.info(f"Using explicit region: {region_or_project}")
             else:
                 # Extract the region from the command if specified
-                import re
                 region_match = re.search(r'--region[=\s]+([^\s]+)', command)
                 if region_match:
                     specified_region = region_match.group(1)
@@ -1755,6 +1753,37 @@ Security & Compliance
                 # Add --quiet flag for deletion commands to avoid prompts
                 if 'delete' in command and '--quiet' not in command and '-q' not in command:
                     command += " --quiet"
+
+        # GCP SA-mode disabled-project guard: refuse commands that mention
+        # any project the user has disabled in Aurora's connector UI. The
+        # auto-injected --project=<root> doesn't trigger this (root is enabled),
+        # but explicit references like --project=<disabled>, projectId:<disabled>,
+        # or the bare project ID anywhere in the command are blocked. The pref
+        # is only meaningful in SA mode, so skip the DB read for OAuth users.
+        if provider.lower() == 'gcp' and auth_method == 'service_account':
+            from chat.backend.agent.prompt.provider_rules import get_gcp_disabled_projects
+            disabled_projects = get_gcp_disabled_projects(user_id)
+            hit = next(
+                (pid for pid in disabled_projects
+                 if re.search(rf"(?<![A-Za-z0-9-]){re.escape(pid)}(?![A-Za-z0-9-])", command)),
+                None,
+            )
+            if hit:
+                logger.warning(
+                    "cloud_exec blocked: GCP project %s is disabled for user %s",
+                    hash_for_log(hit), user_id,
+                )
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        f"GCP project '{hit}' is disabled in this user's Aurora "
+                        "connector. Re-enable it in the GCP Project Management "
+                        "dialog to access it."
+                    ),
+                    "code": "GCP_PROJECT_DISABLED",
+                    "final_command": command,
+                    "provider": "gcp",
+                })
 
         logger.info(f"Executing command: {command}")
 
@@ -2216,7 +2245,6 @@ Security & Compliance
             return any(flag in lowered for flag in ["--filter", "--query", "--limit", "--page-size", "--max-items"])
 
         def _build_projection_command(provider_name: str, cmd: str) -> Tuple[Optional[str], Optional[str]]:
-            import re
             lowered = cmd.lower()
             if provider_name.lower() in ['gcp', 'gcloud']:
                 if " list" in lowered:
