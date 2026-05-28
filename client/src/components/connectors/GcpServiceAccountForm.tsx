@@ -276,12 +276,24 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
 
       <Alert>
         <AlertTitle className="text-sm">Auto-discover all your projects</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground">
-          To auto-discover all your projects with one key, grant the service
-          account <code className="font-mono">roles/browser</code> (or{" "}
-          <code className="font-mono">roles/viewer</code>) at the organization
-          or folder level in GCP IAM. Otherwise only the project this key was
-          created in will be connected.
+        <AlertDescription className="text-xs text-muted-foreground space-y-2">
+          <p>
+            Grant the service account{" "}
+            <code className="font-mono">roles/browser</code> at the{" "}
+            <strong>organization</strong> or <strong>folder</strong> level so
+            Aurora can list every project in that scope. Without this, only the
+            project the key was created in shows up.
+          </p>
+          <p>
+            <code className="font-mono">roles/browser</code> only lets Aurora{" "}
+            <em>see</em> the projects. To actually investigate one, also grant
+            viewer-tier roles on that project —{" "}
+            <code className="font-mono">roles/viewer</code>,{" "}
+            <code className="font-mono">roles/logging.viewer</code>,{" "}
+            <code className="font-mono">roles/monitoring.viewer</code>, etc. A
+            folder-level binding doesn&apos;t reach sibling folders; bind at the
+            org level (or each folder individually) to cover everything.
+          </p>
         </AlertDescription>
       </Alert>
 

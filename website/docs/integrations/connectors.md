@@ -63,6 +63,40 @@ gcloud iam service-accounts keys create aurora-sa-key.json \
 3. Upload or paste the JSON key file contents
 4. Aurora validates the key, lists accessible projects, and connects
 
+##### 5. Auto-discover all your projects
+
+By default Aurora only sees the project the key was created in. Project enumeration uses Cloud Resource Manager v1 `projects.list`, which returns every project the SA has IAM access to anywhere in the hierarchy. Two roles matter and they do different things:
+
+| Role granted at org/folder | Project shows up in Aurora | SA can investigate it |
+|---|---|---|
+| `roles/browser` | ✅ yes | ❌ no — directory-listing only |
+| `roles/viewer` | ✅ yes | ✅ yes, but grants org-wide read of every resource (logs, IAM, billing, …) |
+
+The recommended split is **`roles/browser` for enumeration** + **`roles/viewer`-family roles per project for inspection**:
+
+```bash
+SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+# Enumerate every project under the org
+gcloud organizations add-iam-policy-binding YOUR_ORG_ID \
+  --member="serviceAccount:$SA" --role="roles/browser"
+
+# Then grant viewer-tier roles on the projects you actually want Aurora to use
+gcloud projects add-iam-policy-binding TARGET_PROJECT \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+```
+
+Bind at the **organization** level to reach everything; a **folder**-level binding only enumerates projects under that folder (sibling folders stay invisible — bind each individually or move up to the org).
+
+If your security model allows org-wide read in one shot, you can grant `roles/viewer` at the org level instead of `roles/browser`. It's much broader; only use it if you've cleared the blast radius.
+
+##### 6. Manage projects in the connector UI (optional)
+
+Once connected, the **GCP Project Management** dialog lets you scope Aurora to a subset of what the SA can reach:
+
+- **Enable / disable** individual projects. Disabled projects are excluded from Aurora's discovery scans, and the chat agent refuses `cloud_exec` commands that target them (returns `GCP_PROJECT_DISABLED`).
+- **Set as Root** pins which enabled project Aurora uses as the default context for agent commands. Lookup order: per-call override → root preference → the `project_id` baked into your SA key. If you disable your SA's default project, pin a root explicitly so commands have somewhere to land — otherwise the auto-injected `--project` would target a disabled project and every command would be blocked.
+
 ##### Troubleshooting
 
 | Error | Solution |
