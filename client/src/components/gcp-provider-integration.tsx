@@ -254,6 +254,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
                 onToggle={handleToggle}
                 onSetAsRoot={handleSetAsRoot}
                 showToggle={true}
+                hideRootControls={authType === 'service_account'}
               />
             ))}
           </div>

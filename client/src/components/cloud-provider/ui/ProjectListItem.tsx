@@ -14,6 +14,7 @@ interface ProjectListItemProps {
   onToggle?: (projectId: string) => void;
   onSetAsRoot?: (providerId: string, projectId: string) => void;
   showToggle?: boolean;
+  hideRootControls?: boolean;
 }
 
 export const ProjectListItem: React.FC<ProjectListItemProps> = ({
@@ -23,9 +24,11 @@ export const ProjectListItem: React.FC<ProjectListItemProps> = ({
   onToggle,
   onSetAsRoot,
   showToggle = true,
+  hideRootControls = false,
 }) => {
   // Allow root project selection for GCP, OVH, and Scaleway
   const canSetAsRoot =
+    !hideRootControls &&
     (providerId === 'gcp' || providerId === 'ovh' || providerId === 'scaleway') &&
     !project.isRootProject &&
     project.hasPermission !== false &&
@@ -43,7 +46,7 @@ export const ProjectListItem: React.FC<ProjectListItemProps> = ({
           <span className={`text-sm font-medium ${project.hasPermission === false ? 'text-muted-foreground' : ''}`}>
             {project.name || project.projectId}
           </span>
-          {project.isRootProject && (providerId === 'gcp' || providerId === 'ovh' || providerId === 'scaleway') && (
+          {project.isRootProject && !hideRootControls && (providerId === 'gcp' || providerId === 'ovh' || providerId === 'scaleway') && (
             <Badge variant="default" className="text-xs px-2 py-0 flex items-center gap-1">
               <Crown className="w-3 h-3" />
               Root Project
@@ -56,9 +59,9 @@ export const ProjectListItem: React.FC<ProjectListItemProps> = ({
         {project.hasPermission === false && (
           <span className="text-xs text-red-500 mt-1">No IAM permission</span>
         )}
-        {project.isRootProject && (providerId === 'gcp' || providerId === 'ovh' || providerId === 'scaleway') && (
+        {project.isRootProject && !hideRootControls && (providerId === 'gcp' || providerId === 'ovh' || providerId === 'scaleway') && (
           <span className="text-xs text-muted-foreground mt-1">
-            {providerId === 'gcp' ? 'Service accounts will be created in this project' : 
+            {providerId === 'gcp' ? 'Service accounts will be created in this project' :
              providerId === 'ovh' ? 'Default project for OVH operations' :
              'Default project for Scaleway operations'}
           </span>
