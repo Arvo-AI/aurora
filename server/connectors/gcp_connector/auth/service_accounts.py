@@ -454,11 +454,15 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
                 "Failed to refresh GCP service account credentials. The key may have been revoked or the service account disabled."
             ) from e
 
-        # Pick the project: user-selected if accessible, else default.
-        target_project_id = token_data.get("default_project_id") or sa_info.get("project_id")
+        # Project precedence: per-call > "Set as Root" pref > SA default.
         accessible = token_data.get("accessible_projects") or []
+        accessible_ids = {p.get("project_id") for p in accessible if isinstance(p, dict)}
+        target_project_id = token_data.get("default_project_id") or sa_info.get("project_id")
+        from utils.auth.stateless_auth import get_user_preference
+        root_pref = get_user_preference(user_id, "gcp_root_project")
+        if root_pref and root_pref in accessible_ids:
+            target_project_id = root_pref
         if selected_project_id:
-            accessible_ids = {p.get("project_id") for p in accessible if isinstance(p, dict)}
             if selected_project_id in accessible_ids:
                 target_project_id = selected_project_id
             else:

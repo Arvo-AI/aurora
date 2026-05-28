@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, RefreshCw, LogOut } from 'lucide-react';
 import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem';
 import { fetchProjects, saveProjects, ProjectCache } from '@/components/cloud-provider/projects/projectUtils';
+import { useSetAsRoot } from '@/components/cloud-provider/projects/useSetAsRoot';
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -19,7 +20,6 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
   const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [togglingProjectId, setTogglingProjectId] = useState<string | null>(null);
   const { toast } = useToast();
@@ -99,42 +99,8 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
     }
   };
 
-  const handleSetAsRoot = async (providerId: string, projectId: string) => {
-    if (!userId) return;
-    
-    setIsSaving(true);
-    try {
-      const response = await fetch('/api/root-project', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to set root project');
-      }
-
-      // Refresh projects to get updated root project status
-      await loadProjects();
-      
-      toast({
-        title: "Success",
-        description: "Root project updated successfully",
-      });
-    } catch (error: any) {
-      console.error('Error setting root project:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to set root project",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  // Force-refresh: ProjectCache holds the stale isRootProject flag.
+  const { setAsRoot: handleSetAsRoot } = useSetAsRoot(userId, () => loadProjects(true));
 
   const handleDisconnect = async () => {
     if (!userId) return;
@@ -253,7 +219,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
                 isLoading={togglingProjectId === project.projectId}
                 onToggle={handleToggle}
                 onSetAsRoot={handleSetAsRoot}
-                showToggle={true}
+                showToggle={authType !== 'service_account'}
               />
             ))}
           </div>

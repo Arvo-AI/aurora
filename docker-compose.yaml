@@ -540,6 +540,7 @@ services:
     environment:
       # Next.js development configuration
       NODE_ENV: development
+      FRONTEND_DEV_RUNTIME: ${FRONTEND_DEV_RUNTIME:-bun}
       AURORA_ENV: ${AURORA_ENV}
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"

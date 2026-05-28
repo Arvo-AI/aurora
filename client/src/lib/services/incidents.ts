@@ -8,7 +8,20 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda' | 'chat';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'dynatrace' | 'coroot' | 'bigpanda' | 'cloudwatch' | 'chat';
+
+export function getSourceIconSrc(source: string): string | null {
+  if (source === 'chat') return null;
+  if (source === 'cloudwatch') return '/aws.ico';
+  return `/${source}.svg`;
+}
+
+const _WHITE_BG_ICONS = new Set(['bigpanda', 'cloudwatch']);
+
+export function getSourceIconBgColor(source: string): string {
+  return `object-contain${_WHITE_BG_ICONS.has(source) ? ' bg-white rounded-sm p-0.5' : ''}`;
+}
+
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'summarizing' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';

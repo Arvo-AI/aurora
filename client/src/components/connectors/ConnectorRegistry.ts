@@ -138,6 +138,17 @@ class ConnectorRegistry {
       });
 
     this.register({
+      id: "cloudwatch",
+      name: "CloudWatch",
+      description: "Receive Amazon CloudWatch alarm notifications via SNS webhooks. Alarm state changes automatically create incidents and trigger root cause analysis.",
+      iconPath: "/aws.ico",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/aws/onboarding",
+      storageKey: "isCloudWatchConnected",
+    });
+
+    this.register({
       id: "pagerduty",
       name: "PagerDuty",
       description: "Connect PagerDuty to receive incident alerts and manage on-call schedules. Integrate with your PagerDuty account for real-time incident management.",

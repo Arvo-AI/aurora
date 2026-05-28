@@ -339,8 +339,8 @@ def get_deployment_task(user_id: str, task_id: str = None) -> Optional[Dict]:
         if 'conn' in locals() and conn:
             conn.close()
 
-def store_user_preference(user_id: str, key: str, value: Any):
-    """Store a user-scoped preference.
+def store_user_preference(user_id: str, key: str, value: Any) -> bool:
+    """Store a user-scoped preference. Returns True on commit, False on failure.
 
     For org-scoped preferences (shared across an organization), use
     store_org_preference() instead — passing an "__org__<uuid>" pseudo-user id
@@ -356,7 +356,7 @@ def store_user_preference(user_id: str, key: str, value: Any):
                 "preference %s not written. Use store_org_preference() for org-scoped keys.",
                 sanitize(user_id), sanitize(key),
             )
-            return
+            return False
 
         cursor.execute(
             "DELETE FROM user_preferences WHERE org_id = %s AND preference_key = %s",
@@ -368,8 +368,10 @@ def store_user_preference(user_id: str, key: str, value: Any):
         """, (user_id, org_id, key, json.dumps(value)))
         conn.commit()
         logger.debug("Stored org preference successfully")
+        return True
     except Exception:
         logger.exception("Error storing user preference")
+        return False
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()

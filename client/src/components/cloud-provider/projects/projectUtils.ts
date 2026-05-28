@@ -128,6 +128,29 @@ export const fetchProjects = async (providerId: string, forceRefresh = false, cu
   }
 };
 
+const rootProjectEndpoints: Record<string, string> = {
+  gcp: '/api/root-project',
+  ovh: '/api/provider-root-project/ovh',
+  azure: '/api/provider-root-project/azure',
+  scaleway: '/api/provider-root-project/scaleway',
+};
+
+export const setRootProject = async (providerId: string, projectId: string): Promise<void> => {
+  const endpoint = rootProjectEndpoints[providerId];
+  if (!endpoint) {
+    throw new Error(`No root-project endpoint registered for ${providerId}`);
+  }
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!res.ok) {
+    const error = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(error.error || 'Failed to set root project');
+  }
+};
+
 export const saveProjects = async (providerId: string, projects: Project[]): Promise<void> => {
   const userId = await getUserId();
   const headers: HeadersInit = { 'Content-Type': 'application/json' };

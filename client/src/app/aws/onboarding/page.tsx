@@ -32,6 +32,8 @@ import {
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { Switch } from '@/components/ui/switch';
+import { useQuery, queryClient, jsonFetcher, fetchR } from '@/lib/query';
 
 interface OnboardingData {
   workspaceId: string;
@@ -113,6 +115,157 @@ function RoleTypeToggle({ value, onChange }: { value: 'ReadOnly' | 'Admin'; onCh
       <span className={`text-xs transition-colors duration-200 ${value === 'Admin' ? 'text-amber-400/70' : 'text-white/30'}`}>
         {value === 'Admin' ? 'Full access' : 'Observation only'}
       </span>
+    </div>
+  );
+}
+
+function CloudWatchAlertToggle() {
+  const { toast } = useToast();
+  const [toggling, setToggling] = React.useState(false);
+  const [copySuccess, setCopySuccess] = React.useState(false);
+
+  const { data: statusData, isLoading: loading } = useQuery<{ connected: boolean }>(
+    '/api/proxy/aws/cloudwatch/status',
+    jsonFetcher,
+    {
+      staleTime: 10_000,
+      revalidateOnFocus: true,
+      revalidateOnEvents: ['cloudwatchStateChanged'],
+    },
+  );
+
+  const enabled = statusData?.connected ?? false;
+
+  const { data: webhookData, isLoading: webhookLoading } = useQuery<{ webhookUrl?: string }>(
+    enabled ? '/api/proxy/aws/cloudwatch/webhook-url' : null,
+    jsonFetcher,
+    {
+      staleTime: 60_000,
+      revalidateOnEvents: ['cloudwatchStateChanged'],
+    },
+  );
+
+  const webhookUrl = webhookData?.webhookUrl ?? null;
+
+  const handleToggle = async (checked: boolean) => {
+    setToggling(true);
+    try {
+      if (checked) {
+        const res = await fetchR('/api/proxy/aws/cloudwatch/connect', { method: 'POST' });
+        if (!res.ok) throw new Error('Failed to connect');
+      } else {
+        const res = await fetchR('/api/proxy/aws/cloudwatch/disconnect', { method: 'POST' });
+        if (!res.ok) throw new Error('Failed to disconnect');
+      }
+      queryClient.invalidate('/api/proxy/aws/cloudwatch/status', jsonFetcher);
+      globalThis.dispatchEvent(new Event('cloudwatchStateChanged'));
+    } catch {
+      toast({ title: 'Failed to update CloudWatch settings.', variant: 'destructive' });
+    } finally {
+      setToggling(false);
+    }
+  };
+
+  const handleCopy = () => {
+    if (!webhookUrl) return;
+    copyToClipboard(webhookUrl);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
+  };
+
+  return (
+    <div className="space-y-3 bg-white/5 border border-white/10 rounded-lg p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-white/70">CloudWatch Alerts</p>
+          <p className="text-xs text-white/40 mt-0.5">Receive CloudWatch alarm notifications via SNS webhook</p>
+        </div>
+        {loading ? (
+          <Loader2 className="w-4 h-4 animate-spin text-white/30" />
+        ) : (
+          <Switch
+            checked={enabled}
+            onCheckedChange={handleToggle}
+            disabled={toggling}
+            className="data-[state=checked]:bg-emerald-500"
+          />
+        )}
+      </div>
+
+      {enabled && (
+        <div className="space-y-2 pt-2 border-t border-white/10">
+          {webhookUrl ? (
+            <>
+              <p className="text-xs text-white/50">SNS subscription endpoint</p>
+              <div className="flex gap-2 items-center">
+                <code className="flex-1 bg-black/40 border border-white/10 rounded px-3 py-2 text-xs text-white/70 font-mono truncate">
+                  {webhookUrl}
+                </code>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleCopy}
+                  className="border-white/10 hover:bg-white/5 text-white/70 h-8 w-8 shrink-0"
+                >
+                  {copySuccess ? <CheckCircle className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                </Button>
+              </div>
+              <p className="text-xs text-white/30">
+                Create an SNS HTTPS subscription pointing at this URL, then attach that topic to your CloudWatch alarms.
+              </p>
+              {/* Step-by-step setup guide */}
+              <div className="bg-black/20 border border-white/5 rounded-lg p-3 mt-2 space-y-2">
+                <p className="text-xs font-medium text-white/60">
+                  How to connect CloudWatch alarms via SNS
+                </p>
+                <ol className="space-y-2 text-xs text-white/50 list-decimal list-inside">
+                  <li>
+                    In the <strong className="text-white/70">AWS Console</strong>, go to{" "}
+                    <strong className="text-white/70">Amazon SNS → Topics</strong> and
+                    create a new <strong className="text-white/70">Standard</strong> topic
+                    (e.g. <code className="bg-black/50 px-1 rounded">aurora-cloudwatch-alerts</code>).
+                  </li>
+                  <li>
+                    Open the topic and click{" "}
+                    <strong className="text-white/70">Create subscription</strong>. Set
+                    Protocol to <strong className="text-white/70">HTTPS</strong> and paste
+                    the URL above as the Endpoint. Aurora will automatically confirm the
+                    subscription.
+                  </li>
+                  <li>
+                    Go to{" "}
+                    <strong className="text-white/70">CloudWatch → Alarms</strong>, edit
+                    each alarm you want to monitor. Under{" "}
+                    <strong className="text-white/70">Notification</strong>, add an action
+                    to send to the SNS topic you created — do this for{" "}
+                    <em>In alarm</em>, <em>OK</em>, and{" "}
+                    <em>Insufficient data</em> states.
+                  </li>
+                  <li>
+                    Save the alarm. When it next transitions to{" "}
+                    <strong className="text-white/70">ALARM</strong> state, Aurora will
+                    receive the alert and start an RCA investigation automatically.
+                  </li>
+                </ol>
+                <p className="text-[10px] text-white/30 pt-1">
+                  Aurora automatically confirms the SNS subscription when AWS first sends
+                  the <code className="bg-black/30 px-0.5 rounded">SubscriptionConfirmation</code>{" "}
+                  request — no manual action needed.
+                </p>
+              </div>
+            </>
+          ) : (
+            <button
+              onClick={() => queryClient.invalidate('/api/proxy/aws/cloudwatch/webhook-url', jsonFetcher)}
+              disabled={webhookLoading}
+              className="flex items-center gap-1.5 text-xs text-white/50 hover:text-white disabled:opacity-50"
+            >
+              {webhookLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+              {webhookLoading ? 'Loading…' : 'Show webhook URL'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -321,7 +474,7 @@ export default function AWSOnboardingPage() {
       await fetchOnboardingData();
       setIsConfigured(true);
       localStorage.setItem("aurora_graph_discovery_trigger", "1");
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
+      globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
 
     } catch (err) {
       console.error("Failed to set role:", err);
@@ -351,7 +504,7 @@ export default function AWSOnboardingPage() {
       localStorage.removeItem('isAWSFetched');
       // Notify other components to refresh (chat bar, connectors page, etc.)
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('providerStateChanged'));
+        globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
       }
       // Refresh onboarding data
       await fetchOnboardingData();
@@ -478,7 +631,7 @@ export default function AWSOnboardingPage() {
       localStorage.setItem('cloudProvider', 'aws');
       await fetchConnectedAccounts();
       await fetchInactiveAccounts();
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
+      globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (err) {
       console.error('Reconnect error:', err);
       setError('Failed to reconnect. Check your network connection and try again.');
@@ -552,7 +705,7 @@ export default function AWSOnboardingPage() {
         setIsConfigured(true);
         localStorage.setItem('isAWSConnected', 'true');
         localStorage.setItem('cloudProvider', 'aws');
-        window.dispatchEvent(new CustomEvent('providerStateChanged'));
+        globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
       }
     } catch (err) {
       console.error('Bulk register error:', err);
@@ -1197,6 +1350,9 @@ make dev`}</pre>
                   )}
                 </div>
               )}
+
+              {/* CloudWatch Alerts */}
+              <CloudWatchAlertToggle />
 
               <Button onClick={handleComplete} className="w-full bg-white text-black hover:bg-white/90 h-11">
                 Back to Connectors

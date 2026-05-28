@@ -339,7 +339,7 @@ def build_rca_prompt(
     payload: Dict[str, Any],
     user_id: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Build an RCA prompt by passing the raw webhook payload directly.
+    """Build an RCA prompt by passing the raw payload directly to the LLM.
 
     Instead of manually extracting fields, we pass the raw JSON so the LLM
     parses it directly. Payloads under PAYLOAD_CHAR_THRESHOLD are passed
@@ -347,9 +347,9 @@ def build_rca_prompt(
     down via the get_alert_field tool.
 
     Args:
-        source: Provider name (grafana, datadog, incidentio, etc.)
+        source: Provider name (grafana, datadog, incidentio, chat, etc.)
         title: Alert title (already extracted by the caller for incident creation)
-        payload: The raw webhook payload dict
+        payload: The raw webhook payload dict (or synthetic payload for chat RCAs)
         user_id: For provider lookup, Aurora Learn, and prediscovery context
 
     Returns:

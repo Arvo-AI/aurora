@@ -1,4 +1,14 @@
-.PHONY: help dev down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
+.PHONY: help dev dev-build down logs rebuild-server restart prod prod-build prod-logs prod-down clean nuke build-no-cache dev-fresh prod-clean prod-nuke prod-build-no-cache prod-fresh prod-prebuilt prod-local init prod-local-logs prod-local-down prod-local-clean prod-local-nuke deploy-build deploy package-airtight prod-airtight vm-deploy
+
+# FRONTEND_DEV_RUNTIME=bun|node in .env selects frontend dev compose overrides (see .env.example).
+FRONTEND_DEV_RUNTIME ?= bun
+ifneq (,$(wildcard .env))
+  FRONTEND_DEV_RUNTIME := $(shell grep -E '^FRONTEND_DEV_RUNTIME=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d ' ' | tr -d '\r' | head -1)
+endif
+ifeq ($(FRONTEND_DEV_RUNTIME),)
+  FRONTEND_DEV_RUNTIME := bun
+endif
+COMPOSE_DEV := docker compose -f docker-compose.yaml$(if $(filter node,$(FRONTEND_DEV_RUNTIME)), -f docker-compose.frontend-dev-node.yml,)
 
 help:
 	@echo "Available commands:"
@@ -65,14 +75,14 @@ dev:
 		echo "Please run 'make init' first to set up your environment."; \
 		exit 1; \
 	fi
-	docker compose up --build -d
+	$(COMPOSE_DEV) up --build -d
 
 dev-build: build
 build:
-	docker compose build
+	$(COMPOSE_DEV) build
 
 down:
-	@docker compose down --remove-orphans 2>/dev/null || true
+	@$(COMPOSE_DEV) down --remove-orphans 2>/dev/null || true
 	@docker compose -f docker-compose.prod-local.yml down --remove-orphans 2>/dev/null || true
 	@docker compose -f docker-compose.airtight.yml down --remove-orphans 2>/dev/null || true
 	@for ep in $$(docker network inspect aurora_default -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do docker network disconnect -f aurora_default $$ep 2>/dev/null; done; true
@@ -80,29 +90,29 @@ down:
 
 logs:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
-		docker compose logs --tail 50 -f; \
+		$(COMPOSE_DEV) logs --tail 50 -f; \
 	else \
-		docker compose logs --tail 50 -f $(filter-out $@,$(MAKECMDGOALS)); \
+		$(COMPOSE_DEV) logs --tail 50 -f $(filter-out $@,$(MAKECMDGOALS)); \
 	fi
 
 restart:
-	docker compose down
-	docker compose up -d
+	$(COMPOSE_DEV) down
+	$(COMPOSE_DEV) up -d
 
 # Build without cache
 build-no-cache:
 	@echo "Building all containers without cache..."
-	docker compose build --no-cache
+	$(COMPOSE_DEV) build --no-cache
 
 # Stop containers and remove volumes
 clean:
 	@echo "Stopping containers and removing volumes..."
-	docker compose down -v
+	$(COMPOSE_DEV) down -v
 
 # Full cleanup: containers, volumes, images, and orphans
 nuke:
 	@echo "Performing full cleanup..."
-	docker compose down -v --rmi local --remove-orphans
+	$(COMPOSE_DEV) down -v --rmi local --remove-orphans
 	@echo "Pruning dangling images..."
 	docker image prune -f
 	@echo "Cleanup complete!"
@@ -110,11 +120,11 @@ nuke:
 # Full cleanup + rebuild without cache + start
 dev-fresh:
 	@echo "Performing full fresh rebuild..."
-	docker compose down -v --rmi local --remove-orphans
+	$(COMPOSE_DEV) down -v --rmi local --remove-orphans
 	@echo "Building without cache..."
-	docker compose build --no-cache
+	$(COMPOSE_DEV) build --no-cache
 	@echo "Starting containers..."
-	docker compose up -d
+	$(COMPOSE_DEV) up -d
 	@echo "Fresh rebuild complete!"
 
 # Production commands
