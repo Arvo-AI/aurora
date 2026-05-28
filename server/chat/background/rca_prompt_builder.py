@@ -367,10 +367,10 @@ def build_rca_prompt(
             json_content = serialized
             truncation_note = ""
         else:
-            truncated = truncate_json_fields(payload, max_field_length=250, max_list_items=10)
+            truncated = truncate_json_fields(payload, max_field_length=250)
             json_content = json.dumps(truncated, ensure_ascii=False, default=str)
             if len(json_content) > 15_000:
-                truncated = truncate_json_fields(payload, max_field_length=10, max_list_items=1)
+                truncated = truncate_json_fields(payload, max_field_length=80, max_depth=1)
                 json_content = json.dumps(truncated, indent=2, ensure_ascii=False, default=str)
             truncation_note = (
                 "Some field values were truncated. Use the `get_alert_field` tool "

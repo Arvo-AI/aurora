@@ -191,6 +191,7 @@ def trigger_rca(
             trigger_metadata=trigger_metadata, incident_id=incident_id,
         )
 
+        # Small enough to always pass verbatim (no truncation/get_alert_field needed)
         payload: dict = {
             "title": incident_title,
             "status": "investigating",

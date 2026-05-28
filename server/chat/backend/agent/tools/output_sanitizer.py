@@ -9,12 +9,24 @@ import json
 
 logger = logging.getLogger(__name__)
 
-def truncate_json_fields(data, max_field_length=10000, max_list_items=None):
+def truncate_json_fields(data, max_field_length=10000, max_depth=None, _current_depth=0):
     """
     Recursively truncate string fields in JSON data while preserving the JSON structure.
     Only truncates individual string values, not the entire JSON object.
-    When max_list_items is set, lists longer than that are sliced with a trailing note.
+    When max_depth is set, nested structures beyond that depth are replaced with summaries.
     """
+    if max_depth is not None and _current_depth >= max_depth:
+        if isinstance(data, dict):
+            return f"{{object, {len(data)} keys: {', '.join(list(data.keys())[:5])}{', ...' if len(data) > 5 else ''}}}"
+        elif isinstance(data, list):
+            return f"[array, {len(data)} items]"
+        elif isinstance(data, str):
+            if len(data) > max_field_length:
+                return data[:max_field_length] + "... [field truncated]"
+            return data
+        else:
+            return data
+
     if isinstance(data, str):
         if len(data) > max_field_length:
             return data[:max_field_length] + "... [field truncated]"
@@ -25,14 +37,10 @@ def truncate_json_fields(data, max_field_length=10000, max_list_items=None):
             safe_key = str(key) if key is not None else "null_key"
             if len(safe_key) > 200:
                 safe_key = safe_key[:200] + "..."
-            truncated_dict[safe_key] = truncate_json_fields(value, max_field_length, max_list_items)
+            truncated_dict[safe_key] = truncate_json_fields(value, max_field_length, max_depth, _current_depth + 1)
         return truncated_dict
     elif isinstance(data, list):
-        if max_list_items and len(data) > max_list_items:
-            items = [truncate_json_fields(item, max_field_length, max_list_items) for item in data[:max_list_items]]
-            items.append(f"... [{len(data) - max_list_items} more items]")
-            return items
-        return [truncate_json_fields(item, max_field_length, max_list_items) for item in data]
+        return [truncate_json_fields(item, max_field_length, max_depth, _current_depth + 1) for item in data]
     else:
         return data
 
