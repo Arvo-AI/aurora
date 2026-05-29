@@ -302,7 +302,7 @@ def get_user_providers(user_id: str) -> List[str]:
 # Unified Raw Payload RCA Prompt Builder
 # ============================================================================
 
-PAYLOAD_CHAR_THRESHOLD = 10_000
+PAYLOAD_CHAR_THRESHOLD = 1_000
 
 
 def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
@@ -373,8 +373,8 @@ def build_rca_prompt(
                 truncated = truncate_json_fields(payload, max_field_length=80, max_depth=1)
                 json_content = json.dumps(truncated, indent=2, ensure_ascii=False, default=str)
             truncation_note = (
-                "Some field values were truncated. Use the `get_alert_field` tool "
-                "with a dot-separated path to retrieve full values.\n"
+                "Fields ending with '... [field truncated]' were too long to include in full. "
+                "`get_alert_field` tool for fields that show this marker if you need to inspect them. "
             )
     except Exception as e:
         logger.warning(f"Failed to serialize alert payload: {e}")

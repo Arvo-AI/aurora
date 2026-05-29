@@ -453,41 +453,42 @@ def run_background_chat(
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
-    # Eagerly persist the initial user message so it's visible in the UI immediately
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:EagerMsg]")
-                cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
-                row = cursor.fetchone()
-                messages = row[0] if row and row[0] else []
-                if isinstance(messages, str):
-                    messages = json.loads(messages)
-                if not isinstance(messages, list):
-                    messages = []
-                has_user_message = any(
-                    isinstance(m, dict) and m.get("sender") == "user"
-                    for m in messages
-                )
-                if not has_user_message:
-                    existing_numbers = [
-                        int(m.get("message_number", 0))
+    # Eagerly persist the initial user message so it's visible in the UI immediately (non-prod only)
+    if os.environ.get("AURORA_ENV", "").lower() not in ("prod", "production"):
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:EagerMsg]")
+                    cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+                    row = cursor.fetchone()
+                    messages = row[0] if row and row[0] else []
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+                    if not isinstance(messages, list):
+                        messages = []
+                    has_user_message = any(
+                        isinstance(m, dict) and m.get("sender") == "user"
                         for m in messages
-                        if isinstance(m, dict)
-                    ]
-                    next_num = max(existing_numbers, default=0) + 1
-                    messages.append({
-                        "sender": "user",
-                        "text": initial_message,
-                        "message_number": next_num,
-                    })
-                    cursor.execute(
-                        "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
-                        (json.dumps(messages), session_id),
                     )
-            conn.commit()
-    except Exception as e:
-        logger.warning(f"[BackgroundChat] Failed to eagerly persist user message: {e}")
+                    if not has_user_message:
+                        existing_numbers = [
+                            int(m.get("message_number", 0))
+                            for m in messages
+                            if isinstance(m, dict)
+                        ]
+                        next_num = max(existing_numbers, default=0) + 1
+                        messages.append({
+                            "sender": "user",
+                            "text": initial_message,
+                            "message_number": next_num,
+                        })
+                        cursor.execute(
+                            "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
+                            (json.dumps(messages), session_id),
+                        )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"[BackgroundChat] Failed to eagerly persist user message: {e}")
     
     completed_successfully = False
     
