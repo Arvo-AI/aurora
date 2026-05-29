@@ -8,7 +8,8 @@ and the agent needs to inspect a specific field in full.
 
 import json
 import logging
-from typing import Optional
+from datetime import timedelta
+from typing import Any, Dict, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,8 @@ _SOURCE_TABLE_MAP = {
     "spinnaker": "spinnaker_deployment_events",
 }
 
+_PAYLOAD_LOOKUP_WINDOW = timedelta(minutes=10)
+
 
 class GetAlertFieldArgs(BaseModel):
     json_path: str = Field(
@@ -49,6 +52,110 @@ GET_ALERT_FIELD_DESCRIPTION = (
 )
 
 
+def _validate_inputs(json_path: str, user_id: Optional[str], incident_id: Optional[str]) -> Optional[str]:
+    """Validate required inputs; returns an error string or None if valid."""
+    if not user_id:
+        return "Error: User authentication required."
+    if not incident_id:
+        return "Error: No incident context. This tool is only available during RCA investigations."
+    if not json_path or not json_path.strip():
+        return "Error: json_path is required. Provide a dot-separated path like 'event.incident.summary'."
+    return None
+
+
+def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Optional[Any], Optional[str]]:
+    """Fetch the raw payload for an incident. Returns (payload_dict, error_string)."""
+    from utils.auth.stateless_auth import set_rls_context
+
+    set_rls_context(cursor, conn, user_id, log_prefix="[GetAlertField]")
+
+    cursor.execute(
+        "SELECT source_type, source_alert_id, created_at FROM incidents WHERE id = %s",
+        (incident_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None, f"Error: Incident {incident_id} not found."
+
+    source_type, source_alert_id, incident_created_at = row[0], row[1], row[2]
+    table = _SOURCE_TABLE_MAP.get(source_type)
+    if not table:
+        return None, f"Error: Unknown source type '{source_type}'. Cannot look up payload."
+
+    # Primary: direct ID lookup
+    cursor.execute(
+        f"SELECT payload FROM {table} WHERE id = %s",
+        (source_alert_id,),
+    )
+    payload_row = cursor.fetchone()
+
+    # Fallback: time-window constrained lookup around incident creation
+    if not payload_row or not payload_row[0]:
+        if incident_created_at:
+            window_start = incident_created_at - _PAYLOAD_LOOKUP_WINDOW
+            window_end = incident_created_at + _PAYLOAD_LOOKUP_WINDOW
+            cursor.execute(
+                f"SELECT payload FROM {table} "
+                f"WHERE user_id = %s AND received_at BETWEEN %s AND %s "
+                f"ORDER BY received_at DESC LIMIT 1",
+                (user_id, window_start, window_end),
+            )
+            payload_row = cursor.fetchone()
+
+    if not payload_row or not payload_row[0]:
+        return None, f"Error: No payload found in {table} for source_alert_id {source_alert_id}."
+
+    payload = payload_row[0]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+
+    return payload, None
+
+
+def _traverse_path(payload: Any, json_path: str) -> Tuple[Optional[Any], Optional[str]]:
+    """Walk a dot-separated path through the payload. Returns (value, error_string)."""
+    path_parts = json_path.strip().split(".")
+    current = payload
+    for part in path_parts:
+        if current is None:
+            return None, f"Error: Path '{json_path}' not found. Value is null at '{part}'."
+        if isinstance(current, dict):
+            if part in current:
+                current = current[part]
+            else:
+                available = list(current.keys())[:20]
+                return None, (
+                    f"Error: Key '{part}' not found at this level.\n"
+                    f"Available keys: {available}"
+                )
+        elif isinstance(current, list):
+            try:
+                idx = int(part)
+            except ValueError:
+                return None, f"Error: Expected numeric index for list, got '{part}'."
+            if 0 <= idx < len(current):
+                current = current[idx]
+            else:
+                return None, f"Error: Index {idx} out of range (list has {len(current)} items)."
+        else:
+            return None, f"Error: Cannot traverse into {type(current).__name__} at '{part}'."
+    return current, None
+
+
+def _format_output(value: Any) -> str:
+    """Serialize and truncate the extracted value for tool output."""
+    from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
+
+    if isinstance(value, (dict, list)):
+        result = json.dumps(value, ensure_ascii=False, default=str, indent=2)
+    else:
+        result = str(value) if value is not None else "null"
+
+    if len(result) > MAX_TOOL_OUTPUT_CHARS:
+        result = result[:MAX_TOOL_OUTPUT_CHARS] + "\n... [output truncated]"
+    return result
+
+
 def get_alert_field(
     json_path: str,
     user_id: Optional[str] = None,
@@ -56,100 +163,25 @@ def get_alert_field(
     **kwargs,
 ) -> str:
     """Retrieve a specific field from the stored webhook payload."""
-    if not user_id:
-        return "Error: User authentication required."
-    if not incident_id:
-        return "Error: No incident context. This tool is only available during RCA investigations."
-    if not json_path or not json_path.strip():
-        return "Error: json_path is required. Provide a dot-separated path like 'event.incident.summary'."
+    error = _validate_inputs(json_path, user_id, incident_id)
+    if error:
+        return error
 
     from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
 
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[GetAlertField]")
+                payload, err = _fetch_payload(cursor, conn, incident_id, user_id)
+                if err:
+                    return err
 
-                cursor.execute(
-                    "SELECT source_type, source_alert_id FROM incidents WHERE id = %s",
-                    (incident_id,),
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return f"Error: Incident {incident_id} not found."
+                value, err = _traverse_path(payload, json_path)
+                if err:
+                    return err
 
-                source_type, source_alert_id = row[0], row[1]
-                table = _SOURCE_TABLE_MAP.get(source_type)
-                if not table:
-                    return f"Error: Unknown source type '{source_type}'. Cannot look up payload."
-
-                # Try direct ID lookup first
-                cursor.execute(
-                    f"SELECT payload FROM {table} WHERE id = %s",
-                    (source_alert_id,),
-                )
-                payload_row = cursor.fetchone()
-
-                # Fallback: query by user + most recent (handles providers where
-                # source_alert_id is not the event table row ID, e.g. Grafana CRC)
-                if not payload_row or not payload_row[0]:
-                    cursor.execute("SELECT org_id FROM incidents WHERE id = %s", (incident_id,))
-                    org_row = cursor.fetchone()
-                    if org_row:
-                        cursor.execute(
-                            f"SELECT payload FROM {table} WHERE user_id = %s AND org_id = %s "
-                            f"ORDER BY received_at DESC LIMIT 1",
-                            (user_id, org_row[0]),
-                        )
-                        payload_row = cursor.fetchone()
-
-                if not payload_row or not payload_row[0]:
-                    return f"Error: No payload found in {table} for source_alert_id {source_alert_id}."
-
-                payload = payload_row[0]
-                if isinstance(payload, str):
-                    payload = json.loads(payload)
-
-                # Navigate the dot-separated path
-                path_parts = json_path.strip().split(".")
-                current = payload
-                for part in path_parts:
-                    if current is None:
-                        return f"Error: Path '{json_path}' not found. Value is null at '{part}'."
-                    if isinstance(current, dict):
-                        if part in current:
-                            current = current[part]
-                        else:
-                            available = list(current.keys())[:20]
-                            return (
-                                f"Error: Key '{part}' not found at this level.\n"
-                                f"Available keys: {available}"
-                            )
-                    elif isinstance(current, list):
-                        try:
-                            idx = int(part)
-                            if 0 <= idx < len(current):
-                                current = current[idx]
-                            else:
-                                return f"Error: Index {idx} out of range (list has {len(current)} items)."
-                        except ValueError:
-                            return f"Error: Expected numeric index for list, got '{part}'."
-                    else:
-                        return f"Error: Cannot traverse into {type(current).__name__} at '{part}'."
-
-                # Serialize the result
-                if isinstance(current, (dict, list)):
-                    result = json.dumps(current, ensure_ascii=False, default=str, indent=2)
-                else:
-                    result = str(current) if current is not None else "null"
-
-                from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
-                if len(result) > MAX_TOOL_OUTPUT_CHARS:
-                    result = result[:MAX_TOOL_OUTPUT_CHARS] + "\n... [output truncated]"
-
-                return result
+                return _format_output(value)
 
     except Exception as e:
         logger.exception("[GetAlertField] Error retrieving field: %s", e)
-        return f"Error retrieving alert field: {str(e)}"
+        return f"Error retrieving alert field: {e}"

@@ -463,8 +463,24 @@ def run_background_chat(
                 messages = row[0] if row and row[0] else []
                 if isinstance(messages, str):
                     messages = json.loads(messages)
-                if not any(m.get("sender") == "user" for m in messages):
-                    messages.append({"sender": "user", "text": initial_message, "message_number": 1})
+                if not isinstance(messages, list):
+                    messages = []
+                has_user_message = any(
+                    isinstance(m, dict) and m.get("sender") == "user"
+                    for m in messages
+                )
+                if not has_user_message:
+                    existing_numbers = [
+                        int(m.get("message_number", 0))
+                        for m in messages
+                        if isinstance(m, dict)
+                    ]
+                    next_num = max(existing_numbers, default=0) + 1
+                    messages.append({
+                        "sender": "user",
+                        "text": initial_message,
+                        "message_number": next_num,
+                    })
                     cursor.execute(
                         "UPDATE chat_sessions SET messages = %s::jsonb WHERE id = %s",
                         (json.dumps(messages), session_id),

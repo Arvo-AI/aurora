@@ -313,7 +313,7 @@ def process_netdata_alert(
 
                                     # Build simple RCA prompt with Aurora Learn context injection
                                     rca_prompt, rail_text = build_rca_prompt(
-                                        "netdata", data.get('name', 'Netdata Alert'), data, user_id=user_id
+                                        "netdata", data.get('name', 'Netdata Alert'), payload, user_id=user_id
                                     )
 
                                     # Start RCA task and immediately store task ID

@@ -2371,7 +2371,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     if incident_id and is_background:
         try:
             from .alert_payload_tool import get_alert_field, GetAlertFieldArgs, GET_ALERT_FIELD_DESCRIPTION
-            _ctx = with_user_context(get_alert_field)
+            _ctx = with_forced_context(get_alert_field)
             _notif = with_completion_notification(_ctx)
             _final = wrap_func_with_capture(_notif, "get_alert_field") if tool_capture else _notif
             tools.append(StructuredTool.from_function(

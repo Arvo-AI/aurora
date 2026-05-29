@@ -307,10 +307,10 @@ PAYLOAD_CHAR_THRESHOLD = 10_000
 
 def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
     """Extract attacker-controllable text from a raw payload for guardrail evaluation."""
-    _RAIL_FIELDS = (
+    _RAIL_FIELDS = {
         'title', 'message', 'body', 'description', 'text', 'summary',
-        'alert_title', 'event_title', 'ruleName', 'name', 'condition_name',
-    )
+        'alert_title', 'event_title', 'rulename', 'name', 'condition_name',
+    }
     parts: List[str] = []
 
     def _collect(obj: Any, depth: int = 0) -> None:
