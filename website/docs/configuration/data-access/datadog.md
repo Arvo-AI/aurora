@@ -18,7 +18,7 @@ Both paths serve data that has already been processed by Datadog's Sensitive Dat
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                  Your Datadog Org                            │
 │                                                              │
@@ -93,7 +93,7 @@ For each rule:
 
 For organization-specific PII patterns, add custom regex rules:
 
-```
+```regex
 # Employee names (if they appear in logs)
 \b(John|Jane|FirstName)\s+(Smith|Doe|LastName)\b
 
@@ -133,7 +133,7 @@ Create a dedicated Datadog service account for Aurora with restricted permission
   - `events_read` — required for event queries
 5. **Do NOT grant:**
   - `data_scanner_unmask` — this would let Aurora see masked PII
-  - `logs_write_`* — Aurora should never write to your Datadog
+  - `logs_write_*` — Aurora should never write to your Datadog
   - `user_access_manage` — Aurora should not modify access controls
 6. Click **Save**
 
@@ -168,7 +168,7 @@ Service accounts are bot users that own API keys independently of any human user
 
 The flow is:
 
-```
+```text
 Restriction Query → attached to Role → assigned to Service Account → App Key inherits all restrictions
 ```
 
@@ -215,7 +215,7 @@ curl -X POST "https://api.datadoghq.com/api/v2/logs/events/search" \
 
 **Expected result:** PII fields should appear as hashed/masked values:
 
-```
+```text
 "User 8a3f9c2b1d4e7f60 login failed from b7e2a1c9d3f84052 phone c4e8a2f19b3d7061"
 ```
 
