@@ -16,7 +16,7 @@ Aurora connects to your Datadog via two data paths:
 
 ## Architecture
 
-```text
+```
 ┌─────────────────────────────────────────────────────────┐
 │                  Your Datadog Org                        │
 │                                                         │
