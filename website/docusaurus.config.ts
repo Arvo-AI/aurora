@@ -20,7 +20,7 @@ const config: Config = {
 
   markdown: {
     format: 'detect',
-    mermaid: false,
+    mermaid: true,
     mdx1Compat: {
       comments: true,
       admonitions: true,
@@ -50,6 +50,7 @@ const config: Config = {
   ],
 
   themes: [
+    '@docusaurus/theme-mermaid',
     [
       '@easyops-cn/docusaurus-search-local',
       {
