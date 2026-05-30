@@ -326,15 +326,7 @@ def workspace_cleanup(user_id, workspace_id):
         if failed_accounts and len(failed_accounts) == len(aws_conns):
             return jsonify({"error": "Failed to disconnect AWS connections"}), 500
 
-        if failed_accounts:
-            return jsonify({
-                "success": False,
-                "message": "Some AWS accounts could not be disconnected.",
-                "failedAccounts": failed_accounts,
-            }), 207
-
-        # Only wipe workspace discovery state and graph nodes if no active
-        # AWS connections remain (partial disconnect should preserve state).
+        # Re-check actual DB state to handle races and determine cleanup.
         remaining = get_all_user_aws_connections(user_id)
         if not remaining:
             try:
@@ -362,6 +354,15 @@ def workspace_cleanup(user_id, workspace_id):
                     sanitize(user_id),
                     sanitize(str(e)),
                 )
+
+        if remaining:
+            remaining_ids = [c.get('account_id') for c in remaining if c.get('account_id')]
+            return jsonify({
+                "success": False,
+                "message": "Some AWS accounts could not be disconnected.",
+                "failedAccounts": remaining_ids,
+                "disconnected": [a for a in [c.get('account_id') for c in aws_conns] if a and a not in remaining_ids],
+            }), 207
 
         message = (
             "Aurora has disconnected AWS. "
