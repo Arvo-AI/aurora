@@ -16,23 +16,32 @@ Aurora connects to your Datadog via two data paths:
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    subgraph datadog["Your Datadog Org"]
-        raw["Raw Data (with PII)"]
-        sds["Sensitive Data Scanner\n(Hash or Mask at ingestion)"]
-        stored["Stored Data (PII hashed/masked)"]
-        rbac["Restricted Dataset (RBAC)\nAurora role: no PII access"]
-        output["API Responses + Webhook Payloads\n(PII-free)"]
-
-        raw --> sds --> stored --> rbac --> output
-    end
-
-    subgraph aurora["Aurora"]
-        agent["Sees only hashed/masked values\nCannot reverse hashes\nNot a data processor"]
-    end
-
-    output --> agent
+```text
+┌─────────────────────────────────────────────────────────┐
+│                  Your Datadog Org                        │
+│                                                         │
+│  Raw Data (with PII)                                    │
+│       │                                                 │
+│       ▼                                                 │
+│  Sensitive Data Scanner (Hash or Mask at ingestion)     │
+│       │                                                 │
+│       ▼                                                 │
+│  Stored Data (PII hashed/masked)                        │
+│       │                                                 │
+│       ▼                                                 │
+│  Restricted Dataset (RBAC) — Aurora role: no PII access │
+│       │                                                 │
+│       ▼                                                 │
+│  API Responses + Webhook Payloads (PII-free)            │
+│       │                                                 │
+└───────┼─────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────┐
+│  Aurora                                                 │
+│  Sees only hashed/masked values                         │
+│  Cannot reverse hashes — Not a data processor           │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
