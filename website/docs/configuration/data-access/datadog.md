@@ -14,8 +14,6 @@ Aurora connects to your Datadog via two data paths:
 1. **Webhooks (push):** Datadog sends alert payloads to Aurora when your monitors fire.
 2. **API queries (pull):** Aurora's RCA agent queries your Datadog for logs, metrics, traces, events, monitors, hosts, and incidents.
 
-Both paths serve data that has been processed by Datadog's Sensitive Data Scanner — once you configure it following this guide. Combined with a restricted service account role, PII is filtered **before** data ever leaves your Datadog organization.
-
 ## Architecture
 
 ```mermaid
@@ -146,12 +144,7 @@ Service accounts are bot users that own API keys independently of any human user
 
 ### 2.4 Create API + App Keys Under the Service Account
 
-1. Go to **Organization Settings → API Keys** → Create a new API key
-  - Name: `Aurora Integration`
-2. On the **Service Account** page for `Aurora Integration`, create an **Application Key**
-  - Name: `Aurora Integration`
-  - The key automatically inherits the service account's role (and its restriction query)
-3. Provide both keys when connecting Aurora to Datadog in your Aurora settings (see the [Datadog connector setup guide](../integrations/connectors.md#datadog))
+Follow the [Datadog connector setup guide](../integrations/connectors.md#datadog) to create API and Application keys, but create them **under the service account** (not your personal user) so they inherit the `Aurora Restricted` role.
 
 The flow is:
 
