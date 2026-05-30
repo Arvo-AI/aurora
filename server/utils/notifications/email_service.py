@@ -30,7 +30,7 @@ class EmailService:
 
     def __init__(self):
         self.smtp_host = os.getenv("SMTP_HOST")
-        self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        self.smtp_port = int(os.getenv("SMTP_PORT", "465"))
         self.smtp_user = os.getenv("SMTP_USER")
         self.smtp_password = os.getenv("SMTP_PASSWORD")
         self.from_email = os.getenv("SMTP_FROM_EMAIL")
@@ -55,10 +55,17 @@ class EmailService:
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_default_certs()
 
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.starttls(context=context)
-                server.login(self.smtp_user, self.smtp_password)
-                server.send_message(msg)
+            if self.smtp_port == 465:
+                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, context=context) as server:
+                    server.login(self.smtp_user, self.smtp_password)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                    server.ehlo()
+                    server.starttls(context=context)
+                    server.ehlo()
+                    server.login(self.smtp_user, self.smtp_password)
+                    server.send_message(msg)
 
             logger.info(f"[EmailService] Email sent successfully to {to_email}: {subject}")
             return True
