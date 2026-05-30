@@ -377,12 +377,45 @@ Aurora, without the field accessor role, cannot see those fields. This works wel
 
 ### Skip GCP logs (use an external log source)
 
-If your primary logging is in an external observability platform rather than GCP (e.g., Datadog, Splunk, New Relic, Elastic), the pipeline above is unnecessary. Instead, grant Aurora a GCP service account with only metrics and monitoring permissions (no log access), and connect Aurora to your observability platform separately for log-based investigation.
+If your primary logging is in an external observability platform rather than GCP (e.g., Datadog, Splunk, New Relic, Elastic), the DLP pipeline above is unnecessary. Instead, grant Aurora a GCP service account with infrastructure visibility but no log access, and connect Aurora to your observability platform separately for log-based investigation.
+
+This approach provides significant RCA capability from GCP (pod status, events, metrics, deployments) while keeping all log data access through your external platform's built-in PII filtering.
+
+#### Recommended roles
 
 ```bash
+SA=aurora@aurora-saas-prod.iam.gserviceaccount.com
+
+# Infrastructure visibility (pods, nodes, deployments, events — no pod logs)
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:aurora@aurora-saas-prod.iam.gserviceaccount.com" \
-  --role="roles/monitoring.viewer"
+  --member="serviceAccount:$SA" --role="roles/container.viewer"
+
+# Metrics, alerts, dashboards, uptime checks
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/monitoring.viewer"
 ```
 
-This grants access to GCP metrics, uptime checks, and alerting data but no log entries. For log data, connect Aurora to your observability platform directly. Most platforms offer built-in PII filtering (e.g., Datadog Sensitive Data Scanner, Splunk Data Masking, Elastic Field Redaction) that strip PII before storage, meaning data read via their APIs is already redacted. No additional pipeline is needed on either side.
+#### What Aurora can do with these roles
+
+| Capability | Example |
+|---|---|
+| Detect crash loops | Pod status shows CrashLoopBackoff, restart count |
+| Identify OOM kills | Kubernetes events show OOMKilled reason |
+| Find bad deployments | Rollout history shows recent changes, replica counts |
+| Check resource pressure | Metrics show CPU/memory spikes at alert time |
+| See scheduling failures | Events show FailedScheduling, image pull errors |
+| Check node health | Node conditions, capacity, allocatable resources |
+| Review networking | Service endpoints, ingress configs, HPA state |
+| Alert context | What fired, thresholds, notification channels |
+
+#### What Aurora cannot do (by design)
+
+| Blocked | Why |
+|---|---|
+| Read pod logs (`kubectl logs`) | `container.pods.getLogs` is not in `container.viewer` |
+| Read Cloud Logging entries | No `logging.*` permissions granted |
+| Read traces | No `cloudtrace.*` permissions |
+| Read error reports | No `errorreporting.*` permissions |
+| Access Cloud Storage | No `storage.*` permissions |
+
+Pod logs and application-level log data should be accessed through your external observability platform, which handles PII filtering natively (e.g., Datadog Sensitive Data Scanner, Splunk Data Masking, Elastic Field Redaction).
