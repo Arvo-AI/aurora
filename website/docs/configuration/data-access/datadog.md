@@ -26,7 +26,7 @@ flowchart TB
         sds["Sensitive Data Scanner"]
         stored["Stored Data — PII hashed/masked"]
         rbac["RBAC Restricted Dataset"]
-        output["API + Webhook Responses — PII-free"]
+        output["API + Webhook Responses (PII-free)"]
 
         sds --> stored --> rbac --> output
     end
