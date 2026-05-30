@@ -51,8 +51,12 @@ class EmailService:
             msg.attach(MIMEText(text_body, 'plain'))
             msg.attach(MIMEText(html_body, 'html'))
 
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_default_certs()
+
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.starttls(context=ssl.create_default_context())
+                server.starttls(context=context)
                 server.login(self.smtp_user, self.smtp_password)
                 server.send_message(msg)
 
