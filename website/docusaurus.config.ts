@@ -19,7 +19,7 @@ const config: Config = {
   onBrokenLinks: 'throw',
 
   markdown: {
-    format: 'mdx',
+    format: 'detect',
     mermaid: false,
     mdx1Compat: {
       comments: true,

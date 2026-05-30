@@ -25,6 +25,13 @@ const sidebars: SidebarsConfig = {
         'configuration/vault',
         'configuration/storage',
         'configuration/command-safety',
+        {
+          type: 'category',
+          label: 'Data Access',
+          items: [
+            'configuration/data-access/gcp',
+          ],
+        },
       ],
     },
     {

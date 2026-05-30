@@ -16,6 +16,10 @@ Aurora works without any cloud provider accounts. You only need an LLM API key t
 
 Two authentication methods are available: **OAuth 2.0** (interactive, per-user consent) or **Service Account Key** (non-interactive, ideal for automation and cross-project setups).
 
+:::tip PII-Safe Configuration
+For environments with strict data privacy requirements, see [Configuration > Data Access > GCP](/docs/configuration/data-access/gcp) for PII redaction options and recommended minimal-permission roles.
+:::
+
 #### Option A: Service Account Key
 
 Upload a GCP service account JSON key directly — no OAuth consent screen, no redirect URIs, no browser flow. The uploaded key becomes the working identity (Aurora skips its per-user SA impersonation chain).
