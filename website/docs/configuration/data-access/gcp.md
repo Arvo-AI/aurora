@@ -360,7 +360,7 @@ gcloud logging write test-log \
 
 After 10-15 seconds, the redacted output appears in the `aurora-redacted` bucket:
 
-```
+```text
 ERROR: User [EMAIL_ADDRESS] from IP [IP_ADDRESS], SSN [US_SOCIAL_SECURITY_NUMBER]
 ```
 
