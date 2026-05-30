@@ -12,7 +12,7 @@ sidebar_label: Datadog
 Aurora connects to your Datadog via two data paths:
 
 1. **Webhooks (push):** Datadog sends alert payloads to Aurora when your monitors fire.
-2. **API queries (pull):** Aurora's RCA agent queries your Datadog for logs, metrics, traces, events, monitors, hosts, and incidents.
+1. **API queries (pull):** Aurora's RCA agent queries your Datadog for logs, metrics, traces, events, monitors, hosts, and incidents.
 
 ## Architecture
 
@@ -45,8 +45,8 @@ The Sensitive Data Scanner applies at **ingestion time** — all downstream cons
 
 1. Navigate to **Organization Settings → Sensitive Data Scanner**
   - Direct link: `https://app.datadoghq.com/sensitive-data-scanner/configuration/telemetry`
-2. Click **+ Add Scanning Group**
-3. Configure:
+1. Click **+ Add Scanning Group**
+1. Configure:
   - **Name:** `PII Protection - Aurora Integration`
   - **Query filter:** `*` (all data) or scope to specific services if preferred
   - **Enable scanning for:** Logs, APM Spans, Events
@@ -72,7 +72,7 @@ Click **+ Add Scanning Rule** → **Add Library Rules**. Datadog provides 90+ pr
 For each rule:
 
 1. Under **Action on Match**, select **Entire Event** to scan all fields
-2. Under **Define actions on match**, select **Hash** (irreversible FarmHash fingerprint) or **Mask** (logs only, reversible by privileged users in your org)
+1. Under **Define actions on match**, select **Hash** (irreversible FarmHash fingerprint) or **Mask** (logs only, reversible by privileged users in your org)
 
 ### 1.3 Add Custom Rules (Optional)
 
@@ -109,27 +109,27 @@ Create a dedicated Datadog service account for Aurora with restricted permission
 ### 2.1 Create a Custom Role for Aurora
 
 1. Go to **Organization Settings → Roles**
-2. Click **New Role**
-3. Name: `Aurora Restricted`
-4. Grant permissions:
+1. Click **New Role**
+1. Name: `Aurora Restricted`
+1. Grant permissions:
   - `logs_read_data` — required for log queries
   - `logs_read_index_data` — required for log search
   - `monitors_read` — required for monitor queries
   - `events_read` — required for event queries
-5. **Do NOT grant:**
+1. **Do NOT grant:**
   - `data_scanner_unmask` — this would let Aurora see masked PII
   - `logs_write_*` — Aurora should never write to your Datadog
   - `user_access_manage` — Aurora should not modify access controls
-6. Click **Save**
+1. Click **Save**
 
 ### 2.2 Restricted Dataset (Optional — Only If You Already Tag PII Services)
 
 If your logs are already tagged to indicate which services handle PII (e.g., `service:user-auth`, `data_classification:pii`), you can add an extra access layer:
 
 1. Go to **Organization Settings → Data Access Control**
-2. Click **New Restricted Dataset**
-3. Name it, select **Logs**, and filter on your existing PII-related tag
-4. Grant access to your team's roles. Do NOT grant access to the `Aurora Restricted` role.
+1. Click **New Restricted Dataset**
+1. Name it, select **Logs**, and filter on your existing PII-related tag
+1. Grant access to your team's roles. Do NOT grant access to the `Aurora Restricted` role.
 
 > **Note:** This only works with pre-existing tags — Restricted Datasets cannot filter on log content or attributes. If your services aren't already tagged by data sensitivity, skip this step. The Sensitive Data Scanner (Step 1) is sufficient on its own.
 
@@ -138,9 +138,9 @@ If your logs are already tagged to indicate which services handle PII (e.g., `se
 Service accounts are bot users that own API keys independently of any human user.
 
 1. Go to **Organization Settings → Service Accounts**
-2. Click **+ New Service Account**
-3. Name: `Aurora Integration`
-4. Assign the `Aurora Restricted` role to this service account
+1. Click **+ New Service Account**
+1. Name: `Aurora Integration`
+1. Assign the `Aurora Restricted` role to this service account
 
 ### 2.4 Create API + App Keys Under the Service Account
 
