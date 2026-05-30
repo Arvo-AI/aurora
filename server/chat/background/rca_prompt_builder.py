@@ -364,8 +364,8 @@ def build_rca_prompt(
         payload_size = len(serialized)
 
         if source == "chat":
-            if payload_size > _CHAT_PAYLOAD_MAX:
-                json_content = serialized[:_CHAT_PAYLOAD_MAX] + "\n... [message truncated]"
+            if payload_size > CHAT_PAYLOAD_MAX:
+                json_content = serialized[:CHAT_PAYLOAD_MAX] + "\n... [message truncated]"
             else:
                 json_content = serialized
             truncation_note = ""
