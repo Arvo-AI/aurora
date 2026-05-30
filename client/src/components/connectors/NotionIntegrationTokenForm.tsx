@@ -178,21 +178,30 @@ export function NotionIntegrationTokenForm({
             >
               notion.so/my-integrations
             </a>{" "}
-            &rarr; New integration &rarr; name it &ldquo;Aurora&rdquo; &rarr; copy the
-            Internal Integration Secret.
+            &rarr; <strong>+ New connection</strong> &rarr; name it &ldquo;Aurora&rdquo;
+            &rarr; set Authentication method to <strong>Access token</strong> &rarr;{" "}
+            <strong>Create connection</strong>.
           </p>
           <p>
-            2. Open any page or database you want Aurora to see &rarr; &hellip; menu
-            &rarr; Connect to &rarr; Aurora.
+            2. On the <strong>Configuration</strong> tab, reveal the{" "}
+            <strong>Integration token</strong> (Access token) and copy it. Enable
+            the <strong>Read</strong>, <strong>Update</strong>, and{" "}
+            <strong>Insert content</strong> capabilities.
           </p>
-          <p>3. Paste the secret below.</p>
+          <p>
+            3. Share content with the connection: open each page or database you
+            want Aurora to see &rarr; &hellip; menu &rarr; <strong>Connections</strong>{" "}
+            &rarr; <strong>+ Add connections</strong> &rarr; Aurora (or use the
+            connection&rsquo;s <strong>Content access</strong> tab).
+          </p>
+          <p>4. Paste the token below.</p>
         </AlertDescription>
       </Alert>
 
       <div className="grid gap-1.5">
         <div className="flex items-center justify-between">
           <Label htmlFor="notion-iit" className="text-sm font-medium">
-            Internal Integration Secret
+            Integration Token (Access token)
           </Label>
           <Button
             type="button"
