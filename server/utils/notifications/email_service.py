@@ -4,6 +4,7 @@ import html as html_mod
 import logging
 import os
 import smtplib
+import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional, Dict, Any
@@ -51,7 +52,7 @@ class EmailService:
             msg.attach(MIMEText(html_body, 'html'))
 
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
                 server.login(self.smtp_user, self.smtp_password)
                 server.send_message(msg)
 
