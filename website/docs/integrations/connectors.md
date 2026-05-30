@@ -834,6 +834,10 @@ To receive PagerDuty alerts in Aurora:
 
 API Key + Application Key authentication.
 
+:::tip Data Security
+If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other compliance requirements), see the [Datadog PII Filtering guide](../configuration/data-access/datadog.md) after completing the setup below.
+:::
+
 #### 1. Create API Key
 
 1. Go to [Datadog](https://app.datadoghq.com/) > avatar > **Organization Settings** > **API Keys**

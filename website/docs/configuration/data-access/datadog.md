@@ -14,40 +14,27 @@ Aurora connects to your Datadog via two data paths:
 1. **Webhooks (push):** Datadog sends alert payloads to Aurora when your monitors fire.
 2. **API queries (pull):** Aurora's RCA agent queries your Datadog for logs, metrics, traces, events, monitors, hosts, and incidents.
 
-Both paths serve data that has already been processed by Datadog's Sensitive Data Scanner. Combined with a restricted service account role, PII is filtered **before** data ever leaves your Datadog organization.
+Both paths serve data that has been processed by Datadog's Sensitive Data Scanner — once you configure it following this guide. Combined with a restricted service account role, PII is filtered **before** data ever leaves your Datadog organization.
 
 ## Architecture
 
-```text
-┌──────────────────────────────────────────────────────────────┐
-│                  Your Datadog Org                            │
-│                                                              │
-│  Raw Data (with PII)                                         │
-│       │                                                      │
-│       ▼                                                      │
-│  ┌──────────────────────────────────┐                        │
-│  │  Sensitive Data Scanner          │                        │
-│  │  (Hash or Mask at ingestion)     │                        │
-│  └──────────────┬───────────────────┘                        │
-│                 ▼                                            │
-│  Stored Data (PII hashed/masked)                             │
-│       │                                                      │
-│       ▼                                                      │
-│  ┌──────────────────────────────────┐                        │
-│  │  Restricted Dataset (RBAC)      │                         │
-│  │  Aurora role: no PII access     │                         │
-│  └──────────────┬───────────────────┘                        │
-│                 │                                            │
-│                 ▼                                            │
-│  API Responses + Webhook Payloads (PII-free)                 │
-│                 │                                            │
-└─────────────────┼────────────────────────────────────────────┘
-                  │
-                  ▼
-┌──────────────────────────────────────────────────┐
-│  Aurora (sees only hashed/masked values)         │
-│  Cannot reverse hashes. Not a data processor.    │
-└──────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph datadog["Your Datadog Org"]
+        raw["Raw Data (with PII)"]
+        sds["Sensitive Data Scanner\n(Hash or Mask at ingestion)"]
+        stored["Stored Data (PII hashed/masked)"]
+        rbac["Restricted Dataset (RBAC)\nAurora role: no PII access"]
+        output["API Responses + Webhook Payloads\n(PII-free)"]
+
+        raw --> sds --> stored --> rbac --> output
+    end
+
+    subgraph aurora["Aurora"]
+        agent["Sees only hashed/masked values\nCannot reverse hashes\nNot a data processor"]
+    end
+
+    output --> agent
 ```
 
 ---
@@ -59,8 +46,8 @@ The Sensitive Data Scanner applies at **ingestion time** — all downstream cons
 ### 1.1 Create a Scanning Group
 
 1. Navigate to **Organization Settings → Sensitive Data Scanner**
-  - Direct link: `https://app.datadoghq.com/organization-settings/sensitive-data-scanner`
-2. Click **+ New Scanning Group**
+  - Direct link: `https://app.datadoghq.com/sensitive-data-scanner/configuration/telemetry`
+2. Click **+ Add Scanning Group**
 3. Configure:
   - **Name:** `PII Protection - Aurora Integration`
   - **Query filter:** `*` (all data) or scope to specific services if preferred
@@ -164,7 +151,7 @@ Service accounts are bot users that own API keys independently of any human user
 2. On the **Service Account** page for `Aurora Integration`, create an **Application Key**
   - Name: `Aurora Integration`
   - The key automatically inherits the service account's role (and its restriction query)
-3. Provide both keys when connecting Aurora to Datadog in your Aurora settings
+3. Provide both keys when connecting Aurora to Datadog in your Aurora settings (see the [Datadog connector setup guide](../integrations/connectors.md#datadog))
 
 The flow is:
 
@@ -231,6 +218,13 @@ Trigger a test monitor that fires on `service:aurora-pii-test`. Check the payloa
 
 ---
 
-## References
+## See Also
 
+- [Datadog Connector Setup](../integrations/connectors.md#datadog) — How to connect Aurora to Datadog (API keys, webhooks, site configuration)
 - [Datadog Sensitive Data Scanner](https://docs.datadoghq.com/security/sensitive_data_scanner/)
+- [Datadog Service Accounts](https://docs.datadoghq.com/account_management/org_settings/service_accounts/)
+- [Datadog Restricted Datasets (RBAC)](https://docs.datadoghq.com/data_security/logs/#restricted-datasets)
+
+:::tip
+If you haven't connected Datadog to Aurora yet, start with the [Datadog connector setup guide](../integrations/connectors.md#datadog) first, then return here to configure PII filtering.
+:::
