@@ -18,20 +18,24 @@ Aurora connects to your Datadog via two data paths:
 
 ```mermaid
 flowchart TB
+    subgraph infra["Your Infrastructure"]
+        raw["Raw Data (with PII)\nApps, Services, Agents"]
+    end
+
     subgraph datadog["Your Datadog Org"]
-        raw["Raw Data (with PII)"]
         sds["Sensitive Data Scanner\n(Hash or Mask at ingestion)"]
         stored["Stored Data (PII hashed/masked)"]
         rbac["Restricted Dataset (RBAC)\nAurora role: no PII access"]
         output["API Responses + Webhook Payloads\n(PII-free)"]
 
-        raw --> sds --> stored --> rbac --> output
+        sds --> stored --> rbac --> output
     end
 
     subgraph aurora["Aurora"]
         agent["Sees only hashed/masked values\nCannot reverse hashes\nNot a data processor"]
     end
 
+    raw --> sds
     output --> agent
 ```
 
