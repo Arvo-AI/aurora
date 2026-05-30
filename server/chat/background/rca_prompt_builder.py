@@ -303,7 +303,7 @@ def get_user_providers(user_id: str) -> List[str]:
 # ============================================================================
 
 PAYLOAD_CHAR_THRESHOLD = 1_000
-CHAT_PAYLOAD_MAX = 30_000
+CHAT_PAYLOAD_MAX =60_000
 
 def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
     """Extract attacker-controllable text from a raw payload for guardrail evaluation."""
