@@ -30,6 +30,7 @@ const sidebars: SidebarsConfig = {
           label: 'Data Access',
           items: [
             'configuration/data-access/gcp',
+            'configuration/data-access/datadog',
           ],
         },
       ],
