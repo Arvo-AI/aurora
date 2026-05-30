@@ -453,8 +453,8 @@ def run_background_chat(
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
-    # Eagerly persist the initial user message so it's visible in the UI immediately (non-prod only)
-    if os.environ.get("AURORA_ENV", "").lower() not in ("prod", "production"):
+    # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
+    if os.environ.get("DISPLAY__RCA_USER_MSG", "").lower() in ("1", "true", "yes"):
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:

@@ -9,7 +9,7 @@ and the agent needs to inspect a specific field in full.
 import json
 import logging
 from datetime import timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -89,18 +89,21 @@ def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Option
     )
     payload_row = cursor.fetchone()
 
-    # Fallback: time-window constrained lookup around incident creation
+    # Fallback: time-window constrained lookup (fail-closed if ambiguous)
     if not payload_row or not payload_row[0]:
         if incident_created_at:
             window_start = incident_created_at - _PAYLOAD_LOOKUP_WINDOW
             window_end = incident_created_at + _PAYLOAD_LOOKUP_WINDOW
             cursor.execute(
                 f"SELECT payload FROM {table} "
-                f"WHERE user_id = %s AND received_at BETWEEN %s AND %s "
-                f"ORDER BY received_at DESC LIMIT 1",
+                f"WHERE user_id = %s AND received_at BETWEEN %s AND %s",
                 (user_id, window_start, window_end),
             )
-            payload_row = cursor.fetchone()
+            rows = cursor.fetchall()
+            if len(rows) == 1:
+                payload_row = rows[0]
+            else:
+                payload_row = None
 
     if not payload_row or not payload_row[0]:
         return None, f"Error: No payload found in {table} for source_alert_id {source_alert_id}."

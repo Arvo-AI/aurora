@@ -303,7 +303,7 @@ def get_user_providers(user_id: str) -> List[str]:
 # ============================================================================
 
 PAYLOAD_CHAR_THRESHOLD = 1_000
-
+CHAT_PAYLOAD_MAX = 30_000
 
 def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
     """Extract attacker-controllable text from a raw payload for guardrail evaluation."""
@@ -363,7 +363,13 @@ def build_rca_prompt(
         serialized = json.dumps(payload, ensure_ascii=False, default=str)
         payload_size = len(serialized)
 
-        if payload_size <= PAYLOAD_CHAR_THRESHOLD:
+        if source == "chat":
+            if payload_size > _CHAT_PAYLOAD_MAX:
+                json_content = serialized[:_CHAT_PAYLOAD_MAX] + "\n... [message truncated]"
+            else:
+                json_content = serialized
+            truncation_note = ""
+        elif payload_size <= PAYLOAD_CHAR_THRESHOLD:
             json_content = serialized
             truncation_note = ""
         else:
@@ -396,7 +402,13 @@ def build_rca_prompt(
     ]
 
     # Aurora Learn: inject context from similar past incidents
-    alert_service = ""
+    alert_service = (
+        payload.get("service")
+        or payload.get("resource")
+        or payload.get("component")
+        or (payload.get("metadata", {}) or {}).get("service", "")
+        or ""
+    )
     if user_id:
         similar_context = _get_similar_good_rcas_context(
             user_id=user_id,

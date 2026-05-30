@@ -193,9 +193,11 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     try {
       const parsed = JSON.parse(normalizedInput)
       const path = parsed.json_path || parsed.kwargs?.json_path || ''
-      command = path ? `get_alert_field: ${path}` : "get alert field"
+      if (path) {
+        command = `get_alert_field: ${path}`
+      }
     } catch {
-      command = "get alert field"
+      // Keep the precomputed fallback
     }
   }
 
