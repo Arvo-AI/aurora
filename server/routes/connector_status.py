@@ -270,9 +270,18 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_github(user_id: str, app_runtime_ready: bool) -> Dict[str, Any]:
-    """Mirrors /github/status — App-aware AND OAuth-aware (hybrid mode)."""
+def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str, Any]:
+    """Mirrors /github/status — App-aware AND OAuth-aware (hybrid mode).
+
+    Accepts either a credentials dict (with ``_user_id``) for generic
+    PROVIDER_CHECKERS dispatch, or a plain user_id string for direct callers.
+    """
     from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
+
+    if isinstance(creds_or_user_id, dict):
+        user_id = creds_or_user_id.get("_user_id", "")
+    else:
+        user_id = creds_or_user_id
 
     if is_app_enabled() and app_runtime_ready:
         try:

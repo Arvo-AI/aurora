@@ -23,15 +23,6 @@ def _validate_provider_connection(provider: str, token_data: dict) -> bool:
     """
     from routes.connector_status import PROVIDER_CHECKERS
 
-    if provider == "github":
-        from routes.connector_status import _check_github
-        user_id = token_data.get("_user_id", "")
-        try:
-            result = _check_github(user_id, app_runtime_ready=True)
-            return result.get("connected", False)
-        except Exception:
-            return False
-
     checker = PROVIDER_CHECKERS.get(provider)
     if checker is None:
         return True
