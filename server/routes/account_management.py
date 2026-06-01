@@ -176,19 +176,7 @@ def get_connected_accounts(user_id, target_user_id):
                 }
 
         # ------------------------------
-        # 4) GitHub fallback (App installs may not have user_tokens rows)
-        # ------------------------------
-        if "github" not in accounts:
-            try:
-                from routes.connector_status import _check_github
-                result = _check_github(user_id, app_runtime_ready=True)
-                if result.get("connected"):
-                    accounts["github"] = {"isConnected": True, "name": "GitHub", "displayText": "GitHub"}
-            except Exception:
-                pass
-
-        # ------------------------------
-        # 5) Kubectl agent connections
+        # 4) Kubectl agent connections
         # ------------------------------
         if "kubectl" not in accounts:
             result = _check_kubectl(user_id, org_id)
@@ -196,7 +184,7 @@ def get_connected_accounts(user_id, target_user_id):
                 accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
 
         # ------------------------------
-        # 6) On-prem VM connections
+        # 5) On-prem VM connections
         # ------------------------------
         if "onprem" not in accounts:
             result = _check_onprem(user_id, org_id)
