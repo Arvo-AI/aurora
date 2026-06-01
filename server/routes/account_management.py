@@ -23,6 +23,15 @@ def _validate_provider_connection(provider: str, token_data: dict) -> bool:
     """
     from routes.connector_status import PROVIDER_CHECKERS
 
+    if provider == "github":
+        from routes.connector_status import _check_github
+        user_id = token_data.get("_user_id", "")
+        try:
+            result = _check_github(user_id, app_runtime_ready=True)
+            return result.get("connected", False)
+        except Exception:
+            return False
+
     checker = PROVIDER_CHECKERS.get(provider)
     if checker is None:
         return True
@@ -176,7 +185,16 @@ def get_connected_accounts(user_id, target_user_id):
                 }
 
         # ------------------------------
-        # 4) Kubectl agent connections
+        # 4) GitHub fallback (App installs may not have user_tokens rows)
+        # ------------------------------
+        if "github" not in accounts:
+            from routes.connector_status import _check_github
+            result = _check_github(user_id, app_runtime_ready=True)
+            if result.get("connected"):
+                accounts["github"] = {"isConnected": True, "name": "GitHub", "displayText": "GitHub"}
+
+        # ------------------------------
+        # 5) Kubectl agent connections
         # ------------------------------
         if "kubectl" not in accounts:
             result = _check_kubectl(user_id, org_id)
@@ -184,7 +202,7 @@ def get_connected_accounts(user_id, target_user_id):
                 accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
 
         # ------------------------------
-        # 5) On-prem VM connections
+        # 6) On-prem VM connections
         # ------------------------------
         if "onprem" not in accounts:
             result = _check_onprem(user_id, org_id)
