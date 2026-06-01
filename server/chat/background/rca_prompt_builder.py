@@ -402,11 +402,13 @@ def build_rca_prompt(
     ]
 
     # Aurora Learn: inject context from similar past incidents
+    metadata = payload.get("metadata")
+    metadata_service = metadata.get("service", "") if isinstance(metadata, dict) else ""
     alert_service = (
         payload.get("service")
         or payload.get("resource")
         or payload.get("component")
-        or (payload.get("metadata", {}) or {}).get("service", "")
+        or metadata_service
         or ""
     )
     if user_id:
