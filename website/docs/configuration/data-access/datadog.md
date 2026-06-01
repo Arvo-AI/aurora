@@ -148,7 +148,7 @@ Service accounts are bot users that own API keys independently of any human user
 
 ### 2.4 Create API + App Keys Under the Service Account
 
-Follow the [Datadog connector setup guide](../integrations/connectors.md#datadog) to create API and Application keys, but create them **under the service account** (not your personal user) so they inherit the `Aurora Restricted` role.
+Follow the [Datadog connector setup guide](../../integrations/connectors.md#datadog) to create API and Application keys, but create them **under the service account** (not your personal user) so they inherit the `Aurora Restricted` role.
 
 The flow is:
 
@@ -217,11 +217,11 @@ Trigger a test monitor that fires on `service:aurora-pii-test`. Check the payloa
 
 ## See Also
 
-- [Datadog Connector Setup](../integrations/connectors.md#datadog) — How to connect Aurora to Datadog (API keys, webhooks, site configuration)
+- [Datadog Connector Setup](../../integrations/connectors.md#datadog) — How to connect Aurora to Datadog (API keys, webhooks, site configuration)
 - [Datadog Sensitive Data Scanner](https://docs.datadoghq.com/security/sensitive_data_scanner/)
 - [Datadog Service Accounts](https://docs.datadoghq.com/account_management/org_settings/service_accounts/)
 - [Datadog Restricted Datasets (RBAC)](https://docs.datadoghq.com/data_security/logs/#restricted-datasets)
 
 :::tip
-If you haven't connected Datadog to Aurora yet, start with the [Datadog connector setup guide](../integrations/connectors.md#datadog) first, then return here to configure PII filtering.
+If you haven't connected Datadog to Aurora yet, start with the [Datadog connector setup guide](../../integrations/connectors.md#datadog) first, then return here to configure PII filtering.
 :::
