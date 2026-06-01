@@ -1,9 +1,10 @@
 """Tier-1 always-on MCP tools — focused on the 80% incident workflow.
 
 These tools are registered for every user regardless of which connectors
-are wired up. Descriptions are written so a good external LLM will prefer
-`chat_with_aurora` for ambiguous investigations and fall back to direct
-tools only when the user explicitly asks for raw data.
+are wired up. Descriptions are written so a good external LLM reaches for a
+direct read (incidents, infrastructure context, service graph, RCA findings)
+for factual lookups, and escalates to `chat_with_aurora` only for open-ended,
+multi-source investigation/synthesis.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import quote
 
 from .response import truncate_payload
 from .chat_bridge import chat_with_aurora as _chat_with_aurora
@@ -152,6 +154,61 @@ async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict
     return truncate_payload({"sources": sources}, tool_name="search_runbooks")
 
 
+async def _do_get_infrastructure_context(api_call: ApiCall) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", "/api/graph/infrastructure/context"),
+        tool_name="get_infrastructure_context",
+    )
+
+
+async def _do_list_services(
+    api_call: ApiCall, resource_type: Optional[str], provider: Optional[str],
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if resource_type:
+        params["resource_type"] = resource_type
+    if provider:
+        params["provider"] = provider
+    return truncate_payload(
+        await api_call("GET", "/api/graph/services", params=params or None),
+        tool_name="list_services",
+    )
+
+
+async def _do_service_impact(api_call: ApiCall, name: str) -> Dict[str, Any]:
+    # First-class helpers bypass dispatch's _build_path/quote, and _api only
+    # blocks `..` (not arbitrary chars), so encode the name ourselves — a
+    # service name with a "/" or space would otherwise break the path.
+    encoded = quote(name, safe="")
+    return truncate_payload(
+        await api_call("GET", f"/api/graph/services/{encoded}/impact"),
+        tool_name="service_impact",
+    )
+
+
+async def _do_incident_findings(api_call: ApiCall, incident_id: str) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", f"/api/incidents/{incident_id}/findings"),
+        tool_name="incident_findings",
+    )
+
+
+async def _do_incident_finding_detail(
+    api_call: ApiCall, incident_id: str, agent_id: str,
+) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", f"/api/incidents/{incident_id}/findings/{agent_id}"),
+        tool_name="incident_finding_detail",
+    )
+
+
+async def _do_incident_list_alerts(api_call: ApiCall, incident_id: str) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", f"/api/incidents/{incident_id}/alerts"),
+        tool_name="incident_list_alerts",
+    )
+
+
 def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     """Register Tier-1 tools on a FastMCP instance.
 
@@ -166,39 +223,36 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         mode: str = "chat",
         poll_only: bool = False,
     ) -> Dict[str, Any]:
-        """Default tool for any question about incidents, services, infrastructure, or
-        operations. Aurora's agent picks the right data sources, runs RCAs, and cites
-        sources. Prefer this over calling individual tools unless the user explicitly
-        asks for raw data from a specific source.
+        """Aurora's agentic investigator — use ONLY for open-ended, multi-source
+        questions that need synthesis or a root-cause investigation (e.g. "why did
+        checkout-svc page at 3am — dig into it"). Runs the full agent workflow; it is
+        slower and heavier than a direct read, so reach here only when no specific
+        tool fits.
+
+        NOT a structured-data lookup. To list or fetch incidents (incl. the most
+        recent — use list_incidents(limit=1)), alerts (incident_list_alerts),
+        topology (get_infrastructure_context / service_impact), metrics, what an RCA
+        did (incident_findings / incident_finding_detail), or a postmortem, call the
+        direct tool or `search_tools` — those are faster and cheaper.
 
         SESSION THREADING — READ THIS BEFORE CALLING:
-        Aurora chats are session-scoped. Every call returns a `session_id` in the
-        result. For ANY follow-up turn in the same conversation (clarifications,
-        next steps, "and also…", "what about X?", re-asking after a partial
-        answer, polling, etc.) you MUST pass that `session_id` back. Omit it
-        ONLY when the user clearly starts an unrelated new topic. When in
-        doubt, reuse the last `session_id` — Aurora has its own memory and
-        will branch naturally; starting a fresh session loses all prior
-        context, tools, citations, and is almost always the wrong default.
-
-        Concretely:
-          • First turn:  chat_with_aurora(message="…")  → note result.session_id
-          • Follow-up:   chat_with_aurora(message="…", session_id="<that id>")
-          • Status was "in_progress": chat_with_aurora(session_id="<that id>", poll_only=True)
+        Aurora chats are session-scoped. Every call returns a `session_id`. For ANY
+        follow-up turn in the same conversation (clarifications, "and also…", "what
+        about X?", re-asking after a partial answer, polling) you MUST pass that
+        `session_id` back. Omit it ONLY when the user clearly starts an unrelated new
+        topic. When in doubt, reuse the last `session_id` — a fresh session loses all
+        prior context, tools, and citations, and is almost always wrong.
 
         Args:
-          message: User question. Ignored when poll_only=True.
-          session_id: The `session_id` from the previous chat_with_aurora result.
-            REQUIRED on every follow-up turn in the same conversation. Omit
-            only to deliberately start a new, unrelated chat.
+          message: User question. Ignored when poll_only=True. First turn: pass
+            message, note result.session_id; follow-up: pass message + that id.
+          session_id: The `session_id` from the previous result. REQUIRED on every
+            follow-up turn; omit only to start a new, unrelated chat.
           mode: "chat" (default) or "rca" for the deeper RCA pipeline.
-          poll_only: True to resume polling a still-running session without
-            sending a new turn. Requires session_id.
+          poll_only: True to keep polling a running session (requires session_id).
 
-        Returns: dict with `session_id` (always — keep this for the next call),
-          `status` ("complete" | "in_progress" | "error" | "cancelled" | "failed"),
-          and either `response` + `citations` (complete), `partial` + `hint`
-          (in_progress), or `error` (terminal failure).
+        Returns: dict with `session_id` (always — keep for the next call), `status`,
+          and either `response` + `citations`, `partial` + `hint`, or `error`.
         """
         result = await _chat_with_aurora(
             api_call, message=message, session_id=session_id,
@@ -224,8 +278,15 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
 
     @mcp.tool()
     async def ask_incident(incident_id: str, question: str) -> Dict[str, Any]:
-        """Ask Aurora a follow-up question about a specific incident. Use this for
-        incident-scoped Q&A; for broader investigations use chat_with_aurora."""
+        """Ask Aurora a genuine free-text follow-up about a specific incident
+        (runs an incident-scoped investigation — slower than a direct read).
+
+        Before calling, for a factual lookup use the direct tool: `get_incident`
+        for the summary/citations, `incident_findings` /
+        `incident_finding_detail` for which tools/steps the RCA used, and
+        `incident_list_alerts` for the correlated alerts. Use this only for
+        open-ended questions those reads can't answer. For broader, cross-incident
+        investigations use `chat_with_aurora`."""
         return await _do_ask_incident(api_call, incident_id, question)
 
     @mcp.tool()
@@ -281,3 +342,58 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         (when connected). Confluence has no search endpoint — fetch specific
         Confluence pages via call_tool('confluence_fetch_page', { url })."""
         return await _do_search_runbooks(api_call, query, limit)
+
+    @mcp.tool()
+    async def get_infrastructure_context() -> Dict[str, Any]:
+        """Get the system's infrastructure context: environments, services,
+        dependencies, CI/CD, and monitoring. Use this FIRST to understand the
+        topology before investigating — it's a direct read, no chat needed."""
+        return await _do_get_infrastructure_context(api_call)
+
+    @mcp.tool()
+    async def list_services(
+        resource_type: Optional[str] = None, provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List the services in Aurora's dependency graph. Use this to enumerate
+        what exists before drilling into a specific service. Optional filters:
+        resource_type, provider."""
+        return await _do_list_services(api_call, resource_type, provider)
+
+    @mcp.tool()
+    async def service_impact(name: str) -> Dict[str, Any]:
+        """Get a service's blast radius — the downstream services that depend on
+        it. Use this to answer "what breaks if <service> goes down / what depends
+        on <service>". Direct read; no chat needed.
+
+        Args:
+          name: the service name (as it appears in list_services / the graph).
+        """
+        return await _do_service_impact(api_call, name)
+
+    @mcp.tool()
+    async def incident_findings(incident_id: str) -> Dict[str, Any]:
+        """List what each RCA sub-agent investigated for an incident: role,
+        tools_used, citations, and follow-ups. Use this to answer "what did the
+        RCA look at / which steps did it run" without spending an ask_incident
+        chat call. For one agent's full step-by-step trace, follow up with
+        `incident_finding_detail`."""
+        return await _do_incident_findings(api_call, incident_id)
+
+    @mcp.tool()
+    async def incident_finding_detail(incident_id: str, agent_id: str) -> Dict[str, Any]:
+        """Get one RCA sub-agent's full finding plus its per-step
+        tool_call_history — the exact tools/steps it used during the
+        investigation. Get the agent_id from `incident_findings` first.
+
+        Args:
+          incident_id: the incident UUID.
+          agent_id: the sub-agent id from incident_findings.
+        """
+        return await _do_incident_finding_detail(api_call, incident_id, agent_id)
+
+    @mcp.tool()
+    async def incident_list_alerts(incident_id: str) -> Dict[str, Any]:
+        """List the alerts correlated to an incident: source, title, service,
+        severity, and correlation score. Use this to answer "what alerts fired
+        for incident X". Direct read; no chat needed."""
+        return await _do_incident_list_alerts(api_call, incident_id)
