@@ -10,11 +10,13 @@ def register_prompts(mcp) -> None:
         """Structured prompt for investigating an Aurora incident."""
         return (
             f"Investigate Aurora incident #{incident_id}. Steps:\n"
-            "1. get_incident to retrieve full details\n"
-            "2. Review AI-generated summary, suggestions, citations\n"
-            "3. Use ask_incident or chat_with_aurora for follow-up questions\n"
+            "1. get_incident to retrieve full details (summary, suggestions, citations)\n"
+            "2. incident_findings to see what each RCA sub-agent investigated, then "
+            "incident_finding_detail for the tools/steps a specific agent ran\n"
+            "3. incident_list_alerts to review the correlated alerts\n"
             "4. Search runbooks via search_runbooks\n"
-            "5. Summarize root cause, impact, recommended actions"
+            "5. Only if open questions remain, use ask_incident or chat_with_aurora\n"
+            "6. Summarize root cause, impact, recommended actions"
         )
 
     @mcp.prompt()
@@ -22,8 +24,7 @@ def register_prompts(mcp) -> None:
         """Analyze the blast radius of a failing service."""
         return (
             f"Analyze the blast radius for service '{service_name}'.\n"
-            f"1. call_tool('graph_service_impact', {{'name': '{service_name}'}}) "
-            f"to get downstream dependents\n"
+            f"1. service_impact(name='{service_name}') to get downstream dependents\n"
             f"2. list_incidents to check for active incidents on the affected services\n"
             f"3. Summarize: which services are at risk, estimated user impact,"
             f" mitigation steps"

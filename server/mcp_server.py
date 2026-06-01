@@ -276,12 +276,17 @@ async def _api(
 mcp = FastMCP(
     "Aurora",
     instructions=(
-        "Aurora is an AI-powered cloud operations platform. For investigation, "
-        "incident triage, or any open-ended question, prefer `chat_with_aurora` "
-        "— Aurora's agent picks the right tools, runs RCAs, and cites sources. "
-        "Use the connector-specific tools (query_logs, query_metrics, github_rca…) "
-        "only when the user explicitly asks for raw data. Discover additional "
-        "tools via search_tools and invoke them via call_tool."
+        "Aurora is an AI-powered cloud operations platform. For a factual lookup, "
+        "use a direct tool, not chat: incidents (list_incidents/get_incident), "
+        "infrastructure context & service graph/blast radius "
+        "(get_infrastructure_context/list_services/service_impact), RCA findings "
+        "(incident_findings/incident_finding_detail), incident alerts "
+        "(incident_list_alerts). For metrics (MTTR/DORA), postmortems, runbooks, "
+        "deployments, logs, or anything not shown upfront, call `search_tools` to "
+        "find the direct tool before assuming it's missing. Reserve "
+        "`chat_with_aurora` for open-ended, multi-source investigation or synthesis "
+        "(it runs the full agent workflow and is slower) — it is the escalation "
+        "path, not the default. Invoke discovered tools via call_tool."
     ),
     host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token
     stateless_http=True,

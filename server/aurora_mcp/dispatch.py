@@ -127,8 +127,13 @@ def _do_search_tools(
             "tools": [_shape_entry(e, c) for e, c in ordered],
             "total_matches": len(ordered),
             "hint": (
-                "Call_tool requires a tool whose `callable_now` is true. "
-                "Connect the integration in Aurora to enable the rest."
+                "Aurora exposes many more tools than the few shown upfront — "
+                "logs, metrics, traces, deployments (Jenkins/CloudBees/Spinnaker), "
+                "Jira, GitHub, Sentry, Grafana, postmortems, and DORA metrics "
+                "(MTTR/MTTD/CFR). Search here before assuming a capability is "
+                "missing or defaulting to chat_with_aurora. call_tool requires a "
+                "tool whose `callable_now` is true; connect the integration in "
+                "Aurora to enable the rest."
             ),
         },
         tool_name="search_tools",
@@ -196,13 +201,22 @@ def register_dispatch_tools(
         connector: Optional[str] = None,
         limit: int = 10,
     ) -> Dict[str, Any]:
-        """Discover tools beyond the always-visible set. Use this when the user
-        asks for something a top-level tool doesn't cover.
+        """Discover the many tools Aurora exposes beyond the few shown upfront.
+        Call this BEFORE assuming a capability is missing or defaulting to
+        chat_with_aurora. Searchable families include logs, metrics, traces,
+        deployments (Jenkins/CloudBees/Spinnaker), Jira, GitHub, Sentry, Grafana,
+        Bitbucket, Notion, Confluence/SharePoint runbooks, postmortems, and DORA
+        metrics (MTTR/MTTD/CFR/incident frequency). Then invoke a result with
+        call_tool.
 
         Args:
-          query: free-text search over tool name and description (optional).
-          category: filter to a category (e.g. "logs", "ticketing", "code").
-          connector: filter to entries gated by a specific skill (e.g. "jira").
+          query: free-text search over tool name and description, e.g.
+            "infrastructure topology", "postmortem", "mttr dora", "rca tools
+            steps", "recent deployments" (optional — tokenized, any word matches).
+          category: filter to a category (e.g. "logs", "metrics", "cicd",
+            "ticketing", "code", "monitoring", "alerts", "incidents").
+          connector: filter to entries gated by a specific skill (e.g. "jira",
+            "sentry", "grafana", "spinnaker").
           limit: max results (default 10).
 
         Results that need a connector you haven't connected appear as "not
