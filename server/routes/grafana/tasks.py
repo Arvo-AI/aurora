@@ -321,6 +321,13 @@ def process_grafana_alert(
                                 continue
 
                             # -- Firing: create incident and trigger RCA --
+                            if skip_rca:
+                                logger.info(
+                                    "[GRAFANA][ALERT] skip_rca=True (auto-connect webhook), skipping incident creation for user %s (fp=%s)",
+                                    user_id, fingerprint,
+                                )
+                                continue
+
                             severity = _extract_severity(alert_payload)
                             service = _extract_service(alert_payload)
 
