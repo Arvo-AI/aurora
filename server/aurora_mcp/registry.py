@@ -85,9 +85,10 @@ TIER2_TOOLS: Tuple[GatedToolSpec, ...] = (
         name="query_logs",
         description=(
             "Query logs from any connected log source. Currently backed by "
-            "Datadog (/datadog/logs/search) and Splunk (/splunk/search). "
-            "Advanced — for investigations prefer `chat_with_aurora` so "
-            "Aurora's agent picks the right source."
+            "Datadog (/datadog/logs/search) and Splunk (/splunk/search). Use "
+            "this for a direct log read. Reach for `chat_with_aurora` only when "
+            "the question is open-ended and needs Aurora to correlate logs with "
+            "other sources."
         ),
         enabling_skills=("datadog", "splunk"),
         category="logs",
@@ -95,9 +96,9 @@ TIER2_TOOLS: Tuple[GatedToolSpec, ...] = (
     GatedToolSpec(
         name="query_metrics",
         description=(
-            "Query metrics. Currently backed by Datadog "
-            "(/datadog/metrics/query). For investigations prefer "
-            "`chat_with_aurora`."
+            "Query metrics directly. Currently backed by Datadog "
+            "(/datadog/metrics/query). Use this for a direct metric read; reach "
+            "for `chat_with_aurora` only for open-ended, multi-source analysis."
         ),
         enabling_skills=("datadog",),
         category="metrics",
@@ -652,14 +653,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
     ),
     # ----- GitHub extras -----
     DispatchEntry(
-        name="github_list_repos",
-        description="List all repositories accessible via the connected GitHub app/token.",
-        category="code",
-        method="GET",
-        path="/github/repos",
-        enabling_skills=("github",),
-    ),
-    DispatchEntry(
         name="github_list_branches",
         description="List branches for a GitHub repository.",
         category="code",
@@ -669,14 +662,9 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         path_args=("repo_full_name",),
     ),
     # ----- Service dependency graph (Aurora-internal, /api/graph) -----
-    DispatchEntry(
-        name="get_infrastructure_context",
-        description="Full infrastructure context document: environments, services, dependencies, CI/CD, monitoring. Call when you need to understand system topology.",
-        category="topology",
-        method="GET",
-        path="/api/graph/infrastructure/context",
-        enabling_skills=(),
-    ),
+    # NOTE: get_infrastructure_context, graph_list_services, and
+    # graph_service_impact are promoted to first-class Tier-1 tools (see
+    # tools_always_on.py) — exposed there, not here, to avoid double-exposure.
     DispatchEntry(
         name="graph_get_full",
         description="Fetch the full service dependency graph (nodes + edges + stats).",
@@ -686,28 +674,11 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         enabling_skills=(),
     ),
     DispatchEntry(
-        name="graph_list_services",
-        description="List services in the dependency graph. Optional filters: resource_type, provider.",
-        category="topology",
-        method="GET",
-        path="/api/graph/services",
-        enabling_skills=(),
-    ),
-    DispatchEntry(
         name="graph_get_service",
         description="Fetch a single service with its dependencies.",
         category="topology",
         method="GET",
         path="/api/graph/services/{name}",
-        enabling_skills=(),
-        path_args=("name",),
-    ),
-    DispatchEntry(
-        name="graph_service_impact",
-        description="Blast radius for a service — downstream services that depend on it.",
-        category="topology",
-        method="GET",
-        path="/api/graph/services/{name}/impact",
         enabling_skills=(),
         path_args=("name",),
     ),
@@ -784,6 +755,100 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         method="GET",
         path="/api/metrics/agent-execution",
         enabling_skills=(),
+    ),
+    # ----- CI/CD deployments (Jenkins / CloudBees / Spinnaker) -----
+    DispatchEntry(
+        name="jenkins_list_deployments",
+        description="List recent Jenkins deployments. Query: limit, offset, service.",
+        category="cicd",
+        method="GET",
+        path="/jenkins/deployments",
+        enabling_skills=("jenkins",),
+    ),
+    DispatchEntry(
+        name="cloudbees_list_deployments",
+        description="List recent CloudBees deployments. Query: limit, offset, service.",
+        category="cicd",
+        method="GET",
+        path="/cloudbees/deployments",
+        enabling_skills=("cloudbees",),
+    ),
+    DispatchEntry(
+        name="spinnaker_list_deployments",
+        description="List recent Spinnaker deployments. Query: limit, offset, application.",
+        category="cicd",
+        method="GET",
+        path="/spinnaker/deployments",
+        enabling_skills=("spinnaker",),
+    ),
+    DispatchEntry(
+        name="spinnaker_list_applications",
+        description="List Spinnaker applications.",
+        category="cicd",
+        method="GET",
+        path="/spinnaker/applications",
+        enabling_skills=("spinnaker",),
+    ),
+    DispatchEntry(
+        name="spinnaker_list_pipelines",
+        description="List recent pipeline executions for a Spinnaker application. Query: limit, statuses.",
+        category="cicd",
+        method="GET",
+        path="/spinnaker/applications/{app}/pipelines",
+        enabling_skills=("spinnaker",),
+        path_args=("app",),
+    ),
+    DispatchEntry(
+        name="spinnaker_list_pipeline_configs",
+        description="List pipeline configurations for a Spinnaker application.",
+        category="cicd",
+        method="GET",
+        path="/spinnaker/applications/{app}/pipeline-configs",
+        enabling_skills=("spinnaker",),
+        path_args=("app",),
+    ),
+    DispatchEntry(
+        name="spinnaker_app_health",
+        description="Health of a Spinnaker application's server groups / clusters.",
+        category="cicd",
+        method="GET",
+        path="/spinnaker/applications/{app}/health",
+        enabling_skills=("spinnaker",),
+        path_args=("app",),
+    ),
+    # ----- Sentry (errors / issues) -----
+    DispatchEntry(
+        name="sentry_list_projects",
+        description="List Sentry projects for the connected org.",
+        category="monitoring",
+        method="GET",
+        path="/sentry/projects",
+        enabling_skills=("sentry",),
+    ),
+    DispatchEntry(
+        name="sentry_list_issues",
+        description="List Sentry issues. Query: query, statsPeriod, project, environment, limit, cursor.",
+        category="monitoring",
+        method="GET",
+        path="/sentry/issues",
+        enabling_skills=("sentry",),
+    ),
+    DispatchEntry(
+        name="sentry_list_events",
+        description="List Sentry events ingested via webhook. Query: limit, offset, resource.",
+        category="monitoring",
+        method="GET",
+        path="/sentry/events/ingested",
+        enabling_skills=("sentry",),
+    ),
+    # ----- Grafana (alerts) -----
+    DispatchEntry(
+        name="grafana_list_alerts",
+        description="List Grafana alerts ingested via webhook. Query: limit, offset, state.",
+        category="alerts",
+        method="GET",
+        path="/grafana/alerts",
+        enabling_skills=("grafana",),
     ),
 )
 
@@ -907,24 +972,38 @@ def _normalize_search_filters(
     return q, cat, conn
 
 
-def _entry_matches_search(
-    entry: "DispatchEntry", q: str, cat: str, conn: str, user_id: Optional[str],
+def _tokenize_query(q: str) -> List[str]:
+    """Split a search query into tokens, dropping fragments shorter than 3
+    chars. A natural-language query like "rca tools steps" becomes
+    ["rca", "tools", "steps"] so each token can be matched independently —
+    the whole-string substring match used previously found nothing for such
+    queries and forced a fallback to chat."""
+    return [t for t in q.split() if len(t) >= 3]
+
+
+def _entry_passes_filters(
+    entry: "DispatchEntry", cat: str, conn: str, user_id: Optional[str],
 ) -> bool:
+    """Hard filters independent of the free-text query (category, connector,
+    per-user visibility)."""
     if cat and entry.category.lower() != cat:
         return False
     if conn and conn not in {s.lower() for s in entry.enabling_skills}:
         return False
-    if q:
-        # Tool names use underscores; humans type spaces. Match either by
-        # normalizing both sides to underscores before substring-checking.
-        q_norm = q.replace(" ", "_")
-        name_norm = entry.name.lower()
-        desc_norm = entry.description.lower().replace(" ", "_")
-        if q_norm not in name_norm and q_norm not in desc_norm:
-            return False
     if user_id is not None and not dispatch_entry_visible(entry, user_id):
         return False
     return True
+
+
+def _entry_token_match_count(entry: "DispatchEntry", tokens: List[str]) -> int:
+    """How many query tokens appear in the entry's name or description.
+
+    Returns 0 when `tokens` is empty (the no-query case), which the caller
+    treats as "matches every entry that passes the hard filters"."""
+    if not tokens:
+        return 0
+    haystack = entry.name.lower() + " " + entry.description.lower()
+    return sum(1 for t in tokens if t in haystack)
 
 
 def search_dispatch_entries(
@@ -934,7 +1013,12 @@ def search_dispatch_entries(
     user_id: Optional[str] = None,
     limit: int = 10,
 ) -> List[DispatchEntry]:
-    """Return up to `limit` matching entries.
+    """Return up to `limit` matching entries, best matches first.
+
+    The free-text `query` is tokenized; an entry matches if ANY token is a
+    substring of its name or description, and entries are ranked by the number
+    of matching tokens (more matches first). An empty query returns all entries
+    that pass the category/connector/visibility filters, up to `limit`.
 
     If `user_id` is provided, results are filtered to entries the user can
     actually call (enabling skills connected). If the caller passes a value
@@ -943,11 +1027,20 @@ def search_dispatch_entries(
     still finds something.
     """
     q, cat, conn = _normalize_search_filters(query, category, connector)
-    matches: List[DispatchEntry] = []
-    for entry in DISPATCH_ALLOWLIST:
-        if not _entry_matches_search(entry, q, cat, conn, user_id):
+    tokens = _tokenize_query(q)
+    # Collect ALL matches first (cannot break early at `limit`) so the
+    # match-count ranking is computed over the full candidate set before
+    # truncation. The allowlist is small (~60 entries) so this is cheap.
+    scored: List[Tuple[int, int, DispatchEntry]] = []
+    for idx, entry in enumerate(DISPATCH_ALLOWLIST):
+        if not _entry_passes_filters(entry, cat, conn, user_id):
             continue
-        matches.append(entry)
-        if len(matches) >= limit:
-            break
-    return matches
+        score = _entry_token_match_count(entry, tokens)
+        # With a non-empty query, require at least one matching token.
+        if tokens and score == 0:
+            continue
+        # Sort by score desc; idx asc as a stable tie-breaker (preserves the
+        # original allowlist order among equally-ranked entries).
+        scored.append((-score, idx, entry))
+    scored.sort()
+    return [entry for _, _, entry in scored[:limit]]
