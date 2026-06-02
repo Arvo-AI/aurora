@@ -1129,7 +1129,7 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
 
         return True, org_slug, "api_token", isolated_env
 
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to setup Fly.io environment")
         return False, None, None, None
 
@@ -1395,7 +1395,8 @@ Security & Compliance
         # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
         # the subcommand without the provider prefix, e.g. "ecs list-clusters").
         _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale"}
+                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale",
+                       "flyio": "fly"}
         prefix = _CLI_PREFIX.get(provider.lower(), "")
         gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
         from utils.auth.command_gate import gate_command
