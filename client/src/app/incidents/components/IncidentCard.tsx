@@ -230,19 +230,19 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       // Match suggestion marker [S:id] — always consume to avoid showing raw tokens
       const suggestionMatch = part.match(/^\[S:(\d+)\]$/);
       if (suggestionMatch) {
-        if (!canWrite) return null;
         const suggestion = findFixSuggestionById(suggestionMatch[1]);
         if (suggestion) {
           return (
             <button
               key={`suggestion-marker-${index}`}
+              disabled={!canWrite}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                setSelectedFixSuggestion(suggestion);
+                if (canWrite) setSelectedFixSuggestion(suggestion);
               }}
-              className="inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400"
-              title={`Create PR: ${suggestion.filePath || 'Fix suggestion'}`}
+              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${canWrite ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400 cursor-pointer' : 'bg-green-500/10 text-green-400/50 cursor-not-allowed'}`}
+              title={canWrite ? `Create PR: ${suggestion.filePath || 'Fix suggestion'}` : 'Editors and admins can create PRs'}
             >
               <GitBranch className="w-3 h-3" />
             </button>

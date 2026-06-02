@@ -381,7 +381,6 @@ def _fetch_fix_suggestions(incident_id: str, _retries: int = 2) -> List[Dict[str
                     f"[IncidentSummary] Failed to fetch fix suggestions for {incident_id} after {_retries + 1} attempts: {e}"
                 )
                 return []
-    return []
 
 
 def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:

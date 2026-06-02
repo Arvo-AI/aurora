@@ -245,19 +245,7 @@ class RealMCPServerManager:
                 node_cmd = shutil.which("node") or "/usr/bin/node"
                 cmd = [node_cmd, full_path]
             # Set up environment with cloud provider credentials
-            if server_type == "github":
-                home_dir = os.environ.get("HOME", "/home/app")
-                env = {
-                    "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-                    "HOME": home_dir,
-                    "NODE_PATH": os.environ.get("NODE_PATH", ""),
-                    "npm_config_cache": os.environ.get("npm_config_cache", os.path.join(home_dir, ".npm")),
-                }
-                if user_credentials and "github" in user_credentials:
-                    env["GITHUB_PERSONAL_ACCESS_TOKEN"] = str(user_credentials["github"].get("access_token", ""))
-                    env["GITHUB_TOOLSETS"] = "all"
-            else:
-                env = os.environ.copy()
+            env = os.environ.copy()
             # Add cloud provider credentials to environment
             if user_credentials:
                 if server_type == "aws" and "aws" in user_credentials:
