@@ -1221,7 +1221,7 @@ async def handle_connection(websocket) -> None:
                 except Exception as e:
                     logger.error("Error checking incident session RBAC: %s", e)
             
-            # Hook: check if LLM call is allowed (billing, rate limiting, etc.)
+            # Hook: check if LLM call is allowed
             if user_id:
                 from utils.hooks import get_hook
                 hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
@@ -1230,7 +1230,7 @@ async def handle_connection(websocket) -> None:
                     await websocket.send(json.dumps({
                         "type": "error",
                         "session_id": session_id,
-                        "data": {"text": hook_message, "code": "BUDGET_EXCEEDED"}
+                        "data": {"text": hook_message, "code": "HOOK_BLOCKED"}
                     }))
                     continue
 

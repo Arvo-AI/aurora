@@ -2,9 +2,9 @@
 Extensibility hooks for Aurora server.
 
 Default implementations are no-ops. To provide custom implementations
-(e.g., billing enforcement), set AURORA_HOOKS_MODULE to a Python module:
+(e.g., custom enforcement), set AURORA_HOOKS_MODULE to a Python module:
 
-    AURORA_HOOKS_MODULE=utils.hooks_billing
+    AURORA_HOOKS_MODULE=utils.hooks_custom
 
 The module must define functions matching the signatures below.
 Missing functions fall back to the defaults.
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _hooks_module = None
 _hooks_loaded = False
+_hook_cache: dict = {}
 
 
 # --- Default no-op implementations ---
@@ -30,13 +31,8 @@ def _default_before_llm_call(org_id: Optional[str], user_id: str) -> Tuple[bool,
     return True, None
 
 
-def _default_after_llm_call(org_id: Optional[str], user_id: str, cost_usd: float) -> None:
-    """Called after an LLM call completes with known cost."""
-    pass
-
-
-def _default_on_plan_change(org_id: str, new_plan: str) -> None:
-    """Called when an organization's plan changes."""
+def _default_after_llm_call(org_id: Optional[str], user_id: str, metadata: dict) -> None:
+    """Called after an LLM call completes with metadata about the call."""
     pass
 
 
@@ -44,7 +40,6 @@ def _default_on_plan_change(org_id: str, new_plan: str) -> None:
 _HOOK_REGISTRY = {
     "before_llm_call": _default_before_llm_call,
     "after_llm_call": _default_after_llm_call,
-    "on_plan_change": _default_on_plan_change,
 }
 
 
@@ -57,10 +52,10 @@ def _load_hooks():
     with _lock:
         if _hooks_loaded:
             return
-        _hooks_loaded = True
 
         module_path = os.environ.get("AURORA_HOOKS_MODULE")
         if not module_path:
+            _hooks_loaded = True
             return
 
         try:
@@ -69,8 +64,9 @@ def _load_hooks():
         except Exception as e:
             logger.critical(
                 "AURORA_HOOKS_MODULE='%s' failed to import: %s — "
-                "billing enforcement may be inactive!", module_path, e
+                "custom hooks may be inactive!", module_path, e
             )
+        _hooks_loaded = True
 
 
 def get_hook(name: str):
@@ -80,6 +76,10 @@ def get_hook(name: str):
     if name not in _HOOK_REGISTRY:
         logger.error("Unknown hook '%s' requested", name)
         return _HOOK_REGISTRY.get("before_llm_call", _default_before_llm_call)
+
+    # Return cached closure if available
+    if name in _hook_cache:
+        return _hook_cache[name]
 
     # Try custom module first
     if _hooks_module and hasattr(_hooks_module, name):
@@ -95,4 +95,5 @@ def get_hook(name: str):
             logger.error("Hook '%s' raised: %s — failing open", name, e)
             return _HOOK_REGISTRY[name](*args, **kwargs)
 
+    _hook_cache[name] = _safe_hook
     return _safe_hook

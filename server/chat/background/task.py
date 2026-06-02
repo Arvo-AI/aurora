@@ -611,11 +611,24 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
         
-        # Hook: check if LLM call is allowed (billing, rate limiting, etc.)
+        # Hook: check if LLM call is allowed
         from utils.hooks import get_hook
         hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
         if not hook_allowed:
             logger.warning(f"[BackgroundChat] Hook blocked for user {user_id}: {hook_message}")
+            if incident_id:
+                try:
+                    with db_pool.get_admin_connection() as conn:
+                        with conn.cursor() as cursor:
+                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:HookBlocked]")
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
+                                ('hook_blocked', datetime.now(), incident_id),
+                            )
+                        conn.commit()
+                        logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to 'hook_blocked'")
+                except Exception as hb_err:
+                    logger.error(f"[BackgroundChat] Failed to set hook_blocked status for incident {incident_id}: {hb_err}")
             return {"session_id": session_id, "status": "hook_blocked", "error": hook_message}
 
         # Run the async workflow in the sync Celery context
