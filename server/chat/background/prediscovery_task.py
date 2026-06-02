@@ -200,9 +200,13 @@ def run_prediscovery(
 
     logger.info(f"[Prediscovery] Starting for user {user_id} (trigger={trigger})")
 
+    from utils.auth.stateless_auth import get_org_id_for_user
+    from datetime import datetime, timezone
+    org_id = get_org_id_for_user(user_id)
+
     # Hook: check if LLM call is allowed
     from utils.hooks import get_hook
-    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
     if not hook_allowed:
         logger.warning(f"[Prediscovery] Hook blocked for user {user_id}: {hook_message}")
         return {"status": "hook_blocked", "error": hook_message}
@@ -215,10 +219,6 @@ def run_prediscovery(
         if connected_count == 0:
             logger.info(f"[Prediscovery] No integrations for user {user_id}, skipping")
             return {"status": "skipped", "reason": "no_integrations"}
-
-        from utils.auth.stateless_auth import get_org_id_for_user
-        from datetime import datetime, timezone
-        org_id = get_org_id_for_user(user_id)
         run_started_at = datetime.now(timezone.utc).isoformat()
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
