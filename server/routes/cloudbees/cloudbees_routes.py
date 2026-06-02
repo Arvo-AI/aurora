@@ -225,6 +225,190 @@ def disconnect(user_id):
 
 
 # ------------------------------------------------------------------
+# Enterprise Platform: Operations Center + Feature Management
+# ------------------------------------------------------------------
+
+CLOUDBEES_OC_PROVIDER = "cloudbees_oc"
+CLOUDBEES_FM_PROVIDER = "cloudbees_fm"
+
+
+@cloudbees_bp.route("/connect-platform", methods=["POST"])
+@require_permission("connectors", "write")
+def connect_platform(user_id):
+    """Validate and store Operations Center and Feature Management credentials."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        data = {}
+
+    oc_url = (data.get("oc_url") or "").strip().rstrip("/")
+    username = (data.get("username") or "").strip()
+    api_token = data.get("api_token")
+    fm_api_token = data.get("fm_api_token")
+    fm_app_id = data.get("fm_app_id")
+
+    if not oc_url:
+        return jsonify({"error": "Operations Center URL is required"}), 400
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+    if not api_token or not isinstance(api_token, str):
+        return jsonify({"error": "API token is required"}), 400
+
+    logger.info("[CLOUDBEES] Connecting platform for user %s (OC: %s)", user_id, oc_url)
+
+    # Validate OC connection
+    from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
+
+    oc_client = CloudBeesOCClient(base_url=oc_url, username=username, api_token=api_token)
+    success, server_data, error = oc_client.get_server_info()
+    if not success:
+        logger.warning("[CLOUDBEES] OC validation failed for user %s: %s", user_id, error)
+        return jsonify({"error": error or "Failed to validate Operations Center credentials"}), 400
+
+    # Store OC credentials
+    oc_payload = {
+        "base_url": oc_url,
+        "username": username,
+        "api_token": api_token,
+    }
+    try:
+        store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
+        logger.info("[CLOUDBEES] Stored OC credentials for user %s", user_id)
+    except Exception:
+        logger.exception("[CLOUDBEES] Failed to store OC credentials for user %s", user_id)
+        return jsonify({"error": "Failed to store Operations Center credentials"}), 500
+
+    # Optionally validate and store FM credentials
+    fm_status = {"connected": False}
+    if fm_api_token:
+        from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
+
+        fm_client = CloudBeesFMClient(api_token=fm_api_token)
+        if fm_client.validate_token():
+            fm_payload = {
+                "api_token": fm_api_token,
+                "app_id": fm_app_id or "",
+            }
+            try:
+                store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
+                fm_status = {"connected": True, "app_id": fm_app_id}
+                logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
+            except Exception:
+                logger.exception("[CLOUDBEES] Failed to store FM credentials for user %s", user_id)
+                fm_status = {"connected": False, "error": "Failed to store FM credentials"}
+        else:
+            fm_status = {"connected": False, "error": "Invalid Feature Management API token"}
+
+    return jsonify({
+        "success": True,
+        "operations_center": {"connected": True, "url": oc_url, "username": username},
+        "feature_management": fm_status,
+    })
+
+
+@cloudbees_bp.route("/platform-status", methods=["GET"])
+@require_permission("connectors", "read")
+def platform_status(user_id):
+    """Return Operations Center controller list and Feature Management connection status."""
+    oc_status = {"connected": False}
+    fm_status = {"connected": False}
+
+    # Check OC
+    oc_creds = get_token_data(user_id, CLOUDBEES_OC_PROVIDER)
+    if oc_creds and oc_creds.get("base_url") and oc_creds.get("username") and oc_creds.get("api_token"):
+        from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
+
+        oc_client = CloudBeesOCClient(
+            base_url=oc_creds["base_url"],
+            username=oc_creds["username"],
+            api_token=oc_creds["api_token"],
+        )
+        success, controllers, error = oc_client.discover_controllers()
+        oc_status = {
+            "connected": True,
+            "url": oc_creds["base_url"],
+            "username": oc_creds["username"],
+            "controllers": controllers if success else [],
+            "controller_count": len(controllers) if success else 0,
+            "error": error if not success else None,
+        }
+
+    # Check FM
+    fm_creds = get_token_data(user_id, CLOUDBEES_FM_PROVIDER)
+    if fm_creds and fm_creds.get("api_token"):
+        from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
+
+        fm_client = CloudBeesFMClient(api_token=fm_creds["api_token"])
+        if fm_client.validate_token():
+            success, apps, _ = fm_client.list_applications()
+            fm_status = {
+                "connected": True,
+                "app_id": fm_creds.get("app_id"),
+                "applications": apps if success else [],
+            }
+        else:
+            fm_status = {"connected": False, "error": "Token validation failed"}
+
+    return jsonify({
+        "operations_center": oc_status,
+        "feature_management": fm_status,
+    })
+
+
+@cloudbees_bp.route("/controllers", methods=["GET"])
+@require_permission("connectors", "read")
+def list_controllers(user_id):
+    """Return discovered controllers from Operations Center."""
+    oc_creds = get_token_data(user_id, CLOUDBEES_OC_PROVIDER)
+    if not oc_creds or not oc_creds.get("base_url"):
+        return jsonify({
+            "connected": False,
+            "error": "Operations Center is not connected. Connect it in Connectors → CloudBees.",
+        }), 404
+
+    from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
+
+    oc_client = CloudBeesOCClient(
+        base_url=oc_creds["base_url"],
+        username=oc_creds["username"],
+        api_token=oc_creds["api_token"],
+    )
+    success, controllers, error = oc_client.discover_controllers()
+    if not success:
+        return jsonify({"connected": True, "controllers": [], "error": error}), 502
+
+    return jsonify({"connected": True, "controllers": controllers, "count": len(controllers)})
+
+
+@cloudbees_bp.route("/disconnect-platform", methods=["POST", "DELETE"])
+@require_permission("connectors", "write")
+def disconnect_platform(user_id):
+    """Disconnect Operations Center and Feature Management by removing stored credentials."""
+    deleted_total = 0
+    errors = []
+
+    for provider in (CLOUDBEES_OC_PROVIDER, CLOUDBEES_FM_PROVIDER):
+        try:
+            success, deleted = delete_user_secret(user_id, provider)
+            if success:
+                deleted_total += deleted
+            else:
+                errors.append(f"Failed to remove {provider} credentials")
+        except Exception:
+            logger.exception("[CLOUDBEES] Failed to disconnect %s for user %s", provider, user_id)
+            errors.append(f"Error removing {provider} credentials")
+
+    if errors:
+        logger.warning("[CLOUDBEES] Partial disconnect for user %s: %s", user_id, "; ".join(errors))
+
+    return jsonify({
+        "success": len(errors) == 0,
+        "message": "Platform credentials removed" if not errors else "; ".join(errors),
+        "deleted": deleted_total,
+    })
+
+
+# ------------------------------------------------------------------
 # Webhook: receive deployment events from Jenkinsfile post blocks
 # ------------------------------------------------------------------
 

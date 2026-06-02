@@ -34,6 +34,9 @@ class CloudBeesRCAArgs(BaseModel):
         "blue_ocean_run",
         "blue_ocean_steps",
         "trace_context",
+        "flag_changes",
+        "cross_controller_deployments",
+        "controller_list",
     ] = Field(description="Investigation action to perform")
     job_path: Optional[str] = Field(default=None, description="Job path (e.g. 'folder/job-name')")
     build_number: Optional[int] = Field(default=None, description="Build number to investigate")
@@ -44,6 +47,7 @@ class CloudBeesRCAArgs(BaseModel):
     service: Optional[str] = Field(default=None, description="Service name filter for recent_deployments")
     time_window_hours: Optional[int] = Field(default=24, description="Lookback window in hours for recent_deployments")
     deployment_event_id: Optional[int] = Field(default=None, description="Deployment event ID for trace_context lookup")
+    app_id: Optional[str] = Field(default=None, description="Feature Management application ID for flag_changes")
 
 
 def is_cloudbees_connected(user_id: str) -> bool:
@@ -77,6 +81,36 @@ def _get_client_for_cloudbees_user(user_id: str):
     return JenkinsClient(base_url=base_url, username=username, api_token=api_token)
 
 
+def _get_oc_client_for_user(user_id: str):
+    """Build a CloudBeesOCClient from the user's stored OC credentials."""
+    from utils.auth.token_management import get_token_data
+    from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
+
+    creds = get_token_data(user_id, "cloudbees_oc")
+    if not creds:
+        return None
+    base_url = creds.get("base_url")
+    username = creds.get("username")
+    api_token = creds.get("api_token")
+    if not base_url or not username or not api_token:
+        return None
+    return CloudBeesOCClient(base_url=base_url, username=username, api_token=api_token)
+
+
+def _get_fm_client_for_user(user_id: str):
+    """Build a CloudBeesFMClient from the user's stored FM credentials."""
+    from utils.auth.token_management import get_token_data
+    from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
+
+    creds = get_token_data(user_id, "cloudbees_fm")
+    if not creds:
+        return None
+    api_token = creds.get("api_token")
+    if not api_token:
+        return None
+    return CloudBeesFMClient(api_token=api_token)
+
+
 def cloudbees_rca(
     action: str,
     job_path: Optional[str] = None,
@@ -88,6 +122,7 @@ def cloudbees_rca(
     service: Optional[str] = None,
     time_window_hours: int = 24,
     deployment_event_id: Optional[int] = None,
+    app_id: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Unified CloudBees CI investigation tool for RCA.
@@ -100,7 +135,46 @@ def cloudbees_rca(
     if not user_id:
         return json.dumps({"error": "No user context. Run this from an authenticated session."})
 
-    if action == "recent_deployments":
+    # --- Enterprise actions (OC / FM) ---
+    if action == "flag_changes":
+        fm_client = _get_fm_client_for_user(user_id)
+        if not fm_client:
+            return json.dumps({
+                "error": "Feature Management is not connected. Connect it in Connectors → CloudBees to enable flag change queries."
+            })
+        success, changes, error = fm_client.get_recent_flag_changes(
+            app_id or "", since_hours=time_window_hours
+        )
+        if not success:
+            return json.dumps({"error": error or "Failed to query Feature Management."})
+        return json.dumps({"flag_changes": changes, "count": len(changes), "time_window_hours": time_window_hours})
+
+    elif action == "cross_controller_deployments":
+        oc_client = _get_oc_client_for_user(user_id)
+        if not oc_client:
+            return json.dumps({
+                "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
+            })
+        success, builds, error = oc_client.query_recent_builds_across_controllers(
+            service=service, time_window_hours=time_window_hours
+        )
+        if not success:
+            return json.dumps({"error": error or "Failed to query Operations Center."})
+        return json.dumps({"builds": builds, "count": len(builds), "time_window_hours": time_window_hours, "warnings": error})
+
+    elif action == "controller_list":
+        oc_client = _get_oc_client_for_user(user_id)
+        if not oc_client:
+            return json.dumps({
+                "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
+            })
+        success, controllers, error = oc_client.discover_controllers()
+        if not success:
+            return json.dumps({"error": error or "Failed to discover controllers."})
+        return json.dumps({"controllers": controllers, "count": len(controllers)})
+
+    # --- Existing single-controller actions ---
+    elif action == "recent_deployments":
         return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
     elif action == "trace_context":
         return _action_trace_context(user_id, deployment_event_id, job_path, build_number)
