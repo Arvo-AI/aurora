@@ -7,7 +7,7 @@ from typing import Any, List, Optional, Tuple
 # Providers not in this set (e.g. grafana) are observation-only and should
 # never be passed as the provider argument to cloud_exec.
 CLOUD_EXEC_PROVIDERS = frozenset({
-    "gcp", "aws", "azure", "ovh", "scaleway", "tailscale",
+    "gcp", "aws", "azure", "ovh", "scaleway", "tailscale", "flyio",
 })
 
 

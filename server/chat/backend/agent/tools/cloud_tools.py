@@ -175,6 +175,11 @@ from .cloudflare_tool import (
     CloudflareListZonesArgs,
     CloudflareActionArgs,
 )
+from .flyio_tool import (
+    query_flyio_metrics,
+    is_flyio_connected,
+    FlyioMetricsQueryArgs,
+)
 
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
@@ -2365,6 +2370,31 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.debug(f"Cloudflare tools not added - user {user_id} not connected to Cloudflare")
     except Exception as e:
         logging.warning(f"Failed to add Cloudflare tools (treating as not connected): {e}")
+
+    # Add Fly.io metrics tool if connected
+    try:
+        if is_flyio_connected(user_id):
+            _ctx = with_user_context(query_flyio_metrics)
+            _notif = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notif, "query_flyio_metrics") if tool_capture else _notif
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name="query_flyio_metrics",
+                description=(
+                    "Query Fly.io Prometheus metrics. Use PromQL expressions. "
+                    "Available metrics: fly_instance_up (health), fly_instance_cpu (CPU), "
+                    "fly_instance_memory_resident (memory RSS), fly_instance_net_recv_bytes / "
+                    "fly_instance_net_sent_bytes (network), fly_edge_http_responses_count (HTTP by status), "
+                    "fly_edge_http_response_time_seconds_bucket (latency), fly_app_concurrency (connections). "
+                    "Labels: app, region, host, instance. Example: fly_instance_up{app=\"myapp\"}"
+                ),
+                args_schema=FlyioMetricsQueryArgs,
+            ))
+            logging.info(f"Added Fly.io metrics tool for user {user_id}")
+        else:
+            logging.debug(f"Fly.io tools not added - user {user_id} not connected to Fly.io")
+    except Exception as e:
+        logging.warning(f"Failed to add Fly.io tools (treating as not connected): {e}")
 
     # Add alert payload drill-down tool for RCA sessions with an incident
     incident_id = getattr(state_context, 'incident_id', None) if state_context else None

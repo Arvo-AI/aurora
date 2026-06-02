@@ -206,6 +206,17 @@ RUN ARCH=$(uname -m) && \
 # Install Tailscale CLI (for local dev SSH to tailnet devices)
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
+# Install Fly.io CLI (flyctl) for Fly.io connector
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        FLY_ARCH="x86_64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        FLY_ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -fsSL "https://fly.io/install.sh" | FLYCTL_INSTALL="/usr/local" sh
+
 # Install Node.js for MCP servers
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \

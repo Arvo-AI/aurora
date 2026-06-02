@@ -23,6 +23,7 @@ _ISOLATED_HOME = "/home/appuser" if _POD_ISOLATION else str(Path.home())
 
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
+from utils.secrets.secret_ref_utils import get_user_token_data, get_token_owner_id
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
@@ -42,6 +43,8 @@ def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
         return "aws"
     if p == "scw":
         return "scaleway"
+    if p in ("fly", "flyctl"):
+        return "flyio"
     return p
 
 
@@ -587,7 +590,6 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
         logger.info("Setting up isolated OVH environment...")
 
         # Get OVH token data from database
-        from utils.secrets.secret_ref_utils import get_user_token_data
         token_data = get_user_token_data(user_id, 'ovh')
 
         if not token_data:
@@ -650,7 +652,6 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
                         }
                         if project_id:
                             updated_storage["projectId"] = project_id
-                        from utils.secrets.secret_ref_utils import get_token_owner_id
                         owner_id = get_token_owner_id(user_id, "ovh")
                         store_tokens_in_db(owner_id, updated_storage, 'ovh')
                         logger.info("Successfully refreshed OVH access token")
@@ -706,7 +707,6 @@ def setup_scaleway_environment_isolated(user_id: str, selected_project_id: str |
         logger.info("Setting up isolated Scaleway environment...")
 
         # Get Scaleway token data from database
-        from utils.secrets.secret_ref_utils import get_user_token_data
         token_data = get_user_token_data(user_id, 'scaleway')
 
         if not token_data:
@@ -774,7 +774,6 @@ def setup_tailscale_environment_isolated(user_id: str, selected_tailnet: str | N
         logger.info("Setting up isolated Tailscale environment...")
 
         # Get Tailscale token data from database
-        from utils.secrets.secret_ref_utils import get_user_token_data
         stored_data = get_user_token_data(user_id, 'tailscale')
 
         if not stored_data:
@@ -1094,6 +1093,45 @@ def execute_tailscale_command(command: str, isolated_env: dict) -> dict:
             "error": f"Failed to execute Tailscale command: {str(e)}",
             "return_code": 1
         }
+
+
+def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = None):
+    """Set up Fly.io environment with isolated credentials - NO global state modification.
+
+    Fly.io CLI (flyctl) uses FLY_API_TOKEN for authentication.
+    """
+    try:
+        fn_start = time.perf_counter()
+        logger.info("Setting up isolated Fly.io environment...")
+
+        token_data = get_user_token_data(user_id, 'flyio')
+
+        if not token_data:
+            logger.error("No Fly.io credentials found for user")
+            return False, None, None, None
+
+        api_token = token_data.get('api_token')
+        org_slug = selected_org or token_data.get('org_slug')
+
+        if not api_token:
+            logger.error("Missing Fly.io api_token")
+            return False, None, None, None
+
+        isolated_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": _ISOLATED_HOME,
+            "USER": os.environ.get("USER", ""),
+            "FLY_API_TOKEN": api_token,
+        }
+
+        logger.info(f"Fly.io isolated environment configured (org: {org_slug})")
+        logger.info(f"TIME: setup_flyio_environment_isolated completed in {time.perf_counter() - fn_start:.2f}s")
+
+        return True, org_slug, "api_token", isolated_env
+
+    except Exception as e:
+        logger.error(f"Failed to setup Fly.io environment: {e}")
+        return False, None, None, None
 
 
 def is_read_only_command(command: str) -> bool:
@@ -1424,6 +1462,12 @@ Security & Compliance
             if not success:
                 return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
             resource_id = tailnet
+        elif normalized_provider == 'flyio':
+            # Fly.io isolated setup - uses FLY_API_TOKEN env var
+            success, org_slug, auth_method, isolated_env = setup_flyio_environment_isolated(user_id, selected_project_id)
+            if not success:
+                return json.dumps({"error": f"Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
+            resource_id = org_slug
         elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
             return json.dumps({
                 "success": False,

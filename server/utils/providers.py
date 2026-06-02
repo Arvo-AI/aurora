@@ -20,6 +20,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "coroot",
     "datadog",
     "dynatrace",
+    "flyio",
     "gcp",
     "github",
     "gitlab",

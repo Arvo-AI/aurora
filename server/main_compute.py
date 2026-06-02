@@ -598,6 +598,10 @@ app.register_blueprint(tailscale_bp, url_prefix="/tailscale_api")
 from routes.cloudflare import cloudflare_bp
 app.register_blueprint(cloudflare_bp, url_prefix="/cloudflare_api")
 
+# --- Fly.io Routes ---
+from routes.flyio import flyio_bp
+app.register_blueprint(flyio_bp, url_prefix="/flyio_api")
+
 from routes.terraform import terraform_workspace_bp
 app.register_blueprint(terraform_workspace_bp)
 

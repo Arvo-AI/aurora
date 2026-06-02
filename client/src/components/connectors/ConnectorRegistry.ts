@@ -394,6 +394,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "flyio",
+      name: "Fly.io",
+      description: "Connect to Fly.io for application monitoring, machine lifecycle management, metrics, logs, and incident remediation across your org.",
+      iconPath: "/flyio.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Infrastructure",
+      path: "/flyio/auth",
+      storageKey: "isFlyioConnected",
+    });
+
+    this.register({
       id: "jenkins",
       name: "Jenkins",
       description: "Connect to Jenkins to view jobs, builds, pipeline status, and build agents. Read-only access to your CI/CD server.",
