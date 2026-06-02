@@ -119,9 +119,11 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
 
     # Hook: check if LLM call is allowed
     from utils.hooks import get_hook
-    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    from utils.auth.stateless_auth import get_org_id_for_user
+    _hook_org_id = get_org_id_for_user(user_id) if user_id else None
+    hook_allowed, hook_message = get_hook("before_llm_call")(_hook_org_id, user_id)
     if not hook_allowed:
-        logger.warning(f"Hook blocked for user {user_id}: {hook_message}")
+        logger.warning("Hook blocked for user %s: %s", user_id, hook_message)
         _update_metadata(user_id, repo_full_name, None, "error")
         return
 
