@@ -1,32 +1,11 @@
-from flask import Flask, request, session, jsonify, redirect
-from msal import ConfidentialClientApplication
-import os, logging, urllib.parse
+from flask import request, session, jsonify
+import os, logging
 from dotenv import load_dotenv
 from connectors.azure_connector.billing import fetch_subscriptions
-from connectors.azure_connector.k8s_client import get_aks_clusters
-from utils.auth.token_management import store_tokens_in_db, get_token_data
+from utils.auth.token_management import store_tokens_in_db
 from azure.identity import ClientSecretCredential
-from utils.db.db_utils import connect_to_db_as_admin
-from utils.logging.secure_logging import mask_credential_value
 
 load_dotenv()
-
-# ---------------- AURORA APP CONFIGURATION ----------------
-# These credentials are for Aurora's OAuth app registration, not user credentials
-# They're needed for OAuth redirect flows and on-behalf-of token exchanges
-
-AZURE_AUTHORITY = f"https://login.microsoftonline.com/common"
-AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
-AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
-
-AZURE_SCOPES = [f"api://{AZURE_CLIENT_ID}/obo_flow"]
-
-# Initialize MSAL app for OAuth flows
-msal_app = ConfidentialClientApplication(
-    AZURE_CLIENT_ID,
-    authority=AZURE_AUTHORITY,
-    client_credential=AZURE_CLIENT_SECRET
-)
 
 def azure_login(data=None):
     """Handle Azure login with service principal credentials."""
@@ -158,59 +137,3 @@ def azure_login(data=None):
         return jsonify({"error": "Failed to process Azure login"}), 500
 
 
-
-def azure_callback():
-    """Handles the callback from Microsoft Entra ID authentication."""
-    FRONTEND_URL = os.getenv("FRONTEND_URL")
-
-    try:
-        # Retrieve query parameters (fixing the 415 Unsupported Media Type error)
-        state = request.args.get("state")
-        code = request.args.get("code")  # Extract authorization code from the URL
-
-        if not state:
-            raise ValueError("State parameter missing.")
-        if not code:
-            raise ValueError("Authorization code is missing.")
-
-        user_id = urllib.parse.unquote(state)  # Decode user_id from state
-
-        # Retrieve stored authentication flow session
-        azure_flow = session.get("azure_auth_flow")
-        if not azure_flow:
-            raise ValueError("Azure auth flow not found in session. Session may have expired.")
-
-        # Exchange authorization code for access token
-        azure_result = msal_app.acquire_token_by_auth_code_flow(azure_flow, request.args)
-        if "error" in azure_result:
-            raise ValueError(f"Token acquisition failed: {azure_result['error_description']}")
-
-        # Store the access token in session
-        azure_access_token = azure_result.get("access_token")
-        logging.debug("Access token received (length=%d)", len(azure_access_token) if azure_access_token else 0)
-        if not azure_access_token:
-            raise ValueError("Azure access token is missing in response.")
-
-        session["access_token"] = azure_access_token
-
-        # Extract user_id from state parameter (strip the "azure_" prefix)
-        #user_id = state[len("azure_"):] if state.startswith("azure_") else None
-        
-        # Extract tenant ID from MSAL's already-validated id_token claims
-        id_token_claims = azure_result.get("id_token_claims")
-        if not id_token_claims:
-            raise ValueError("Azure ID token claims are missing in response.")
-
-        tenant_id = id_token_claims.get("tid")
-        # SECURITY: Mask tenant ID in logs
-        masked_tenant = mask_credential_value(tenant_id, 8) if tenant_id else "unknown"
-        logging.info(f"User authenticated from Tenant: {masked_tenant}, User ID: {user_id}")
-
-        # Remove auth session
-        session.pop("azure_auth_flow", None)
-
-        return redirect(f"{FRONTEND_URL}?login=azure_success")
-
-    except Exception as e:
-        logging.error(f"Entra ID Callback error: {e}")
-        return redirect(f"{FRONTEND_URL}?login=azure_failed")

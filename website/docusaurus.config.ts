@@ -19,8 +19,8 @@ const config: Config = {
   onBrokenLinks: 'throw',
 
   markdown: {
-    format: 'mdx',
-    mermaid: false,
+    format: 'detect',
+    mermaid: true,
     mdx1Compat: {
       comments: true,
       admonitions: true,
@@ -50,6 +50,7 @@ const config: Config = {
   ],
 
   themes: [
+    '@docusaurus/theme-mermaid',
     [
       '@easyops-cn/docusaurus-search-local',
       {

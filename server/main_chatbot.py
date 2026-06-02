@@ -6,7 +6,8 @@ logger = logging.getLogger(__name__)
 
 # Reduce verbosity of specific noisy loggers
 logging.getLogger("langchain").setLevel(logging.WARNING)
-logging.getLogger("websockets").setLevel(logging.WARNING)  
+logging.getLogger("websockets").setLevel(logging.WARNING)
+logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 logging.getLogger("weaviate").setLevel(logging.WARNING)
 logging.getLogger("redis").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -44,7 +45,6 @@ from chat.backend.agent.workflow import Workflow
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
-from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
 from utils.db.connection_pool import db_pool
 from utils.billing.billing_cache import update_api_cost_cache_async, get_cached_api_cost
 from utils.billing.billing_utils import get_api_cost
@@ -55,6 +55,14 @@ from chat.backend.agent.access import ModeAccessController
 from utils.text.text_utils import clean_markdown
 from utils.internal.api_handler import handle_http_request
 from utils.auth.stateless_auth import validate_user_exists, get_org_id_for_user, set_rls_context
+
+
+class _MockState:
+    """Minimal state object for set_user_context when called outside the agent loop."""
+    __slots__ = ("session_id",)
+
+    def __init__(self, session_id):
+        self.session_id = session_id
 
 
 class RateLimiter:
@@ -167,6 +175,12 @@ async def _ws_reject(websocket, text: str, *, close_reason: str = ""):
 
 def _warm_user_caches(user_id: str):
     """Kick off background tasks that pre-warm per-user caches."""
+    try:
+        uuid.UUID(user_id)
+    except (ValueError, TypeError):
+        logger.debug(f"Skipping cache warmup for non-UUID user_id: {user_id}")
+        return
+
     _cost_warm_task = asyncio.create_task(update_api_cost_cache_async(user_id))
     _background_tasks.add(_cost_warm_task)
     _cost_warm_task.add_done_callback(_background_tasks.discard)
@@ -317,6 +331,7 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+    incident_id = incident_id or getattr(state, "incident_id", None)
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
@@ -366,21 +381,34 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 if len(text_to_save) > 20:  # Lower minimum to save smaller chunks
                     try:
                         from utils.db.connection_pool import db_pool
-                        from datetime import datetime
+                        from datetime import datetime, timezone
                         cleaned_text = clean_markdown(text_to_save)
-                        
+
                         # Only save if cleaned text has substantial content
                         if len(cleaned_text) > 20:  # Lower threshold
+                            now = datetime.now(timezone.utc)
                             with db_pool.get_admin_connection() as conn:
                                 with conn.cursor() as cursor:
                                     # No RLS needed — incident_thoughts not RLS-protected
                                     cursor.execute(
                                         "INSERT INTO incident_thoughts (incident_id, timestamp, content, thought_type) "
                                         "VALUES (%s, %s, %s, %s)",
-                                        (incident_id, datetime.now(), cleaned_text, "analysis")
+                                        (incident_id, now, cleaned_text, "analysis")
                                     )
+                                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat]")
+                                    cursor.execute(
+                                        "UPDATE incidents SET updated_at = %s WHERE id = %s",
+                                        (now, incident_id),
+                                    )
+                                    incident_touched = cursor.rowcount == 1
                                 conn.commit()
-                                logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                                if incident_touched:
+                                    logger.info(f"[BackgroundChat] Saved thought for incident {incident_id}: {len(cleaned_text)} chars (incremental save)")
+                                else:
+                                    logger.warning(
+                                        "[BackgroundChat] Thought saved, but incidents.updated_at heartbeat touched 0 rows for incident %s — RLS context may be wrong",
+                                        incident_id,
+                                    )
                                 accumulated_thought.clear()
                                 if remaining:
                                     accumulated_thought.append(remaining)
@@ -1179,9 +1207,8 @@ async def handle_connection(websocket) -> None:
                             row = cur.fetchone()
                     if row and row[0]:
                         _rbac_incident_id = str(row[0])
-                        from utils.auth.enforcer import get_enforcer
-                        enforcer = get_enforcer()
-                        if not enforcer.enforce(user_id, org_id, "incidents", "write"):
+                        from utils.auth.enforcer import enforce_with_reload
+                        if not enforce_with_reload(user_id, org_id, "incidents", "write"):
                             logger.warning(
                                 "RBAC denied: viewer user=%s tried to chat in incident session=%s",
                                 user_id, session_id,
@@ -1222,6 +1249,8 @@ async def handle_connection(websocket) -> None:
             mode_input = data.get('mode')    # Extract chat mode (agent / ask)
             attachments = data.get('attachments', []) # Extract file attachments if present
             trigger_rca_requested = data.get('trigger_rca') is True
+            raw_action_id = data.get('trigger_action')
+            trigger_action_id = raw_action_id if isinstance(raw_action_id, str) and raw_action_id else None
 
             mode = _normalize_mode(mode_input)
 
@@ -1264,20 +1293,13 @@ async def handle_connection(websocket) -> None:
                     # Import and execute the tool
                     try:
                         from chat.backend.agent.tools.github_commit_tool import github_commit
-                        # set_user_context already imported at top of file
                         
-                        # Set user context for the tool
-                        class MockState:
-                            def __init__(self, session_id):
-                                self.session_id = session_id
-                        
-                        mock_state = MockState(session_id)
                         set_user_context(
                             user_id=user_id,
                             session_id=session_id,
                             provider_preference=provider_preference,
                             selected_project_id=selected_project_id,
-                            state=mock_state,
+                            state=_MockState(session_id),
                             mode=mode,
                         )
                         
@@ -1320,20 +1342,14 @@ async def handle_connection(websocket) -> None:
                     logger.info(f"Executing direct iac_tool call with params: {parameters}")
 
                     try:
-                        # set_user_context already imported at top of file
                         from chat.backend.agent.tools.iac_tool import run_iac_tool
 
-                        class MockState:
-                            def __init__(self, session_id):
-                                self.session_id = session_id
-
-                        mock_state = MockState(session_id)
                         set_user_context(
                             user_id=user_id,
                             session_id=session_id,
                             provider_preference=provider_preference,
                             selected_project_id=selected_project_id,
-                            state=mock_state,
+                            state=_MockState(session_id),
                             mode=mode,
                         )
 
@@ -1351,7 +1367,21 @@ async def handle_connection(websocket) -> None:
                             }))
                             continue
 
-                        result_payload = run_iac_tool(
+                        tool_call_id = f"direct-{uuid.uuid4().hex[:12]}"
+
+                        await websocket.send(json.dumps({
+                            "type": "tool_call",
+                            "data": {
+                                "tool_call_id": tool_call_id,
+                                "tool_name": "iac_tool",
+                                "input": json.dumps(parameters),
+                                "status": "running",
+                                "session_id": session_id
+                            }
+                        }))
+
+                        result_payload = await asyncio.to_thread(
+                            run_iac_tool,
                             action=action,
                             path=parameters.get('path'),
                             content=parameters.get('content'),
@@ -1359,14 +1389,15 @@ async def handle_connection(websocket) -> None:
                             vars=parameters.get('vars'),
                             auto_approve=parameters.get('auto_approve'),
                             user_id=user_id,
-                            session_id=session_id
+                            session_id=session_id,
                         )
 
                         await websocket.send(json.dumps({
                             "type": "tool_result",
                             "data": {
+                                "tool_call_id": tool_call_id,
                                 "tool_name": 'iac_tool',
-                                "result": result_payload,
+                                "output": result_payload,
                                 "session_id": session_id
                             }
                         }))
@@ -1523,10 +1554,30 @@ async def handle_connection(websocket) -> None:
             # Resolve incident_id — reuse result from RBAC check to avoid duplicate query
             _incident_id = _rbac_incident_id
 
+            from utils.incidents import fetch_incident_start_time
+            _incident_start_time = fetch_incident_start_time(
+                user_id, _incident_id, log_prefix="[Chatbot:StartTime]"
+            )
+
+            # Fetch org tool permissions for gate bypass
+            _permitted_tools = None
+            try:
+                with db_pool.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:perms]")
+                        cur.execute(
+                            "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
+                            (org_id,),
+                        )
+                        _permitted_tools = {row[0] for row in cur.fetchall()}
+            except Exception as e:
+                logger.warning("[Chatbot] Failed to fetch tool permissions: %s", e)
+
             state = State(
                 user_id=user_id,
                 session_id=session_id,
                 incident_id=_incident_id,
+                incident_start_time=_incident_start_time,
                 org_id=org_id,
                 provider_preference=provider_preference,
                 selected_project_id=selected_project_id,
@@ -1536,20 +1587,20 @@ async def handle_connection(websocket) -> None:
                 model=model,
                 mode=mode,
                 trigger_rca_requested=bool(trigger_rca_requested),
+                trigger_action_id=trigger_action_id or None,
+                permitted_tools=_permitted_tools,
             )
 
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")
             logger.info(f"WebSocket sender initialized: {websocket_sender is not None}")
 
-            # IMMEDIATE SAVE: Save user message immediately when received
-            if session_id and user_id:
-                handle_immediate_save(session_id, user_id, question)
-
             # Launch workflow processing as async task without blocking
             # Set UI state in workflow before processing so it gets saved
             wf._ui_state = ui_state
             
-            task = asyncio.create_task(process_workflow_async(wf, state, websocket, user_id))
+            task = asyncio.create_task(
+                process_workflow_async(wf, state, websocket, user_id, incident_id=_incident_id)
+            )
             session_tasks[effective_session_id] = (task, wf)
             task.add_done_callback(lambda _t, _sid=effective_session_id: session_tasks.pop(_sid, None))
 
@@ -1591,6 +1642,10 @@ async def main():
     # Clean up old terraform files on startup
     cleanup_terraform_directory()
 
+    # Mark any investigations orphaned by a previous crash as failed
+    from chat.background.task import cleanup_orphaned_investigations
+    await asyncio.to_thread(cleanup_orphaned_investigations)
+
     # Start HTTP server (health check + internal API)
     http_server = await asyncio.start_server(handle_http_request, "0.0.0.0", HEALTH_PORT)
     logger.info(f"HTTP server (health + internal API) listening on port {HEALTH_PORT}")
@@ -1602,7 +1657,8 @@ async def main():
         ping_interval=20,  # Send ping every 20 seconds
         ping_timeout=10,   # Wait 10 seconds for pong response
         max_size=10 * 1024 * 1024,  # 10MB max message size
-        compression=None   # Disable compression to avoid frame issues
+        compression=None,  # Disable compression to avoid frame issues
+        logger=logging.getLogger("websockets.server"),
     ):
         logger.info(f"WebSocket server listening on port {WS_PORT}")
         await asyncio.Future()

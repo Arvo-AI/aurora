@@ -112,44 +112,83 @@ def update_visualization(
 
 
 def _fetch_recent_tool_calls(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
-    """Fetch recent tool calls from database llm_context_history."""
+    """Fetch recent infrastructure tool calls for an RCA session.
+
+    For orchestrator (fanout) RCAs, the parent session's llm_context_history
+    is empty — all tool calls live under child session_ids like
+    `{parent}::sa_N` / `{parent}::sa_wN_M`. We aggregate from execution_steps
+    so the final visualization has the data it needs.
+    """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
                     return []
-                cursor.execute("""
-                    SELECT llm_context_history
-                    FROM chat_sessions
-                    WHERE id = %s
-                """, (session_id,))
-                
+
+                # Parent session's llm_context_history (single-agent path)
+                parent_calls: List[Dict] = []
+                cursor.execute(
+                    "SELECT llm_context_history FROM chat_sessions WHERE id = %s",
+                    (session_id,),
+                )
                 row = cursor.fetchone()
-        
-        if not row or not row[0]:
-            logger.warning(f"{_LOG_PREFIX} No llm_context_history found for session {session_id}")
+                if row and row[0]:
+                    llm_context = row[0]
+                    if isinstance(llm_context, str):
+                        llm_context = json.loads(llm_context)
+                    for msg in llm_context:
+                        if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
+                            parent_calls.append({
+                                'tool': msg.get('name'),
+                                'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
+                            })
+
+                # Child sub-agent sessions (orchestrator fanout path).
+                # session_id format: `{parent}::{agent_id}` (e.g. `{uuid}::sa_1`,
+                # `{uuid}::sa_w2_1`). execution_steps is the canonical store of
+                # tool invocations and is indexed on session_id. Bound the query
+                # so it doesn't scale with RCA history — fetch the most recent
+                # `limit` rows and reverse to chronological order for the
+                # visualization extractor.
+                child_calls: List[Dict] = []
+                # Prefix range scan over the `{parent}::` namespace — index-friendly
+                # and immune to wildcards in session_id (LIKE would mismatch on `%`/`_`).
+                # Upper bound replaces the final `:` with `;` (next ASCII codepoint),
+                # making it the smallest string strictly greater than every `{sid}::*`.
+                child_lo = f"{session_id}::"
+                child_hi = f"{session_id}:;"
+                cursor.execute(
+                    """
+                    SELECT tool_name, tool_output
+                      FROM execution_steps
+                     WHERE session_id >= %s AND session_id < %s
+                       AND tool_name = ANY(%s)
+                     ORDER BY created_at DESC
+                     LIMIT %s
+                    """,
+                    (child_lo, child_hi, list(INFRASTRUCTURE_TOOLS), limit),
+                )
+                for tname, toutput in reversed(cursor.fetchall()):
+                    child_calls.append({
+                        'tool': tname,
+                        'output': str(toutput or '')[:MAX_TOOL_OUTPUT_CHARS],
+                    })
+
+        combined = parent_calls + child_calls
+        if not combined:
+            logger.warning(
+                f"{_LOG_PREFIX} No tool calls found for session {session_id} (parent or children)"
+            )
             return []
-        
-        llm_context = row[0]
-        if isinstance(llm_context, str):
-            import json
-            llm_context = json.loads(llm_context)
-        
-        tool_calls = []
-        
-        # Extract tool messages from llm_context_history
-        for msg in llm_context:
-            if isinstance(msg, dict) and msg.get('name') in INFRASTRUCTURE_TOOLS:
-                tool_calls.append({
-                    'tool': msg.get('name'),
-                    'output': str(msg.get('content', ''))[:MAX_TOOL_OUTPUT_CHARS],
-                })
-        
-        logger.info(f"{_LOG_PREFIX} Fetched {len(tool_calls)} infrastructure tool calls from database for session {session_id}")
-        return tool_calls[-limit:] if tool_calls else []
-    
+
+        logger.info(
+            f"{_LOG_PREFIX} Fetched {len(parent_calls)} parent + {len(child_calls)} child "
+            f"infrastructure tool calls for session {session_id}"
+        )
+        return combined[-limit:]
+
     except Exception as e:
-        logger.error(f"{_LOG_PREFIX} Failed to fetch tool calls from database: {e}")
+        logger.error(f"{_LOG_PREFIX} Failed to fetch tool calls: {e}")
         return []
 
 

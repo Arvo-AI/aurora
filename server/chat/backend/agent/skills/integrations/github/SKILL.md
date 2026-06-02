@@ -4,9 +4,9 @@ id: github
 description: "GitHub code repository integration for investigating code changes, deployments, commits, PRs, and suggesting fixes during RCA"
 category: code_repository
 connection_check:
-  method: get_credentials_from_db
-  provider_key: github
-  required_field: username
+  method: is_connected_function
+  module: utils.auth.github_auth_router
+  function: is_github_connected
 tools:
   - get_connected_repos
   - github_rca
@@ -42,7 +42,7 @@ Connected account: {username}
    - `diff` (requires `commit_sha`) — File-level changes for a specific commit
    - `pull_requests` — Merged PRs in the time window
    - Pass `incident_time` (ISO 8601) for automatic time window correlation
-3. `github_fix(file_path=..., suggested_content=..., fix_description=..., root_cause_summary=...)` — Suggest a code fix (stored for user review, not auto-applied)
+3. `github_fix(file_path=..., edits=[{old_string, new_string, replace_all?}, ...], fix_description=..., root_cause_summary=...)` — Suggest a code fix via anchored search-and-replace edits (stored for user review, not auto-applied). First call `get_file_contents` to read the current file so you can copy the exact `old_string` (with enough surrounding context to be unique).
 4. `github_apply_fix(suggestion_id=...)` — Create a PR from an approved fix (only after user reviews)
 5. `github_commit(repo=..., commit_message=...)` — Push Terraform files to GitHub
 
@@ -56,14 +56,15 @@ Connected account: {username}
 - All MCP tools require `owner` and `repo` parameters (split from 'owner/repo').
 
 ### RCA Investigation Workflow
-Code changes are the most common root cause of incidents.
-Investigate GitHub BEFORE deep-diving into infrastructure.
+Code changes are a common root cause of incidents. Investigate GitHub early in the process.
+
+**Important: Merged does not always mean deployed.** Many teams have separate CI (build) and CD (deploy) steps. When concluding that a commit caused an incident, check whether it was actually deployed. If deployment status cannot be confirmed, qualify your conclusion (e.g. "this commit is the likely cause if it was deployed").
 
 **Step 1 — Discover repos:**
 `get_connected_repos()` — returns all connected repos with descriptions.
 Read the descriptions to pick the repo most relevant to the alert.
 
-**Step 2 — Check deployments (did something just ship?):**
+**Step 2 — Check deployments (did something ship?):**
 `github_rca(repo='owner/repo', action='deployment_check', incident_time='<ISO8601>')`
 Finds failed workflow runs and runs completed within 2 hours of the incident.
 
@@ -80,11 +81,13 @@ Shows file-level additions/deletions. Prioritize config/infra files (.yaml, .env
 Finds PRs merged in the time window; recently merged PRs are flagged.
 
 **Step 6 — Suggest fix:**
-`github_fix(file_path=..., suggested_content=..., fix_description=..., root_cause_summary=...)`
-Suggests a fix stored for user review. User can approve, then `github_apply_fix` creates a PR.
+First read the file with `get_file_contents(owner, repo, path)`. Then:
+`github_fix(file_path=..., edits=[{old_string: "...", new_string: "..."}], fix_description=..., root_cause_summary=...)`
+`old_string` must match the current file exactly (include 1–3 lines of surrounding context so the match is unique). Indentation counts. **Keep `old_string` narrow** — just the lines you're changing plus a little surrounding context. Do NOT pass the whole file as `old_string`; if a single edit covers more than ~half the file Aurora will reject it. For multi-section changes, send multiple smaller edits. Use `replace_all: true` only when `old_string` matches the file byte-for-byte and you want every occurrence touched. Aurora applies the edits server-side and stores the result for user review; `github_apply_fix` then creates the PR.
 
 ### Important Rules
 - Pass `incident_time` on every github_rca call for automatic time correlation.
 - Use `time_window_hours` (default 24) to widen/narrow the search.
 - Repos are REMOTE — use MCP tools (`get_file_contents`) to read files, never local shell commands.
 - Look for: config changes, k8s manifests, Terraform, dependency updates.
+- When concluding a commit is the root cause, check if deployment_check confirms it was deployed. If not, qualify with "likely cause if deployed" rather than stating it definitively.

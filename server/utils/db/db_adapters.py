@@ -4,11 +4,15 @@ These functions allow existing code to work with the new connection pool without
 """
 
 import logging
+import time
 from utils.db.connection_pool import db_pool, DatabaseConnectionPool
 from contextlib import contextmanager
 import psycopg2
 
 logger = logging.getLogger(__name__)
+
+_POOL_RETRY_ATTEMPTS = 3
+_POOL_RETRY_BASE_DELAY = 0.1
 
 class PooledConnectionWrapper:
     """Wrapper that makes a pooled connection behave like a regular connection but returns to pool on close."""
@@ -47,61 +51,53 @@ class PooledConnectionWrapper:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+def _getconn_with_retry(pool, label="connection"):
+    for attempt in range(_POOL_RETRY_ATTEMPTS):
+        try:
+            connection = pool.getconn()
+            if connection:
+                return connection
+        except psycopg2.pool.PoolError:
+            logger.debug("Pool exhausted on attempt %d, will retry", attempt + 1)
+        if attempt < _POOL_RETRY_ATTEMPTS - 1:
+            delay = _POOL_RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning("Pool exhausted getting %s, retrying in %.2fs (attempt %d/%d)",
+                           label, delay, attempt + 1, _POOL_RETRY_ATTEMPTS)
+            time.sleep(delay)
+    raise Exception("connection pool exhausted")
+
+
 def connect_to_db_as_admin():
     """
     Backward compatible function that returns a connection from the admin pool.
-    
+
     WARNING: This function is for backward compatibility only.
     New code should use db_pool.get_admin_connection() context manager instead.
-    
+
     Returns:
         PooledConnectionWrapper: Database connection that automatically returns to pool on close()
     """
-    logger.debug("Using deprecated connect_to_db_as_admin(). Consider migrating to db_pool.get_admin_connection() context manager.")
-    
-    try:
-        pool = db_pool._get_pool()
-        connection = pool.getconn()
-        if connection:
-            connection.autocommit = False
-            DatabaseConnectionPool._set_rls_vars(connection)
-            logger.debug("Retrieved admin connection from pool (backward compatibility mode)")
-            return PooledConnectionWrapper(connection, pool, is_admin=True)
-        else:
-            raise Exception("connection pool exhausted")
-    except psycopg2.pool.PoolError:
-        raise Exception("connection pool exhausted")
-    except Exception as e:
-        logger.error(f"Error getting admin connection: {e}")
-        raise Exception("connection pool exhausted")
+    pool = db_pool._get_pool()
+    connection = _getconn_with_retry(pool, "admin")
+    connection.autocommit = False
+    DatabaseConnectionPool._set_rls_vars(connection)
+    return PooledConnectionWrapper(connection, pool, is_admin=True)
 
 def connect_to_db_as_user():
     """
     Backward compatible function that returns a connection from the user pool.
-    
+
     WARNING: This function is for backward compatibility only.
     New code should use db_pool.get_user_connection() context manager instead.
-    
+
     Returns:
         PooledConnectionWrapper: Database connection that automatically returns to pool on close()
     """
-    logger.debug("Using deprecated connect_to_db_as_user(). Consider migrating to db_pool.get_user_connection() context manager.")
-    
-    try:
-        pool = db_pool._get_pool()
-        connection = pool.getconn()
-        if connection:
-            connection.autocommit = False
-            DatabaseConnectionPool._set_rls_vars(connection)
-            logger.debug("Retrieved user connection from pool (backward compatibility mode)")
-            return PooledConnectionWrapper(connection, pool, is_admin=False)
-        else:
-            raise Exception("connection pool exhausted")
-    except psycopg2.pool.PoolError:
-        raise Exception("connection pool exhausted")
-    except Exception as e:
-        logger.error(f"Error getting user connection: {e}")
-        raise Exception("connection pool exhausted")
+    pool = db_pool._get_pool()
+    connection = _getconn_with_retry(pool, "user")
+    connection.autocommit = False
+    DatabaseConnectionPool._set_rls_vars(connection)
+    return PooledConnectionWrapper(connection, pool, is_admin=False)
 
 def return_connection_to_pool(connection, is_admin=False):
     """

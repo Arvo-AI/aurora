@@ -247,9 +247,9 @@ def get_session_usage(user_id, session_id):
                     model_name, input_tokens, output_tokens, total_tokens,
                     estimated_cost, response_time_ms, timestamp
                 FROM llm_usage_tracking
-                WHERE session_id = %s
+                WHERE session_id = %s OR session_id LIKE %s
                 ORDER BY timestamp ASC
-            """, (session_id,))
+            """, (session_id, f"{session_id}::%"))
 
             rows = cursor.fetchall()
 

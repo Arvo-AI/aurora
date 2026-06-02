@@ -3,6 +3,10 @@
 # ============================================
 FROM oven/bun:1.2.22-alpine AS dev
 
+# Node is optional at runtime (FRONTEND_DEV_RUNTIME=node). Installed in the image so
+# devs can switch via .env without rebuilding a separate Dockerfile target.
+RUN apk add --no-cache nodejs npm
+
 WORKDIR /app
 
 # Install dependencies first (will be overridden by volume mount in dev)
@@ -11,14 +15,15 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+COPY scripts/docker-dev-start.sh /docker-dev-start.sh
+RUN chmod +x /docker-entrypoint.sh /docker-dev-start.sh
 
 # Expose port for Next.js
 EXPOSE 3000
 
 # Use the same entrypoint as prod to generate env-config.js at startup
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bun", "run", "dev"]
+CMD ["/docker-dev-start.sh"]
 
 # ============================================
 # Production Builder Stage

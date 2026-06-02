@@ -134,18 +134,27 @@ def set_connection_status(
 def list_active_connections(user_id: str) -> List[Dict]:
     """Return active connections for a user (including org-shared connections)."""
     org_id = _resolve_org_id(user_id)
-    sql = """
-        SELECT provider, account_id, connection_method, role_arn, read_only_role_arn, region, last_verified_at
-        FROM user_connections
-        WHERE (user_id = %s OR org_id = %s) AND status = 'active'
-        ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END;
-    """
+    if org_id:
+        sql = """
+            SELECT provider, account_id, connection_method, role_arn, read_only_role_arn, region, last_verified_at
+            FROM user_connections
+            WHERE (user_id = %s OR org_id = %s) AND status = 'active'
+            ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END;
+        """
+        params = (user_id, org_id, user_id)
+    else:
+        sql = """
+            SELECT provider, account_id, connection_method, role_arn, read_only_role_arn, region, last_verified_at
+            FROM user_connections
+            WHERE user_id = %s AND status = 'active';
+        """
+        params = (user_id,)
     conn = None
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:list]")
-            cur.execute(sql, (user_id, org_id, user_id))
+            cur.execute(sql, params)
             rows = cur.fetchall()
         logger.info("[CONN-META] Fetched %d active connections for user %s", len(rows), user_id)
         return [
@@ -170,25 +179,35 @@ def list_active_connections(user_id: str) -> List[Dict]:
 
 def get_user_aws_connection(user_id: str) -> Optional[Dict]:
     """Get the first active AWS connection for a user from user_connections table.
-    
+
     This is the single source of truth for AWS connections.
     Returns None if no active AWS connection exists.
     For multi-account users, use get_all_user_aws_connections() instead.
     """
     org_id = _resolve_org_id(user_id)
-    sql = """
-        SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
-        FROM user_connections
-        WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
-        ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
-        LIMIT 1;
-    """
+    if org_id:
+        sql = """
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            FROM user_connections
+            WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+            ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
+            LIMIT 1;
+        """
+        params = (user_id, org_id, user_id)
+    else:
+        sql = """
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            FROM user_connections
+            WHERE user_id = %s AND provider = 'aws' AND status = 'active'
+            LIMIT 1;
+        """
+        params = (user_id,)
     conn = None
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:awsConn]")
-            cur.execute(sql, (user_id, org_id, user_id))
+            cur.execute(sql, params)
             row = cur.fetchone()
             
             if row:
@@ -217,18 +236,28 @@ def get_all_user_aws_connections(user_id: str) -> List[Dict]:
     connection_method, and last_verified_at.
     """
     org_id = _resolve_org_id(user_id)
-    sql = """
-        SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
-        FROM user_connections
-        WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
-        ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
-    """
+    if org_id:
+        sql = """
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            FROM user_connections
+            WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
+            ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END, account_id;
+        """
+        params = (user_id, org_id, user_id)
+    else:
+        sql = """
+            SELECT account_id, role_arn, read_only_role_arn, connection_method, region, last_verified_at
+            FROM user_connections
+            WHERE user_id = %s AND provider = 'aws' AND status = 'active'
+            ORDER BY account_id;
+        """
+        params = (user_id,)
     conn = None
     try:
         conn = connect_to_db_as_user()
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix="[CONN-META:allAws]")
-            cur.execute(sql, (user_id, org_id, user_id))
+            cur.execute(sql, params)
             rows = cur.fetchall()
 
         logger.info("[CONN-META] Fetched %d active AWS connections for user %s", len(rows), user_id)

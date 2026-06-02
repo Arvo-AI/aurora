@@ -246,6 +246,19 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
         
         logging.info(f"GCP post-auth setup completed for user {user_id} (setup_success={setup_success})")
 
+        # Persist the set of projects that were actually configured so discovery
+        # knows exactly which projects to scan, regardless of how many projects
+        # the OAuth token can see in the user's Google account.
+        try:
+            connected_project_ids = [p['projectId'] for p in projects_to_setup if p.get('projectId')]
+            store_user_preference(user_id, 'gcp_connected_projects', connected_project_ids)
+            logging.info(
+                "[GCPPostAuth] Stored gcp_connected_projects for user %s: %s",
+                user_id, connected_project_ids,
+            )
+        except Exception as e:
+            logging.warning("[GCPPostAuth] Failed to store gcp_connected_projects for user %s: %s", user_id, e)
+
         # Trigger graph discovery now that APIs and SAs are ready across all projects
         try:
             from services.discovery.tasks import run_user_discovery
@@ -267,8 +280,8 @@ def gcp_post_auth_setup_task(self, user_id, selected_project_ids=None):
             'total_projects': len(projects)
         }
 
-    except Exception as e:
-        logging.error(f"Error during GCP post-auth setup for user {user_id}: {e}")
+    except Exception:
+        logging.exception("Error during GCP post-auth setup")
 
         return {
             'status': 'FAILED',

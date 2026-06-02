@@ -7,10 +7,9 @@ import os
 import tempfile
 import shutil
 from typing import Dict, Any, Optional, Tuple
-from routes.terraform.terraform_manager import TerraformManager
 from routes.terraform.terraform_generator import TerraformGenerator
 import logging
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import hash_for_log, sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -48,58 +47,9 @@ def write_terraform_files_from_zip(zip_path: str, workdir: str, cloud_provider: 
     main_tf = os.path.join(latest_dir, 'main.tf')
     if not os.path.isfile(main_tf):
         raise RuntimeError("main.tf not found after generation.")
-    # Optionally copy main.tf to workdir root for TerraformManager
+    # Optionally copy main.tf to workdir root
     shutil.copy2(main_tf, os.path.join(workdir, 'main.tf'))
     return os.path.join(workdir, 'main.tf')
-
-
-def init_terraform(workdir: str, authenticator=None) -> bool:
-    """Initialize Terraform in the given working directory.
-
-    .. deprecated::
-        Use ``iac_execution_core.run_terraform_command`` with
-        ``setup_terraform_environment_isolated`` instead for proper
-        credential isolation.
-    """
-    manager = TerraformManager(workdir, authenticator)
-    return manager.init()
-
-
-def plan_terraform(workdir: str, authenticator=None) -> Tuple[bool, str]:
-    """Run 'terraform plan' in the given working directory.
-
-    .. deprecated::
-        Use ``iac_execution_core.run_terraform_command`` with
-        ``setup_terraform_environment_isolated`` instead for proper
-        credential isolation.
-    """
-    manager = TerraformManager(workdir, authenticator)
-    return manager.plan()
-
-
-def apply_terraform(workdir: str, authenticator=None) -> Tuple[bool, str]:
-    """Run 'terraform apply' in the given working directory.
-
-    .. deprecated::
-        Use ``iac_execution_core.run_terraform_command`` with
-        ``setup_terraform_environment_isolated`` instead for proper
-        credential isolation.
-    """
-    manager = TerraformManager(workdir, authenticator)
-    return manager.apply()
-
-
-def write_tfvars(data: Dict[str, Any], workdir: str) -> str:
-    """
-    Write a terraform.tfvars file in the working directory using the provided data.
-    Returns the path to the tfvars file.
-    """
-    manager = TerraformManager(workdir)
-    tfvars_path = os.path.join(workdir, 'terraform.tfvars')
-    success = manager.generate_terraform_tfvars(data, tfvars_path)
-    if not success:
-        raise RuntimeError("Failed to generate terraform.tfvars file.")
-    return tfvars_path
 
 
 def setup_azure_terraform_environment_isolated(user_id: str):
@@ -283,7 +233,7 @@ def setup_gcp_terraform_environment_isolated(user_id: str):
         except Exception as e:
             logger.warning(f"Failed to create credentials file for Terraform: {e}")
 
-        logger.info(f"GCP Terraform isolated environment configured for project: {project_id}")
+        logger.info("GCP Terraform isolated environment configured for project: %s", hash_for_log(project_id))
         return True, project_id, cached_env
 
     except Exception as e:
@@ -321,23 +271,8 @@ def setup_ovh_terraform_environment_isolated(user_id: str):
             return False, None, None
 
         # Get user's OVH root project (service_name in OVH API terms)
-        from utils.db.db_utils import connect_to_db_as_user
-        project_id = None
-        try:
-            conn = connect_to_db_as_user()
-            with conn.cursor() as cur:
-                from utils.auth.stateless_auth import set_rls_context
-                set_rls_context(cur, conn, user_id, log_prefix="[Terraform]")
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'ovh_root_project';",
-                    (user_id,)
-                )
-                row = cur.fetchone()
-                if row:
-                    project_id = row[0]
-            conn.close()
-        except Exception as e:
-            logger.warning(f"Could not fetch OVH root project preference: {e}")
+        from utils.auth.stateless_auth import get_user_preference
+        project_id = get_user_preference(user_id, 'ovh_root_project')
 
         if not project_id:
             logger.warning("No OVH root project set - Terraform may need project_id variable")
@@ -414,13 +349,10 @@ def setup_scaleway_terraform_environment_isolated(user_id: str):
                     project_id = row[2]  # subscription_name = default_project_id
                 
                 # Get user's Scaleway root project preference if set
-                cur.execute(
-                    "SELECT preference_value FROM user_preferences WHERE user_id = %s AND preference_key = 'scaleway_root_project';",
-                    (user_id,)
-                )
-                pref_row = cur.fetchone()
-                if pref_row and pref_row[0]:
-                    project_id = pref_row[0]  # Override with user preference
+                from utils.auth.stateless_auth import get_user_preference
+                scaleway_pref = get_user_preference(user_id, 'scaleway_root_project')
+                if scaleway_pref:
+                    project_id = scaleway_pref  # Override with preference
         except Exception as e:
             logger.warning(f"Could not fetch Scaleway credentials from database: {e}")
         finally:

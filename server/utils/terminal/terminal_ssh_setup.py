@@ -19,7 +19,7 @@ SSH_PROVIDER_PATTERN = '%_ssh_%'
 def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
     """
     Return all SSH private keys for a user, keyed by a readable name:
-    e.g., {"scaleway_4b9511a5": "<private key>", "ovh_abc123": "<private key>"}
+    e.g., {"scaleway_4b9511a5": "<private key>"}
     """
     ssh_keys: Dict[str, str] = {}
     with db_pool.get_admin_connection() as conn:
@@ -34,8 +34,7 @@ def _fetch_user_ssh_keys(user_id: str) -> Dict[str, str]:
             try:
                 token_data = get_token_data(user_id, provider)
                 if token_data and "private_key" in token_data:
-                    # provider is like "scaleway_ssh_<vmId>" or "ovh_ssh_<vmId>"
-                    vm_key = provider.replace("_ssh_", "_")  # scaleway_<vmId>
+                    vm_key = provider.replace("_ssh_", "_")
                     ssh_keys[vm_key] = token_data["private_key"]
             except (KeyError, ValueError, TypeError) as e:
                 logger.warning(f"Failed to load SSH key for {provider}: {e}")

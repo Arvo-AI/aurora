@@ -208,12 +208,14 @@ def spinnaker_rca(
 
     # Mutating action: trigger_pipeline requires human-in-the-loop confirmation
     if action == "trigger_pipeline":
-        # Block in background/ask mode — no user to confirm
+        # Block in background/ask mode — unless org has explicitly permitted this tool
         try:
+            from utils.auth.command_gate import _is_org_tool_permitted
             from chat.backend.agent.tools.cloud_tools import get_state_context
             state = get_state_context()
             if state and getattr(state, "is_background", False):
-                return json.dumps({"error": "trigger_pipeline is not available in background mode. Only read-only actions can run automatically."})
+                if not _is_org_tool_permitted("spinnaker_rca"):
+                    return json.dumps({"error": "trigger_pipeline is not available in background mode. Only read-only actions can run automatically."})
         except Exception as e:
             logger.debug("[SPINNAKER_RCA] Could not check background state: %s", e)
 
@@ -225,22 +227,17 @@ def spinnaker_rca(
             return json.dumps({"error": "Spinnaker is not connected. Configure credentials in Settings > Connectors > Spinnaker."})
 
         try:
-            from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
-            from chat.backend.agent.tools.cloud_tools import get_state_context
-
-            session_id = getattr(get_state_context(), "session_id", None)
+            from utils.auth.command_gate import gate_action
 
             summary = f"Trigger pipeline '{pipeline_name}' for application '{application}'"
             if parameters:
                 summary += f"\nParameters: {json.dumps(parameters)}"
 
-            confirmed = wait_for_user_confirmation(
+            if not gate_action(
                 user_id=user_id,
-                message=summary,
                 tool_name="spinnaker_rca",
-                session_id=session_id,
-            )
-            if not confirmed:
+                summary=summary,
+            ).allowed:
                 return json.dumps({"status": "cancelled", "message": "Pipeline trigger cancelled by user"})
         except Exception as e:
             logger.error("[SPINNAKER_RCA] Confirmation flow failed, aborting trigger: %s", e)

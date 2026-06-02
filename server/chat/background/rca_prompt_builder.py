@@ -1,85 +1,44 @@
 """
-Shared RCA (Root Cause Analysis) prompt builder for background alert processing.
+RCA (Root Cause Analysis) prompt builder for background alert processing.
 
-This module creates provider-aware, persistence-focused RCA prompts that leverage
-all available tools and follow the detailed investigation guidelines in the system prompt.
+build_rca_prompt() is the single entry point for all RCA prompt
+construction — both webhook-triggered and user-initiated (chat) RCAs.
+It passes the raw payload directly to the LLM, with conditional truncation
+for large payloads.
 
 Aurora Learn Integration:
 - When Aurora Learn is enabled, searches for similar past incidents with positive feedback
 - Injects context from helpful RCAs to improve new investigations
 """
 
-from functools import lru_cache
 from typing import Any, Dict, List, Optional
+import json
 import logging
-import os
 
 logger = logging.getLogger(__name__)
 
-RCA_SEGMENTS_DIR = os.path.normpath(
-    os.path.join(
-        os.path.dirname(__file__),
-        os.pardir,
-        "backend",
-        "agent",
-        "skills",
-        "rca",
-        "segments",
-    )
-)
 
+def build_alert_rail_text(alert_details: Dict[str, Any]) -> str:
+    """Extract the webhook-authored subset of an alert for input-rail evaluation.
 
-@lru_cache(maxsize=32)
-def _load_rca_segment_template(segment_name: str) -> str:
+    Synthesized RCA prompts wrap externally-controlled fields (alert title,
+    status, message/description) in a large instruction scaffold. The scaffold
+    is not user input and must not be fed to the prompt-injection rail (it
+    produces false positives with stricter models). This helper returns only
+    the webhook-provided text so the rail evaluates exactly the attacker-
+    controllable surface.
     """
-    Load an RCA markdown segment by name (filename without .md).
-
-    Segment content is cached in-process for performance.
-    """
-    try:
-        from chat.backend.agent.skills.loader import load_core_prompt
-
-        return load_core_prompt(RCA_SEGMENTS_DIR, segments=[segment_name]).strip()
-    except Exception as e:
-        logger.warning(f"Failed to load RCA segment '{segment_name}': {e}")
-        return ""
-
-
-def _render_rca_segment(segment_name: str, context: Optional[Dict[str, Any]] = None) -> str:
-    """Render an RCA segment with optional {variable} template substitutions."""
-    template = _load_rca_segment_template(segment_name)
-    if not template:
-        return ""
-
-    if not context:
-        return template
-
-    try:
-        from chat.backend.agent.skills.loader import resolve_template
-
-        return resolve_template(template, context)
-    except Exception as e:
-        logger.warning(f"Failed to render RCA segment '{segment_name}': {e}")
-        return template
-
-
-def _append_rca_segment(
-    prompt_parts: List[str],
-    segment_name: str,
-    context: Optional[Dict[str, Any]] = None,
-    leading_blank: bool = False,
-    trailing_blank: bool = False,
-) -> None:
-    """Append rendered segment to prompt_parts with optional surrounding blank lines."""
-    content = _render_rca_segment(segment_name, context=context)
-    if not content:
-        return
-
-    if leading_blank:
-        prompt_parts.append("")
-    prompt_parts.append(content)
-    if trailing_blank:
-        prompt_parts.append("")
+    parts: List[str] = []
+    title = alert_details.get('title')
+    if isinstance(title, str) and title.strip():
+        parts.append(title.strip())
+    status = alert_details.get('status')
+    if isinstance(status, str) and status.strip() and status.strip().lower() != 'unknown':
+        parts.append(f"Status: {status.strip()}")
+    message = alert_details.get('message')
+    if isinstance(message, str) and message.strip():
+        parts.append(message.strip())
+    return "\n\n".join(parts)
 
 
 # ============================================================================
@@ -339,282 +298,119 @@ def get_user_providers(user_id: str) -> List[str]:
     return result
 
 
-def _has_onprem_clusters(user_id: Optional[str]) -> bool:
-    """Check if user has active on-prem kubectl connections."""
-    if not user_id:
-        return False
-    try:
-        from utils.db.db_adapters import connect_to_db_as_user
-        from utils.auth.stateless_auth import set_rls_context
-        conn = connect_to_db_as_user()
-        try:
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:onprem]")
-            cursor.execute("""
-                SELECT COUNT(*) FROM active_kubectl_connections c
-                JOIN kubectl_agent_tokens t ON c.token = t.token
-                WHERE t.user_id = %s AND c.status = 'active'
-            """, (user_id,))
-            count = cursor.fetchone()[0]
-            cursor.close()
-            return count > 0
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.warning(f"Error checking on-prem clusters: {e}")
-        return False
+# ============================================================================
+# Unified Raw Payload RCA Prompt Builder
+# ============================================================================
 
+PAYLOAD_CHAR_THRESHOLD = 1_000
+CHAT_PAYLOAD_MAX =60_000
 
-def _build_provider_investigation_section(providers: List[str], user_id: Optional[str] = None) -> str:
-    """Provider investigation now loaded from skills/rca/ files."""
-    return ""
+def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
+    """Extract attacker-controllable text from a raw payload for guardrail evaluation."""
+    _RAIL_FIELDS = {
+        'title', 'message', 'body', 'description', 'text', 'summary',
+        'alert_title', 'event_title', 'rulename', 'name', 'condition_name',
+    }
+    parts: List[str] = []
 
-def _get_github_connected(user_id: str) -> bool:
-    """Check if user has GitHub connected."""
-    try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        creds = get_credentials_from_db(user_id, "github")
-        return bool(creds and creds.get("access_token"))
-    except Exception as e:
-        logger.warning(f"Error checking GitHub connection for user {user_id}: {e}")
-        return False
+    def _collect(obj: Any, depth: int = 0) -> None:
+        if depth > 2:
+            return
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if isinstance(val, str) and key.lower().rstrip('_') in _RAIL_FIELDS:
+                    stripped = val.strip()
+                    if stripped:
+                        parts.append(stripped)
+                elif isinstance(val, (dict, list)):
+                    _collect(val, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj[:5]:
+                _collect(item, depth + 1)
 
-
-def _has_jenkins_connected(user_id: str) -> bool:
-    """Check if user has Jenkins connected."""
-    try:
-        from utils.auth.token_management import get_token_data
-        creds = get_token_data(user_id, "jenkins")
-        return bool(creds and creds.get("base_url"))
-    except Exception as e:
-        logger.warning(f"Error checking Jenkins context: {e}")
-        return False
-
-
-def _has_cloudbees_connected(user_id: str) -> bool:
-    """Check if user has CloudBees CI connected."""
-    try:
-        from utils.auth.token_management import get_token_data
-        creds = get_token_data(user_id, "cloudbees")
-        return bool(creds and creds.get("base_url"))
-    except Exception as e:
-        logger.warning(f"Error checking CloudBees context: {e}")
-        return False
-
-
-def _has_jira_connected(user_id: str) -> bool:
-    """Check if user has Jira connected and the feature flag is enabled."""
-    try:
-        from utils.flags.feature_flags import is_jira_enabled
-        if not is_jira_enabled():
-            return False
-        from utils.auth.token_management import get_token_data
-        creds = get_token_data(user_id, "jira")
-        return bool(creds and (creds.get("access_token") or creds.get("pat_token")))
-    except Exception as e:
-        logger.warning(f"Error checking Jira context: {e}")
-        return False
-
-
-def _has_confluence_connected(user_id: str) -> bool:
-    """Check if user has Confluence connected and the feature flag is enabled."""
-    try:
-        from utils.flags.feature_flags import is_confluence_enabled
-        if not is_confluence_enabled():
-            return False
-        from utils.auth.token_management import get_token_data
-        creds = get_token_data(user_id, "confluence")
-        return bool(creds and (creds.get("access_token") or creds.get("pat_token")))
-    except Exception as e:
-        logger.warning(f"Error checking Confluence context: {e}")
-        return False
-
-
-def _get_recent_jenkins_deployments(user_id: str, service: str = "", lookback_minutes: int = 60, provider: str = "") -> List[Dict[str, Any]]:
-    """Query jenkins_deployment_events for recent deployments matching a service.
-
-    Used to inject deployment context into ANY RCA prompt (not just Jenkins-sourced).
-    """
-    if not user_id:
-        return []
-    lookback_minutes = max(1, min(int(lookback_minutes), 10080))  # 1 min to 7 days
-    try:
-        from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import set_rls_context
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[RCAPrompt:_get_recent_jenkins_deployments]")
-                conditions = ["user_id = %s", "received_at >= NOW() - make_interval(mins => %s)"]
-                params: list = [user_id, lookback_minutes]
-
-                if service and service != "unknown":
-                    conditions.append("service = %s")
-                    params.append(service)
-
-                if provider:
-                    conditions.append("provider = %s")
-                    params.append(provider)
-
-                where = " AND ".join(conditions)
-                cursor.execute(
-                    f"""SELECT service, environment, result, build_number, build_url,
-                              commit_sha, branch, deployer, trace_id, received_at
-                       FROM jenkins_deployment_events
-                       WHERE {where}
-                       ORDER BY received_at DESC LIMIT 5""",
-                    tuple(params),
-                )
-                rows = cursor.fetchall()
-                return [
-                    {
-                        "service": r[0], "environment": r[1], "result": r[2],
-                        "build_number": r[3], "build_url": r[4], "commit_sha": r[5] or "",
-                        "branch": r[6], "deployer": r[7], "trace_id": r[8],
-                        "webhook_received_at": r[9].isoformat() if r[9] else None,
-                    }
-                    for r in rows
-                ]
-    except Exception as e:
-        logger.warning(f"Error fetching recent Jenkins deployments: {e}")
-        return []
+    _collect(payload)
+    combined = "\n\n".join(parts)
+    return combined[:3000]
 
 
 def build_rca_prompt(
     source: str,
-    alert_details: Dict[str, Any],
-    providers: Optional[List[str]] = None,
+    title: str,
+    payload: Dict[str, Any],
     user_id: Optional[str] = None,
-    integrations: Optional[Dict[str, bool]] = None,
-) -> str:
-    """Build a comprehensive, provider-aware RCA prompt."""
-    # Fetch providers if not provided
-    if not providers and user_id:
-        providers = get_user_providers(user_id)
+) -> tuple[str, str]:
+    """Build an RCA prompt by passing the raw payload directly to the LLM.
 
-    providers = providers or []
-    providers_lower = [p.lower() for p in providers]
+    Instead of manually extracting fields, we pass the raw JSON so the LLM
+    parses it directly. Payloads under PAYLOAD_CHAR_THRESHOLD are passed
+    verbatim; larger ones get per-field truncation so the agent can drill
+    down via the get_alert_field tool.
 
-    # Derive integrations from skill registry when not passed by caller
-    if integrations is None and user_id:
-        try:
-            from chat.backend.agent.skills.registry import SkillRegistry
-            registry = SkillRegistry.get_instance()
-            connected_ids = registry.get_connected_skill_ids(user_id)
-            integrations = {sid: True for sid in connected_ids}
-        except Exception:
-            integrations = {}
+    Args:
+        source: Provider name (grafana, datadog, incidentio, chat, etc.)
+        title: Alert title (already extracted by the caller for incident creation)
+        payload: The raw webhook payload dict (or synthetic payload for chat RCAs)
+        user_id: For provider lookup, Aurora Learn, and prediscovery context
 
-    # Extract alert service name early — used by multiple sections below.
-    # Start with the explicit service label, then try richer fallbacks from
-    # the alert message (Condition/Policy/Targets fields) so downstream
-    # consumers (Jenkins deploy lookup, Aurora Learn, prediscovery) get the
-    # same specificity as the Jira search term.
-    _label_service = alert_details.get('labels', {}).get('service', '')
-    alert_service = _label_service if _label_service and _label_service != 'unknown' else ''
-    if not alert_service and source == 'netdata':
-        alert_service = alert_details.get('host', '') or ''
+    Returns:
+        (prompt, rail_text) tuple
+    """
+    from chat.backend.agent.tools.output_sanitizer import truncate_json_fields
 
-    # Format alert details
-    title = alert_details.get('title', 'Unknown Alert')
-    status = alert_details.get('status', 'unknown')
-    labels = alert_details.get('labels', {})
-    message = alert_details.get('message', '')
-    values = alert_details.get('values', '')
+    providers = get_user_providers(user_id) if user_id else []
 
-    # If alert_service is still empty, try to extract a meaningful service/component
-    # name from the message (same heuristic the Jira search uses).
-    _generic_titles = {
-        'new relic alert', 'unknown alert', 'alert', 'unknown',
-        'grafana alert', 'datadog alert', 'splunk alert',
-    }
-    if not alert_service:
-        _candidate = title if title.lower().strip() not in _generic_titles else ''
-        if not _candidate:
-            _msg = message or ''
-            for _part in _msg.replace('.', ',').split(','):
-                _part = _part.strip()
-                for _prefix in ('Condition:', 'Targets:', 'Entities:', 'Policy:', 'Search:'):
-                    if _part.startswith(_prefix):
-                        _candidate = _part[len(_prefix):].strip()
-                        break
-                if _candidate:
-                    break
-        if _candidate:
-            alert_service = _candidate
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        payload_size = len(serialized)
 
-    # Source-specific labels formatting
-    if source == 'grafana':
-        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-    elif source == 'datadog':
-        tags = alert_details.get('tags', [])
-        labels_str = ", ".join(tags[:10]) if tags else "none"
-    elif source == 'netdata':
-        host = alert_details.get('host', 'unknown')
-        chart = alert_details.get('chart', 'unknown')
-        labels_str = f"host={host}, chart={chart}"
-    elif source == 'pagerduty':
-        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-    elif source == 'splunk':
-        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-    elif source == 'dynatrace':
-        entity = alert_details.get('impacted_entity', 'unknown')
-        impact = alert_details.get('impact', 'unknown')
-        labels_str = f"entity={entity}, impact={impact}"
-    elif source == 'bigpanda':
-        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-    elif source == 'newrelic':
-        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
-    elif source == 'chat':
-        labels_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "user-reported"
-    elif source == 'opsgenie':
-        tags = alert_details.get('tags', [])
-        labels_str = ", ".join(tags[:10]) if tags else "none"
-    else:
-        labels_str = str(labels)
+        if source == "chat":
+            if payload_size > CHAT_PAYLOAD_MAX:
+                json_content = serialized[:CHAT_PAYLOAD_MAX] + "\n... [message truncated]"
+            else:
+                json_content = serialized
+            truncation_note = ""
+        elif payload_size <= PAYLOAD_CHAR_THRESHOLD:
+            json_content = serialized
+            truncation_note = ""
+        else:
+            truncated = truncate_json_fields(payload, max_field_length=250)
+            json_content = json.dumps(truncated, ensure_ascii=False, default=str)
+            if len(json_content) > 15_000:
+                truncated = truncate_json_fields(payload, max_field_length=80, max_depth=1)
+                json_content = json.dumps(truncated, indent=2, ensure_ascii=False, default=str)
+            truncation_note = (
+                "Fields ending with '... [field truncated]' were too long to include in full. "
+                "`get_alert_field` tool for fields that show this marker if you need to inspect them. "
+            )
+    except Exception as e:
+        logger.warning(f"Failed to serialize alert payload: {e}")
+        json_content = f"[Payload could not be serialized — use get_alert_field to inspect fields. Keys: {list(payload.keys())[:20]}]"
+        truncation_note = ""
 
-    # Build the prompt
     prompt_parts = [
         f"# ROOT CAUSE ANALYSIS REQUIRED - {source.upper()} ALERT",
         "",
-        "## ALERT DETAILS:",
-        f"- **Title**: {title}",
-        f"- **Status**: {status}",
-        f"- **Source**: {source}",
-        f"- **Labels/Tags**: {labels_str}",
+        f"## ALERT: {title}",
+        "",
+        "## CONNECTED INFRASTRUCTURE:",
+        f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
+        "",
+        "## WEBHOOK PAYLOAD:",
+        truncation_note + "<alert_payload>",
+        json_content,
+        "</alert_payload>",
     ]
 
-    if message:
-        prompt_parts.append(f"- **Message**: {message}")
-    if values:
-        prompt_parts.append(f"- **Values**: {values}")
-    if source == 'datadog' and 'monitor_id' in alert_details:
-        prompt_parts.append(f"- **Monitor ID**: {alert_details['monitor_id']}")
-    if source == 'pagerduty':
-        if 'incident_id' in alert_details:
-            prompt_parts.append(f"- **Incident ID**: {alert_details['incident_id']}")
-        if 'incident_url' in alert_details:
-            prompt_parts.append(f"- **Incident URL**: {alert_details['incident_url']}")
-    if source == 'netdata':
-        prompt_parts.append(f"- **Host**: {alert_details.get('host', 'unknown')}")
-        prompt_parts.append(f"- **Chart**: {alert_details.get('chart', 'unknown')}")
-    if source == 'newrelic':
-        if 'issueUrl' in alert_details:
-            prompt_parts.append(f"- **Issue URL**: {alert_details['issueUrl']}")
-
-    # providers list is already verified by get_user_providers() — only
-    # cloud providers with valid role-auth + SkillRegistry-validated integrations.
-    prompt_parts.extend([
-        "",
-        "## CONNECTED INFRASTRUCTURE & MONITORING:",
-        f"You have access to: {', '.join(providers) if providers else 'No cloud/monitoring providers connected'}",
-    ])
-
-    # All integration guidance (GitHub, Jira, Confluence, Jenkins, CloudBees,
-    # provider investigation commands) loaded from skill files via SkillRegistry
-    # in the system prompt (background.py). No skill loading here — the user
-    # message should contain only alert details and investigation context.
-
-    # Aurora Learn: Inject context from similar past incidents
+    # Aurora Learn: inject context from similar past incidents
+    metadata = payload.get("metadata")
+    metadata_service = metadata.get("service", "") if isinstance(metadata, dict) else ""
+    alert_service = (
+        payload.get("service")
+        or payload.get("resource")
+        or payload.get("component")
+        or metadata_service
+        or ""
+    )
     if user_id:
         similar_context = _get_similar_good_rcas_context(
             user_id=user_id,
@@ -625,7 +421,7 @@ def build_rca_prompt(
         if similar_context:
             prompt_parts.append(similar_context)
 
-    # Prediscovery: Inject infrastructure topology context
+    # Prediscovery: inject infrastructure topology context
     if user_id:
         prediscovery_context = _get_prediscovery_context(
             user_id=user_id,
@@ -635,638 +431,7 @@ def build_rca_prompt(
         if prediscovery_context:
             prompt_parts.append(prediscovery_context)
 
-    # Critical investigation requirements (modular markdown segments)
-    _append_rca_segment(
-        prompt_parts,
-        "critical_requirements_header",
-        leading_blank=True,
-        trailing_blank=True,
-    )
+    prompt = "\n".join(prompt_parts)
+    rail_text = _extract_rail_text_from_payload(payload)
 
-    has_infra_providers = bool({'gcp', 'aws', 'azure', 'ovh', 'scaleway'}.intersection(set(providers_lower)))
-    has_jira = bool((integrations or {}).get('jira'))
-    has_confluence = bool((integrations or {}).get('confluence'))
-    after_context_label = 'Jira' if has_jira else 'Confluence' if has_confluence else 'change'
-    
-    # Add aggressive persistence prompts only if cost optimization is disabled
-    # The immediate action required due to the AgentExecutor which assumes agent is done when it sends a text chunk without a tool call.
-    if os.getenv("RCA_OPTIMIZE_COSTS", "").lower() != "true":
-        _append_rca_segment(
-            prompt_parts,
-            "persistence_and_immediate_action",
-            context={"after_context_label": after_context_label},
-            trailing_blank=True,
-        )
-    
-    depth_steps = []
-    if has_jira or has_confluence:
-        depth_steps.append("**Search Jira/Confluence first** for recent changes, open bugs, and runbooks")
-    depth_steps.extend([
-        "Start broad - understand the overall system state",
-        "Identify the affected component(s)",
-        "Drill down into specifics - logs, metrics, configurations",
-        "Check related/dependent resources",
-        "Look for recent changes that correlate with the issue",
-    ])
-    if has_infra_providers:
-        depth_steps.extend([
-            "Compare with healthy resources of the same type",
-            "Check resource quotas, limits, and constraints",
-            "Examine network connectivity and security rules",
-            "Verify IAM permissions and service accounts",
-        ])
-    depth_steps.append("Review historical patterns if available")
-    prompt_parts.append("### INVESTIGATION DEPTH:")
-    for i, step in enumerate(depth_steps, 1):
-        prompt_parts.append(f"{i}. {step}")
-
-    _append_rca_segment(prompt_parts, "error_resilience_intro", leading_blank=True)
-    if has_infra_providers:
-        _append_rca_segment(prompt_parts, "error_resilience_infra")
-    _append_rca_segment(prompt_parts, "error_resilience_outro")
-
-    _append_rca_segment(prompt_parts, "what_to_investigate", leading_blank=True)
-    _append_rca_segment(prompt_parts, "output_requirements", leading_blank=True)
-
-    return "\n".join(prompt_parts)
-
-
-def build_grafana_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from Grafana alert payload."""
-    title = payload.get("title") or payload.get("ruleName") or "Unknown Alert"
-    status = payload.get("state") or payload.get("status") or "unknown"
-    message = payload.get("message") or payload.get("annotations", {}).get("description") or ""
-    labels = payload.get("commonLabels", {}) or payload.get("labels", {})
-
-    values = payload.get("values") or payload.get("evalMatches", [])
-    values_str = ""
-    if values:
-        if isinstance(values, list):
-            values_str = ", ".join(str(v) for v in values[:5])
-        elif isinstance(values, dict):
-            values_str = ", ".join(f"{k}: {v}" for k, v in list(values.items())[:5])
-
-    alert_details = {
-        'title': title,
-        'status': status,
-        'message': message,
-        'labels': labels,
-        'values': values_str,
-    }
-
-    return build_rca_prompt('grafana', alert_details, providers, user_id)
-
-
-def build_datadog_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from Datadog alert payload."""
-    title = payload.get("title") or payload.get("event_title") or payload.get("event", {}).get("title") or "Unknown Alert"
-    status = payload.get("status") or payload.get("state") or payload.get("alert_type") or "unknown"
-    event_type = payload.get("event_type") or payload.get("alert_type") or "unknown"
-    scope = payload.get("scope") or payload.get("event", {}).get("scope") or "none"
-    tags = payload.get("tags", [])
-    monitor_id = payload.get("monitor_id") or payload.get("alert_id") or "unknown"
-    message = payload.get("body") or payload.get("message") or payload.get("event", {}).get("text") or ""
-
-    alert_details = {
-        'title': title,
-        'status': f"{status} ({event_type})",
-        'message': message,
-        'tags': tags,
-        'monitor_id': monitor_id,
-        'scope': scope,
-    }
-
-    return build_rca_prompt('datadog', alert_details, providers, user_id)
-
-
-def build_dynatrace_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from Dynatrace problem notification payload."""
-    title = payload.get("ProblemTitle") or "Unknown Problem"
-    impact = payload.get("ProblemImpact") or "unknown"
-    entity = payload.get("ImpactedEntity") or "unknown"
-    problem_url = payload.get("ProblemURL") or ""
-    tags = payload.get("Tags") or ""
-
-    alert_details = {
-        'title': title,
-        'status': payload.get("State", "OPEN"),
-        'message': f"Impact: {impact}. Entity: {entity}",
-        'labels': {},
-        'impacted_entity': entity,
-        'impact': impact,
-    }
-    if problem_url:
-        alert_details['problemUrl'] = problem_url
-    if tags:
-        alert_details['tags'] = tags
-
-    return build_rca_prompt('dynatrace', alert_details, providers, user_id)
-
-
-def build_netdata_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from Netdata alert payload."""
-    alarm = payload.get("name") or payload.get("alarm") or payload.get("title") or "Unknown Alert"
-    status = payload.get("status") or "unknown"
-    host = payload.get("host") or "unknown"
-    chart = payload.get("chart") or "unknown"
-    alert_class = payload.get("class") or "unknown"
-    family = payload.get("family") or "unknown"
-    space = payload.get("space") or "unknown"
-    room = payload.get("room") or "unknown"
-    value = payload.get("value")
-    message = payload.get("message") or payload.get("info") or ""
-
-    values_str = str(value) if value is not None else ""
-
-    alert_details = {
-        'title': alarm,
-        'status': status,
-        'message': message,
-        'host': host,
-        'chart': chart,
-        'labels': {
-            'class': alert_class,
-            'family': family,
-            'space': space,
-            'room': room,
-        },
-        'values': values_str,
-    }
-
-    return build_rca_prompt('netdata', alert_details, providers, user_id)
-
-
-def build_pagerduty_rca_prompt(
-    incident: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from PagerDuty V3 incident data."""
-    title = incident.get("title", "Untitled Incident")
-    incident_number = incident.get("number", "unknown")
-    incident_id = incident.get("id", "unknown")
-    status = incident.get("status", "unknown")
-    urgency = incident.get("urgency", "unknown")
-    
-    # Service information
-    service = incident.get("service", {})
-    service_name = service.get("summary", "unknown") if isinstance(service, dict) else "unknown"
-    
-    # Priority information
-    priority = incident.get("priority", {})
-    priority_name = priority.get("summary") or priority.get("name", "none") if isinstance(priority, dict) else "none"
-    
-    # Description
-    description = incident.get("body", {}).get("details", "")
-    
-    # HTML URL
-    html_url = incident.get("html_url", "")
-    
-    # Incident key
-    incident_key = incident.get("incident_key", "")
-    
-    # Build alert details for the unified prompt builder
-    alert_details = {
-        'title': f"#{incident_number}: {title}",
-        'status': f"{status} (urgency: {urgency})",
-        'message': description,
-        'labels': {
-            'incident_id': incident_id,
-            'incident_number': str(incident_number),
-            'urgency': urgency,
-            'priority': priority_name,
-            'service': service_name,
-        },
-        'incident_url': html_url,
-        'incident_id': incident_id,
-    }
-    
-    if incident_key:
-        alert_details['labels']['incident_key'] = incident_key
-    
-    # Add escalation policy
-    if escalation_policy := incident.get("escalation_policy", {}):
-        if isinstance(escalation_policy, dict):
-            ep_name = escalation_policy.get("summary") or escalation_policy.get("name", "")
-            if ep_name:
-                alert_details['labels']['escalation_policy'] = ep_name
-    
-    # Add assignments
-    if assignments := incident.get("assignments", []):
-        if isinstance(assignments, list) and assignments:
-            assignees = []
-            for assignment in assignments[:3]:
-                if isinstance(assignment, dict):
-                    assignee = assignment.get("assignee", {})
-                    if isinstance(assignee, dict):
-                        assignee_name = assignee.get("summary") or assignee.get("name", "")
-                        if assignee_name:
-                            assignees.append(assignee_name)
-            if assignees:
-                alert_details['labels']['assigned_to'] = ', '.join(assignees)
-    
-    # Add teams
-    if teams := incident.get("teams", []):
-        if isinstance(teams, list) and teams:
-            team_names = []
-            for team in teams[:3]:
-                if isinstance(team, dict):
-                    team_name = team.get("summary") or team.get("name", "")
-                    if team_name:
-                        team_names.append(team_name)
-            if team_names:
-                alert_details['labels']['teams'] = ', '.join(team_names)
-    
-    # Add custom fields
-    if custom_fields := incident.get("customFields", {}):
-        if isinstance(custom_fields, dict) and custom_fields:
-            for field_name, field_value in custom_fields.items():
-                alert_details['labels'][f"custom_{field_name}"] = str(field_value)
-    
-    return build_rca_prompt('pagerduty', alert_details, providers, user_id)
-
-
-def build_jenkins_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from a Jenkins deployment failure event."""
-    service = payload.get("service") or payload.get("job_name") or "Unknown Service"
-    result = payload.get("result", "FAILURE")
-    environment = payload.get("environment", "unknown")
-    git = payload.get("git", {})
-
-    alert_details = {
-        'title': f"Jenkins Deployment {result}: {service}",
-        'status': result,
-        'message': f"Build #{payload.get('build_number', '?')} deployed to {environment}",
-        'labels': {
-            'service': service,
-            'environment': environment,
-            'deployer': payload.get('deployer', ''),
-        },
-    }
-
-    if git.get("commit_sha"):
-        alert_details['labels']['commit'] = git['commit_sha']
-    if git.get("branch"):
-        alert_details['labels']['branch'] = git['branch']
-    if payload.get("trace_id"):
-        alert_details['labels']['trace_id'] = payload['trace_id']
-
-    return build_rca_prompt('jenkins', alert_details, providers, user_id)
-
-
-def build_cloudbees_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from a CloudBees CI deployment failure event."""
-    service = payload.get("service") or payload.get("job_name") or "Unknown Service"
-    result = payload.get("result", "FAILURE")
-    environment = payload.get("environment", "unknown")
-    git = payload.get("git", {})
-
-    alert_details = {
-        'title': f"CloudBees CI Deployment {result}: {service}",
-        'status': result,
-        'message': f"Build #{payload.get('build_number', '?')} deployed to {environment}",
-        'labels': {
-            'service': service,
-            'environment': environment,
-            'deployer': payload.get('deployer', ''),
-        },
-    }
-
-    if git.get("commit_sha"):
-        alert_details['labels']['commit'] = git['commit_sha']
-    if git.get("branch"):
-        alert_details['labels']['branch'] = git['branch']
-    if payload.get("trace_id"):
-        alert_details['labels']['trace_id'] = payload['trace_id']
-
-    return build_rca_prompt('cloudbees', alert_details, providers, user_id)
-
-
-def build_spinnaker_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from a Spinnaker pipeline failure event."""
-    application = payload.get("application") or "Unknown Application"
-    pipeline_name = payload.get("pipeline_name") or payload.get("pipeline", "Unknown Pipeline")
-    status = payload.get("status", "TERMINAL")
-    trigger_type = payload.get("trigger_type", "unknown")
-    trigger_user = payload.get("trigger_user", "unknown")
-
-    alert_details = {
-        'title': f"Spinnaker Pipeline {status}: {application}/{pipeline_name}",
-        'status': status,
-        'message': f"Pipeline '{pipeline_name}' for application '{application}' ended with status {status}",
-        'labels': {
-            'service': application,
-            'pipeline': pipeline_name,
-            'trigger_type': trigger_type,
-            'trigger_user': trigger_user,
-        },
-    }
-
-    execution_id = payload.get("execution_id")
-    if execution_id:
-        alert_details['labels']['execution_id'] = execution_id
-
-    return build_rca_prompt('spinnaker', alert_details, providers, user_id)
-
-
-def build_bigpanda_rca_prompt(
-    incident: Dict[str, Any],
-    alerts: list,
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from BigPanda incident payload."""
-    first_alert = alerts[0] if alerts else {}
-    title = (
-        first_alert.get("description")
-        or first_alert.get("condition_name")
-        or f"BigPanda Incident {incident.get('id', 'unknown')}"
-    )
-    service = str(
-        first_alert.get("primary_property")
-        or first_alert.get("source_system")
-        or "unknown"
-    )
-    bp_status = incident.get("status", "active")
-
-    message_parts = [f"Child alerts: {len(alerts)}"]
-    if envs := incident.get("environments"):
-        message_parts.append(f"Environments: {envs}")
-    if tags := incident.get("incident_tags"):
-        message_parts.append(f"Tags: {tags}")
-    if alerts:
-        summaries = []
-        for a in alerts[:5]:
-            desc = a.get("description") or a.get("condition_name") or "no description"
-            src = a.get("source_system") or "unknown"
-            summaries.append(f"[{src}] {desc}")
-        message_parts.append("Top alerts: " + "; ".join(summaries))
-
-    alert_details = {
-        'title': title,
-        'status': bp_status,
-        'message': ". ".join(message_parts),
-        'labels': {
-            'service': service,
-            'severity': incident.get("severity", "unknown"),
-            'child_alert_count': str(len(alerts)),
-        },
-    }
-
-    return build_rca_prompt('bigpanda', alert_details, providers, user_id)
-
-
-def build_splunk_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from Splunk alert payload."""
-    search_name = payload.get("search_name") or payload.get("name") or "Unknown Alert"
-    result_count = payload.get("result_count") or payload.get("results_count") or 0
-    search_query = payload.get("search") or payload.get("search_query") or ""
-    app = payload.get("app") or payload.get("source") or ""
-    severity = payload.get("severity") or payload.get("alert_severity") or ""
-
-    results = payload.get("results") or payload.get("result") or []
-    results_str = ""
-    if results:
-        if isinstance(results, list):
-            results_str = ", ".join(str(r) for r in results[:5])
-        elif isinstance(results, dict):
-            results_str = str(results)
-
-    message_parts = [f"Search: {search_name}", f"Result count: {result_count}"]
-    if search_query:
-        message_parts.append(f"SPL: {search_query}")
-    if results_str:
-        message_parts.append(f"Sample: {results_str}")
-
-    alert_details = {
-        'title': search_name,
-        'status': f"triggered ({result_count} results)",
-        'message': ". ".join(message_parts),
-        'labels': {},
-    }
-
-    if app:
-        alert_details['labels']['app'] = app
-    if severity:
-        alert_details['labels']['severity'] = str(severity)
-
-    return build_rca_prompt('splunk', alert_details, providers, user_id)
-
-
-def build_newrelic_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from New Relic alert/issue webhook payload."""
-    from routes.newrelic.tasks import extract_newrelic_title
-    title = extract_newrelic_title(payload)
-    state = payload.get("state") or payload.get("currentState") or payload.get("current_state") or "unknown"
-    priority = payload.get("priority") or payload.get("severity") or "unknown"
-    condition_name = payload.get("conditionName") or payload.get("condition_name") or ""
-    policy_name = payload.get("policyName") or payload.get("policy_name") or ""
-    issue_url = payload.get("issueUrl") or payload.get("violationChartUrl") or payload.get("incident_url") or ""
-    account_id = payload.get("accountId") or payload.get("account_id") or ""
-
-    entities = payload.get("entitiesData", {}).get("entities", [])
-    entity_names = [e.get("name", "unknown") for e in entities[:5]] if entities else []
-    targets = payload.get("targets", [])
-    target_names = [t.get("name", "unknown") for t in targets[:5]] if targets else []
-
-    details = payload.get("details") or ""
-
-    message_parts = []
-    if condition_name:
-        message_parts.append(f"Condition: {condition_name}")
-    if policy_name:
-        message_parts.append(f"Policy: {policy_name}")
-    if entity_names:
-        message_parts.append(f"Entities: {', '.join(entity_names)}")
-    elif target_names:
-        message_parts.append(f"Targets: {', '.join(target_names)}")
-    if payload.get("totalIncidents"):
-        message_parts.append(f"Total incidents: {payload['totalIncidents']}")
-    if details:
-        message_parts.append(f"Details: {details[:500]}")
-
-    labels: Dict[str, str] = {}
-    if priority and priority != "unknown":
-        labels["priority"] = priority
-    if account_id:
-        labels["accountId"] = str(account_id)
-
-    alert_details = {
-        'title': title,
-        'status': f"{state} (priority: {priority})",
-        'message': ". ".join(message_parts) if message_parts else title,
-        'labels': labels,
-    }
-    if issue_url:
-        alert_details['issueUrl'] = issue_url
-
-    return build_rca_prompt('newrelic', alert_details, providers, user_id)
-
-
-def build_chat_rca_prompt(
-    description: str,
-    title: str = "",
-    service: str = "",
-    severity: str = "medium",
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from a user-reported incident in chat.
-
-    Wraps the user's free-text description into the standard alert_details
-    format and delegates to the shared build_rca_prompt().
-    """
-    alert_title = title or f"User-reported: {description[:80]}"
-
-    labels: Dict[str, str] = {}
-    if service:
-        labels["service"] = service
-    if severity:
-        labels["severity"] = severity
-
-    alert_details = {
-        "title": alert_title,
-        "status": "investigating",
-        "message": description,
-        "labels": labels,
-    }
-
-    return build_rca_prompt("chat", alert_details, providers, user_id)
-
-
-def build_opsgenie_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from OpsGenie alert webhook payload."""
-    alert = payload.get("alert", {})
-    message = alert.get("message") or "Unknown Alert"
-    action = payload.get("action") or "unknown"
-    priority = alert.get("priority") or "unknown"
-    status = alert.get("status") or "unknown"
-    source = alert.get("source") or "unknown"
-    description = alert.get("description") or ""
-    entity = alert.get("entity") or ""
-    tags = alert.get("tags", [])
-    teams = alert.get("teams", [])
-
-    message_parts = []
-    if description:
-        message_parts.append(description)
-    if entity:
-        message_parts.append(f"Entity: {entity}")
-    if teams:
-        message_parts.append(f"Teams: {', '.join(teams) if isinstance(teams, list) else str(teams)}")
-
-    alert_details = {
-        'title': message,
-        'status': f"{status} (action: {action}, priority: {priority})",
-        'message': ". ".join(message_parts) if message_parts else message,
-        'tags': tags,
-        'source': source,
-    }
-    if entity:
-        alert_details['entity'] = entity
-
-    return build_rca_prompt('opsgenie', alert_details, providers, user_id)
-
-
-def _incidentio_dict_name(obj, default: str = "") -> str:
-    """Extract .name from a dict-or-scalar incident.io field."""
-    if isinstance(obj, dict):
-        return obj.get("name", default)
-    return str(obj) if obj else default
-
-
-def _incidentio_format_roles(roles: list) -> str:
-    return ", ".join(
-        f"{r.get('role', {}).get('name', '?')}: {r.get('assignee', {}).get('name', 'unassigned')}"
-        for r in roles[:5]
-    )
-
-
-def _incidentio_format_custom_fields(custom_fields: list) -> str:
-    return ", ".join(
-        f"{cf.get('custom_field', {}).get('name', '?')}="
-        f"{(cf.get('values') or [{}])[0].get('label', '?')}"
-        for cf in custom_fields[:5]
-        if cf.get("values")
-    )
-
-
-def build_incidentio_rca_prompt(
-    payload: Dict[str, Any],
-    providers: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-) -> str:
-    """Build RCA prompt from incident.io webhook event payload."""
-    event = payload.get("event", {}) or {}
-    incident = event.get("incident") or payload.get("incident") or {}
-
-    name = incident.get("name") or incident.get("title") or "Unknown Incident"
-    status = incident.get("status") or "unknown"
-    summary = incident.get("summary") or ""
-    permalink = incident.get("permalink") or ""
-    severity = _incidentio_dict_name(incident.get("severity"))
-    inc_type = _incidentio_dict_name(incident.get("incident_type"))
-
-    role_str = _incidentio_format_roles(incident.get("incident_role_assignments") or [])
-    cf_str = _incidentio_format_custom_fields(incident.get("custom_field_entries") or [])
-
-    message_parts = [f"Incident: {name}"]
-    for label, value in [("Summary", summary), ("Roles", role_str),
-                         ("Fields", cf_str), ("Link", permalink)]:
-        if value:
-            message_parts.append(f"{label}: {value}")
-
-    labels = {}
-    if severity:
-        labels['severity'] = severity
-    if inc_type:
-        labels['incident_type'] = inc_type
-
-    alert_details = {
-        'title': name,
-        'status': f"{status} (severity: {severity})" if severity else status,
-        'message': ". ".join(message_parts),
-        'labels': labels,
-    }
-
-    return build_rca_prompt('incidentio', alert_details, providers, user_id)
+    return prompt, rail_text

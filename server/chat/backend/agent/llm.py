@@ -33,6 +33,11 @@ class ModelConfig:
         else "anthropic/claude-opus-4.6"
     )
 
+    # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
+    # No fallback to MAIN_MODEL/RCA_MODEL: must be set explicitly.
+    RCA_ORCHESTRATOR_MODEL = os.getenv("RCA_ORCHESTRATOR_MODEL") or None  # triage + synthesis
+    RCA_SUBAGENT_MODEL = os.getenv("RCA_SUBAGENT_MODEL") or None          # sub-agents
+
     # Summarization models - configurable via env vars, fall back to MAIN_MODEL
     INCIDENT_REPORT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
     TOOL_OUTPUT_SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
@@ -220,7 +225,7 @@ class LLMManager:
         try:
             if output_struct:
                 raw_result = model.with_structured_output(
-                    schema=output_struct, include_raw=True
+                    schema=output_struct, include_raw=True, method="function_calling"
                 ).invoke(prompt)
                 llm_response = raw_result.get("raw")
                 parsed = raw_result.get("parsed")

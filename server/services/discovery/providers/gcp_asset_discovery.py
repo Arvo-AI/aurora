@@ -15,6 +15,10 @@ from services.discovery.resource_mapper import map_gcp_resource, GCP_RELATIONSHI
 logger = logging.getLogger(__name__)
 
 
+class SCCPremiumRequiredError(RuntimeError):
+    """Raised when GCP reports that Security Command Center premium is required."""
+
+
 def _run_command(args, timeout=600, env=None):
     """Run a gcloud CLI command and return parsed JSON output.
 
@@ -46,6 +50,12 @@ def _run_command(args, timeout=600, env=None):
                     "Cloud Asset API is not enabled for this project. "
                     "Enable it with: gcloud services enable cloudasset.googleapis.com"
                 )
+            # SCC premium required for relationship data — not a credential
+            # problem, just a billing tier limitation.  Raise a specific
+            # exception so callers can downgrade to a warning.
+            if "Relationship is only supported for SCC premium customers" in stderr or \
+               ("UNAUTHENTICATED" in stderr and "premium customers" in stderr):
+                raise SCCPremiumRequiredError()
             logger.error(f"gcloud command failed (rc={result.returncode}): {stderr}")
             return None
 
@@ -243,6 +253,9 @@ def _parse_asset_to_node(asset, project_id):
 
     # Build metadata from useful asset fields
     metadata = {}
+    # Always store the project_id so enrichment phases can pass --project to
+    # gcloud commands without having to re-derive it from the asset name.
+    metadata["project_id"] = project_id
     state = asset.get("state", "")
     if state:
         metadata["state"] = state
@@ -446,6 +459,11 @@ def _discover_project(project_id, auth_args, env=None):
         elif isinstance(raw_relationships, list):
             logger.info(f"[{project_id}] Fetched {len(raw_relationships)} relationship assets")
             relationships = _parse_relationships(raw_relationships, nodes_by_id)
+    except SCCPremiumRequiredError:
+        logger.info(
+            "[%s] Relationship data requires SCC premium — skipping (nodes still discovered)",
+            project_id,
+        )
     except RuntimeError as e:
         errors.append(f"[{project_id}] Relationship fetch failed: {e}")
 

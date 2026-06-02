@@ -36,7 +36,9 @@ def _get_bb_client(user_id):
         if bb_creds.get("access_token") != old_access_token:
             try:
                 from utils.auth.token_management import store_tokens_in_db
-                store_tokens_in_db(user_id, bb_creds, "bitbucket")
+                from utils.secrets.secret_ref_utils import get_token_owner_id
+                owner_id = get_token_owner_id(user_id, "bitbucket")
+                store_tokens_in_db(owner_id, bb_creds, "bitbucket")
             except Exception as e:
                 logger.warning(f"Failed to persist refreshed Bitbucket token: {e}")
 

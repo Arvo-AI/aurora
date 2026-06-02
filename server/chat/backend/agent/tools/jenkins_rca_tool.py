@@ -40,6 +40,18 @@ class JenkinsRCAArgs(BaseModel):
     deployment_event_id: Optional[int] = Field(default=None, description="Deployment event ID for trace_context lookup")
 
 
+def is_jenkins_connected(user_id: str) -> bool:
+    """Check if Jenkins is connected for a user."""
+    from utils.auth.token_management import get_token_data
+    creds = get_token_data(user_id, "jenkins")
+    return bool(
+        creds
+        and creds.get("base_url")
+        and creds.get("username")
+        and creds.get("api_token")
+    )
+
+
 def _get_client_for_user(user_id: str):
     """Build a JenkinsClient from the user's stored credentials."""
     from utils.auth.token_management import get_token_data

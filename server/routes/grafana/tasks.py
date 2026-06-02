@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_grafana_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -321,6 +321,13 @@ def process_grafana_alert(
                                 continue
 
                             # -- Firing: create incident and trigger RCA --
+                            if skip_rca:
+                                logger.info(
+                                    "[GRAFANA][ALERT] skip_rca=True (auto-connect webhook), skipping incident creation for user %s (fp=%s)",
+                                    user_id, fingerprint,
+                                )
+                                continue
+
                             severity = _extract_severity(alert_payload)
                             service = _extract_service(alert_payload)
 
@@ -378,6 +385,7 @@ def process_grafana_alert(
                                     source_alert_id=per_alert_source_id, alert_title=per_alert_title,
                                     alert_service=service, alert_severity=severity,
                                     alert_metadata=alert_metadata,
+                                    org_id=org_id,
                                 )
                                 cursor.execute("RELEASE SAVEPOINT sp_correlation")
                             except Exception as exc:
@@ -486,6 +494,7 @@ def process_grafana_alert(
                                 from routes.incidents_sse import broadcast_incident_update_to_user_connections
                                 broadcast_incident_update_to_user_connections(
                                     user_id, {"type": "incident_update", "incident_id": str(incident_id), "source": "grafana"},
+                                    org_id=org_id,
                                 )
                             except Exception as e:
                                 logger.warning("[GRAFANA][ALERT] Failed to notify SSE: %s", e)
@@ -502,7 +511,7 @@ def process_grafana_alert(
                                 logger.warning("[GRAFANA][ALERT] Failed to enqueue summary for incident %s (%s): %s", incident_id, per_alert_title, summary_exc)
 
                             # Trigger full RCA background chat
-                            if not skip_rca and _should_trigger_background_chat(user_id, alert_payload):
+                            if _should_trigger_background_chat(user_id, alert_payload):
                                 try:
                                     from chat.background.task import (
                                         run_background_chat, create_background_chat_session, is_background_chat_allowed,
@@ -515,12 +524,13 @@ def process_grafana_alert(
                                             user_id=user_id, title=chat_title,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
                                         )
-                                        rca_prompt = build_grafana_rca_prompt(alert_payload, user_id=user_id)
+                                        rca_prompt, rail_text = build_rca_prompt("grafana", per_alert_title, alert_payload, user_id=user_id)
                                         task = run_background_chat.delay(
                                             user_id=user_id, session_id=session_id, initial_message=rca_prompt,
                                             trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
                                                               "alert_title": per_alert_title, "alert_state": alert_state},
                                             incident_id=str(incident_id) if incident_id else None,
+                                            rail_text=rail_text,
                                         )
                                         if incident_id:
                                             cursor.execute(

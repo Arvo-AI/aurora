@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -16,7 +16,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import AuroraCreditProgressBar from "@/components/AuroraCreditProgressBar"
 
 interface NavigationProps {
   isChatExpanded?: boolean;
@@ -225,6 +224,24 @@ export default function Navigation({
             </Link>
           </li>
 
+          {/* Actions Navigation Item */}
+          <li>
+            <Link
+              href="/actions"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/actions")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <Workflow size={16} />
+                <span className="ml-2">Actions</span>
+              </div>
+            </Link>
+          </li>
+
           {/* Chat History Section */}
           {(
             <li className="flex-1 min-h-0 overflow-hidden">
@@ -246,25 +263,6 @@ export default function Navigation({
             <div className="w-full">
               {user ? (
                 <div className="space-y-2">
-                  {/* API Cost Tracking for signed-in users */}
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div>
-                          <AuroraCreditProgressBar />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-sm">
-                        <div className="text-sm space-y-1">
-                          <p className="font-medium">API Cost Tracking</p>
-                          <p className="text-muted-foreground">
-                            Track your LLM API usage costs.
-                          </p>
-                        </div>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  
                   <div className="relative" ref={userMenuRef}>
                     <button
                       type="button"

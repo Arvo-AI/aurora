@@ -118,24 +118,10 @@ def initialize_tables():
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()  # No RLS needed — schema migration/DDL
 
-            # Try to acquire advisory lock (non-blocking)
-            cursor.execute("SELECT pg_try_advisory_lock(1234567890);")
-            lock_acquired = cursor.fetchone()[0]
-            
-            if not lock_acquired:
-                # Lock is held - likely by a dead process. Force release stale locks.
-                logging.warning("Advisory lock held by another process, clearing stale locks...")
-                cursor.execute("""
-                    SELECT pg_terminate_backend(pid) 
-                    FROM pg_locks 
-                    WHERE locktype = 'advisory' AND objid = 1234567890 AND pid != pg_backend_pid();
-                """)
-                conn.commit()
-                
-                # Now acquire the lock properly
-                cursor.execute("SELECT pg_advisory_lock(1234567890);")
-                lock_acquired = True
-                logging.info("Advisory lock acquired after clearing stale locks")
+            # Acquire transaction-level advisory lock — blocks until the holder
+            # finishes and auto-releases on commit or rollback, so it can't leak
+            # back into the connection pool.
+            cursor.execute("SELECT pg_advisory_xact_lock(1234567890);")
 
             # Define table creation scripts.
             create_tables = {
@@ -313,14 +299,15 @@ def initialize_tables():
                         session_data JSONB,
                         last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         is_active BOOLEAN DEFAULT true,
-                        UNIQUE(user_id, provider)
+                        UNIQUE NULLS NOT DISTINCT (org_id, provider)
                     );
                 """,
-                "github_connected_repos": """
-                    CREATE TABLE IF NOT EXISTS github_connected_repos (
+                "connected_repos": """
+                    CREATE TABLE IF NOT EXISTS connected_repos (
                         id SERIAL PRIMARY KEY,
                         user_id VARCHAR(255) NOT NULL,
                         org_id VARCHAR(255),
+                        provider VARCHAR(20) NOT NULL DEFAULT 'github',
                         repo_full_name VARCHAR(512) NOT NULL,
                         repo_id INTEGER,
                         default_branch VARCHAR(255),
@@ -330,8 +317,52 @@ def initialize_tables():
                         repo_data JSONB,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(user_id, repo_full_name)
+                        UNIQUE(user_id, provider, repo_full_name)
                     );
+                """,
+                "github_installations": """
+                    CREATE TABLE IF NOT EXISTS github_installations (
+                        id SERIAL PRIMARY KEY,
+                        installation_id BIGINT NOT NULL UNIQUE,
+                        account_login VARCHAR(255) NOT NULL,
+                        account_id BIGINT NOT NULL,
+                        account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('User', 'Organization')),
+                        target_type VARCHAR(20) NOT NULL,
+                        permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        events JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        repository_selection VARCHAR(20) NOT NULL DEFAULT 'selected',
+                        suspended_at TIMESTAMP NULL,
+                        permissions_pending_update BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """,
+                "user_github_installations": """
+                    CREATE TABLE IF NOT EXISTS user_github_installations (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255) NULL,
+                        installation_id BIGINT NOT NULL REFERENCES github_installations(installation_id) ON DELETE CASCADE,
+                        linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        disconnected_at TIMESTAMP NULL,
+                        is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+                        UNIQUE(user_id, installation_id)
+                    );
+                """,
+                "webhook_deliveries": """
+                    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                        id SERIAL PRIMARY KEY,
+                        delivery_id VARCHAR(64) NOT NULL UNIQUE,
+                        event_type VARCHAR(64) NOT NULL,
+                        installation_id BIGINT NULL,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        processed_at TIMESTAMP NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'received',
+                        error TEXT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
+                    ON webhook_deliveries(received_at);
                 """,
                 "user_manual_vms": """
                     CREATE TABLE IF NOT EXISTS user_manual_vms (
@@ -361,7 +392,7 @@ def initialize_tables():
                         read_only_role_arn VARCHAR(512),
                         connection_method VARCHAR(50),
                         region VARCHAR(50),
-                        status VARCHAR(20) DEFAULT 'active', -- active | not_connected | error
+                        status VARCHAR(20) DEFAULT 'active',
                         last_verified_at TIMESTAMP,
                         UNIQUE(user_id, provider, account_id)
                     );
@@ -518,6 +549,31 @@ def initialize_tables():
                     
                     CREATE INDEX IF NOT EXISTS idx_ingestion_in_progress ON cloud_ingestion_state(user_id, provider) WHERE in_progress = TRUE;
                 """,
+                "cloudwatch_alarms": """
+                    CREATE TABLE IF NOT EXISTS cloudwatch_alarms (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alarm_name TEXT,
+                        alarm_arn TEXT,
+                        state_value VARCHAR(50),
+                        previous_state_value VARCHAR(50),
+                        reason TEXT,
+                        account_id VARCHAR(50),
+                        region VARCHAR(100),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        sns_message_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    ALTER TABLE cloudwatch_alarms ADD COLUMN IF NOT EXISTS sns_message_id VARCHAR(255);
+
+                    CREATE INDEX IF NOT EXISTS idx_cloudwatch_alarms_user_id ON cloudwatch_alarms(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_cloudwatch_alarms_state ON cloudwatch_alarms(state_value);
+                    CREATE INDEX IF NOT EXISTS idx_cloudwatch_alarms_received_at ON cloudwatch_alarms(received_at DESC);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_cloudwatch_alarms_sns_dedup ON cloudwatch_alarms(sns_message_id, user_id) WHERE sns_message_id IS NOT NULL;
+                """,
                 "grafana_alerts": """
                     CREATE TABLE IF NOT EXISTS grafana_alerts (
                         id SERIAL PRIMARY KEY,
@@ -577,6 +633,29 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_user_id ON newrelic_events(user_id, received_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
+                """,
+                "sentry_events": """
+                    CREATE TABLE IF NOT EXISTS sentry_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        issue_id VARCHAR(255),
+                        issue_title TEXT,
+                        level VARCHAR(50),
+                        project_slug VARCHAR(255),
+                        resource VARCHAR(50),
+                        action VARCHAR(50),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_sentry_events_org_issue_action
+                        ON sentry_events(org_id, issue_id, action) WHERE issue_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_user_id ON sentry_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_resource ON sentry_events(resource);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_project ON sentry_events(project_slug);
+                    CREATE INDEX IF NOT EXISTS idx_sentry_events_received_at ON sentry_events(received_at DESC);
                 """,
                 "netdata_alerts": """
                     CREATE TABLE IF NOT EXISTS netdata_verification_tokens (
@@ -972,6 +1051,13 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_token ON kubectl_agent_tokens(token);
                     CREATE INDEX IF NOT EXISTS idx_kubectl_tokens_status ON kubectl_agent_tokens(status);
                 """,
+                "infrastructure_context": """
+                    CREATE TABLE IF NOT EXISTS infrastructure_context (
+                        org_id VARCHAR(255) PRIMARY KEY,
+                        content TEXT NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """,
                 "mcp_tokens": """
                     CREATE TABLE IF NOT EXISTS mcp_tokens (
                         id SERIAL PRIMARY KEY,
@@ -1046,6 +1132,19 @@ def initialize_tables():
                     );
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
                         ON org_command_policies(org_id);
+                """,
+                "org_tool_permissions": """
+                    CREATE TABLE IF NOT EXISTS org_tool_permissions (
+                        id SERIAL PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        tool_key VARCHAR(100) NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT false,
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, tool_key)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_otp_org
+                        ON org_tool_permissions(org_id);
                 """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
@@ -1130,7 +1229,9 @@ def initialize_tables():
                         notion_page_id TEXT,
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
-                        notion_database_id TEXT
+                        notion_database_id TEXT,
+                        generation_session_id VARCHAR(255),
+                        current_version_id UUID
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
@@ -1153,6 +1254,37 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_incident ON incident_lifecycle_events(incident_id, created_at);
                     CREATE INDEX IF NOT EXISTS idx_lifecycle_user ON incident_lifecycle_events(user_id, created_at DESC);
                 """,
+                "rca_findings": """
+                    CREATE TABLE IF NOT EXISTS rca_findings (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        agent_id VARCHAR(64) NOT NULL,
+                        role_name VARCHAR(128) NOT NULL,
+                        purpose TEXT NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'running',
+                        wave INTEGER NOT NULL DEFAULT 1,
+                        storage_uri TEXT,
+                        current_action TEXT,
+                        self_assessed_strength VARCHAR(20),
+                        tools_used JSONB DEFAULT '[]'::jsonb,
+                        citations JSONB DEFAULT '[]'::jsonb,
+                        follow_ups_suggested JSONB DEFAULT '[]'::jsonb,
+                        tool_call_history JSONB DEFAULT '[]'::jsonb,
+                        child_session_id VARCHAR(255),
+                        error_message TEXT,
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        org_id VARCHAR(255),
+                        user_id VARCHAR(255) NOT NULL
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_rca_findings_incident_agent
+                    ON rca_findings(incident_id, agent_id);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_incident_status
+                    ON rca_findings(incident_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
+                    ON rca_findings(org_id, started_at DESC);
+                """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -1169,6 +1301,44 @@ def initialize_tables():
 
                     CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(org_id, created_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(org_id, action);
+                """,
+                "actions": """
+                    CREATE TABLE IF NOT EXISTS actions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        description TEXT,
+                        instructions TEXT NOT NULL,
+                        trigger_type VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        trigger_config JSONB DEFAULT '{}',
+                        mode VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        enabled BOOLEAN NOT NULL DEFAULT true,
+                        is_system BOOLEAN NOT NULL DEFAULT false,
+                        system_key VARCHAR(100),
+                        default_instructions TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_actions_org ON actions(org_id);
+                    CREATE INDEX IF NOT EXISTS idx_actions_trigger ON actions(org_id, trigger_type, enabled);
+                """,
+                "action_runs": """
+                    CREATE TABLE IF NOT EXISTS action_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        action_id UUID NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        chat_session_id VARCHAR(255),
+                        incident_id UUID,
+                        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                        trigger_context JSONB DEFAULT '{}',
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        error TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
+                    CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
             }
 
@@ -1210,9 +1380,11 @@ def initialize_tables():
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
             rls_tables.append("newrelic_events")
+            rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
 
             # Add monitoring tables
+            rls_tables.append("cloudwatch_alarms")
             rls_tables.append("grafana_alerts")
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
@@ -1233,9 +1405,14 @@ def initialize_tables():
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
-            rls_tables.append("github_connected_repos")
+            rls_tables.append("connected_repos")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
+            rls_tables.append("org_tool_permissions")
+            rls_tables.append("rca_findings")
+            rls_tables.append("actions")
+            rls_tables.append("action_runs")
+            rls_tables.append("postmortem_versions")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1271,10 +1448,137 @@ def initialize_tables():
                 logging.warning(f"Error adding merged_into_incident_id column to incidents: {e}")
                 conn.rollback()
 
+            # Migration: Rename github_connected_repos → connected_repos BEFORE table creation
+            # (must run first so CREATE TABLE IF NOT EXISTS doesn't create an empty duplicate)
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'github_connected_repos')
+                           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'connected_repos') THEN
+                            ALTER TABLE github_connected_repos RENAME TO connected_repos;
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error renaming github_connected_repos to connected_repos: {e}")
+                conn.rollback()
+
+            # Migration: bring renamed table to provider-aware schema
+            try:
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        -- Add provider column if missing (old github_connected_repos didn't have it)
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'connected_repos' AND column_name = 'provider'
+                        ) THEN
+                            ALTER TABLE connected_repos
+                                ADD COLUMN provider VARCHAR(20) NOT NULL DEFAULT 'github';
+                        END IF;
+
+                        -- Drop old unique constraint (user_id, repo_full_name) and create new one
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'connected_repos_user_id_provider_repo_full_name_key'
+                        ) THEN
+                            -- Drop any legacy unique constraint on (user_id, repo_full_name)
+                            BEGIN
+                                ALTER TABLE connected_repos
+                                    DROP CONSTRAINT IF EXISTS github_connected_repos_user_id_repo_full_name_key;
+                            EXCEPTION WHEN undefined_object THEN NULL;
+                            END;
+                            ALTER TABLE connected_repos
+                                ADD CONSTRAINT connected_repos_user_id_provider_repo_full_name_key
+                                UNIQUE (user_id, provider, repo_full_name);
+                        END IF;
+                    END $$;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error completing connected_repos schema migration: {e}")
+                conn.rollback()
+
             # Execute table creation scripts
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS installation_id BIGINT NULL;"
+                )
+                cursor.execute(
+                    """UPDATE connected_repos r
+                          SET installation_id = NULL
+                        WHERE installation_id IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM github_installations i
+                               WHERE i.installation_id = r.installation_id
+                          );"""
+                )
+                cursor.execute(
+                    """DO $$
+                       BEGIN
+                           IF NOT EXISTS (
+                               SELECT 1 FROM pg_constraint
+                                WHERE conname = 'connected_repos_installation_id_fkey'
+                           ) THEN
+                               ALTER TABLE connected_repos
+                                   ADD CONSTRAINT connected_repos_installation_id_fkey
+                                   FOREIGN KEY (installation_id)
+                                   REFERENCES github_installations(installation_id)
+                                   ON DELETE SET NULL;
+                           END IF;
+                       END $$;"""
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured installation_id column + FK exist on connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding installation_id column/FK to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add disconnected_at to user_github_installations so
+            # Aurora-side disconnect can soft-delete the link instead of
+            # dropping the row. Reconnects (which often don't re-fire GitHub's
+            # install callback when the App is already installed) just clear
+            # this column instead of relying on a fresh installation_id.
+            try:
+                cursor.execute(
+                    "ALTER TABLE user_github_installations ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL;"
+                )
+                cursor.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_user_github_installations_installation_id
+                       ON user_github_installations(installation_id)
+                       WHERE disconnected_at IS NULL;"""
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured disconnected_at column + partial index exist on user_github_installations table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding disconnected_at column/index to user_github_installations: {e}"
+                )
+                conn.rollback()
+
+            # Migration: add system action columns to actions table
+            try:
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT false;")
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS system_key VARCHAR(100);")
+                cursor.execute("ALTER TABLE actions ADD COLUMN IF NOT EXISTS default_instructions TEXT;")
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_system_key ON actions(org_id, system_key) WHERE system_key IS NOT NULL;")
+                conn.commit()
+                logging.info("Ensured system action columns exist on actions table.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for actions system columns: {e}")
 
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
@@ -1368,6 +1672,95 @@ def initialize_tables():
                 logging.warning(f"Error adding stateless columns to user_tokens: {e}")
                 conn.rollback()
 
+            # Migration: replace per-user unique constraint with per-org unique constraint on
+            # user_tokens so that an org shares one credential row per provider.
+            try:
+                # Step 1: collect secret_refs of rows that will be removed by deduplication
+                # so their Vault entries can be cleaned up before the rows are deleted.
+                orphaned_refs = []
+                try:
+                    cursor.execute("""
+                        SELECT secret_ref FROM user_tokens
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY org_id, provider
+                                           ORDER BY COALESCE(last_activity, timestamp) DESC
+                                       ) AS rn
+                                FROM user_tokens
+                            ) ranked
+                            WHERE rn > 1
+                        ) AND secret_ref IS NOT NULL
+                    """)
+                    orphaned_refs = [row[0] for row in cursor.fetchall() if row[0]]
+                except Exception as e:
+                    logging.warning(f"Could not collect orphaned secret_refs before dedup: {e}")
+
+                # Step 2: delete orphaned Vault secrets before removing DB rows
+                if orphaned_refs:
+                    try:
+                        from utils.secrets.secret_ref_utils import SecretRefManager
+                        sm = SecretRefManager()
+                        for ref in orphaned_refs:
+                            try:
+                                sm.delete_secret(ref)
+                            except Exception as ref_err:
+                                logging.warning(f"Failed to delete orphaned Vault secret: {ref_err}")
+                        logging.info(
+                            "Cleaned up %d orphaned Vault secret(s) before deduplication.",
+                            len(orphaned_refs),
+                        )
+                    except Exception as e:
+                        logging.warning(f"Could not clean up orphaned Vault secrets: {e}")
+
+                # Step 3: dedup rows and swap the unique constraint.
+                # NULLS NOT DISTINCT (PG ≥ 15) makes (NULL, provider) a unique key, so
+                # the dedup runs over ALL rows — not only those with a non-NULL org_id.
+                cursor.execute("""
+                    DO $$
+                    BEGIN
+                        DELETE FROM user_tokens
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY org_id, provider
+                                           ORDER BY COALESCE(last_activity, timestamp) DESC
+                                       ) AS rn
+                                FROM user_tokens
+                            ) ranked
+                            WHERE rn > 1
+                        );
+
+                        -- Drop the old per-user constraint if it still exists
+                        IF EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_tokens_user_id_provider_key'
+                              AND conrelid = 'user_tokens'::regclass
+                        ) THEN
+                            ALTER TABLE user_tokens DROP CONSTRAINT user_tokens_user_id_provider_key;
+                        END IF;
+
+                        -- Add the new per-org constraint if it doesn't exist yet.
+                        -- NULLS NOT DISTINCT ensures (NULL, provider) is also unique.
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conname = 'user_tokens_org_id_provider_key'
+                              AND conrelid = 'user_tokens'::regclass
+                        ) THEN
+                            ALTER TABLE user_tokens ADD CONSTRAINT user_tokens_org_id_provider_key
+                                UNIQUE NULLS NOT DISTINCT (org_id, provider);
+                        END IF;
+                    END
+                    $$;
+                """)
+                logging.info("Migrated user_tokens unique constraint to (org_id, provider).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error migrating user_tokens unique constraint: {e}")
+                conn.rollback()
+
             # Migration: Add ui_state column to chat_sessions if it doesn't exist
             try:
                 cursor.execute("""
@@ -1459,6 +1852,40 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding incident_id index: {e}")
+                conn.rollback()
+
+            # Migration: Add pending_turn column (live HITL state, separate from
+            # the append-only messages history). Cleared by the command gate
+            # once the user resolves the confirmation. Rehydrated as a
+            # synthetic tail card on session load.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS pending_turn JSONB;
+                """)
+                logging.info(
+                    "Added pending_turn column to chat_sessions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding pending_turn column: {e}")
+                conn.rollback()
+
+            # Migration: Add security_tainted column. When NeMo's input rail
+            # blocks the opening user message in a foreground chat, we mark
+            # the session tainted instead of hard-failing; every subsequent
+            # tool call then requires user approval via the command gate.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS security_tainted BOOLEAN NOT NULL DEFAULT false;
+                """)
+                logging.info(
+                    "Added security_tainted column to chat_sessions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding security_tainted column: {e}")
                 conn.rollback()
 
             # Migration: Add surcharge fields to llm_usage_tracking table if they don't exist
@@ -1802,7 +2229,9 @@ def initialize_tables():
                         notion_page_id TEXT,
                         notion_page_url TEXT,
                         notion_exported_at TIMESTAMP,
-                        notion_database_id TEXT
+                        notion_database_id TEXT,
+                        generation_session_id VARCHAR(255),
+                        current_version_id UUID
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
@@ -1933,6 +2362,43 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error backfilling postmortem_exports: {e}")
                 conn.rollback()
+
+            # Create postmortem_versions table for version history
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS postmortem_versions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        postmortem_id UUID NOT NULL REFERENCES postmortems(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT NOT NULL,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        source VARCHAR(50) NOT NULL DEFAULT 'manual',
+                        generation_session_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_versions_postmortem
+                        ON postmortem_versions(postmortem_id, version_number DESC);
+                    CREATE INDEX IF NOT EXISTS idx_postmortem_versions_org
+                        ON postmortem_versions(org_id);
+                """)
+                logging.info("Created postmortem_versions table (if not exists).")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error creating postmortem_versions table: {e}")
+                conn.rollback()
+
+            # Migrations: postmortem columns for existing deployments
+            try:
+                cursor.execute("""
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                    ALTER TABLE postmortems ADD COLUMN IF NOT EXISTS current_version_id UUID;
+                    ALTER TABLE postmortem_versions ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for postmortem columns: {e}")
 
             # Migration: Add resolved_at, alert_fired_at, and investigation_started_at
             # columns to incidents table.
@@ -2105,6 +2571,30 @@ def initialize_tables():
             """)
             logging.info("Added MCP token resolve RLS policies on mcp_tokens.")
 
+            # kubectl agent token verification is a bootstrap auth query — the
+            # agent connects with a Bearer token before any org context exists.
+            # Same pattern as mcp_tokens: a permissive policy keyed on a session
+            # variable so the handler can opt in to a scoped RLS bypass.
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS select_by_token_resolve ON kubectl_agent_tokens;
+                    CREATE POLICY select_by_token_resolve ON kubectl_agent_tokens
+                    FOR SELECT USING (
+                        current_setting('myapp.kubectl_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            cursor.execute("""
+                DO $$ BEGIN
+                    DROP POLICY IF EXISTS update_by_token_resolve ON kubectl_agent_tokens;
+                    CREATE POLICY update_by_token_resolve ON kubectl_agent_tokens
+                    FOR UPDATE USING (
+                        current_setting('myapp.kubectl_token_resolve', true) = 'true'
+                    );
+                END $$;
+            """)
+            logging.info("Added kubectl token resolve RLS policies on kubectl_agent_tokens.")
+
             conn.commit()
 
             # Migration: Add role column to users table for RBAC
@@ -2145,6 +2635,7 @@ def initialize_tables():
                 "rca_notification_emails", "splunk_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
+                "cloudwatch_alarms",
                 "mcp_tokens",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
@@ -2153,7 +2644,7 @@ def initialize_tables():
                 "knowledge_base_memory", "knowledge_base_documents",
                 "incident_feedback", "postmortems",
                 "incident_lifecycle_events",
-                "github_connected_repos",
+                "connected_repos",
             ]
             for tbl in org_id_tables:
                 try:
@@ -2463,13 +2954,6 @@ def initialize_tables():
             conn.commit()
             logging.info("Database tables initialized successfully.")
             cursor.close()
-
-            # Release advisory lock
-            try:
-                with conn.cursor() as unlock_cursor:  # No RLS needed — advisory lock release
-                    unlock_cursor.execute("SELECT pg_advisory_unlock(1234567890);")
-            except Exception as unlock_error:
-                logging.warning(f"Error releasing advisory lock: {unlock_error}")
 
     except Exception as e:
         logging.error(f"Error initializing tables: {e}")

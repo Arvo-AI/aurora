@@ -238,10 +238,6 @@ class SkillRegistry:
             connected = func(user_id)
             ctx_data: Dict[str, Any] = {}
 
-            # Build extra context for specific skills
-            if bool(connected) and skill_id == "kubectl_onprem":
-                ctx_data = self._get_kubectl_onprem_context(user_id)
-
             return bool(connected), ctx_data
 
         elif method == "provider_in_preference":
@@ -325,6 +321,7 @@ class SkillRegistry:
                 lines.append(f"- load_skill('{meta.id}')  # {display_name}: {meta.index} [tools: {tools_str}]")
             else:
                 lines.append(f"- load_skill('{meta.id}')  # {display_name}: {meta.index}")
+
 
         lines.append("")
         return "\n".join(lines)
@@ -492,34 +489,6 @@ class SkillRegistry:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _get_kubectl_onprem_context(user_id: str) -> Dict[str, Any]:
-        """Fetch connected on-prem cluster names and IDs for template rendering."""
-        try:
-            from utils.db.connection_pool import db_pool
-            from utils.auth.stateless_auth import set_rls_context
-
-            with db_pool.get_user_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:kubectl]")
-                    cur.execute(
-                        """SELECT c.cluster_id, t.cluster_name
-                           FROM active_kubectl_connections c
-                           JOIN kubectl_agent_tokens t ON c.token = t.token
-                           WHERE t.user_id = %s AND c.status = 'active'
-                           ORDER BY t.cluster_name""",
-                        (user_id,),
-                    )
-                    rows = cur.fetchall()
-
-            if rows:
-                lines = [f"- {name} (cluster_id: `{cid}`)" for cid, name in rows]
-                return {"cluster_list": "\n".join(lines)}
-            return {"cluster_list": "(no active clusters)"}
-        except Exception as e:
-            logger.warning(f"Failed to fetch kubectl on-prem clusters: {e}")
-            return {"cluster_list": "(cluster data unavailable)"}
-
-    @staticmethod
     def _get_bitbucket_workspace_context(user_id: str) -> Dict[str, Any]:
         """Fetch the user's Bitbucket workspace selection for template rendering."""
         try:
@@ -597,10 +566,6 @@ class SkillRegistry:
         if integrations.get("bitbucket"):
             ctx.update(SkillRegistry._get_bitbucket_workspace_context(user_id))
 
-        # kubectl on-prem cluster list
-        if integrations.get("kubectl_onprem"):
-            ctx.update(SkillRegistry._get_kubectl_onprem_context(user_id))
-
         return ctx
 
     @staticmethod
@@ -669,3 +634,7 @@ class SkillRegistry:
     def get_all_skill_ids(self) -> List[str]:
         """Return all registered skill IDs."""
         return list(self._skills.keys())
+
+    def get_skill_metadata(self, skill_id: str) -> Optional[SkillMetadata]:
+        """Return the metadata for a registered skill, or None if unknown."""
+        return self._skills.get(skill_id)

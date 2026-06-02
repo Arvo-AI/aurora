@@ -78,10 +78,27 @@ image:
   #   - name: regcred
 
 # ------------------------------------------------------------------------------
+# Autoscaling (HPA)
+# ------------------------------------------------------------------------------
+autoscaling:
+  server:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70
+    targetMemory:         # optional — set to e.g. 80 to also scale on memory
+  celeryWorker:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPU: 70
+
+# ------------------------------------------------------------------------------
 # Replica counts per service
 # ------------------------------------------------------------------------------
 replicaCounts:
   # Scalable services (can increase for load balancing)
+  # NOTE: When autoscaling is enabled above, these values are ignored — HPA's minReplicas takes over.
   server: 1          # API server (Flask) - stateless, can scale
   mcp: 1             # MCP server (streamable-http on 8811)
   celeryWorker: 1    # Background task workers - stateless, can scale
@@ -175,14 +192,45 @@ config:
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
-  
+
+  # --- AI Safety Guardrails ---
+  # Input rail + signature matcher + LLM safety judge. All three activate with
+  # the master switch; LLM checks fail closed. Adapted from Meta's PurpleLlama
+  # (MIT licensed).
+  GUARDRAILS_ENABLED: "true"
+  # Gate the vendored SigmaHQ rule corpus inside the signature matcher.
+  # Requires GUARDRAILS_ENABLED=true. Set to "false" to run only hand-written rules.
+  GUARDRAILS_SIGMA_ENABLED: "true"
+  # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
+  GUARDRAILS_LLM_MODEL: ""
+
+  # --- Concurrency & Pool Sizing ---
+  GUNICORN_WORKERS: "2"
+  GUNICORN_THREADS: "4"
+  CELERY_CONCURRENCY: "4"
+  DB_POOL_MIN: "2"
+  DB_POOL_MAX: "20"
+
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
   AURORA_SETUP_CACHE_TTL: "3600"
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
-  
+
+  # --- Multi-agent RCA orchestrator ---
+  # When "true" (default), a lead orchestrator triages each background RCA and
+  # may fan out parallel read-only sub-agents. When "false", background RCA
+  # falls back to the legacy single-agent path. Operational kill-switch: set
+  # to "false" and restart celery workers to fully revert.
+  ORCHESTRATOR_ENABLED: "true"
+  # Triage + synthesis brain. Required when ORCHESTRATOR_ENABLED=true.
+  # Provider/model format (e.g. anthropic/claude-sonnet-4.6).
+  RCA_ORCHESTRATOR_MODEL: ""
+  # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
+  # Needs reliable tool-calling.
+  RCA_SUBAGENT_MODEL: ""
+
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"

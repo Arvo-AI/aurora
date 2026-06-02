@@ -10,16 +10,12 @@ export async function GET(request: NextRequest) {
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
-
     const response = await fetch(`${API_BASE_URL}/api/incidents/stream`, {
       method: 'GET',
       headers: authResult.headers,
       credentials: 'include',
-      signal: controller.signal,
+      signal: request.signal,
     });
-    clearTimeout(timeoutId);
 
     if (!response.ok) return new Response('Failed to connect to incident stream', { status: response.status });
 

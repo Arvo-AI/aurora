@@ -190,11 +190,19 @@ def _build_summary_prompt_with_chat(
     citations: Optional[List[Citation]] = None,
     correlated_alert_count: int = 0,
     fix_suggestions: Optional[List[Dict[str, Any]]] = None,
+    agent_reasoning: Optional[str] = None,
 ) -> str:
     """Build a concise summary prompt that incorporates RCA chat context.
 
     If citations are provided, uses citation-based prompt with [n] markers.
     Otherwise falls back to transcript-based summarization.
+
+    ``agent_reasoning`` carries the investigating agent's own thoughts and any
+    orchestrator synthesis summaries. It must be passed through whenever the
+    chat session has any AI-authored text — without it the summarizer only
+    sees raw tool outputs and routinely turns absence of evidence into
+    fabricated findings. Applies equally to single-agent and fan-out modes
+    because both paths emit AIMessage content during investigation.
     """
     triggered_line = f"- Triggered at: {triggered_at}" if triggered_at else ""
 
@@ -246,7 +254,14 @@ When writing your report, consider whether these correlated alerts contributed t
 If the correlated alerts are relevant, clearly indicate their relationship to the primary incident in your analysis.
 """
 
-        prompt = f"""You are writing an incident report based on alert data and forensic evidence.
+        reasoning_block = ""
+        if agent_reasoning and agent_reasoning.strip():
+            reasoning_block = (
+                "\nINVESTIGATOR NOTES (context only — do NOT cite as a source, use numeric evidence citations instead):\n"
+                f"{agent_reasoning}\n"
+            )
+
+        prompt = f"""You are writing an incident report from alert data, investigator notes, and forensic evidence.
 
 ALERT INFORMATION:
 - Source: {source_type}
@@ -254,53 +269,50 @@ ALERT INFORMATION:
 - Severity: {severity}
 - Service: {service}
 {triggered_line}
-{correlated_note}
+{correlated_note}{reasoning_block}
 INVESTIGATION EVIDENCE (cite using [n] markers):
 {evidence_text}
 
 Write a 2-3 paragraph incident report:
 
-PARAGRAPH 1 - What Happened:
-State what occurred, when it occurred, and what was affected. Write as if you're reporting a known fact, not describing an investigation.
-Example: "On [date], the data-processor service experienced OOMKilled events due to memory exhaustion [3, 5]."
+PARAGRAPH 1 — What Happened:
+State what occurred, when, and what was affected, using only facts present in the provided sections. Report as known facts, not as an investigation log.
 
-PARAGRAPH 2 - Root Cause:
-Directly state the root cause and explain the causal chain. Use evidence to support claims.
-Example: "The root cause was a ConfigMap change that increased BATCH_SIZE from 1000 to 10000 [7], causing memory usage to exceed the 128Mi limit [9, 11]."
+PARAGRAPH 2 — Root Cause:
+- If the numbered evidence clearly supports a specific root cause, state it and cite the supporting evidence with numeric markers like [3], [7].
+  Example: "The root cause was a ConfigMap change that increased BATCH_SIZE from 1000 to 10000 [7], causing memory usage to exceed the 128Mi limit [9, 11]."
+- Otherwise the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
 
-PARAGRAPH 3 (if significant) - Impact & Timeline:
-Describe the scope of impact and any relevant timeline details.
+PARAGRAPH 3 (if significant) — Impact & Timeline:
+Only the scope and timeline actually present in the alert or evidence.
 
-CITATION RULES:
-- Cite specific evidence that supports factual claims
-- Group related citations together [3, 5, 7]
-- Don't cite every detail - only key supporting evidence
-- Never describe the investigation process or tools used
-- Never say "Investigation revealed..." or "Attempts to..." - just state what happened
+ANTI-HALLUCINATION RULES (non-negotiable):
+- Use only facts present in the provided sections — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
+- Empty or missing output from a generic probe is NOT evidence of a specific failure mode; never promote absence of data into a confident root cause.
+- Never fabricate a [n] citation — every marker MUST reference a real numbered evidence row above.
+- Treat purely temporal correlations as correlations, not causations.
+- If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
 
-CRITICAL - DO NOT:
-- Describe investigation steps or what tools were run
-- Say "Investigation revealed" or "Attempts to query" or "The investigation was unable"
-- Focus on tool failures or unavailable data
-- Write about the RCA process itself
+CITATION RULES (non-negotiable):
+- ONLY cite numbered evidence items using their numeric index: [1], [3, 5], [7].
+- NEVER cite section headers. Do NOT write [Alert], [Agent Reasoning], [Investigator Notes], or any non-numeric citation.
 
-CRITICAL - DO:
-- Write as if reporting a completed incident with known facts
-- State the root cause directly in the first or second paragraph
-- Focus on WHAT HAPPENED to the system, not HOW YOU FOUND OUT
-- Use evidence citations to back up claims about system behavior
+WRITING RULES:
+- Cite specific evidence that supports factual claims; group related citations [3, 5, 7]; cite only key supporting evidence.
+- Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
+- Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-TONE: Professional, factual, incident-record style (not investigative process documentation)
-
-After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
-- Lists 2-4 specific areas the SRE should investigate based on the findings
-- Provides actionable guidance for further troubleshooting
-- References specific metrics, logs, or infrastructure components mentioned in the investigation
-- Keep it concise and targeted
+After the report, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions (specific logs/metrics/configs/components). When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
 {fix_suggestions_block}"""
     else:
-        # Fallback to transcript-based prompt
+        # Transcript fallback — same anti-hallucination contract.
         transcript = investigation_transcript or "[No transcript available]"
+        reasoning_block = ""
+        if agent_reasoning and agent_reasoning.strip():
+            reasoning_block = (
+                "\nINVESTIGATOR NOTES (context only — do NOT cite as a source):\n"
+                f"{agent_reasoning}\n"
+            )
         prompt = f"""
 You are rewriting an alert plus the subsequent investigation transcript into a neutral incident summary.
 
@@ -310,27 +322,21 @@ ALERT INFORMATION:
 - Severity: {severity}
 - Service: {service}
 {triggered_line}
-
+{reasoning_block}
 INVESTIGATION TRANSCRIPT (chat log):
 {transcript}
 
-Write a concise 2–3 paragraph summary that:
-- Describes what triggered the alert
-- States the severity and observed impact (if explicitly present)
-- Identifies the affected service or component
-- Summarizes investigation findings and best-known root cause (only if explicitly stated)
-- If root cause is not explicit, state what is known and what is still uncertain
+Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known.
 
-SUMMARY RULES:
-- Do NOT address any audience in the summary paragraphs
-- Tone: neutral, factual, incident-record style
-- Style: descriptive, not advisory
+ANTI-HALLUCINATION RULES (non-negotiable):
+- Use only facts present in the provided sections — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
+- Empty or missing output from a generic probe is NOT evidence of a specific failure mode.
+- Treat purely temporal correlations as correlations, not causations.
+- If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
 
-After the summary, add a separate paragraph titled "## Suggested Next Steps" that:
-- Lists 2-4 specific areas the SRE should investigate based on the findings
-- Provides actionable guidance for further troubleshooting
-- References specific metrics, logs, or infrastructure components mentioned in the investigation
-- Keep it concise and targeted
+Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
+
+After the summary, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions. When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
 {fix_suggestions_block}"""
     return prompt
 
@@ -419,6 +425,55 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
             f"{_LOG_PREFIX} Failed to fetch incident basics for {incident_id}: {e}"
         )
         return None
+
+
+_REASONING_MAX_TOTAL_CHARS = 8000
+
+
+def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
+    """Return the agent's reasoning for an incident — the same stream of
+    AI-authored text the UI's Thoughts panel renders.
+
+    Reading from `incident_thoughts` (instead of reconstructing reasoning from
+    `llm_context_history` AIMessages) is materially richer because thoughts are
+    streamed in token-by-token across single-agent, sub-agent, and synthesis
+    paths, while the checkpointer only persists the final-form messages.
+
+    `incident_thoughts` is not RLS-protected (it CASCADEs from `incidents`),
+    so we set RLS context on the connection and JOIN through `incidents` to
+    enforce the caller's tenant boundary. Truncated to a single budget so the
+    summary prompt stays inside the model context window.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return ""
+                cursor.execute(
+                    """
+                    SELECT it.content
+                    FROM incident_thoughts it
+                    JOIN incidents i ON i.id = it.incident_id
+                    WHERE it.incident_id = %s
+                    ORDER BY COALESCE(it.timestamp, it.created_at) ASC
+                    """,
+                    (incident_id,),
+                )
+                rows = cursor.fetchall()
+    except Exception as e:
+        logger.warning(
+            f"{_LOG_PREFIX} Failed to read incident_thoughts for {incident_id}: {e}"
+        )
+        return ""
+
+    text = "\n\n".join(r[0] for r in rows if r and r[0])
+    if len(text) > _REASONING_MAX_TOTAL_CHARS:
+        # Keep the most recent reasoning — that's where the synthesis lands.
+        text = (
+            "...[earlier reasoning truncated to fit prompt budget]\n\n"
+            + text[-_REASONING_MAX_TOTAL_CHARS:]
+        )
+    return text
 
 
 def _fetch_chat_transcript(
@@ -647,9 +702,12 @@ def generate_incident_summary_from_chat(
             )
             return {"incident_id": incident_id, "status": "not_found"}
 
-        # Extract citations from the chat session (citations are simply tool calls and their outputs)
+        # Extract citations from the chat session (citations are simply tool calls and their outputs).
+        # Passing incident_id expands dispatch_subagent rollups into per-tool-call citations.
         extractor = CitationExtractor()
-        all_citations = extractor.extract_citations_from_session(session_id, user_id)
+        all_citations = extractor.extract_citations_from_session(
+            session_id, user_id, incident_id=incident_id,
+        )
 
         logger.info(
             f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"
@@ -667,6 +725,12 @@ def generate_incident_summary_from_chat(
                 f"[IncidentSummary] Found {len(fix_suggestions)} fix suggestions for incident {incident_id}"
             )
 
+        # Feed the same Thoughts-panel content the user sees back to the
+        # summarizer. Without it the LLM has only raw tool outputs and
+        # routinely promotes absence of evidence into a confident root cause.
+        # Same code path applies to both single-agent and orchestrator runs.
+        agent_reasoning = _fetch_agent_reasoning(user_id, incident_id)
+
         # Build prompt - uses citations if available, otherwise falls back to transcript
         prompt = _build_summary_prompt_with_chat(
             source_type=basics["source_type"],
@@ -678,6 +742,15 @@ def generate_incident_summary_from_chat(
             citations=all_citations if all_citations else None,
             correlated_alert_count=basics.get("correlated_alert_count", 0),
             fix_suggestions=fix_suggestions if fix_suggestions else None,
+            agent_reasoning=agent_reasoning,
+        )
+
+        logger.info(
+            "%s incident_summary_prompt incident=%s citations=%d "
+            "agent_reasoning_chars=%d prompt_chars=%d transcript_fallback=%s",
+            _LOG_PREFIX, incident_id, len(all_citations),
+            len(agent_reasoning or ""), len(prompt),
+            "true" if transcript is not None else "false",
         )
 
         # Use centralized model config for email report generation
@@ -753,12 +826,12 @@ def generate_incident_summary_from_chat(
         from chat.background.task import (
             _send_rca_notification,
             _is_rca_email_notification_enabled,
-            _has_slack_connected,
             _has_google_chat_connected,
         )
+        from chat.backend.agent.tools.slack_tool import is_slack_connected
 
         email_enabled = _is_rca_email_notification_enabled(user_id)
-        slack_enabled = _has_slack_connected(user_id)
+        slack_enabled = is_slack_connected(user_id)
         google_chat_enabled = _has_google_chat_connected(user_id)
 
         if email_enabled or slack_enabled or google_chat_enabled:
@@ -835,17 +908,19 @@ def _update_incident_summary(
         UUID(incident_id)  # Validate UUID format
         
         with db_pool.get_admin_connection() as conn:
+            resolved_org_id = None
             with conn.cursor() as cursor:
                 if user_id:
-                    if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                    if not resolved_org_id:
                         return
-                
+
                 # If status is None, only update summary and preserve current aurora_status
                 if status is None:
                     cursor.execute(
                         """
-                        UPDATE incidents 
-                        SET aurora_summary = %s, 
+                        UPDATE incidents
+                        SET aurora_summary = %s,
                             updated_at = %s
                         WHERE id = %s
                         """,
@@ -854,16 +929,17 @@ def _update_incident_summary(
                 else:
                     cursor.execute(
                         """
-                        UPDATE incidents 
-                        SET aurora_summary = %s, 
+                        UPDATE incidents
+                        SET aurora_summary = %s,
                             aurora_status = %s,
+                            status = CASE WHEN status = 'investigating' AND %s = 'complete' THEN 'analyzed' ELSE status END,
                             analyzed_at = CASE WHEN analyzed_at IS NULL THEN %s ELSE analyzed_at END,
                             updated_at = %s
                         WHERE id = %s
                         """,
-                        (summary, status, datetime.now(), datetime.now(), incident_id),
+                        (summary, status, status, datetime.now(), datetime.now(), incident_id),
                     )
-                
+
                 rows_updated = cursor.rowcount
             conn.commit()
 
@@ -875,6 +951,27 @@ def _update_incident_summary(
                 logger.warning(
                     f"{_LOG_PREFIX} No rows updated for incident {incident_id}"
                 )
+
+            # Record rca_completed lifecycle event when the status transitions to complete.
+            # Only emit on real updates (rows_updated > 0) and when we have user_id/org_id
+            # for RLS attribution (insert_by_org policy requires non-null matching org_id).
+            if status == 'complete' and rows_updated > 0 and user_id and resolved_org_id:
+                try:
+                    with conn.cursor() as cursor:
+                        # RLS already set above when user_id is provided
+                        cursor.execute(
+                            """INSERT INTO incident_lifecycle_events
+                               (incident_id, user_id, org_id, event_type, new_value)
+                               VALUES (%s, %s, %s, %s, %s)""",
+                            (incident_id, user_id, resolved_org_id, 'rca_completed', 'complete')
+                        )
+                    conn.commit()
+                    logger.info(f"{_LOG_PREFIX} Recorded lifecycle event 'rca_completed' for incident {incident_id}")
+                except Exception:
+                    logger.exception(
+                        "%s Failed to record lifecycle event 'rca_completed' for incident %s",
+                        _LOG_PREFIX, incident_id,
+                    )
 
     except Exception as e:
         logger.error(

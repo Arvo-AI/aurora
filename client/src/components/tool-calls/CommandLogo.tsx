@@ -158,7 +158,7 @@ const logos = {
   ),
   dynatrace: (
     <img
-      src="/dynatrace.png"
+      src="/dynatrace.svg"
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="Dynatrace"
       onError={(e) => console.error('Failed to load Dynatrace logo:', e)}
@@ -204,6 +204,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Bitbucket logo:', e)}
     />
   ),
+  gitlab: (
+    <img
+      src="/gitlab.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="GitLab"
+      onError={(e) => console.error('Failed to load GitLab logo:', e)}
+    />
+  ),
   sharepoint: (
     <img
       src="/sharepoint.png"
@@ -243,6 +251,32 @@ const logos = {
       alt="OpsGenie / JSM"
       onError={(e) => console.error('Failed to load OpsGenie logo:', e)}
     />
+  ),
+  slack: (
+    <img
+      src="/slack.png"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Slack"
+      onError={(e) => console.error('Failed to load Slack logo:', e)}
+    />
+  ),
+  postmortem: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-zinc-400"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <line x1="10" y1="9" x2="8" y2="9" />
+    </svg>
   ),
   incidentio: (
     <img
@@ -321,6 +355,22 @@ const logos = {
       <line x1="12" y1="18" x2="12" y2="22" />
       <line x1="2" y1="12" x2="6" y2="12" />
       <line x1="18" y1="12" x2="22" y2="12" />
+    </svg>
+  ),
+  triggerAction: (
+    <svg
+      className="w-4 h-4 min-w-4 min-h-4 text-blue-500"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect width="8" height="8" x="3" y="3" rx="2" />
+      <path d="M7 11v4a2 2 0 0 0 2 2h4" />
+      <rect width="8" height="8" x="13" y="13" rx="2" />
     </svg>
   ),
   github: <GitHubLogo />,
@@ -413,6 +463,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'bitbucket'
   }
 
+  // GitLab tools
+  if (tool === 'gitlab' || tool.startsWith('gitlab_')) {
+    return 'gitlab'
+  }
+
   // SharePoint tools
   if (tool.startsWith('sharepoint_')) {
     return 'sharepoint'
@@ -441,6 +496,16 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // incident.io tools
   if (tool.includes('incidentio')) {
     return 'incidentio'
+  }
+
+  // Slack tools
+  if (tool.includes('slack') || tool === 'get_channel_history' || tool === 'get_thread_replies') {
+    return 'slack'
+  }
+
+  // Postmortem tools
+  if (tool === 'get_postmortem' || tool === 'save_postmortem' || tool.includes('postmortem')) {
+    return 'postmortem'
   }
 
   // IAC tools
@@ -541,6 +606,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
 
   if (tool === 'trigger_rca') {
     return 'triggerRca'
+  }
+
+  if (tool === 'trigger_action') {
+    return 'triggerAction'
   }
 
   return 'default'

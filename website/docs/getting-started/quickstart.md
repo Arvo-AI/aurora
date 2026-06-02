@@ -92,6 +92,10 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 GOOGLE_AI_API_KEY=your-key-here
 ```
 
+:::note Guardrails are on by default
+Aurora's AI safety guardrails run by default and depend on this LLM key. The judge fails closed on any LLM error, so make sure the key above is valid before starting Aurora. To disable guardrails, set `GUARDRAILS_ENABLED=false` in `.env`. See [Command Safety](../configuration/command-safety).
+:::
+
 ## Step 4: Start Aurora
 
 ```bash

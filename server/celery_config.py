@@ -1,4 +1,5 @@
 from celery import Celery
+import importlib
 import os
 import logging
 from dotenv import load_dotenv
@@ -64,7 +65,7 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_time_limit=(60*60*3),  # 3 hour timeout
-    worker_max_tasks_per_child=1,  # Restart worker after each task
+    worker_max_tasks_per_child=50,  # Restart worker periodically to reclaim memory
     worker_prefetch_multiplier=1,  # Process one task at a time
     broker_connection_retry_on_startup=True,  # Explicitly enable for Celery 6.0+
     result_expires=3600,  # Expire task results after 1 hour (backend= is set above)
@@ -81,6 +82,7 @@ celery_app.conf.update(
         'routes.pagerduty.tasks',
         'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
+        'routes.sentry.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',
         'routes.incidentio.tasks',
@@ -88,12 +90,14 @@ celery_app.conf.update(
         'chat.background.task',
         'chat.background.summarization',
         'chat.background.visualization_generator',
-        'chat.background.postmortem_generator',
         'chat.background.prediscovery_task',
         'routes.knowledge_base.tasks',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
+        'routes.aws.cloudwatch_tasks',
+        'tasks.github_webhook_tasks',
         'routes.github.github_repo_metadata',
+        'services.actions.scheduler',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -125,6 +129,10 @@ celery_app.conf.update(
             'task': 'utils.aws.credential_refresh.refresh_aws_credentials',
             'schedule': 600.0,  # Every 10 minutes
         },
+        'run-scheduled-actions': {
+            'task': 'services.actions.scheduler.run_scheduled_actions',
+            'schedule': 60.0,  # Check every minute
+        },
     },
     beat_schedule_filename='celerybeat-schedule',
     worker_hijack_root_logger=False
@@ -143,7 +151,6 @@ try:
     import chat.background.task
     import chat.background.summarization
     import chat.background.visualization_generator
-    import chat.background.postmortem_generator
     logging.info("Background chat tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import background chat tasks: {e}")
@@ -207,6 +214,18 @@ try:
     logging.info("New Relic tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import New Relic tasks: {e}")
+
+try:
+    importlib.import_module("tasks.github_webhook_tasks")
+    logging.info("GitHub webhook dispatcher task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import GitHub webhook dispatcher task: {e}")
+
+try:
+    import routes.sentry.tasks  # noqa: F401
+    logging.info("Sentry tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Sentry tasks: {e}")
 
 try:
     import routes.github.github_repo_metadata  # noqa: F401

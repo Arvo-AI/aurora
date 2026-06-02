@@ -48,7 +48,7 @@ _DESTRUCTIVE_MCP_TOOLS = {
     "merge_pull_request", "update_pull_request_branch", "fork_repository",
     "add_issue_comment", "add_comment_to_pending_review", "add_project_item",
     "delete_file", "delete_pending_review", "cancel_workflow_run",
-    "rerun_workflow", "rerun_workflow_failed_jobs", "assign_copilot_to_issue",
+    "rerun_workflow_run", "rerun_failed_jobs", "assign_copilot_to_issue",
     "request_copilot_review", "update_issue", "update_project_item_field_value",
     "close_pull_request_review", "manage_pull_request_review",
 }
@@ -117,8 +117,8 @@ class RealMCPServerManager:
             #     "description": "Azure MCP Server"
             # },
             "github": {
-                "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
-                "description": "GitHub Official MCP Server (npx)"
+                "command": ["github-mcp-server", "stdio"],
+                "description": "GitHub Official MCP Server"
             },
             "context7": {
                 "command": ["npx", "-y", "@upstash/context7-mcp"],
@@ -222,8 +222,8 @@ class RealMCPServerManager:
                 python_cmd = shutil.which("python") or "/usr/local/bin/python"
                 cmd = [python_cmd, "-m", "awslabs.aws_api_mcp_server.server"]
             elif server_type == "github":
-                # Official GitHub MCP Server via npx
-                npx_cmd = shutil.which("npx") or "/usr/bin/npx"
+                # Official GitHub MCP Server - native binary baked into the image
+                github_binary = shutil.which("github-mcp-server") or "/usr/local/bin/github-mcp-server"
                 github_token = ""
                 if user_credentials and "github" in user_credentials:
                     github_token = str(user_credentials["github"].get("access_token", ""))
@@ -232,9 +232,8 @@ class RealMCPServerManager:
                     logging.error(" GitHub token is required for GitHub MCP server")
                     return None
                 
-                cmd = [npx_cmd, "-y", "@modelcontextprotocol/server-github"]
-                
-                logging.info(f" GitHub MCP server command prepared (npx with all toolsets)")
+                cmd = [github_binary, "stdio"]
+                logging.info(" GitHub MCP server command prepared (native binary, all toolsets)")
                 logging.info(f" GitHub token configured (length: {len(github_token)})")
             elif server_type == "context7":
                 # Context7 MCP server via npx - provides up-to-date docs for OVH CLI/Terraform
@@ -305,11 +304,11 @@ output = json
                     env["AWS_SHARED_CREDENTIALS_FILE"] = credentials_file
                     env["AWS_CONFIG_FILE"] = config_file
                     
-                # GitHub credentials are passed via Docker -e flag in the command itself
-                # (handled above when building the docker command)
+                # GitHub credentials passed as env vars to the native binary
                 elif server_type == "github":
-                    # Token already passed in Docker command args, nothing to add to env
-                    pass
+                    if "github" in user_credentials:
+                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = str(user_credentials["github"].get("access_token", ""))
+                        env["GITHUB_TOOLSETS"] = "all"
 
             
             # Offload the blocking Popen spawn to a worker thread so we don't
@@ -329,8 +328,7 @@ output = json
             )
 
             # Give the process a moment to start
-            # Docker containers need more time, especially on first run (image pull)
-            startup_wait = 2.0 if server_type == "github" else 0.5
+            startup_wait = 0.5
             await asyncio.sleep(startup_wait)
             
             # Check if process started successfully
@@ -738,8 +736,13 @@ output = json
             # Get user credentials from Aurora's database
             credentials = get_user_cloud_credentials(user_id)
             if not credentials:
-                logging.warning(f" No credentials found for user {user_id}")
-                return {}
+                # App-mode github users have no entries in user_tokens.
+                # Don't bail here — the github branch below will mint an
+                # installation token from the App. Bail only for non-github.
+                if server_type != "github":
+                    logging.warning(f" No credentials found for user {user_id}")
+                    return {}
+                credentials = {}
             
             # Map credentials to environment variables for each server type
             if server_type == "aws":
@@ -766,8 +769,38 @@ output = json
             elif server_type == "github":
                 github_creds = credentials.get("github", {})
                 token = github_creds.get("access_token", "")
+                # App-mode users have no OAuth access_token in user_tokens.
+                # Fall back to minting an installation token via the auth
+                # router — the GitHub MCP server accepts an installation
+                # token in GITHUB_PERSONAL_ACCESS_TOKEN since both use the
+                # same `Authorization: token <value>` header convention.
+                # Tokens last 1h which is well above the MCP server's
+                # warm-keep window for a single agent turn.
+                if not token and user_id:
+                    try:
+                        from utils.auth.github_auth_router import (
+                            NoGitHubAuthError,
+                            get_any_auth_for_user,
+                        )
+                        auth = get_any_auth_for_user(user_id)
+                        token = auth.token
+                        logging.info(
+                            " GitHub MCP credentials: using App installation token "
+                            "(installation_id=%s) — no OAuth token in user_tokens",
+                            auth.installation_id,
+                        )
+                    except NoGitHubAuthError:
+                        logging.warning(
+                            " No GitHub OAuth token AND no App installation for user %s",
+                            user_id,
+                        )
+                    except Exception as exc:
+                        logging.warning(
+                            " Failed to mint App installation token for user %s: %s",
+                            user_id, exc,
+                        )
                 if token:
-                    logging.info(f" Found GitHub token for MCP server (length: {len(token)})")
+                    logging.info(" GitHub MCP token resolved (length: %d)", len(token))
                 else:
                     logging.warning(" No GitHub token found in credentials")
                 return {
@@ -1012,7 +1045,28 @@ async def get_real_mcp_tools_for_user(user_id: str) -> List:
             #     available_servers.append("azure")
             if credentials.get("github", {}).get("access_token"):
                 available_servers.append("github")
-        
+
+        # App-only users have no OAuth row in user_tokens, but they do have
+        # an active App installation. Probe the auth router so the github
+        # MCP server still spins up — get_credentials_for_server will mint
+        # an installation token via the App.
+        if "github" not in available_servers:
+            try:
+                from utils.auth.github_auth_router import (
+                    NoGitHubAuthError,
+                    get_any_auth_for_user,
+                )
+                get_any_auth_for_user(user_id)
+                available_servers.append("github")
+            except NoGitHubAuthError:
+                logging.debug(
+                    "User %s has no GitHub auth (App or OAuth); skipping GitHub MCP", user_id
+                )
+            except Exception as exc:
+                logging.warning(
+                    "GitHub App auth probe failed for user %s: %s", user_id, exc
+                )
+
         if not available_servers:
             logging.info(f"No cloud credentials found for user {user_id}, no MCP servers to load")
         
@@ -1238,7 +1292,7 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Generate consistent tool_call_id for start/completion matching
                 import hashlib
                 import json
-                tool_name = f"mcp_{original_tool_name}"
+                tool_name = f"mcp_{server_type}_{original_tool_name}"
                 # Use JSON serialization with sorted keys for deterministic hashing
                 signature = f"{tool_name}_{json.dumps(kwargs, sort_keys=True, default=str)}"
                 # Use longer hash (16 chars) to reduce collision risk
@@ -1255,25 +1309,19 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                 # Check if this is a destructive MCP tool and ask for confirmation
                 if is_destructive_mcp_tool(original_tool_name):
                     try:
-                        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
+                        from utils.auth.command_gate import gate_action
                         from utils.cloud.cloud_utils import get_user_context
-                        from chat.backend.agent.tools.cloud_tools import get_state_context
-                        
-                        # Get user context
+
                         context = get_user_context()
                         user_id = context.get('user_id') if isinstance(context, dict) else context
-                        state_context = get_state_context()
-                        session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-                        
+
                         if user_id:
                             summary_msg = summarize_mcp_tool_action(original_tool_name, kwargs)
-                            if not wait_for_user_confirmation(
+                            if not gate_action(
                                 user_id=user_id,
-                                message=summary_msg,
                                 tool_name=tool_name,
-                                session_id=session_id
-                            ):
-                                # User cancelled the action
+                                summary=summary_msg,
+                            ).allowed:
                                 cancellation_result = f"MCP tool {original_tool_name} cancelled by user."
                                 try:
                                     if send_tool_completion:
@@ -1373,11 +1421,26 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                     if isinstance(result, dict) and "content" in result:
                         content_items = result["content"]
                         if content_items and len(content_items) > 0:
-                            first_content = content_items[0]
-                            if isinstance(first_content, dict) and "text" in first_content:
-                                final_result = first_content["text"]
-                            else:
-                                final_result = str(result)
+                            parts = []
+                            for item in content_items:
+                                if isinstance(item, dict):
+                                    if "text" in item:
+                                        parts.append(item["text"])
+                                    elif "resource" in item and isinstance(item["resource"], dict):
+                                        res = item["resource"]
+                                        if "text" in res:
+                                            parts.append(res["text"])
+                                        elif "blob" in res:
+                                            import base64
+                                            try:
+                                                parts.append(base64.b64decode(res["blob"]).decode("utf-8"))
+                                            except Exception:
+                                                parts.append(f"[binary content, {len(res['blob'])} chars base64]")
+                                    else:
+                                        parts.append(str(item))
+                                else:
+                                    parts.append(str(item))
+                            final_result = "\n".join(parts) if parts else str(result)
                         else:
                             final_result = str(result)
                     else:

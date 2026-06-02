@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { RecentIncident, incidentsService, AuroraStatus } from '@/lib/services/incidents';
+import { RecentIncident, incidentsService, AuroraStatus, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
 import { ChevronDown, Clock, Server, ArrowRight, Loader2, Check, X } from 'lucide-react';
 import Image from 'next/image';
 
@@ -26,15 +26,17 @@ function RecentAlertCard({
     <div className="group relative p-3 rounded-lg bg-zinc-900/30 border border-zinc-800/50 hover:border-zinc-700/50 transition-all duration-200">
       <div className="flex items-start gap-3">
         {/* Source icon */}
-        <div className="flex-shrink-0 mt-0.5 opacity-50">
-          <Image 
-            src={incident.sourceType === 'pagerduty' ? '/pagerduty-icon.svg' : incident.sourceType === 'dynatrace' ? '/dynatrace.png' : `/${incident.sourceType}.svg`}
-            alt={incident.sourceType}
-            width={16}
-            height={16}
-            className={`object-contain${incident.sourceType === 'dynatrace' ? ' scale-[2.2]' : ''}${incident.sourceType === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
-          />
-        </div>
+        {incident.sourceType !== 'chat' && (
+          <div className="flex-shrink-0 mt-0.5 opacity-50">
+            <Image 
+              src={getSourceIconSrc(incident.sourceType)!}
+              alt={incident.sourceType}
+              width={16}
+              height={16}
+              className={getSourceIconBgColor(incident.sourceType)}
+            />
+          </div>
+        )}
         
         {/* Content */}
         <div className="flex-1 min-w-0">

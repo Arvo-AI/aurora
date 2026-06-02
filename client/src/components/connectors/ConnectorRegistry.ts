@@ -82,7 +82,7 @@ class ConnectorRegistry {
         id: "dynatrace",
         name: "Dynatrace",
         description: "Connect to Dynatrace for full-stack observability. Receive problem notifications and query metrics, logs, and entities for root cause analysis.",
-        iconPath: "/dynatrace.png",
+        iconPath: "/dynatrace.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Monitoring",
         path: "/dynatrace/auth",
@@ -115,6 +115,18 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "sentry",
+      name: "Sentry",
+      description: "Connect Sentry to ingest issue and error alerts and query full stacktraces and breadcrumbs for automated root cause analysis.",
+      iconPath: "/sentry.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/sentry/auth",
+      storageKey: "isSentryConnected",
+      useCustomConnection: true,
+    });
+
+    this.register({
         id: "thousandeyes",
         name: "ThousandEyes",
         description: "Connect Cisco ThousandEyes for network intelligence: tests, alerts, path visualization, BGP monitoring, and Internet Insights outage detection.",
@@ -126,10 +138,21 @@ class ConnectorRegistry {
       });
 
     this.register({
+      id: "cloudwatch",
+      name: "CloudWatch",
+      description: "Receive Amazon CloudWatch alarm notifications via SNS webhooks. Alarm state changes automatically create incidents and trigger root cause analysis.",
+      iconPath: "/aws.ico",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/aws/onboarding",
+      storageKey: "isCloudWatchConnected",
+    });
+
+    this.register({
       id: "pagerduty",
       name: "PagerDuty",
       description: "Connect PagerDuty to receive incident alerts and manage on-call schedules. Integrate with your PagerDuty account for real-time incident management.",
-      iconPath: "/pagerduty-icon.svg",
+      iconPath: "/pagerduty.svg",
       iconBgColor: "bg-white dark:bg-white",
       category: "Incident Management",
       path: "/pagerduty/auth",
@@ -239,6 +262,16 @@ class ConnectorRegistry {
       icon: Github,
       iconColor: "text-gray-800 dark:text-gray-300",
       iconBgColor: "bg-gray-200 dark:bg-gray-800",
+      category: "Development",
+      useCustomConnection: true,
+    });
+
+    this.register({
+      id: "gitlab",
+      name: "GitLab",
+      description: "Connect to GitLab to investigate code changes, pipelines, merge requests, and manage fixes during incident response.",
+      iconPath: "/gitlab.svg",
+      iconBgColor: "bg-white dark:bg-white",
       category: "Development",
       useCustomConnection: true,
     });

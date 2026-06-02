@@ -1,39 +1,31 @@
 """
 GitHub multi-repo selection endpoints.
 Manages which repos a user has connected for RCA investigation.
+
+Read endpoints surface a per-repo ``auth_method`` (``"app"`` / ``"oauth"``
+/ ``None``) computed in a single batched query — see
+:func:`get_repo_selections` for the no-N+1 contract that mirrors
+:mod:`utils.auth.github_auth_router`'s routing rules.
 """
 import logging
 import json
 from flask import Blueprint, jsonify, request
-from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
+from utils.db.connection_pool import db_pool
+from utils.db.org_scope import resolve_org, org_read_predicate
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
-
-
-def _get_user_org_id(user_id: str) -> str | None:
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                # No RLS needed — users not RLS-protected
-                cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                row = cur.fetchone()
-                return row[0] if row else None
-    except Exception as e:
-        logger.warning(f"Error fetching org_id for user {user_id}: {e}")
-        return None
 
 
 def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:_update_metadata_status]")
                 cur.execute(
-                    "UPDATE github_connected_repos SET metadata_status = %s, updated_at = NOW() WHERE user_id = %s AND repo_full_name = %s",
-                    (status, user_id, repo_full_name),
+                    "UPDATE connected_repos SET metadata_status = %s, updated_at = NOW() WHERE provider = 'github' AND repo_full_name = %s",
+                    (status, repo_full_name),
                 )
                 conn.commit()
     except Exception as e:
@@ -43,22 +35,76 @@ def _update_metadata_status(user_id: str, repo_full_name: str, status: str):
 @github_repo_selection_bp.route("/repo-selections", methods=["GET"])
 @require_permission("connectors", "read")
 def get_repo_selections(user_id):
-    """Return all connected repos with metadata for this user."""
+    """Return all connected repos for this org plus a per-row ``auth_method``.
+
+    The ``auth_method`` field mirrors the routing decision that
+    :func:`utils.auth.github_auth_router.get_auth_for_user_repo` would
+    make for each repo:
+
+    - ``"app"`` when the repo row has a non-NULL ``installation_id`` AND
+      the joined installation row exists with ``suspended_at IS NULL``.
+    - ``"oauth"`` when no active App install is present but the row's
+      owner has a stored OAuth ``access_token``.
+    - ``None`` when neither path can resolve.
+    """
     try:
+        from utils.auth.github_auth_mode import is_oauth_enabled
+        from utils.auth.token_management import get_token_data
+
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:get_repo_selections]")
                 cur.execute(
-                    """SELECT repo_full_name, repo_id, default_branch, is_private,
-                              metadata_summary, metadata_status, repo_data, created_at
-                       FROM github_connected_repos
-                       WHERE user_id = %s ORDER BY repo_full_name""",
-                    (user_id,),
+                    f"""SELECT DISTINCT ON (r.repo_full_name)
+                              r.repo_full_name, r.repo_id, r.default_branch,
+                              r.is_private, r.metadata_summary, r.metadata_status,
+                              r.repo_data, r.created_at, r.installation_id,
+                              r.user_id,
+                              (i.installation_id IS NOT NULL
+                                  AND i.suspended_at IS NULL)
+                                  AS has_active_installation
+                         FROM (
+                             SELECT *
+                               FROM connected_repos
+                              WHERE provider = 'github'
+                                AND {predicate}
+                         ) r
+                         LEFT JOIN github_installations i
+                                ON i.installation_id = r.installation_id
+                        ORDER BY r.repo_full_name, r.updated_at DESC""",
+                    pred_params,
                 )
                 rows = cur.fetchall()
 
-        repos = [
-            {
+        oauth_enabled = is_oauth_enabled()
+        oauth_owner_cache: dict[str, bool] = {}
+
+        def _owner_has_oauth(owner_id: str) -> bool:
+            if not oauth_enabled or not owner_id:
+                return False
+            if owner_id not in oauth_owner_cache:
+                try:
+                    creds = get_token_data(owner_id, "github")
+                except Exception:
+                    creds = None
+                oauth_owner_cache[owner_id] = bool(
+                    creds and creds.get("access_token")
+                )
+            return oauth_owner_cache[owner_id]
+
+        repos = []
+        for r in rows:
+            installation_id = r[8]
+            row_owner = r[9]
+            has_active_installation = r[10]
+            if installation_id is not None and has_active_installation:
+                auth_method: str | None = "app"
+            elif _owner_has_oauth(row_owner):
+                auth_method = "oauth"
+            else:
+                auth_method = None
+            repos.append({
                 "repo_full_name": r[0],
                 "repo_id": r[1],
                 "default_branch": r[2],
@@ -67,87 +113,91 @@ def get_repo_selections(user_id):
                 "metadata_status": r[5],
                 "repo_data": r[6],
                 "created_at": r[7].isoformat() if r[7] else None,
-            }
-            for r in rows
-        ]
+                "installation_id": installation_id,
+                "auth_method": auth_method,
+            })
         return jsonify({"repositories": repos})
     except Exception as e:
-        logger.error(f"Error getting repo selections: {e}", exc_info=True)
+        logger.exception(f"Error getting repo selections: {e}")
         return jsonify({"error": "Failed to get repository selections"}), 500
 
 
 @github_repo_selection_bp.route("/repo-selections", methods=["POST"])
 @require_permission("connectors", "write")
 def save_repo_selections(user_id):
-    """Sync the set of connected repos. Upserts new, removes deselected, triggers metadata gen."""
+    """Sync the set of connected repos. Upserts new, removes deselected."""
     try:
-        data = request.get_json(silent=True)
-        if not isinstance(data, dict):
-            return jsonify({"error": "Request body must be a JSON object"}), 400
-        repositories = data.get("repositories")
+        data = request.get_json()
+        repositories = data.get("repositories") if data else None
         if not isinstance(repositories, list):
-            return jsonify({"error": "repositories array is required"}), 400
+            return jsonify({"error": "repositories must be an array"}), 400
+        if not all(isinstance(r, dict) for r in repositories):
+            return jsonify({"error": "every repositories entry must be an object"}), 400
 
-        org_id = _get_user_org_id(user_id)
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:save_repo_selections]")
                 cur.execute(
-                    "SELECT repo_full_name FROM github_connected_repos WHERE user_id = %s",
-                    (user_id,),
+                    "SELECT repo_full_name, user_id FROM connected_repos WHERE provider = 'github'",
                 )
-                existing = {r[0] for r in cur.fetchall()}
+                # {repo_full_name: owner_user_id} — we need the owner to delete the right row
+                existing = {r[0]: r[1] for r in cur.fetchall()}
 
                 incoming = set()
                 newly_added = []
 
                 for repo in repositories:
-                    if not isinstance(repo, dict):
-                        return jsonify({"error": "Each repository must be an object"}), 400
                     full_name = repo.get("full_name")
                     if not full_name:
                         continue
                     incoming.add(full_name)
 
+                    owner_id = existing.get(full_name, user_id)
+                    payload_install_id = repo.get("installation_id")
+                    if not isinstance(payload_install_id, int):
+                        payload_install_id = None
                     cur.execute(
-                        """INSERT INTO github_connected_repos
-                               (user_id, org_id, repo_full_name, repo_id, default_branch,
-                                is_private, repo_data, metadata_status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
-                           ON CONFLICT (user_id, repo_full_name) DO UPDATE SET
+                        """INSERT INTO connected_repos
+                               (user_id, org_id, provider, repo_full_name, repo_id, default_branch,
+                                is_private, installation_id, repo_data, metadata_status)
+                           VALUES (%s, %s, 'github', %s, %s, %s, %s, %s, %s, 'pending')
+                           ON CONFLICT (user_id, provider, repo_full_name) DO UPDATE SET
                                repo_data = EXCLUDED.repo_data,
                                default_branch = EXCLUDED.default_branch,
                                is_private = EXCLUDED.is_private,
+                               installation_id = COALESCE(EXCLUDED.installation_id,
+                                                          connected_repos.installation_id),
                                updated_at = NOW()""",
                         (
-                            user_id,
+                            owner_id,
                             org_id,
                             full_name,
                             repo.get("id"),
                             repo.get("default_branch"),
                             repo.get("private", False),
+                            payload_install_id,
                             json.dumps(repo),
                         ),
                     )
                     if full_name not in existing:
+                        existing[full_name] = user_id
                         newly_added.append(full_name)
 
-                # Empty `repositories` is valid (clears all); only reject if the caller sent
-                # items but none had a usable full_name.
                 if repositories and not incoming:
                     return jsonify({"error": "No valid repositories in request (all missing full_name)"}), 400
 
-                removed = existing - incoming
+                removed = set(existing.keys()) - incoming
                 if removed:
                     cur.execute(
-                        "DELETE FROM github_connected_repos WHERE user_id = %s AND repo_full_name = ANY(%s)",
-                        (user_id, list(removed)),
+                        "DELETE FROM connected_repos WHERE provider = 'github' AND repo_full_name = ANY(%s)",
+                        (list(removed),),
                     )
 
                 conn.commit()
 
-        # Fire metadata generation for newly added repos
         for repo_name in newly_added:
             try:
                 from routes.github.github_repo_metadata import generate_repo_metadata
@@ -169,12 +219,14 @@ def save_repo_selections(user_id):
 @github_repo_selection_bp.route("/repo-selections", methods=["DELETE"])
 @require_permission("connectors", "write")
 def clear_repo_selections(user_id):
-    """Remove all connected repos for a user."""
+    """Remove all connected repos for the org."""
     try:
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:clear_repo_selections]")
-                cur.execute("DELETE FROM github_connected_repos WHERE user_id = %s", (user_id,))
+                cur.execute("DELETE FROM connected_repos WHERE provider = 'github'")
                 conn.commit()
         return jsonify({"message": "All repository selections cleared"})
     except Exception as e:
@@ -192,17 +244,17 @@ def update_repo_metadata(user_id, repo_full_name):
         if summary is None:
             return jsonify({"error": "metadata_summary is required"}), 400
 
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:update_repo_metadata]")
                 cur.execute(
-                    """UPDATE github_connected_repos
+                    """UPDATE connected_repos
                        SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
-                       WHERE user_id = %s AND repo_full_name = %s""",
-                    (summary, user_id, repo_full_name),
+                       WHERE provider = 'github' AND repo_full_name = %s""",
+                    (summary, repo_full_name),
                 )
-                if cur.rowcount == 0:
-                    return jsonify({"error": "Repository not found"}), 404
                 conn.commit()
         return jsonify({"message": "Metadata updated"})
     except Exception as e:
@@ -220,16 +272,16 @@ def trigger_metadata_generation(user_id):
         if not repo_full_name:
             return jsonify({"error": "repo_full_name is required"}), 400
 
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:trigger_metadata_generation]")
                 cur.execute(
-                    """UPDATE github_connected_repos SET metadata_status = 'generating', updated_at = NOW()
-                       WHERE user_id = %s AND repo_full_name = %s""",
-                    (user_id, repo_full_name),
+                    """UPDATE connected_repos SET metadata_status = 'generating', updated_at = NOW()
+                       WHERE provider = 'github' AND repo_full_name = %s""",
+                    (repo_full_name,),
                 )
-                if cur.rowcount == 0:
-                    return jsonify({"error": "Repository not found"}), 404
                 conn.commit()
 
         from routes.github.github_repo_metadata import generate_repo_metadata
@@ -237,7 +289,7 @@ def trigger_metadata_generation(user_id):
             generate_repo_metadata.delay(user_id, repo_full_name)
         except Exception as e:
             logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
-            _update_metadata_status(user_id, repo_full_name, "pending")
+            _update_metadata_status(user_id, repo_full_name, "error")
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:

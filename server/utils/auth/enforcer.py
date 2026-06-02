@@ -21,7 +21,9 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 _enforcer: casbin.Enforcer | None = None
-_lock = threading.Lock()
+_lock = threading.RLock()
+_last_reload: float = 0.0
+_RELOAD_INTERVAL = 300.0
 
 # Default permission policies seeded on first run.
 # Format: (role, domain, resource, action)
@@ -42,6 +44,7 @@ _DEFAULT_POLICIES = [
     ("viewer", "*", "user_preferences", "read"),
     ("viewer", "*", "user_preferences", "write"),
     ("viewer", "*", "rca_emails", "read"),
+    ("viewer", "*", "actions", "read"),
 
     # --- editor permissions (mutating operations) ---
     ("editor", "*", "connectors", "write"),
@@ -51,7 +54,9 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "ssh_keys", "write"),
     ("editor", "*", "vms", "write"),
     ("editor", "*", "rca_emails", "write"),
+    ("editor", "*", "notification_settings", "write"),
     ("editor", "*", "graph", "write"),
+    ("editor", "*", "actions", "write"),
 
     # --- admin-only permissions ---
     ("admin", "*", "users", "manage"),
@@ -95,21 +100,41 @@ def _model_path() -> str:
     return os.path.join(os.path.dirname(__file__), "..", "..", "rbac_model.conf")
 
 
+def _add_missing_policies(enforcer, existing) -> None:
+    """Add any default policies not yet present in the enforcer."""
+    existing_set = {tuple(p) for p in existing}
+    added = 0
+    for role, domain, resource, action in _DEFAULT_POLICIES:
+        if (role, domain, resource, action) not in existing_set:
+            enforcer.add_policy(role, domain, resource, action)
+            added += 1
+    existing_groups = {tuple(g) for g in enforcer.get_named_grouping_policy("g")}
+    for parent_role, child_role, domain in _DEFAULT_ROLE_HIERARCHY:
+        if (parent_role, child_role, domain) not in existing_groups:
+            enforcer.add_grouping_policy(parent_role, child_role, domain)
+            added += 1
+    if added:
+        enforcer.save_policy()
+        logger.info("Added %d missing default Casbin policies.", added)
+    else:
+        logger.info("Casbin policies already present (%d rules), all defaults satisfied.", len(existing))
+
+
 def _seed_default_policies(enforcer: casbin.Enforcer) -> None:
     """Seed default permission and role-hierarchy policies when the table is empty.
     
     Also handles migration from non-domain to domain-based model by checking
     if existing policies have the old 3-field format and re-seeding.
+    Adds any missing default policies for existing installations.
     """
     existing = enforcer.get_policy()
     if existing:
-        # Check if policies are old format (3 fields) vs new (4 fields with domain)
         needs_migration = any(len(p) == 3 for p in existing)
         if needs_migration:
             logger.info("Detected old non-domain Casbin policies, migrating to domain-based format...")
             enforcer.clear_policy()
         else:
-            logger.info("Casbin policies already present (%d rules), skipping seed.", len(existing))
+            _add_missing_policies(enforcer, existing)
             return
 
     logger.info("Seeding default Casbin RBAC policies …")
@@ -125,9 +150,21 @@ def _seed_default_policies(enforcer: casbin.Enforcer) -> None:
 
 
 def get_enforcer() -> casbin.Enforcer:
-    """Return the module-level Casbin enforcer, creating it on first call."""
-    global _enforcer
+    """Return the module-level Casbin enforcer, creating it on first call.
+
+    Periodically reloads policies from the DB (every 5 min) as a safety net
+    for role revocations.  For role *grants*, callers should use
+    ``enforce_with_reload`` which reloads on deny for instant propagation.
+    """
+    global _enforcer, _last_reload
     if _enforcer is not None:
+        import time
+        now = time.monotonic()
+        if now - _last_reload > _RELOAD_INTERVAL:
+            with _lock:
+                if now - _last_reload > _RELOAD_INTERVAL:
+                    _enforcer.load_policy()
+                    _last_reload = now
         return _enforcer
 
     with _lock:
@@ -153,9 +190,25 @@ def get_enforcer() -> casbin.Enforcer:
 
         _seed_default_policies(_enforcer)
         _enforcer.load_policy()
+        import time
+        _last_reload = time.monotonic()
 
         logger.info("Casbin enforcer ready.")
         return _enforcer
+
+
+def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -> bool:
+    """Enforce a permission check, reloading from DB on first denial.
+
+    Handles the common case where a role was just granted: the in-memory
+    cache says deny, but the DB says allow.  One reload + retry keeps
+    the hot path fast (no DB hit) while making grants take effect instantly.
+    """
+    enforcer = get_enforcer()
+    if enforcer.enforce(user_id, org_id, resource, action):
+        return True
+    reload_policies()
+    return enforcer.enforce(user_id, org_id, resource, action)
 
 
 def reload_policies() -> None:

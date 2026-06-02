@@ -46,6 +46,18 @@ class CloudBeesRCAArgs(BaseModel):
     deployment_event_id: Optional[int] = Field(default=None, description="Deployment event ID for trace_context lookup")
 
 
+def is_cloudbees_connected(user_id: str) -> bool:
+    """Check if CloudBees CI is connected for a user."""
+    from utils.auth.token_management import get_token_data
+    creds = get_token_data(user_id, "cloudbees")
+    return bool(
+        creds
+        and creds.get("base_url")
+        and creds.get("username")
+        and creds.get("api_token")
+    )
+
+
 def _get_client_for_cloudbees_user(user_id: str):
     """Build a JenkinsClient from the user's stored CloudBees credentials."""
     from utils.auth.token_management import get_token_data

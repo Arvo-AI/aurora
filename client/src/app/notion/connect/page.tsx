@@ -371,7 +371,7 @@ export default function NotionConnectPage() {
             <CardDescription>
               {showTabs
                 ? "Choose how Aurora should authenticate with Notion. You can always switch later by disconnecting and reconnecting."
-                : "Aurora authenticates with your Notion workspace via an Internal Integration Token."}
+                : "Aurora authenticates with your Notion workspace via an Integration Token (Access token)."}
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -773,6 +773,63 @@ class MemgraphClient:
     # Stale Service Management
     # =========================================================================
 
+    def delete_services_for_provider(self, user_id, provider):
+        """Delete all Service nodes (and their edges) for a user/provider pair.
+
+        Called immediately when a cloud provider is disconnected so that
+        stale infrastructure nodes are not left behind in the graph.
+        """
+        query = """
+        MATCH (s:Service {user_id: $user_id, provider: $provider})
+        DETACH DELETE s
+        RETURN count(s) AS deleted;
+        """
+        results = self._execute(query, {"user_id": user_id, "provider": provider})
+        deleted = results[0]["deleted"] if results else 0
+        logger.info(
+            "[MemgraphClient] Deleted %d Service nodes for user=%s provider=%s",
+            deleted, sanitize(user_id), sanitize(provider),
+        )
+        return deleted
+
+    def delete_services_for_cluster(self, user_id, cluster_name):
+        """Delete all Service nodes (and their edges) for a specific kubectl cluster.
+
+        Used when a single cluster is disconnected so that only its nodes are
+        removed, leaving other clusters' nodes intact.
+        """
+        query = """
+        MATCH (s:Service {user_id: $user_id, provider: "kubectl", cluster_name: $cluster_name})
+        DETACH DELETE s
+        RETURN count(s) AS deleted;
+        """
+        results = self._execute(query, {"user_id": user_id, "cluster_name": cluster_name})
+        deleted = results[0]["deleted"] if results else 0
+        logger.info(
+            "[MemgraphClient] Deleted %d Service nodes for user=%s cluster=%s",
+            deleted, sanitize(user_id), sanitize(cluster_name),
+        )
+        return deleted
+
+    def delete_services_for_aws_account(self, user_id, aws_account_id):
+        """Delete Service nodes for a single AWS account, leaving other accounts intact.
+
+        Uses the aws_account_id property set during discovery rather than the
+        provider field, so only the disconnected account's nodes are removed.
+        """
+        query = """
+        MATCH (s:Service {user_id: $user_id, provider: "aws", aws_account_id: $aws_account_id})
+        DETACH DELETE s
+        RETURN count(s) AS deleted;
+        """
+        results = self._execute(query, {"user_id": user_id, "aws_account_id": aws_account_id})
+        deleted = results[0]["deleted"] if results else 0
+        logger.info(
+            "[MemgraphClient] Deleted %d Service nodes for user=%s aws_account=%s",
+            deleted, sanitize(user_id), sanitize(aws_account_id),
+        )
+        return deleted
+
     def mark_stale_services(self, user_id, stale_days=7):
         """Mark services not updated in N days as stale."""
         query = """
@@ -783,6 +840,27 @@ class MemgraphClient:
         """
         results = self._execute(query, {"user_id": user_id, "days": stale_days})
         return results[0]["marked"] if results else 0
+
+    def delete_stale_services(self, user_id, stale_days=30):
+        """Delete Service nodes already marked stale and not updated in stale_days.
+
+        Only deletes nodes where stale=true to avoid removing nodes that are
+        actively updated but happen to be old (e.g. long-lived services). Acts
+        as a safety net for nodes never cleaned up by a disconnect event.
+        """
+        query = """
+        MATCH (s:Service {user_id: $user_id, stale: true})
+        WHERE s.updated_at < localDateTime() - duration({days: $days})
+        DETACH DELETE s
+        RETURN count(s) AS deleted;
+        """
+        results = self._execute(query, {"user_id": user_id, "days": stale_days})
+        deleted = results[0]["deleted"] if results else 0
+        logger.info(
+            "[MemgraphClient] Deleted %d stale Service nodes (>%dd) for user=%s",
+            deleted, stale_days, sanitize(user_id),
+        )
+        return deleted
 
     # =========================================================================
     # Helpers

@@ -15,21 +15,25 @@ def build_manual_vm_access_segment(user_id: Optional[str]) -> str:
 
     try:
         from utils.auth.stateless_auth import set_rls_context
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        _, pred_params = org_read_predicate(user_id, org_id)
+        vm_predicate = "(mv.user_id = %s OR mv.org_id = %s)" if org_id else "mv.user_id = %s"
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
                 if not set_rls_context(cur, conn, user_id, log_prefix="[ContextFetchers]"):
                     return ""
                 cur.execute(
-                    """
+                    f"""
                     SELECT mv.name, mv.ip_address, mv.port, mv.ssh_username, mv.ssh_jump_command, mv.ssh_key_id,
                            ut.provider, ut.token_data
                     FROM user_manual_vms mv
                     LEFT JOIN user_tokens ut ON ut.id = mv.ssh_key_id
-                    WHERE mv.user_id = %s
+                    WHERE {vm_predicate}
                     ORDER BY mv.updated_at DESC
                     LIMIT 10;
                     """,
-                    (user_id,),
+                    pred_params,
                 )
                 rows = cur.fetchall()
     except Exception as e:

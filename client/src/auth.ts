@@ -37,8 +37,11 @@ async function doRefreshUserFromBackend(userId: string): Promise<RefreshResult> 
     // socket (which ignores AbortController for up to ~20s).
     const result = await Promise.race<RefreshResult>([
       (async () => {
+        const headers: Record<string, string> = { "X-User-ID": userId }
+        const internalSecret = process.env.INTERNAL_API_SECRET
+        if (internalSecret) headers["X-Internal-Secret"] = internalSecret
         const res = await fetch(`${backendUrl}/api/auth/me`, {
-          headers: { "X-User-ID": userId },
+          headers,
           cache: "no-store",
           signal: controller.signal,
         })
@@ -140,6 +143,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.id = undefined
           token.email = undefined
           token.name = undefined
+          token.lastRefreshedAt = now
           return token
         }
         if (fresh) {
@@ -147,8 +151,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.orgId = fresh.orgId
           token.orgName = fresh.orgName
           token.mustChangePassword = fresh.mustChangePassword
+          token.lastRefreshedAt = now
         }
-        token.lastRefreshedAt = now
       }
 
       return token

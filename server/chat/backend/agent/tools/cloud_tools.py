@@ -1,24 +1,16 @@
-from typing import Any, Dict, Optional, Annotated, List, Union, Callable, Tuple, Literal, Awaitable
+from typing import Any, Dict, Optional, Tuple
 import threading
 import json
 import asyncio
 import logging
 from functools import wraps
 from datetime import datetime
-import builtins
-from pydantic import BaseModel, SkipValidation, Field
-import contextvars
-import subprocess
-import tempfile
-import os
 import time
-import shutil
-from contextlib import asynccontextmanager
-from threading import local
-import concurrent.futures
 
-from langchain_core.tools import StructuredTool
 from .output_sanitizer import truncate_json_fields
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +23,13 @@ from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
-from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs
-from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs
-from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs
+from .kubectl_clusters_tool import get_connected_clusters, GetConnectedClustersArgs
+from utils.auth.github_auth_router import is_github_connected
+from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs, is_jenkins_connected
+from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs, is_cloudbees_connected
+from .spinnaker_rca_tool import spinnaker_rca, SpinnakerRCAArgs, is_spinnaker_connected
 from .trigger_rca_tool import trigger_rca, TriggerRCAArgs
+from .trigger_action_tool import trigger_action, TriggerActionArgs
 
 # Visualization trigger caching
 from cachetools import TTLCache
@@ -43,7 +38,12 @@ _viz_triggers: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 1 hour TTL
 # Strong references for fire-and-forget tasks so they aren't GC'd before completion.
 _background_tasks: "set[asyncio.Task]" = set()
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS
-from .github_apply_fix_tool import github_apply_fix, GitHubApplyFixArgs
+# github_apply_fix is intentionally NOT exposed as an LLM-callable tool — it
+# creates a PR and must require explicit user approval via the Incidents UI's
+# "Create Pull Request" button. The route handler in incidents_routes.py
+# imports github_apply_fix directly.
+from .gitlab_tool import gitlab_tool, GitLabToolArgs
+from routes.gitlab.gitlab_api_utils import is_gitlab_connected
 from .cloud_exec_tool import cloud_exec
 
 from .zip_file_tool import analyze_zip_file
@@ -51,7 +51,7 @@ from .cloud_provider_utils import determine_target_provider_from_context
 from .rag_indexer_tool import rag_index_zip, RAGIndexZipArgs
 from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
-from .tailscale_ssh_tool import tailscale_ssh
+from .tailscale_ssh_tool import tailscale_ssh, is_tailscale_connected
 from .confluence_runbook_tool import confluence_runbook_parse, ConfluenceRunbookArgs
 from .confluence_search_tool import (
     confluence_search_similar,
@@ -135,6 +135,11 @@ from .newrelic_tool import (
     query_newrelic,
     is_newrelic_connected,
     QueryNewRelicArgs,
+)
+from .sentry_tool import (
+    query_sentry,
+    is_sentry_connected,
+    QuerySentryArgs,
 )
 from .thousandeyes_tool import (
     thousandeyes_list_tests,
@@ -335,6 +340,52 @@ def send_websocket_message(message_data: Dict[str, Any], tool_name: str, fallbac
         daemon=True,
     )
     thread.start()
+
+
+def _apply_output_redaction(
+    tool_name: str,
+    text: str,
+    user_id: Optional[str],
+    session_id: Optional[str],
+) -> str:
+    """Output redaction (Hook 1): strip secrets from tool output.
+
+    Invoked once per tool call from the ``with_completion_notification``
+    decorator before the result is fanned out. The redacted string then
+    flows to ``send_tool_completion`` (WebSocket) and to LangGraph as the
+    ``ToolMessage.content`` the next LLM turn will see, so both paths
+    carry the same redacted copy. Fail-open via the engine; gated by
+    ``GUARDRAILS_ENABLED``.
+    """
+    if not text or not _guardrails_config.enabled:
+        return text
+    t0 = time.perf_counter()
+    redacted, findings = _redact(text)
+    if not findings:
+        return text
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    # Emit per-call scan latency only on the first finding in the batch;
+    # remaining events carry latency_ms=0 so a dashboard summing the field
+    # reflects actual scan cost rather than N*cost for N findings.
+    for idx, f in enumerate(findings):
+        try:
+            _emit_redaction(
+                user_id=user_id or "",
+                session_id=session_id or "",
+                rule_id=f.rule_id,
+                value_hash=f.value_hash,
+                location="tool_completion",
+                tool=tool_name,
+                latency_ms=latency_ms if idx == 0 else 0.0,
+            )
+        except Exception as audit_err:
+            logging.warning(
+                "output-redaction audit emit failed for %s tool_completion: %s",
+                tool_name,
+                audit_err,
+            )
+    return redacted
+
 
 def send_tool_completion(tool_name: str, output: str, status: str = "completed", tool_call_id: Optional[str] = None, tool_input: Optional[Dict] = None):
     """Send tool completion notification via WebSocket if available."""
@@ -545,6 +596,20 @@ def send_tool_error(tool_name: str, error_msg: str, tool_call_id: Optional[str] 
         state_context = get_state_context()
         session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
 
+        # Output redaction: tool exceptions routinely echo the failing
+        # command (kubectl/aws/subprocess) which can carry auth flags or
+        # environment-injected credentials, so the error path needs the
+        # same Hook 1 scrub as the success path.
+        if _guardrails_config.enabled:
+            try:
+                cleaned_error = _apply_output_redaction(
+                    tool_name, cleaned_error, user_id, session_id
+                )
+            except Exception as redact_err:
+                logging.warning(
+                    f"Output-redaction on error path failed open for {tool_name}: {redact_err}"
+                )
+
         result_data = {
             "type": "tool_error",
             "data": {
@@ -690,7 +755,48 @@ def with_completion_notification(func):
         try:
             # Execute the original function
             result = func(*args, **kwargs)
-            
+
+            # Output redaction applied at the single fan-out point so the
+            # same redacted copy flows to both the WebSocket notification
+            # (see send_tool_completion) and the ToolMessage.content returned
+            # into LangGraph state for the next LLM turn. Structured results
+            # (dict/list) are serialized here so the same redacted string is
+            # reused by every downstream consumer (send_tool_completion,
+            # wrap_func_with_capture's json.dumps, and the iac_tool branch's
+            # json.loads round-trip). Both the serialization and redaction
+            # are gated by GUARDRAILS_ENABLED so disabling the feature is a
+            # true no-op (dict/list results still flow through as-is).
+            if _guardrails_config.enabled:
+                # Context retrieval is best-effort metadata for the audit
+                # event; a failure here must not skip the redaction scan
+                # itself, or secrets leak downstream on any ctx hiccup.
+                _uid = None
+                _sid = None
+                try:
+                    ctx = get_user_context()
+                    _uid = ctx.get('user_id') if isinstance(ctx, dict) else ctx
+                    _sctx = get_state_context()
+                    _sid = _sctx.session_id if _sctx and hasattr(_sctx, 'session_id') else None
+                except Exception as ctx_err:
+                    logging.warning(
+                        f"Output-redaction context lookup failed for {tool_name}: {ctx_err}; "
+                        "scanning with empty user/session metadata"
+                    )
+                try:
+                    if isinstance(result, (dict, list)):
+                        try:
+                            result = json.dumps(result, ensure_ascii=False, default=str)
+                        except Exception as dump_err:
+                            logging.warning(
+                                f"Output-redaction serialize failed for {tool_name}: {dump_err}; redacting repr"
+                            )
+                            result = str(result)
+                    elif not isinstance(result, str):
+                        result = str(result)
+                    result = _apply_output_redaction(tool_name, result, _uid, _sid)
+                except Exception as redact_err:
+                    logging.warning(f"Output-redaction pre-completion pass failed open for {tool_name}: {redact_err}")
+
             # Only send completion notification if no stop request
             try:
                 logging.info(f"🔍 TOOL COMPLETION: {tool_name} with signature_id: {signature_id}, input: {tool_input_data}")
@@ -880,6 +986,9 @@ def get_cloud_tools():
     # Check if we have cached LangChain tools for this user
     user_context = get_user_context()
     user_id = user_context.get('user_id') if isinstance(user_context, dict) else user_context
+    if not user_id:
+        logging.warning("get_cloud_tools called without user_id — returning empty tool set")
+        return []
     state_context = get_state_context()
     mode = None
     if state_context and hasattr(state_context, 'mode'):
@@ -894,24 +1003,23 @@ def get_cloud_tools():
     #   session gets its own wrapped functions that close over the *right* capture instance.
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
+    is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
     
-    if user_id:
-        current_time = time.time()
-        if (
-            cache_key in _langchain_tools_cache and
-            cache_key in _langchain_tools_cache_expiry and
-            current_time < _langchain_tools_cache_expiry[cache_key]
-        ):
-            logging.info(
-                f"Using fully cached LangChain tools for user {user_id} (cache key: {cache_key})"
-            )
-            cached_tools = _langchain_tools_cache[cache_key]
-            # Important: Return a copy to avoid modifications affecting the cache
-            return list(cached_tools)
+    current_time = time.time()
+    if (
+        cache_key in _langchain_tools_cache and
+        cache_key in _langchain_tools_cache_expiry and
+        current_time < _langchain_tools_cache_expiry[cache_key]
+    ):
+        logging.info(
+            f"Using fully cached LangChain tools for user {user_id} (cache key: {cache_key})"
+        )
+        cached_tools = _langchain_tools_cache[cache_key]
+        return list(cached_tools)
     
     # Create wrapper function to capture tool results
     INTERNAL_CONTEXT_KEYS = {
@@ -1171,40 +1279,121 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     cloud_exec_wrapper.__name__ = "cloud_exec"
     
     # Import on-prem kubectl tool
-    from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
-    
-    # List of (function, name) tuples
+    from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl, is_kubectl_onprem_connected
+    from utils.auth.stateless_auth import get_connected_providers
+
+    # List of (function, name) tuples — always-available tools
     tool_functions = [
-        (run_iac_tool, "iac_tool"),
-        (github_commit, "github_commit"),
-        (get_connected_repos, "get_connected_repos"),
-        (github_rca, "github_rca"),
-        (github_fix, "github_fix"),
-        (jenkins_rca, "jenkins_rca"),
-        (cloudbees_rca, "cloudbees_rca"),
-        (spinnaker_rca, "spinnaker_rca"),
-        (github_apply_fix, "github_apply_fix"),
-        (cloud_exec_wrapper, "cloud_exec"),
         (terminal_exec, "terminal_exec"),
-        (tailscale_ssh, "tailscale_ssh"),
-        (on_prem_kubectl, "on_prem_kubectl"),
         (analyze_zip_file, "analyze_zip_file"),
         # (web_search, "web_search"),  # Moved to dedicated registration below with explicit args_schema
     ]
 
+    # Cloud provider tools (only if at least one provider is connected)
+    if get_connected_providers(user_id):
+        tool_functions.append((run_iac_tool, "iac_tool"))
+        tool_functions.append((cloud_exec_wrapper, "cloud_exec"))
+
     # Only include trigger_rca when the user explicitly requested it via the UI button
     if state_context and getattr(state_context, 'trigger_rca_requested', False):
         tool_functions.append((trigger_rca, "trigger_rca"))
-    
+
+    # Only include trigger_action when the user explicitly used /action command
+    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
+    if _action_id:
+        tool_functions.append((trigger_action, "trigger_action"))
+
+    # Connection-gated tools — only added when user has the connector configured
+    def _safe_connected(check_fn, connector_name: str) -> bool:
+        try:
+            return bool(check_fn(user_id))
+        except Exception as e:
+            logging.warning(
+                "Skipping %s tools for user %s: connectivity check failed: %s",
+                connector_name, user_id, e,
+            )
+            return False
+
+    if _safe_connected(is_github_connected, "GitHub"):
+        tool_functions.append((github_commit, "github_commit"))
+        tool_functions.append((get_connected_repos, "get_connected_repos"))
+        tool_functions.append((github_rca, "github_rca"))
+        tool_functions.append((github_fix, "github_fix"))
+        logging.info(f"Added GitHub tools for user {user_id}")
+
+    if _safe_connected(is_tailscale_connected, "Tailscale"):
+        tool_functions.append((tailscale_ssh, "tailscale_ssh"))
+        logging.info(f"Added Tailscale SSH tool for user {user_id}")
+
+    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem"):
+        tool_functions.append((get_connected_clusters, "get_connected_clusters"))
+        tool_functions.append((on_prem_kubectl, "on_prem_kubectl"))
+        logging.info(f"Added on-prem kubectl tools for user {user_id}")
+
+    # Slack tools (if Slack connected)
+    try:
+        from .slack_tool import (
+            list_slack_channels,
+            get_channel_history,
+            get_thread_replies,
+            is_slack_connected,
+        )
+        if _safe_connected(is_slack_connected, "Slack"):
+            tool_functions.append((list_slack_channels, "list_slack_channels"))
+            tool_functions.append((get_channel_history, "get_channel_history"))
+            tool_functions.append((get_thread_replies, "get_thread_replies"))
+            logging.info(f"Added Slack tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Slack tools: {e}")
+
+    if _safe_connected(is_jenkins_connected, "Jenkins"):
+        tool_functions.append((jenkins_rca, "jenkins_rca"))
+        logging.info(f"Added Jenkins RCA tool for user {user_id}")
+    if _safe_connected(is_cloudbees_connected, "CloudBees"):
+        tool_functions.append((cloudbees_rca, "cloudbees_rca"))
+        logging.info(f"Added CloudBees RCA tool for user {user_id}")
+    if _safe_connected(is_spinnaker_connected, "Spinnaker"):
+        tool_functions.append((spinnaker_rca, "spinnaker_rca"))
+        logging.info(f"Added Spinnaker RCA tool for user {user_id}")
+
+    # get_postmortem is always available (read-only).
+    # save_postmortem is restricted to the dedicated postmortem generation action.
+    try:
+        from .postmortem_tool import get_postmortem, save_postmortem
+        tool_functions.append((get_postmortem, "get_postmortem"))
+        if is_postmortem_action:
+            tool_functions.append((save_postmortem, "save_postmortem"))
+    except ImportError:
+        logger.warning("Postmortem tools not available — import failed")
+
     # Process Aurora native tools
     for func, name in tool_functions:
+        # For github_rca, inject the authoritative incident timestamp before any
+        # other decoration so the fail-closed check and incident_time kwarg flow
+        # through with_completion_notification and wrap_func_with_capture.
+        effective_func = func
+        if name == 'github_rca':
+            def _github_rca_pinned(*args, _inner=func, **kwargs):
+                state_ctx = get_state_context()
+                incident_id_ctx = getattr(state_ctx, "incident_id", None) if state_ctx else None
+                pinned = getattr(state_ctx, "incident_start_time", None) if state_ctx else None
+                if incident_id_ctx and not pinned:
+                    return json.dumps({
+                        "status": "error",
+                        "error": "incident_start_time is missing from state; cannot run github_rca for an incident without the pinned timestamp.",
+                    })
+                if pinned:
+                    kwargs["incident_time"] = pinned
+                return _inner(*args, **kwargs)
+            effective_func = _github_rca_pinned
+
         # Apply forced context wrapper for critical tools that should never have parameters mixed up
-        if name in ['iac_tool', 'github_commit', 'github_fix', 'github_apply_fix']:
-            context_wrapped = with_forced_context(func)
+        if name in ['iac_tool', 'github_commit', 'github_fix']:
+            context_wrapped = with_forced_context(effective_func)
             logging.info(f"Applied with_forced_context decorator to {name}")
         else:
             # Apply user context wrapper for other tools
-            context_wrapped = with_user_context(func)
+            context_wrapped = with_user_context(effective_func)
             logging.info(f"Applied with_user_context decorator to {name}")
         
         # Apply completion notification wrapper for WebSocket updates
@@ -1238,6 +1427,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=GetConnectedReposArgs
             )
+        elif name == 'get_connected_clusters':
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all on-prem Kubernetes clusters the user has connected via the Aurora kubectl agent. "
+                    "Call this first to discover available clusters and their cluster_id before using on_prem_kubectl. "
+                    "Returns cluster names, IDs, connection status, and metadata."
+                ),
+                args_schema=GetConnectedClustersArgs
+            )
         elif name == 'github_rca':
             tool = StructuredTool.from_function(
                 func=final_func,
@@ -1250,7 +1450,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'pull_requests' (merged PRs in time window). "
                     "IMPORTANT: Always pass repo='owner/repo' to specify which repository to investigate. "
                     "If unsure which repo, call get_connected_repos first. "
-                    "Pass incident_time (ISO 8601) for automatic time window correlation."
+                    "The incident time is set automatically — do not pass it."
                 ),
                 args_schema=GitHubRCAArgs
             )
@@ -1262,7 +1462,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Suggest a code fix for an identified issue during RCA. "
                     "Use this when you identify a specific code change that would fix the root cause. "
                     "The fix is stored for user review before being applied. "
-                    "Parameters: file_path (path in repo), suggested_content (complete fixed file), "
+                    "Parameters: file_path (path in repo), "
+                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                    "set replace_all=true if you want every occurrence replaced), "
                     "fix_description (what this fix does), root_cause_summary (why this change is needed). "
                     "Optional: repo (owner/repo format), commit_message, branch."
                 ),
@@ -1329,19 +1532,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=SpinnakerRCAArgs
             )
-        elif name == 'github_apply_fix':
-            tool = StructuredTool.from_function(
-                func=final_func,
-                name=name,
-                description=(
-                    "Apply an approved fix suggestion by creating a branch and PR. "
-                    "Use this after the user has reviewed and approved a fix suggestion. "
-                    "Parameters: suggestion_id (ID of the fix suggestion to apply), "
-                    "use_edited_content (boolean, default true - use user-edited content if available), "
-                    "target_branch (optional base branch for PR, defaults to main)."
-                ),
-                args_schema=GitHubApplyFixArgs
-            )
         elif name == 'trigger_rca':
             tool = StructuredTool.from_function(
                 func=final_func,
@@ -1355,6 +1545,78 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "severity (optional: critical/high/medium/low)."
                 ),
                 args_schema=TriggerRCAArgs,
+            )
+        elif name == 'trigger_action':
+            pinned_id = _action_id
+            def _pinned_trigger(action_id: str = "", _pid=pinned_id, _fn=final_func, **kw):
+                return _fn(action_id=_pid, **kw)
+            tool = StructuredTool.from_function(
+                func=_pinned_trigger,
+                name=name,
+                description=(
+                    "Trigger an Aurora Action to run as a background task. "
+                    f"Call with action_id=\"{pinned_id}\"."
+                ),
+                args_schema=TriggerActionArgs,
+            )
+        elif name == 'get_postmortem':
+            from .postmortem_tool import GetPostmortemArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Read the current postmortem document for an incident. "
+                    "Returns the markdown content or indicates no postmortem exists yet. "
+                    "Use this before regenerating to get the prior version as context."
+                ),
+                args_schema=GetPostmortemArgs,
+            )
+        elif name == 'save_postmortem':
+            from .postmortem_tool import SavePostmortemArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Save or update a postmortem document for an incident. "
+                    "Creates a new version each time. Content should be complete "
+                    "structured markdown (Summary, Timeline, Root Cause, Impact, etc.)."
+                ),
+                args_schema=SavePostmortemArgs,
+            )
+        elif name == 'list_slack_channels':
+            from .slack_tool import ListSlackChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List Slack channels accessible to the bot. Returns channel names, "
+                    "topics, purposes, and member counts. Use to discover relevant channels "
+                    "before fetching message history."
+                ),
+                args_schema=ListSlackChannelsArgs,
+            )
+        elif name == 'get_channel_history':
+            from .slack_tool import GetChannelHistoryArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Fetch messages from a Slack channel within a time window. "
+                    "Use oldest/latest (ISO 8601) to scope messages to the incident timeframe. "
+                    "Returns message text, timestamps, user IDs, and thread info."
+                ),
+                args_schema=GetChannelHistoryArgs,
+            )
+        elif name == 'get_thread_replies':
+            from .slack_tool import GetThreadRepliesArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Fetch replies in a Slack thread. Use when a message has reply_count > 0 "
+                    "and the thread looks relevant to the incident investigation."
+                ),
+                args_schema=GetThreadRepliesArgs,
             )
         else:
             tool = StructuredTool.from_function(final_func)
@@ -1380,61 +1642,85 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     ))
 
     # Add load_skill tool for on-demand integration guidance
-    if user_id:
-        try:
-            from chat.backend.agent.skills.load_skill_tool import load_skill as _load_skill, LoadSkillArgs
+    try:
+        from chat.backend.agent.skills.load_skill_tool import load_skill as _load_skill, LoadSkillArgs
 
-            context_wrapped_skill = with_user_context(_load_skill)
-            notification_wrapped_skill = with_completion_notification(context_wrapped_skill)
-            if tool_capture:
-                final_skill_func = wrap_func_with_capture(notification_wrapped_skill, "load_skill")
-            else:
-                final_skill_func = notification_wrapped_skill
+        context_wrapped_skill = with_user_context(_load_skill)
+        notification_wrapped_skill = with_completion_notification(context_wrapped_skill)
+        if tool_capture:
+            final_skill_func = wrap_func_with_capture(notification_wrapped_skill, "load_skill")
+        else:
+            final_skill_func = notification_wrapped_skill
 
-            tools.append(StructuredTool.from_function(
-                func=final_skill_func,
-                name="load_skill",
-                description=(
-                    "MANDATORY: Load integration guidance BEFORE using any integration tool. "
-                    "You MUST call this first to get the correct workflow, syntax, and constraints. "
-                    "Without loading the skill, you will miss critical instructions. "
-                    "Only call ONCE per integration per conversation — the guidance stays in your context after loading. "
-                    "Check your CONNECTED INTEGRATIONS index for available IDs. "
-                    "Example: load_skill('github') before using github_rca, load_skill('datadog') before using query_datadog."
-                ),
-                args_schema=LoadSkillArgs,
-            ))
-        except Exception as e:
-            logging.warning(f"Failed to register load_skill tool: {e}")
+        tools.append(StructuredTool.from_function(
+            func=final_skill_func,
+            name="load_skill",
+            description=(
+                "MANDATORY: Load integration guidance BEFORE using any integration tool. "
+                "You MUST call this first to get the correct workflow, syntax, and constraints. "
+                "Without loading the skill, you will miss critical instructions. "
+                "Only call ONCE per integration per conversation — the guidance stays in your context after loading. "
+                "Check your CONNECTED INTEGRATIONS index for available IDs. "
+                "Example: load_skill('github') before using github_rca, load_skill('datadog') before using query_datadog."
+            ),
+            args_schema=LoadSkillArgs,
+        ))
+    except Exception as e:
+        logging.warning(f"Failed to register load_skill tool: {e}")
 
     # Add Knowledge Base search tool for authenticated users
+    try:
+        from chat.backend.agent.tools.knowledge_base_search_tool import (
+            knowledge_base_search,
+            KnowledgeBaseSearchArgs,
+            KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
+        )
+
+        context_wrapped_kb = with_user_context(knowledge_base_search)
+        notification_wrapped_kb = with_completion_notification(context_wrapped_kb)
+        if tool_capture:
+            final_kb_func = wrap_func_with_capture(notification_wrapped_kb, "knowledge_base_search")
+        else:
+            final_kb_func = notification_wrapped_kb
+
+        tools.append(StructuredTool.from_function(
+            func=final_kb_func,
+            name="knowledge_base_search",
+            description=KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
+            args_schema=KnowledgeBaseSearchArgs,
+        ))
+        logging.info(f"Added knowledge_base_search tool for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add knowledge_base_search tool: {e}")
+
+    # Add get_infrastructure_context for all authenticated users
     if user_id:
         try:
-            from chat.backend.agent.tools.knowledge_base_search_tool import (
-                knowledge_base_search,
-                KnowledgeBaseSearchArgs,
-                KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
+            from chat.backend.agent.tools.infra_context_tool import (
+                get_infrastructure_context,
+                GetInfraContextArgs,
+                GET_INFRA_CONTEXT_DESCRIPTION,
             )
 
-            context_wrapped_kb = with_user_context(knowledge_base_search)
-            notification_wrapped_kb = with_completion_notification(context_wrapped_kb)
+            context_wrapped_ic = with_user_context(get_infrastructure_context)
+            notification_wrapped_ic = with_completion_notification(context_wrapped_ic)
             if tool_capture:
-                final_kb_func = wrap_func_with_capture(notification_wrapped_kb, "knowledge_base_search")
+                final_ic_func = wrap_func_with_capture(notification_wrapped_ic, "get_infrastructure_context")
             else:
-                final_kb_func = notification_wrapped_kb
+                final_ic_func = notification_wrapped_ic
 
             tools.append(StructuredTool.from_function(
-                func=final_kb_func,
-                name="knowledge_base_search",
-                description=KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
-                args_schema=KnowledgeBaseSearchArgs,
+                func=final_ic_func,
+                name="get_infrastructure_context",
+                description=GET_INFRA_CONTEXT_DESCRIPTION,
+                args_schema=GetInfraContextArgs,
             ))
-            logging.info(f"Added knowledge_base_search tool for user {user_id}")
+            logging.info(f"Added get_infrastructure_context tool for user {user_id}")
         except Exception as e:
-            logging.warning(f"Failed to add knowledge_base_search tool: {e}")
+            logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
 
     # Add discovery finding tool for prediscovery mode
-    if user_id and mode_suffix == "prediscovery":
+    if mode_suffix == "prediscovery":
         try:
             from chat.backend.agent.tools.discovery_finding_tool import (
                 save_discovery_finding,
@@ -1459,8 +1745,32 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add save_discovery_finding tool: {e}")
 
+        try:
+            from chat.backend.agent.tools.infra_context_tool import (
+                save_infrastructure_context,
+                SaveInfraContextArgs,
+                SAVE_INFRA_CONTEXT_DESCRIPTION,
+            )
+
+            context_wrapped_sic = with_user_context(save_infrastructure_context)
+            notification_wrapped_sic = with_completion_notification(context_wrapped_sic)
+            if tool_capture:
+                final_sic_func = wrap_func_with_capture(notification_wrapped_sic, "save_infrastructure_context")
+            else:
+                final_sic_func = notification_wrapped_sic
+
+            tools.append(StructuredTool.from_function(
+                func=final_sic_func,
+                name="save_infrastructure_context",
+                description=SAVE_INFRA_CONTEXT_DESCRIPTION,
+                args_schema=SaveInfraContextArgs,
+            ))
+            logging.info("Added save_infrastructure_context tool for prediscovery mode")
+        except Exception as e:
+            logging.warning(f"Failed to add save_infrastructure_context tool: {e}")
+
     # Add Splunk tools if connected
-    if user_id and is_splunk_connected(user_id):
+    if is_splunk_connected(user_id):
         # search_splunk tool
         context_wrapped_splunk = with_user_context(search_splunk)
         notification_wrapped_splunk = with_completion_notification(context_wrapped_splunk)
@@ -1516,7 +1826,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
 
     # Add incident.io tools if connected
-    if user_id and is_incidentio_connected(user_id):
+    if is_incidentio_connected(user_id):
         context_wrapped_list = with_user_context(list_incidentio_incidents)
         notification_wrapped_list = with_completion_notification(context_wrapped_list)
         final_list_func = wrap_func_with_capture(notification_wrapped_list, "list_incidentio_incidents") if tool_capture else notification_wrapped_list
@@ -1568,7 +1878,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.debug(f"incident.io tools not added - user {user_id} not connected")
 
     # Add Dynatrace tool if connected
-    if user_id and is_dynatrace_connected(user_id):
+    if is_dynatrace_connected(user_id):
         context_wrapped_dt = with_user_context(query_dynatrace)
         notification_wrapped_dt = with_completion_notification(context_wrapped_dt)
         final_dt_func = wrap_func_with_capture(notification_wrapped_dt, "query_dynatrace") if tool_capture else notification_wrapped_dt
@@ -1587,7 +1897,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Dynatrace tool for user {user_id}")
 
     # Add Datadog tool if connected
-    if user_id and is_datadog_connected(user_id):
+    if is_datadog_connected(user_id):
         context_wrapped_dd = with_user_context(query_datadog)
         notification_wrapped_dd = with_completion_notification(context_wrapped_dd)
         final_dd_func = wrap_func_with_capture(notification_wrapped_dd, "query_datadog") if tool_capture else notification_wrapped_dd
@@ -1606,7 +1916,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Datadog tool for user {user_id}")
 
     # Add New Relic tool if connected
-    if user_id and is_newrelic_connected(user_id):
+    if is_newrelic_connected(user_id):
         context_wrapped_nr = with_user_context(query_newrelic)
         notification_wrapped_nr = with_completion_notification(context_wrapped_nr)
         final_nr_func = wrap_func_with_capture(notification_wrapped_nr, "query_newrelic") if tool_capture else notification_wrapped_nr
@@ -1628,8 +1938,49 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
 
+    # Add Sentry tool if connected
+    if is_sentry_connected(user_id):
+        context_wrapped_sentry = with_user_context(query_sentry)
+        notification_wrapped_sentry = with_completion_notification(context_wrapped_sentry)
+        final_sentry_func = wrap_func_with_capture(notification_wrapped_sentry, "query_sentry") if tool_capture else notification_wrapped_sentry
+
+        tools.append(StructuredTool.from_function(
+            func=final_sentry_func,
+            name="query_sentry",
+            description=(
+                "Query Sentry for error tracking data: issues, full event stacktraces, projects, or Discover-style event searches. "
+                "resource_type must be one of 'issues', 'issue_detail', 'issue_event', 'projects', 'events'. "
+                "For 'issues' and 'events', the query is a Sentry search expression (e.g. 'is:unresolved level:error environment:production'). "
+                "For 'issue_detail' and 'issue_event', the query MUST be the numeric Sentry issue id. "
+                "Examples: query_sentry(resource_type='issues', query='is:unresolved level:error', stats_period='24h') "
+                "or query_sentry(resource_type='issue_event', query='1234567890') for full stacktrace + breadcrumbs "
+                "or query_sentry(resource_type='projects') to list projects."
+            ),
+            args_schema=QuerySentryArgs,
+        ))
+        logging.info(f"Added Sentry tool for user {user_id}")
+
+    # Add GitLab tool if connected
+    if is_gitlab_connected(user_id):
+        context_wrapped_gl = with_forced_context(gitlab_tool)
+        context_wrapped_gl.__name__ = "gitlab"
+        notification_wrapped_gl = with_completion_notification(context_wrapped_gl)
+        final_gl_func = wrap_func_with_capture(notification_wrapped_gl, "gitlab") if tool_capture else notification_wrapped_gl
+
+        tools.append(StructuredTool.from_function(
+            func=final_gl_func,
+            name="gitlab",
+            description=(
+                "Interact with GitLab repositories. Actions: list_projects, deployment_check, "
+                "commits, diff, merge_requests, suggest_fix, apply_fix, commit_terraform, "
+                "create_branch, push_files, create_merge_request, delete_branch."
+            ),
+            args_schema=GitLabToolArgs,
+        ))
+        logging.info(f"Added GitLab tool for user {user_id}")
+
     # --- OpsGenie / JSM Operations tool ---
-    if user_id and is_opsgenie_connected(user_id):
+    if is_opsgenie_connected(user_id):
         from routes.opsgenie.opsgenie_routes import _get_stored_opsgenie_credentials
         _og_creds = _get_stored_opsgenie_credentials(user_id)
         _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
@@ -1654,7 +2005,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         from .bitbucket import is_bitbucket_connected
 
-        if user_id and is_bitbucket_connected(user_id):
+        if is_bitbucket_connected(user_id):
             from .bitbucket import (
                 bitbucket_repos, BitbucketReposArgs,
                 bitbucket_branches, BitbucketBranchesArgs,
@@ -1699,7 +2050,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # no Confluence credentials, breaking RCAs that mention runbook URLs.
     try:
         from utils.auth.token_management import get_token_data
-        if user_id and get_token_data(user_id, "confluence"):
+        if get_token_data(user_id, "confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "
@@ -1748,7 +2099,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     }
     try:
         from .notion import NOTION_TOOL_SPECS, is_notion_connected
-        if user_id and is_notion_connected(user_id):
+        if is_notion_connected(user_id):
             is_background = getattr(state_context, 'is_background', False) if state_context else False
             specs = NOTION_TOOL_SPECS
             if is_background:
@@ -1777,7 +2128,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             JiraCreateIssueArgs, JiraUpdateIssueArgs, JiraLinkIssuesArgs,
         )
 
-        if is_jira_enabled() and user_id:
+        if is_jira_enabled():
             from utils.auth.token_management import get_token_data as _get_jira_creds
             _jira_creds = _get_jira_creds(user_id, "jira")
             if _jira_creds:
@@ -1819,7 +2170,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         from utils.flags.feature_flags import is_sharepoint_enabled
         from utils.secrets.secret_ref_utils import has_user_credentials
 
-        if is_sharepoint_enabled() and user_id and has_user_credentials(user_id, "sharepoint"):
+        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint"):
             _sharepoint_tools = [
                 (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
                  "Search SharePoint for pages, documents, and list items matching a query. "
@@ -1850,7 +2201,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Coroot observability tools if connected
     try:
-        if user_id and is_coroot_connected(user_id):
+        if is_coroot_connected(user_id):
             _coroot_tools = [
                 (coroot_get_incidents, "coroot_get_incidents", CorootGetIncidentsArgs,
                  "List recent incidents from Coroot (eBPF-powered observability) with RCA summaries, severity, "
@@ -1916,7 +2267,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add ThousandEyes network intelligence tools if connected
     try:
-        if user_id and is_thousandeyes_connected(user_id):
+        if is_thousandeyes_connected(user_id):
             _te_tools = [
                 (thousandeyes_list_tests, "thousandeyes_list_tests", ThousandEyesListTestsArgs,
                  "List all configured ThousandEyes tests (network, HTTP, DNS, BGP, page load, etc.). "
@@ -1972,7 +2323,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Cloudflare tools if connected
     try:
-        if user_id and is_cloudflare_connected(user_id):
+        if is_cloudflare_connected(user_id):
             _cf_tools = [
                 (query_cloudflare, "query_cloudflare", CloudflareQueryArgs,
                  "Query Cloudflare for diagnostic data. Set resource_type to one of: "
@@ -2015,39 +2366,48 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Cloudflare tools (treating as not connected): {e}")
 
+    # Add alert payload drill-down tool for RCA sessions with an incident
+    incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+    if incident_id and is_background:
+        try:
+            from .alert_payload_tool import get_alert_field, GetAlertFieldArgs, GET_ALERT_FIELD_DESCRIPTION
+            _ctx = with_forced_context(get_alert_field)
+            _notif = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notif, "get_alert_field") if tool_capture else _notif
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name="get_alert_field",
+                description=GET_ALERT_FIELD_DESCRIPTION,
+                args_schema=GetAlertFieldArgs,
+            ))
+            logging.info(f"Added get_alert_field tool for incident {incident_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add get_alert_field tool: {e}")
+
     logging.info(f"Created {len(tools)} Aurora native tools")
     
-    # Add real MCP tools if available (simplified approach)
+    # Add real MCP tools if available
     try:
-        # Get user context to determine which MCP tools to include
-        user_context = get_user_context()
-        user_id = user_context.get('user_id') if isinstance(user_context, dict) else user_context
+        logging.info(f"Fetching MCP tools for user {user_id}")
+        try:
+            real_mcp_tools = run_async_in_thread(get_real_mcp_tools_for_user(user_id), timeout=90)
+        except Exception as e:
+            logging.warning(f" MCP tool retrieval failed: {str(e)}")
+            real_mcp_tools = []
         
-        if user_id:
-            # Get real MCP tools from all providers with safe timeout
-            logging.info(f"Fetching MCP tools for user {user_id}")
-            
-            try:
-                # Use a longer timeout for Azure MCP operations which can be slow
-                real_mcp_tools = run_async_in_thread(get_real_mcp_tools_for_user(user_id), timeout=90)
-            except Exception as e:
-                logging.warning(f" MCP tool retrieval failed: {str(e)}")
-                real_mcp_tools = []
-            
-            if real_mcp_tools:
-                # Convert MCP tools to LangChain tools using the new module
-                mcp_tools = create_mcp_langchain_tools(
-                    real_mcp_tools, 
-                    tool_capture=tool_capture,
-                    send_tool_start=send_tool_start,
-                    send_tool_completion=send_tool_completion,
-                    send_tool_error=send_tool_error,
-                    run_async_in_thread=run_async_in_thread
-                )
-                tools.extend(mcp_tools)
-                logging.info(f"Added {len(mcp_tools)} MCP tools for user {user_id}")
-            else:
-                logging.warning(f"No MCP tools returned for user {user_id} - this may indicate a timeout or error")
+        if real_mcp_tools:
+            mcp_tools = create_mcp_langchain_tools(
+                real_mcp_tools, 
+                tool_capture=tool_capture,
+                send_tool_start=send_tool_start,
+                send_tool_completion=send_tool_completion,
+                send_tool_error=send_tool_error,
+                run_async_in_thread=run_async_in_thread
+            )
+            tools.extend(mcp_tools)
+            logging.info(f"Added {len(mcp_tools)} MCP tools for user {user_id}")
+        else:
+            logging.warning(f"No MCP tools returned for user {user_id} - this may indicate a timeout or error")
                     
     except Exception as e:
         logging.error(f"Error adding real MCP tools: {str(e)}")
@@ -2097,13 +2457,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     
     logging.info(f"Total tools available: {len(tools)}")
     
-    # Cache the fully processed LangChain tools if we have a user_id
-    if user_id:
-        _langchain_tools_cache[cache_key] = tools
-        _langchain_tools_cache_expiry[cache_key] = time.time() + LANGCHAIN_TOOLS_CACHE_DURATION
-        logging.info(
-            f"Cached {len(tools)} fully processed LangChain tools for user {user_id} (key: {cache_key})"
-        )
+    # Cache the fully processed LangChain tools
+    _langchain_tools_cache[cache_key] = tools
+    _langchain_tools_cache_expiry[cache_key] = time.time() + LANGCHAIN_TOOLS_CACHE_DURATION
+    logging.info(
+        f"Cached {len(tools)} fully processed LangChain tools for user {user_id} (key: {cache_key})"
+    )
     
     return tools 
 

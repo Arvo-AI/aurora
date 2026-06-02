@@ -389,11 +389,23 @@ class S3Backend(StorageBackend):
             self._client = self._create_client()
         return self._client
 
+    def _is_gcs_endpoint(self) -> bool:
+        """Check if endpoint is Google Cloud Storage S3-compatible API."""
+        if not self._config.endpoint_url:
+            return False
+        from urllib.parse import urlparse
+        parsed = urlparse(self._config.endpoint_url)
+        return (parsed.hostname or "").lower() == "storage.googleapis.com"
+
     def _create_client(self):
         """Create boto3 S3 client with configuration."""
         try:
+            # GCS S3-interop requires V2 signatures; boto3's V4 chunked upload
+            # signing is incompatible with GCS's S3 endpoint for write operations.
+            sig_version = "s3" if self._is_gcs_endpoint() else "s3v4"
+
             client_config = Config(
-                signature_version="s3v4",
+                signature_version=sig_version,
                 retries={"max_attempts": 3, "mode": "standard"},
                 connect_timeout=10,
                 read_timeout=30,
@@ -421,7 +433,8 @@ class S3Backend(StorageBackend):
 
             endpoint_desc = self._config.endpoint_url or "AWS S3"
             logger.info(
-                f"S3 client initialized: endpoint={endpoint_desc}, bucket={self._config.bucket}"
+                "S3 client initialized: endpoint=%s, bucket=%s, signature=%s",
+                endpoint_desc, self._config.bucket, sig_version,
             )
 
             return client

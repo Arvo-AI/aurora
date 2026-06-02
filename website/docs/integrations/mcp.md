@@ -4,36 +4,74 @@ sidebar_position: 4
 
 # MCP (Model Context Protocol)
 
-Aurora exposes its full API surface over [MCP](https://modelcontextprotocol.io/), letting AI coding assistants (Cursor, Claude Desktop, Windsurf, etc.) query incidents, search your knowledge base, and call any Aurora API endpoint directly from the editor.
+Aurora exposes a focused, token-lean tool surface over [MCP](https://modelcontextprotocol.io/) so external clients (Cursor, Claude Desktop, Windsurf, etc.) can drive real investigations against Aurora without pulling in the full 150-tool agent catalog.
 
-## Available Tools
+The surface is **hybrid**: a small set of always-visible tools handles the 80% case, and a search-and-call pattern (`search_tools` + `call_tool`) reaches the long tail.
+
+## Tool Tiers
+
+### Tier 1 — Always visible
 
 | Tool | Description |
 |------|-------------|
-| `list_incidents` | List incidents, optionally filtered by status |
-| `get_incident` | Full incident details with summary, suggestions, and alerts |
-| `ask_incident` | Ask Aurora AI a question about an incident |
-| `get_graph_stats` | Infrastructure graph: single points of failure, critical services |
-| `search_knowledge_base` | Semantic search across ingested runbooks, postmortems, and docs |
-| `aurora_api` | Generic proxy to any of Aurora's ~340 API endpoints |
+| `chat_with_aurora` | **Default for any open-ended question.** Aurora's agent picks the right data sources, runs RCAs, and cites sources. Prefer this over individual tools unless the user explicitly asks for raw data. |
+| `list_incidents` | List Aurora incidents, optionally filtered by status |
+| `get_incident` | Full incident details with summary, suggestions, citations |
+| `ask_incident` | Incident-scoped follow-up Q&A |
+| `trigger_rca` | Kick off (or restart) Aurora's RCA pipeline for an incident |
+| `knowledge_base_search` | Semantic search across Aurora's ingested docs |
+| `search_runbooks` | Unified runbook search across the knowledge base, Confluence, SharePoint |
+| `search_tools` | Discover additional tools available behind the long-tail dispatch |
+| `call_tool` | Invoke a tool returned by `search_tools` |
+
+### Tier 2 — Connector-gated
+
+These appear in your tool list only when at least one backing integration is connected for the user:
+
+| Tool | Enabling integrations |
+|------|----------------------|
+| `query_logs` | Datadog · New Relic · Splunk · Coroot · Dynatrace |
+| `query_metrics` | Datadog · New Relic · Coroot · Dynatrace |
+| `query_traces` | Datadog APM · Coroot · Dynatrace |
+| `query_alerts` | Datadog · OpsGenie · incident.io |
+| `github_rca` | GitHub |
+| `query_jira` | Jira (search, get issue) |
+| `query_incidentio` | incident.io (list, get, timeline) |
+| `query_thousandeyes` | ThousandEyes (tests, alerts, agents) |
+| `query_coroot` | Coroot (applications, incidents, logs) |
+| `query_notion` | Notion (search, fetch page) |
+| `query_bitbucket` | Bitbucket (repos, branches, PRs) |
+
+Connect a new integration in the Aurora UI and the corresponding tool appears in your MCP client on its next request — the list is rebuilt per request.
+
+### Tier 3 — Long tail via search
+
+Specific endpoints (individual ThousandEyes routes, Notion writes, Bitbucket writes, postmortem actions, etc.) are not in the upfront list. Discover them with `search_tools("query")` and call them with `call_tool("name", { args })`. The full set is governed by a hard-coded **allowlist** in `server/aurora_mcp/registry.py`.
+
+**Out of scope for MCP** (deliberately not in the allowlist): Terraform apply/destroy, kubectl mutations, raw shell exec, Cloudflare WAF/DNS writes. These remain in the agent's internal surface only.
 
 ## Resources
 
-MCP resources provide read-only reference data your AI assistant can pull in for context:
+URI-fetched reference data — costs zero tokens until requested:
 
 | Resource URI | Description |
 |-------------|-------------|
-| `aurora://api-catalog` | Auto-generated list of all Aurora API endpoints (from Flask route map) |
-| `aurora://health` | Live system health: database, Redis, Weaviate, Celery status |
+| `aurora://catalog/connectors` | The user's connected providers and their status |
+| `aurora://catalog/skills` | All skills, with per-user connection status |
+| `aurora://incidents/recent` | Last 20 incidents (titles only, no full bodies) |
+| `aurora://runbooks/index` | Runbook index per connected doc connector |
+| `aurora://health` | Live system health: database, Redis, Weaviate, Celery |
 
 ## Prompts
 
-Pre-built investigation workflows your assistant can invoke:
+Pre-built workflows your assistant can pick from a menu:
 
 | Prompt | Parameters | Description |
 |--------|-----------|-------------|
-| `investigate_incident` | `incident_id` | Step-by-step incident investigation: fetch details, review AI summary, check graph impact, search runbooks |
-| `blast_radius_analysis` | `service_name` | Analyze downstream dependencies, check active incidents on affected services, estimate user impact |
+| `investigate_incident` | `incident_id` | Step-by-step incident investigation |
+| `blast_radius_analysis` | `service_name` | Downstream dependencies + active incidents on affected services |
+| `triage_alert` | `alert_id` | Triage workflow tying alerts → logs → metrics → recent deploys |
+| `summarize_incident` | `incident_id` | Produces a postmortem-shaped summary with citations |
 
 ## Authentication
 
@@ -113,12 +151,16 @@ Replace `<AURORA_MCP_URL>` with your Aurora deployment's MCP endpoint:
 ## Security Considerations
 
 :::warning External Exposure
-The MCP server grants full platform access to any client with a valid token. When exposing MCP externally via ingress:
+The MCP server grants full platform access (under each user's own RBAC and RLS scope) to any client with a valid token. When exposing MCP externally via ingress:
 
 - **Always** place it behind an auth proxy (e.g. oauth2-proxy, nginx `auth_request`) in addition to the Bearer token
 - Prefer keeping MCP cluster-internal and using `kubectl port-forward` for developer access
 - If you must expose it, use TLS and restrict access by IP or VPN
 :::
+
+### Allowlist (Tier 3 dispatch)
+
+The set of tools reachable through `call_tool` is hard-coded in `server/aurora_mcp/registry.py`. Infra-write surfaces (Terraform apply, kubectl mutations, shell exec, Cloudflare WAF/DNS) are excluded by design and additionally protected by a startup assertion against banned name fragments. To audit, read `DISPATCH_ALLOWLIST` in that file — it's the single source of truth.
 
 ### When to Use Ingress vs Port-Forward
 
@@ -132,17 +174,19 @@ The MCP server grants full platform access to any client with a valid token. Whe
 Once connected, your AI assistant can interact with Aurora:
 
 ```text
+"Why did checkout-svc page at 3am?"
+→ calls chat_with_aurora("Why did checkout-svc page at 3am?")
+   Aurora's agent picks the right tools, runs the full RCA, and replies with citations.
+
 "List all investigating incidents"
 → calls list_incidents(status="investigating")
 
-"What caused incident abc-123?"
-→ calls get_incident("abc-123"), then ask_incident("abc-123", "What was the root cause?")
+"Pull the raw Datadog logs for checkout-svc"
+→ calls query_logs(query="service:checkout-svc", source="datadog")
 
-"Show me the infrastructure graph stats"
-→ calls get_graph_stats()
-
-"Check the health endpoint"
-→ calls aurora_api(method="GET", path="/health/")
+"Are there any tools for creating Jira issues?"
+→ calls search_tools(query="jira create")
+→ then call_tool("jira_create_issue", { project: "OPS", summary: "...", ... })
 ```
 
-The `aurora_api` tool is a generic proxy -- read the `aurora://api-catalog` resource in your MCP client to discover all available endpoints.
+The default path is `chat_with_aurora` — Aurora's own agent runs server-side with its full system prompts and skill loader, so behavior matches the Aurora UI. Direct tools are available for surgical access to raw data when needed.

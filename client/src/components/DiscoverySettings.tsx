@@ -5,8 +5,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Radar, Check } from "lucide-react";
+import { Radar, Check, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuthHooks";
 
 export function DiscoverySettings() {
@@ -15,6 +16,9 @@ export function DiscoverySettings() {
   const [discovering, setDiscovering] = useState(false);
   const [intervalHours, setIntervalHours] = useState<number>(24);
   const [savingInterval, setSavingInterval] = useState(false);
+  const [autoEnabled, setAutoEnabled] = useState<boolean>(true);
+  const [savingEnabled, setSavingEnabled] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const { toast } = useToast();
   const { userId } = useAuth();
 
@@ -36,7 +40,98 @@ export function DiscoverySettings() {
         if (data.value != null) setIntervalHours(data.value);
       })
       .catch(() => {});
+    fetch(`/api/proxy/user-preferences?key=prediscovery_enabled`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.value != null) setAutoEnabled(Boolean(data.value));
+      })
+      .catch(() => {});
   }, [userId]);
+
+  type CancelOutcome = "cancelled" | "no_active" | "error";
+
+  const cancelAndRefreshStatus = async (): Promise<CancelOutcome> => {
+    try {
+      const cancelRes = await fetch("/api/prediscovery/cancel", { method: "POST", credentials: "include" });
+      if (!cancelRes.ok) {
+        console.error("Failed to cancel prediscovery:", cancelRes.status);
+        return "error";
+      }
+      const cancelData = await cancelRes.json().catch(() => ({}));
+      const statusRes = await fetch("/api/prediscovery/status", { credentials: "include" });
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        setStatus(data.status || "never_run");
+        setLastRun(data.updated_at || data.started_at || null);
+      }
+      return cancelData.status === "cancelled" ? "cancelled" : "no_active";
+    } catch (err) {
+      console.error("Failed to cancel prediscovery:", err);
+      return "error";
+    }
+  };
+
+  const toggleAutoDiscovery = async (next: boolean) => {
+    if (!userId) return;
+    const revert = () => {
+      setAutoEnabled(!next);
+      toast({ title: "Failed to save", variant: "destructive" });
+    };
+    setAutoEnabled(next);
+    setSavingEnabled(true);
+    try {
+      const res = await fetch(`/api/proxy/user-preferences`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "prediscovery_enabled", value: next }),
+      });
+      if (!res.ok) {
+        revert();
+        return;
+      }
+      const cancelOutcome = next ? "cancelled" : await cancelAndRefreshStatus();
+      if (next) {
+        toast({
+          title: "Auto-discovery enabled",
+          description: "Aurora will scan your infrastructure on the configured interval.",
+        });
+      } else if (cancelOutcome === "error") {
+        toast({
+          title: "Auto-discovery disabled",
+          description: "Scheduled scans paused, but cancelling the running scan failed.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Auto-discovery disabled",
+          description:
+            cancelOutcome === "cancelled"
+              ? "Scheduled scans paused and the running scan was cancelled."
+              : "Scheduled scans paused.",
+        });
+      }
+    } catch {
+      revert();
+    } finally {
+      setSavingEnabled(false);
+    }
+  };
+
+  const cancelRun = async () => {
+    setCancelling(true);
+    try {
+      const outcome = await cancelAndRefreshStatus();
+      if (outcome === "cancelled") {
+        toast({ title: "Discovery cancelled", description: "The running scan has been stopped." });
+      } else if (outcome === "no_active") {
+        toast({ title: "No active scan to cancel" });
+      } else {
+        toast({ title: "Failed to cancel", variant: "destructive" });
+      }
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const runDiscovery = async () => {
     setDiscovering(true);
@@ -89,6 +184,7 @@ export function DiscoverySettings() {
       return `Last synced ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}`;
     }
     if (status === "failed") return "Last run failed";
+    if (status === "cancelled") return "Last run cancelled";
     if (status === "never_run") return "Never run";
     return status;
   };
@@ -105,20 +201,40 @@ export function DiscoverySettings() {
       <CardContent className="space-y-4">
         <div className="flex items-center justify-between p-4 border rounded-lg">
           <div className="space-y-1">
-            <h4 className="font-medium">Run Discovery</h4>
-            <p className="text-sm text-muted-foreground">{formatStatus()}</p>
+            <Label htmlFor="auto-discovery-toggle" className="font-medium">Automatic Discovery</Label>
+            <p className="text-sm text-muted-foreground">
+              {autoEnabled
+                ? "Aurora scans on the interval below. Toggle off to stop scheduled runs."
+                : "Scheduled scans are paused. Manual runs still work."}
+            </p>
           </div>
-          <Button
-            variant="outline"
-            onClick={runDiscovery}
-            disabled={discovering || status === "in_progress"}
-          >
-            <Radar className={`h-4 w-4 mr-2 ${discovering || status === "in_progress" ? "animate-spin" : ""}`} />
-            {discovering || status === "in_progress" ? "Discovering..." : "Run Now"}
-          </Button>
+          <Switch
+            id="auto-discovery-toggle"
+            checked={autoEnabled}
+            onCheckedChange={toggleAutoDiscovery}
+            disabled={savingEnabled || cancelling}
+          />
         </div>
 
         <div className="flex items-center justify-between p-4 border rounded-lg">
+          <div className="space-y-1">
+            <h4 className="font-medium">Run Discovery</h4>
+            <p className="text-sm text-muted-foreground">{formatStatus()}</p>
+          </div>
+          {status === "in_progress" ? (
+            <Button variant="outline" onClick={cancelRun} disabled={cancelling}>
+              <X className="h-4 w-4 mr-2" />
+              {cancelling ? "Cancelling..." : "Cancel"}
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={runDiscovery} disabled={discovering}>
+              <Radar className={`h-4 w-4 mr-2 ${discovering ? "animate-spin" : ""}`} />
+              {discovering ? "Starting..." : "Run Now"}
+            </Button>
+          )}
+        </div>
+
+        <div className={`flex items-center justify-between p-4 border rounded-lg ${autoEnabled ? "" : "opacity-50"}`}>
           <div className="space-y-1">
             <Label htmlFor="discovery-interval" className="font-medium">Auto-Discovery Interval</Label>
             <p className="text-sm text-muted-foreground">
@@ -133,9 +249,10 @@ export function DiscoverySettings() {
               value={intervalHours}
               onChange={(e) => setIntervalHours(Number(e.target.value))}
               className="w-20"
+              disabled={!autoEnabled}
             />
             <span className="text-sm text-muted-foreground">hours</span>
-            <Button variant="outline" size="sm" onClick={saveInterval} disabled={savingInterval}>
+            <Button variant="outline" size="sm" onClick={saveInterval} disabled={savingInterval || !autoEnabled}>
               <Check className="h-4 w-4" />
             </Button>
           </div>

@@ -5,7 +5,9 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.server.enabled }}
   replicas: {{ .Values.replicaCounts.server }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "aurora.name" . }}-server
@@ -44,7 +46,7 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c"]
           args:
-            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads 16 --workers 2 --timeout 120 --preload
+            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads ${GUNICORN_THREADS:-4} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "server" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:

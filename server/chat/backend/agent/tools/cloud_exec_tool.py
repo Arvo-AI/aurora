@@ -13,14 +13,22 @@ from typing import Dict, Any, Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
+# Home directory for isolated subprocess environments.
+# Terminal pods (Dockerfile-user-terminal) create 'appuser' at /home/appuser.
+# The server container (Dockerfile) creates 'app' at /home/app.
+# In local dev (no pod isolation), use the actual process home so cloud CLIs
+# can write config/cache files (.kube, .azure, .config/gcloud, etc.).
+_POD_ISOLATION = os.getenv("ENABLE_POD_ISOLATION", "true") == "true"
+_ISOLATED_HOME = "/home/appuser" if _POD_ISOLATION else str(Path.home())
+
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
-from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+from utils.log_sanitizer import hash_for_log
 
 
 def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
@@ -45,77 +53,6 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     """Count tokens in text using LLMUsageTracker (for context management, not billing)."""
     return LLMUsageTracker.count_tokens(text, model)
 
-# --------------------------------------------------------------------------------------
-# Common verb sets used across providers
-# --------------------------------------------------------------------------------------
-_READ_ONLY_VERBS: set[str] = {
-    "list", "describe", "get", "show", "config", "version", "info", "view", "read", "status",
-}
-# A non-exhaustive but conservative set of verbs considered to CHANGE state
-_ACTION_VERBS: set[str] = {
-    "create", "delete", "update", "apply", "destroy", "terminate", "start", "stop",
-    "restart", "attach", "detach", "enable", "disable", "put", "remove",
-}
-
-
-def summarize_cloud_command(cmd: str) -> str:
-    """Return a short description of what the CLI command (gcloud/az/aws) intends to do."""
-
-    try:
-        tokens = shlex.split(cmd)
-    except Exception:
-        tokens = cmd.split()
-
-    action = None
-    resource_type = None
-    resource_name = None
-    zone_or_region = None
-
-    # Tokens representing the CLI executable that we should skip when searching
-    cli_tokens = {"gcloud", "az", "aws", "kubectl", "gsutil", "bq", "scw", "ovh"}
-
-    for i, tok in enumerate(tokens):
-        low = tok.lower()
-
-        # Detect action verb
-        if low in _ACTION_VERBS.union(_READ_ONLY_VERBS):
-            action = low
-
-            # Try to infer resource type – walk backwards until we find a token
-            # that is not a flag or CLI executable.
-            j = i - 1
-            while j >= 0 and (tokens[j].lower() in cli_tokens or tokens[j].startswith("-")):
-                j -= 1
-            if j >= 0:
-                resource_type = tokens[j]
-
-            # Resource name usually follows the action verb (unless it's a flag)
-            k = i + 1
-            while k < len(tokens) and tokens[k].startswith("-"):
-                k += 1
-            if k < len(tokens):
-                resource_name = tokens[k]
-
-        # Capture location / region / zone flags for common CLIs
-        if low.startswith("--zone="):
-            zone_or_region = tok.split("=", 1)[1]
-        elif low == "--zone" and i + 1 < len(tokens):
-            zone_or_region = tokens[i + 1]
-        elif low.startswith("--region=") or low.startswith("--location="):
-            zone_or_region = tok.split("=", 1)[1]
-        elif low in {"--region", "--location", "-r", "-l"} and i + 1 < len(tokens):
-            zone_or_region = tokens[i + 1]
-
-    parts: list[str] = []
-    if action and resource_type:
-        parts.append(f"The command will {action} {resource_type}")
-    if resource_name and not resource_name.startswith("--"):
-        parts.append(f"named '{resource_name}'")
-    if zone_or_region:
-        parts.append(f"in {zone_or_region}")
-
-    summary_core = " ".join(parts) if parts else cmd
-    return f"{summary_core}.\n\n"
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +98,8 @@ def check_cli_availability(cli_tool: str) -> bool:
             check_cmd,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            trusted=True
         )
         return result.returncode == 0
     except Exception:
@@ -171,7 +109,8 @@ def check_cli_availability(cli_tool: str) -> bool:
                 [cli_tool, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                trusted=True
             )
             return result.returncode == 0
         except Exception:
@@ -199,12 +138,12 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "AZURE_CLIENT_ID": str(client_id),
             "AZURE_CLIENT_SECRET": str(client_secret),
             "AZURE_TENANT_ID": str(tenant_id),
-            "AZURE_CONFIG_DIR": "/home/appuser/.azure",  # Ensure Azure CLI uses correct config directory
+            "AZURE_CONFIG_DIR": f"{_ISOLATED_HOME}/.azure",
         }
         
         # Store auth command for chaining with user commands (NEVER log the secret!)
@@ -265,7 +204,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             else:
                 aws_conn = get_user_aws_connection(user_id)
             if not aws_conn or not aws_conn.get('role_arn'):
-                logger.error("User %s does not have an active AWS connection", user_id)
+                logger.error("User %s does not have an active AWS connection", hash_for_log(user_id))
                 return False, None, None, None
 
             conn_region = aws_conn.get("region")
@@ -276,7 +215,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             ws = get_or_create_workspace(user_id, "default")
             external_id = ws.get("aws_external_id")
             if not external_id:
-                logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+                logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
                 return False, None, None, None
 
             current_mode = get_mode_from_context()
@@ -290,7 +229,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 if read_only_role:
                     # Use dedicated read-only role if available
                     role_arn = read_only_role
-                    logger.info("Using AWS read-only role for user %s", user_id)
+                    logger.info("Using AWS read-only role for user %s", hash_for_log(user_id))
                 else:
                     # Apply restrictive session policy to make the role read-only
                     # NOTE: Session policies work as an intersection with base role permissions.
@@ -301,7 +240,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                         "Read-only mode enabled for user %s but no read_only_role_arn provided. "
                         "Using session policy fallback. This may fail if the base role lacks read permissions. "
                         "Consider providing a dedicated read-only role for better reliability.",
-                        user_id
+                        hash_for_log(user_id)
                     )
 
             sts_creds = assume_workspace_role(
@@ -309,7 +248,8 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 external_id=external_id,
                 workspace_id=ws["id"],
                 region=selected_region or "us-east-1",
-                session_policy=session_policy
+                session_policy=session_policy,
+                user_id=user_id,
             )
 
             aws_credentials = {
@@ -320,7 +260,11 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
                 "aws_regions": [selected_region or "us-east-1"],
             }
 
-            logger.info("Assumed workspace role for %s, obtained temporary credentials (expires %s)", ws["id"], sts_creds["expiration"])
+            logger.info(
+                "Assumed workspace role for %s in region %s",
+                hash_for_log(str(ws["id"])),
+                selected_region or "us-east-1",
+            )
 
         except Exception as e:
             logger.error("Failed to obtain AWS workspace credentials: %s", e)
@@ -345,7 +289,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",  # Use terminal pod's writable home directory
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "AWS_ACCESS_KEY_ID": str(access_key_id),
             "AWS_SECRET_ACCESS_KEY": str(secret_access_key),
@@ -445,12 +389,12 @@ def setup_aws_environments_all_accounts(user_id: str):
     ws = get_or_create_workspace(user_id, "default")
     external_id = ws.get("aws_external_id")
     if not external_id:
-        logger.error("Workspace %s for user %s missing aws_external_id", ws["id"], user_id)
+        logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
         return []
 
     connections = get_all_user_aws_connections(user_id)
     if not connections:
-        logger.warning("No active AWS connections for user %s", user_id)
+        logger.warning("No active AWS connections for user %s", hash_for_log(user_id))
         return []
 
     current_mode = get_mode_from_context()
@@ -482,6 +426,7 @@ def setup_aws_environments_all_accounts(user_id: str):
                 workspace_id=ws["id"],
                 region=region,
                 session_policy=session_policy,
+                user_id=user_id,
             )
         except Exception as e:
             logger.error("Failed to assume role for account %s: %s", account_id, e)
@@ -505,7 +450,7 @@ def setup_aws_environments_all_accounts(user_id: str):
 
     logger.info(
         "Assumed roles for %d / %d accounts for user %s",
-        len(account_envs), len(connections), user_id,
+        len(account_envs), len(connections), hash_for_log(user_id),
     )
     return account_envs
 
@@ -568,28 +513,42 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
         is_sa_mode = token_resp.get("auth_type") == GCP_AUTH_TYPE_SA
         auth_method = "service_account" if is_sa_mode else "impersonated"
 
-        # Per-user gcloud config directory so concurrent users don't race on
-        # the same gcloud config/cache files and leak auth state between
-        # sessions. A user_id in Aurora is a UUID, which is already safe to
-        # embed in a filesystem path.
-        cloudsdk_config_dir = f"/tmp/.gcloud-{user_id}"
+        # Use an ephemeral temp directory for CLOUDSDK_CONFIG so no per-user
+        # on-disk gcloud state persists across invocations.  Each call gets its
+        # own directory; the OS reclaims it when the process exits (or earlier
+        # when the caller explicitly calls shutil.rmtree on _gcloud_tmpdir).
+        import atexit, shutil as _shutil
+        cloudsdk_config_dir = tempfile.mkdtemp(prefix=f".gcloud-{user_id}-")
         try:
-            os.makedirs(cloudsdk_config_dir, exist_ok=True)
+            # Write a minimal properties file so gcloud sees an active account.
+            # Without this, gcloud config config-helper (called by
+            # gke-gcloud-auth-plugin on every kubectl invocation) exits with
+            # "You do not currently have an active account selected" even when
+            # GOOGLE_OAUTH_ACCESS_TOKEN is set, because gcloud still validates
+            # that core/account is populated before resolving the token.
+            properties_path = os.path.join(cloudsdk_config_dir, "properties")
+            account_identity = sa_email if sa_email else "aurora-discovery@local"
+            fd = os.open(properties_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as _pf:
+                _pf.write(f"[core]\naccount = {account_identity}\n")
         except OSError as mkdir_err:
             logger.warning(
-                "GCP isolated env: could not create per-user CLOUDSDK_CONFIG dir (error_type=%s) — falling back to shared path",
+                "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s)",
                 type(mkdir_err).__name__,
             )
-            cloudsdk_config_dir = "/tmp/.gcloud"
+            _shutil.rmtree(cloudsdk_config_dir, ignore_errors=True)
+            return False, None, None, None
 
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "GOOGLE_OAUTH_ACCESS_TOKEN": access_token,
             "CLOUDSDK_AUTH_ACCESS_TOKEN": access_token,
             "GOOGLE_CLOUD_PROJECT": project_id,
             "CLOUDSDK_CONFIG": cloudsdk_config_dir,
+            # Expose the temp dir path so callers can clean up after use.
+            "_gcloud_tmpdir": cloudsdk_config_dir,
         }
         if is_sa_mode:
             # Point gcloud at a concrete ADC source so it doesn't fall through
@@ -608,6 +567,11 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
 
         logger.info("GCP isolated environment configured (%s)", auth_method)
         logger.info("TIME: setup_gcp_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
+
+        # Safety-net: register an atexit handler so the tmpdir is always
+        # removed even if the caller forgets to clean it up.  This covers
+        # every call-site, not just discovery_service.py.
+        atexit.register(_shutil.rmtree, cloudsdk_config_dir, ignore_errors=True)
 
         return True, project_id, auth_method, isolated_env
 
@@ -686,7 +650,9 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
                         }
                         if project_id:
                             updated_storage["projectId"] = project_id
-                        store_tokens_in_db(user_id, updated_storage, 'ovh')
+                        from utils.secrets.secret_ref_utils import get_token_owner_id
+                        owner_id = get_token_owner_id(user_id, "ovh")
+                        store_tokens_in_db(owner_id, updated_storage, 'ovh')
                         logger.info("Successfully refreshed OVH access token")
                     else:
                         logger.error(f"Failed to refresh OVH token: {refresh_response.status_code}")
@@ -713,7 +679,7 @@ def setup_ovh_environment_isolated(user_id: str, selected_project_id: str | None
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "OVH_ACCESS_TOKEN": access_token,
             "OVH_ENDPOINT": ovh_endpoint,
@@ -767,7 +733,7 @@ def setup_scaleway_environment_isolated(user_id: str, selected_project_id: str |
         # SCW_DEFAULT_REGION, SCW_DEFAULT_ZONE
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/home/appuser",
+            "HOME": _ISOLATED_HOME,
             "USER": os.environ.get("USER", ""),
             "SCW_ACCESS_KEY": access_key,
             "SCW_SECRET_KEY": secret_key,
@@ -1226,26 +1192,6 @@ def _cloud_exec_aws_multi_account(
             "provider": "aws",
         })
 
-    if not is_read_only_command(command):
-        from utils.cloud.infrastructure_confirmation import wait_for_user_confirmation
-        from .cloud_tools import get_state_context
-        summary_msg = summarize_cloud_command(command)
-        state_context = get_state_context()
-        context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-        if not wait_for_user_confirmation(
-            user_id=user_id,
-            message=f"[ALL {len(connections)} accounts] {summary_msg}",
-            tool_name="cloud_exec",
-            session_id=context_session_id,
-        ):
-            return json.dumps({
-                "success": False,
-                "error": "User declined multi-account command execution",
-                "multi_account": True,
-                "command": command,
-                "provider": "aws",
-            })
-
     def _run_on_account(conn: dict) -> dict:
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
@@ -1407,25 +1353,22 @@ Security & Compliance
         normalized_provider = _normalize_cloud_exec_provider(provider)
         provider = normalized_provider
 
-        # Org command policy check -- must run before any execution path branches
+        # Unified gate: signature + org policy + LLM judge + HITL (foreground).
         # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
         # the subcommand without the provider prefix, e.g. "ecs list-clusters").
         _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud"}
-        from utils.auth.command_policy import evaluate_compound_command
-        from utils.auth.stateless_auth import get_org_id_for_user
-        org_id = get_org_id_for_user(user_id) if user_id else None
+                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale"}
         prefix = _CLI_PREFIX.get(provider.lower(), "")
-        policy_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
-        verdict = evaluate_compound_command(org_id, policy_cmd)
-        if not verdict.allowed:
-            reason = (verdict.rule_description or "Matched organization policy")[:200]
-            logger.warning("Policy denied cloud command for user %s (%s)",
-                            user_id, reason)
+        gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        from utils.auth.command_gate import gate_command
+        gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
+        if not gate.allowed:
+            logger.warning("cloud_exec blocked for user %s (%s): %s",
+                           user_id, gate.code, gate.block_reason[:200])
             return json.dumps({
                 "success": False,
-                "error": f"Command blocked by organization policy: {reason}",
-                "code": "POLICY_DENIED",
+                "error": gate.block_reason,
+                "code": gate.code,
                 "final_command": command,
                 "provider": provider.lower(),
             })
@@ -1732,7 +1675,6 @@ Security & Compliance
                 logger.info(f"Using explicit project: {region_or_project}")
             else:
                 # Extract the project from the command if specified
-                import re
                 project_match = re.search(r'--project[=\s]+([^\s]+)', command)
                 if project_match:
                     specified_project = project_match.group(1)
@@ -1753,7 +1695,6 @@ Security & Compliance
                 logger.info(f"Using explicit region: {region_or_project}")
             else:
                 # Extract the region from the command if specified
-                import re
                 region_match = re.search(r'--region[=\s]+([^\s]+)', command)
                 if region_match:
                     specified_region = region_match.group(1)
@@ -1808,7 +1749,7 @@ Security & Compliance
                             tokens.insert(idx + 2, sa_email)
                             command = ' '.join(tokens)
                             break
-                logger.info(f"Injected impersonation flag for gsutil: {sa_email}")
+                logger.info("Injected impersonation flag for gsutil: %s", hash_for_log(sa_email))
                 # Add --quiet flag for deletion commands to avoid prompts
                 if 'delete' in command and '--quiet' not in command and '-q' not in command:
                     command += " --quiet"
@@ -1832,42 +1773,10 @@ Security & Compliance
             })
 
 
-        # If command is potentially action, ask for confirmation first (after command processing)
-        if not is_read_only_command(command):
-            summary_msg = summarize_cloud_command(command)
-            # Get session_id from context for state saving
-            from .cloud_tools import get_state_context
-            state_context = get_state_context()
-            context_session_id = state_context.session_id if state_context and hasattr(state_context, 'session_id') else None
-            
-            if not wait_for_user_confirmation(
-                user_id=user_id, 
-                message=summary_msg, 
-                tool_name="cloud_exec",
-                session_id=context_session_id
-            ):
-                # Capture the cancellation result in the tool capture system
-                tool_capture = get_tool_capture()
-                current_tool_call_id = get_current_tool_call_id(
-                    tool_name="cloud_exec",
-                    tool_kwargs={'provider': original_provider, 'command': original_command}
-                )
-                
-                cancellation_result = json.dumps({
-                    "status": "cancelled",
-                    "message": "cloud_exec command cancelled by user",
-                    "chat_output": "Command cancelled.",
-                    "user_cancelled": True,
-                    "final_command": command,  # Now includes the processed command with all prefixes and flags
-                })
-                
-                # Capture the cancellation result if we have a tool capture and current tool call ID
-                if tool_capture and current_tool_call_id:
-                    logger.info(f"Capturing cancellation result for tool call {current_tool_call_id}")
-                    tool_capture.capture_tool_end(current_tool_call_id, cancellation_result, is_error=False)
-                
-                return cancellation_result
-        
+        # Destructive-command confirmation is handled by the unified command
+        # gate earlier in this function (signature + org policy + LLM judge +
+        # HITL). Org policy is the source of truth for what requires approval.
+
         # Check if CLI tool is available before attempting to execute
         if not check_cli_availability(cli_tool):
             logger.error(f"CLI tool '{cli_tool}' is not available")
@@ -1911,7 +1820,8 @@ Security & Compliance
                     capture_output=True,
                     text=True,
                     timeout=30,
-                    env=isolated_env
+                    env=isolated_env,
+                    trusted=True
                 )
                 if auth_result.returncode != 0:
                     logger.error(f"Azure authentication failed: {auth_result.stderr}")
@@ -2304,7 +2214,6 @@ Security & Compliance
             return any(flag in lowered for flag in ["--filter", "--query", "--limit", "--page-size", "--max-items"])
 
         def _build_projection_command(provider_name: str, cmd: str) -> Tuple[Optional[str], Optional[str]]:
-            import re
             lowered = cmd.lower()
             if provider_name.lower() in ['gcp', 'gcloud']:
                 if " list" in lowered:
@@ -2356,7 +2265,8 @@ Security & Compliance
                             capture_output=True,
                             text=True,
                             timeout=effective_timeout,
-                            env=isolated_env
+                            env=isolated_env,
+                            trusted=True
                         )
                         if filtered_result.returncode == 0:
                             filtered_output = filtered_result.stdout.strip() or filtered_result.stderr

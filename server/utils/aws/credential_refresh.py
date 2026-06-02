@@ -71,7 +71,7 @@ def refresh_aws_credentials():
         logger.error("Failed to query active AWS connections for refresh: %s", e)
         return {"refreshed": 0, "error": str(e)}
 
-    for _user_id, role_arn, region, workspace_id, external_id in rows:
+    for user_id, role_arn, region, workspace_id, external_id in rows:
         if role_arn not in expiring_role_arns:
             skipped += 1
             continue
@@ -82,6 +82,7 @@ def refresh_aws_credentials():
                 external_id=external_id,
                 workspace_id=workspace_id,
                 region=region,
+                user_id=user_id,
             )
             refreshed += 1
         except Exception as e:

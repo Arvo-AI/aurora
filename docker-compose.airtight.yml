@@ -20,6 +20,8 @@ x-common-env: &common-env
   POSTGRES_DB: ${POSTGRES_DB}
   POSTGRES_HOST: ${POSTGRES_HOST}
   POSTGRES_PORT: ${POSTGRES_PORT}
+  DB_POOL_MIN: ${DB_POOL_MIN:-2}
+  DB_POOL_MAX: ${DB_POOL_MAX:-20}
 
   # Redis
   REDIS_URL: ${REDIS_URL}
@@ -34,6 +36,9 @@ x-common-env: &common-env
   STORAGE_VERIFY_SSL: ${STORAGE_VERIFY_SSL}
   STORAGE_CACHE_ENABLED: ${STORAGE_CACHE_ENABLED}
   STORAGE_CACHE_TTL: ${STORAGE_CACHE_TTL}
+
+  # Terraform
+  TF_CLI_CONFIG_FILE: /etc/terraform-airgapped.rc
 
   # Weaviate
   WEAVIATE_HOST: ${WEAVIATE_HOST}
@@ -90,11 +95,19 @@ x-common-env: &common-env
   LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
   SEARXNG_URL: ${SEARXNG_URL}
   RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
+  ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-true}
   RCA_MODEL: ${RCA_MODEL}
   MAIN_MODEL: ${MAIN_MODEL}
+  RCA_ORCHESTRATOR_MODEL: ${RCA_ORCHESTRATOR_MODEL}
+  RCA_SUBAGENT_MODEL: ${RCA_SUBAGENT_MODEL}
   VISION_MODEL: ${VISION_MODEL}
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+
+  # AI Safety Guardrails
+  GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
+  GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
+  GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
 
   # Vertex AI (Google Cloud)
   VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
@@ -154,7 +167,7 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-    command: ["python", "main_compute.py"]
+    command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-4} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
@@ -226,6 +239,7 @@ services:
     command: >
       celery -A celery_config worker
         --loglevel=info
+        --concurrency=${CELERY_CONCURRENCY:-4}
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker

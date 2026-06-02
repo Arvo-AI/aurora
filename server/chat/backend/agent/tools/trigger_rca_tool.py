@@ -144,7 +144,7 @@ def trigger_rca(
             conn.commit()
     except Exception as e:
         logger.exception(f"[TriggerRCA] Failed to create incident: {e}")
-        return json.dumps({"error": f"Failed to create incident: {e}"})
+        return json.dumps({"error": "Failed to create incident due to an internal error."})
 
     if not incident_id:
         return json.dumps({"error": "Failed to create incident — no ID returned"})
@@ -181,7 +181,7 @@ def trigger_rca(
             create_background_chat_session,
             run_background_chat,
         )
-        from chat.background.rca_prompt_builder import build_chat_rca_prompt
+        from chat.background.rca_prompt_builder import build_rca_prompt
 
         trigger_metadata = {"source": "chat", "incident_id": incident_id}
 
@@ -191,15 +191,24 @@ def trigger_rca(
             trigger_metadata=trigger_metadata, incident_id=incident_id,
         )
 
-        rca_prompt = build_chat_rca_prompt(
-            description=issue_description, title=incident_title,
-            service=service, severity=severity, user_id=user_id,
+        # Small enough to always pass verbatim (no truncation/get_alert_field needed)
+        payload: dict = {
+            "title": incident_title,
+            "status": "investigating",
+            "description": issue_description,
+            "service": service,
+            "severity": severity,
+        }
+
+        rca_prompt, rail_text = build_rca_prompt(
+            "chat", incident_title, payload, user_id=user_id,
         )
 
         task = run_background_chat.delay(
             user_id=user_id, session_id=rca_session_id,
             initial_message=rca_prompt, trigger_metadata=trigger_metadata,
             incident_id=incident_id,
+            rail_text=rail_text,
         )
 
         try:
@@ -234,7 +243,7 @@ def trigger_rca(
             logger.warning(f"[TriggerRCA] Could not mark incident {incident_id} as failed")
         return json.dumps({
             "incident_id": incident_id,
-            "error": f"Incident created but RCA dispatch failed: {e}",
+            "error": "Incident created but RCA dispatch failed due to an internal error.",
         })
 
     return json.dumps({

@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, RefreshCw, LogOut } from 'lucide-react';
 import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem';
 import { fetchProjects, saveProjects } from '@/components/cloud-provider/projects/projectUtils';
+import { useSetAsRoot } from '@/components/cloud-provider/projects/useSetAsRoot';
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -17,7 +18,6 @@ export default function OvhProviderIntegration({ onDisconnect }: OvhProviderInte
   const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [togglingProjectId, setTogglingProjectId] = useState<string | null>(null);
   const { toast } = useToast();
@@ -88,41 +88,7 @@ export default function OvhProviderIntegration({ onDisconnect }: OvhProviderInte
     }
   }
 
-  async function handleSetAsRoot(providerId: string, projectId: string): Promise<void> {
-    if (!userId) return;
-
-    setIsSaving(true);
-    try {
-      const response = await fetch('/api/provider-root-project/ovh', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to set root project');
-      }
-
-      await loadProjects(true);
-
-      toast({
-        title: "Success",
-        description: "Root project updated successfully",
-      });
-    } catch (error: any) {
-      console.error('Error setting root project:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to set root project",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  }
+  const { setAsRoot: handleSetAsRoot } = useSetAsRoot(userId, () => loadProjects(true));
 
   async function handleDisconnect(): Promise<void> {
     if (!userId) return;

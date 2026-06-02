@@ -1,6 +1,6 @@
 'use client';
 
-import { Incident, AuroraStatus, Citation, incidentsService } from '@/lib/services/incidents';
+import { Incident, AuroraStatus, Citation, Suggestion, incidentsService, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
 import { Badge } from '@/components/ui/badge';
 import {
   ExternalLink,
@@ -33,7 +33,6 @@ import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
-import { Suggestion } from '@/lib/services/incidents';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -46,15 +45,15 @@ function sourceDisplayName(source: string): string {
 }
 
 interface IncidentCardProps {
-  incident: Incident;
-  duration: string;
-  showThoughts: boolean;
-  onToggleThoughts: () => void;
-  citations?: Citation[];
-  onRefresh?: () => void;
+  readonly incident: Incident;
+  readonly duration: string;
+  readonly showThoughts: boolean;
+  readonly onToggleThoughts: () => void;
+  readonly citations?: Citation[];
+  readonly onRefresh?: () => void;
 }
 
-function StatusPill({ status }: { status: AuroraStatus }) {
+function StatusPill({ status }: { readonly status: AuroraStatus }) {
   switch (status) {
     case 'running':
       return (
@@ -121,12 +120,18 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
+  const sourceIconSrc = getSourceIconSrc(alert.source);
+  const sourceIconBgColor = getSourceIconBgColor(alert.source);
+
+  const [justResolved, setJustResolved] = useState(false);
 
   const handleResolveIncident = async () => {
     setResolvingIncident(true);
     try {
       await incidentsService.resolveIncident(incident.id);
-      toast({ title: 'Incident resolved', description: 'Postmortem generation has started.' });
+      toast({ title: 'Incident resolved', description: 'Postmortem is being generated in the background.' });
+      setJustResolved(true);
+      setShowPostmortem(true);
       onRefresh?.();
     } catch (e) {
       console.error('Failed to resolve incident:', e);
@@ -136,18 +141,37 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     }
   };
 
-  // Extract significant words (length > 3) from text for matching
+  // Extract significant words (length > 3) from text for matching.
+  // Splits on every non-word run AND on underscores, so path-y tokens like
+  // `server/routes/health_routes.py` become ['server', 'routes', 'health',
+  // 'routes', 'py'] instead of one un-splittable blob. Without this, file
+  // paths in bullets never overlap with file paths in fix-suggestion titles.
   const extractSignificantWords = useCallback((text: string): string[] => {
-    const normalized = text.toLowerCase().replace(/[^\w\s]/g, '');
-    return normalized.split(/\s+/).filter(word => word.length > 3);
+    return text
+      .toLowerCase()
+      .split(/[\W_]+/)
+      .filter(word => word.length > 3);
+  }, []);
+
+  // Pull the bare filename out of a path so we can do a strong "file mentioned
+  // in this bullet?" check for fix-type suggestions independent of word overlap.
+  const fileBasename = useCallback((filePath?: string): string | null => {
+    if (!filePath) return null;
+    const trimmed = filePath.trim();
+    if (!trimmed) return null;
+    const parts = trimmed.split(/[\\/]/);
+    const base = parts[parts.length - 1] || trimmed;
+    return base.toLowerCase();
   }, []);
 
   // Matches summary list items to suggestions by comparing significant words
-  // Returns the suggestion with the BEST match (most matching words), not just the first match
+  // Returns the suggestion with the BEST match (most matching words), not just the first match.
+  // For fix-type suggestions, a basename mention in the bullet is also a strong match signal.
   const findMatchingSuggestion = useCallback((text: string): Suggestion | null => {
     if (!incident.suggestions?.length) return null;
 
     const textWords = extractSignificantWords(text);
+    const lowerText = text.toLowerCase();
     const normalizedText = text.toLowerCase().replace(/[^\w\s]/g, '');
 
     let bestMatch: Suggestion | null = null;
@@ -156,12 +180,25 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     for (const suggestion of incident.suggestions) {
       // Match by title word overlap (at least 2 significant words in common)
       const titleWords = extractSignificantWords(suggestion.title);
-      const matchingWordCount = titleWords.filter(word => textWords.includes(word)).length;
+      const textWordSet = new Set(textWords);
+      const matchingWordCount = titleWords.filter(word => textWordSet.has(word)).length;
 
       // Keep track of the best match (most words in common)
       if (matchingWordCount >= 2 && matchingWordCount > bestMatchCount) {
         bestMatch = suggestion;
         bestMatchCount = matchingWordCount;
+      }
+
+      // For fix-type suggestions, also match if the bullet text mentions the
+      // target filename. Bullets like "Audit `server/routes/health_routes.py`"
+      // are a clear pointer to a fix on that file even when the prose vocab
+      // doesn't otherwise overlap with the fix title.
+      if (suggestion.type === 'fix') {
+        const base = fileBasename(suggestion.filePath);
+        if (base && lowerText.includes(base) && bestMatchCount < 3) {
+          bestMatch = suggestion;
+          bestMatchCount = 3; // beat any 2-word overlap; lose to richer overlap
+        }
       }
 
       // Match by description prefix overlap (only if no better title match)
@@ -176,7 +213,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       }
     }
     return bestMatch;
-  }, [incident.suggestions, extractSignificantWords]);
+  }, [incident.suggestions, extractSignificantWords, fileBasename]);
 
   // Find a fix suggestion by its database ID (for [S:id] markers)
   const findFixSuggestionById = useCallback((id: string): Suggestion | null => {
@@ -379,13 +416,15 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               </Badge>
             )}
             <div className="flex items-center gap-2">
-              <Image 
-                src={alert.source === 'pagerduty' ? '/pagerduty-icon.svg' : alert.source === 'dynatrace' ? '/dynatrace.png' : `/${alert.source}.svg`}
-                alt={alert.source}
-                width={20}
-                height={20}
-                className={`object-contain${alert.source === 'dynatrace' ? ' scale-[2.2]' : ''}${alert.source === 'bigpanda' ? ' bg-white rounded-sm p-0.5' : ''}`}
-              />
+              {sourceIconSrc && (
+                <Image 
+                  src={sourceIconSrc}
+                  alt={alert.source}
+                  width={20}
+                  height={20}
+                  className={sourceIconBgColor}
+                />
+              )}
               {isSafeUrl(alert.sourceUrl) ? (
                 <a 
                   href={alert.sourceUrl}
@@ -403,7 +442,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               )}
             </div>
           </div>
-          <StatusPill status={incident.auroraStatus} />
+          <div className="flex items-center gap-3">
+            <StatusPill status={incident.auroraStatus} />
+          </div>
         </div>
 
         {/* Alert title */}
@@ -789,6 +830,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         incidentTitle={incident.alert.title}
         isVisible={showPostmortem}
         onClose={() => setShowPostmortem(false)}
+        justResolved={justResolved}
       />
 
       {/* Infrastructure Visualization */}

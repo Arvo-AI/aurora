@@ -21,6 +21,16 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def is_tailscale_connected(user_id: str) -> bool:
+    """Check if Tailscale is connected for a user."""
+    from utils.auth.token_management import get_token_data
+    token_data = get_token_data(user_id, "tailscale")
+    if not token_data:
+        return False
+    auth_key = token_data.get("tailscale_auth_key") or token_data.get("auth_key")
+    return bool(auth_key or token_data.get("ssh_private_key"))
+
+
 def _is_pod_isolation_enabled() -> bool:
     """Check if pod isolation is enabled (K8s mode vs local dev)."""
     return os.getenv('ENABLE_POD_ISOLATION', 'true').lower() == 'true'
@@ -223,19 +233,16 @@ def tailscale_ssh(
             "error": "Command cannot be empty"
         })
 
-    # Org command policy check (shared allow/deny firewall across all tools)
-    from utils.auth.command_policy import evaluate_compound_command
-    from utils.auth.stateless_auth import get_org_id_for_user
-    org_id = get_org_id_for_user(user_id) if user_id else None
-    verdict = evaluate_compound_command(org_id, command)
-    if not verdict.allowed:
-        reason = (verdict.rule_description or "Matched organization policy")[:200]
-        logger.warning("Policy denied tailscale_ssh command for user %s (%s)",
-                        user_id, reason)
+    # Unified gate: signature + org policy + LLM judge + HITL (foreground).
+    from utils.auth.command_gate import gate_command
+    gate = gate_command(user_id=user_id, tool_name="tailscale_ssh", command=command)
+    if not gate.allowed:
+        logger.warning("tailscale_ssh blocked for user %s (%s): %s",
+                       user_id, gate.code, gate.block_reason[:200])
         return json.dumps({
             "success": False,
-            "error": f"Command blocked by organization policy: {reason}",
-            "code": "POLICY_DENIED",
+            "error": gate.block_reason,
+            "code": gate.code,
             "provider": "tailscale_ssh",
         })
 

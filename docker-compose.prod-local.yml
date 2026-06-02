@@ -15,6 +15,8 @@ x-common-env: &common-env
   POSTGRES_DB: ${POSTGRES_DB}
   POSTGRES_HOST: ${POSTGRES_HOST}
   POSTGRES_PORT: ${POSTGRES_PORT}
+  DB_POOL_MIN: ${DB_POOL_MIN:-2}
+  DB_POOL_MAX: ${DB_POOL_MAX:-20}
 
   # Redis
   REDIS_URL: ${REDIS_URL}
@@ -30,7 +32,8 @@ x-common-env: &common-env
   STORAGE_CACHE_ENABLED: ${STORAGE_CACHE_ENABLED}
   STORAGE_CACHE_TTL: ${STORAGE_CACHE_TTL}
 
-  # Terraform Timeouts
+  # Terraform
+  TF_CLI_CONFIG_FILE: /etc/terraform.rc
 
   # Weaviate
   WEAVIATE_HOST: ${WEAVIATE_HOST}
@@ -95,12 +98,34 @@ x-common-env: &common-env
   LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
   SEARXNG_URL: ${SEARXNG_URL}
   RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
+  ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-true}
   RCA_MODEL: ${RCA_MODEL}
   MAIN_MODEL: ${MAIN_MODEL}
+  RCA_ORCHESTRATOR_MODEL: ${RCA_ORCHESTRATOR_MODEL}
+  RCA_SUBAGENT_MODEL: ${RCA_SUBAGENT_MODEL}
   VISION_MODEL: ${VISION_MODEL}
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
   GEMINI_DISABLE_THINKING: ${GEMINI_DISABLE_THINKING}
+
+  # GitHub auth — every Aurora service that talks to GitHub (server,
+  # celery_worker, chatbot) needs the auth mode + App credentials to mint
+  # installation tokens. OAuth client credentials are also shared so the
+  # MCP server and background workers can mint/read user tokens. Webhook
+  # secret stays server-only (lives on the aurora-server entry below).
+  GITHUB_AUTH_MODE: ${GITHUB_AUTH_MODE:-app}
+  GITHUB_APP_ID: ${GITHUB_APP_ID}
+  GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
+  NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
+  GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
+  GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
+  GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
+  GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+
+  # AI Safety Guardrails
+  GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
+  GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
+  GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
 
   # Vertex AI (Google Cloud)
   VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
@@ -163,7 +188,7 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-    command: ["python", "main_compute.py"]
+    command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-4} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
@@ -191,9 +216,10 @@ services:
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
 
-      # GitHub OAuth (optional)
-      GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
-      GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+      # GitHub App webhook secret — server-only (HMAC validation lives in
+      # the route handler; chatbot/celery_worker handle already-verified
+      # deliveries). Other GitHub vars come from x-common-env.
+      GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET}
 
       # Bitbucket OAuth (optional)
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
@@ -260,6 +286,7 @@ services:
     command: >
       celery -A celery_config worker
         --loglevel=info
+        --concurrency=${CELERY_CONCURRENCY:-4}
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
@@ -288,6 +315,9 @@ services:
       OVH_EU_CLIENT_SECRET: ${OVH_EU_CLIENT_SECRET}
       OVH_US_CLIENT_ID: ${OVH_US_CLIENT_ID}
       OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
+
+      # GitHub App — auth mode + App credentials come from x-common-env.
+      # Webhook secret intentionally NOT passed to the worker.
 
       # Google Chat (service account needed to send responses)
       GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}

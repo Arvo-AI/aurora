@@ -304,40 +304,65 @@ def workspace_cleanup(user_id, workspace_id):
             return jsonify({"error": "Access denied"}), 403
 
         from utils.db.connection_utils import (
-            get_user_aws_connection,
+            get_all_user_aws_connections,
             delete_connection_secret,
         )
-        
-        aws_conn = get_user_aws_connection(user_id)
-        if not aws_conn:
+
+        aws_conns = get_all_user_aws_connections(user_id)
+        if not aws_conns:
             return jsonify({
-                "success": True, 
+                "success": True,
                 "message": "AWS connection already disconnected."
             })
 
-        account_id = aws_conn.get('account_id')
-        if account_id:
-            success = delete_connection_secret(user_id, "aws", account_id)
-            if not success:
-                logger.error("Failed to delete AWS connection for user %s account %s", user_id, account_id)
-                return jsonify({"error": "Failed to disconnect AWS connection"}), 500
-        
-        try:
-            from utils.db.connection_pool import db_pool
-            with db_pool.get_admin_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    """UPDATE workspaces SET aws_discovery_summary = NULL,
-                       aws_discovery_artifact_bucket = NULL,
-                       aws_discovery_artifact_key = NULL,
-                       updated_at = CURRENT_TIMESTAMP
-                       WHERE id = %s""",
-                    (workspace_id,),
+        failed_accounts = []
+        for aws_conn in aws_conns:
+            account_id = aws_conn.get('account_id')
+            if account_id:
+                if not delete_connection_secret(user_id, "aws", account_id):
+                    failed_accounts.append(account_id)
+                    logger.error("Failed to delete AWS connection for user %s account %s", user_id, account_id)
+
+        if failed_accounts and len(failed_accounts) == len(aws_conns):
+            return jsonify({"error": "Failed to disconnect AWS connections"}), 500
+
+        # Re-check actual DB state to handle races and determine cleanup.
+        remaining = get_all_user_aws_connections(user_id)
+        if not remaining:
+            try:
+                from utils.db.connection_pool import db_pool
+                with db_pool.get_admin_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """UPDATE workspaces SET aws_discovery_summary = NULL,
+                           aws_discovery_artifact_bucket = NULL,
+                           aws_discovery_artifact_key = NULL,
+                           updated_at = CURRENT_TIMESTAMP
+                           WHERE id = %s""",
+                        (workspace_id,),
+                    )
+                    conn.commit()
+            except Exception as db_exc:
+                logger.warning("Failed to clear workspace discovery fields for %s: %s", sanitize(workspace_id), db_exc)
+
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
+                    sanitize(user_id),
+                    sanitize(str(e)),
                 )
-                conn.commit()
-        except Exception as db_exc:
-            logger.warning("Failed to clear workspace discovery fields for %s: %s", sanitize(workspace_id), db_exc)
-            # Don't fail the request - connection is already removed from user_connections
+
+        if remaining:
+            remaining_ids = [c.get('account_id') for c in remaining if c.get('account_id')]
+            return jsonify({
+                "success": False,
+                "message": "Some AWS accounts could not be disconnected.",
+                "failedAccounts": remaining_ids,
+                "disconnected": [a for a in [c.get('account_id') for c in aws_conns] if a and a not in remaining_ids],
+            }), 207
 
         message = (
             "Aurora has disconnected AWS. "
@@ -419,7 +444,7 @@ def bulk_register_aws_accounts(user_id, workspace_id):
         results = []
         for entry in data["accounts"]:
             if not isinstance(entry, dict):
-                results.append({"accountId": "unknown", "success": False, "error": "Each entry must be a JSON object"})
+                results.append({"accountId": None, "success": False, "error": "Each entry must be a JSON object"})
                 continue
             role_arn = (entry.get("roleArn") or "").strip()
             account_id = (entry.get("accountId") or "").strip()
@@ -492,12 +517,29 @@ def delete_aws_account(user_id, workspace_id, account_id):
         from utils.db.connection_utils import delete_connection_secret
         success = delete_connection_secret(user_id, "aws", account_id)
         if success:
+            # Delete discovered infrastructure nodes scoped to this account only.
+            # Nodes for other AWS accounts still connected to this user are preserved.
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_aws_account(user_id, account_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete Memgraph nodes for user=%s aws account=%s: %s",
+                    sanitize(user_id),
+                    sanitize(account_id),
+                    sanitize(str(e)),
+                )
             return jsonify({"success": True, "message": f"Account {account_id} disconnected."})
         else:
             return jsonify({"error": "Account not found or already disconnected"}), 404
 
     except Exception as e:
-        logger.error("Failed to delete AWS account %s for workspace %s: %s", account_id, workspace_id, e)
+        logger.exception(
+            "Failed to delete AWS account %s for workspace %s: %s",
+            sanitize(account_id),
+            sanitize(workspace_id),
+            sanitize(str(e)),
+        )
         return jsonify({"error": "Internal server error"}), 500
 
 

@@ -10,9 +10,14 @@ import logging
 import json
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
+from utils.security.audit_events import emit_block_event
+from utils.security.audit_events import emit_redaction_event as _emit_redaction
+from utils.security.config import config as _guardrails_config
+from utils.security.output_redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +48,22 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
         for part in content:
             if isinstance(part, dict):
                 part_type = part.get("type", "")
-                
-                # Extract text from both thinking and text blocks
-                # thinking blocks: use 'thinking' key
-                # text blocks: use 'text' key
+
+                # Extract text from thinking, reasoning, and text blocks.
+                # Anthropic / Gemini thinking blocks: use `thinking` key.
+                # OpenAI Responses-API reasoning blocks: text lives inside
+                #   `summary` as a list of {type:'summary_text', text:'…'}.
+                # Regular text blocks: use `text` key.
                 if part_type in ("thinking", "reasoning") and include_thinking:
                     thinking_text = part.get("thinking", "")
                     if thinking_text:
                         text_parts.append(str(thinking_text))
+                    for s_item in part.get("summary") or []:
+                        if isinstance(s_item, dict):
+                            s_text = s_item.get("text") or s_item.get("summary_text", "")
+                            if s_text:
+                                text_parts.append(str(s_text))
                 elif part_type == "text" or not part_type:
-                    # Regular text content
                     text = part.get("text", "")
                     if text:
                         text_parts.append(str(text))
@@ -60,6 +71,13 @@ def _extract_text_from_content(content: Any, include_thinking: bool = False) -> 
                 text_parts.append(part)
         return "".join(text_parts)
     return str(content)
+
+
+def _get_input_rail_text(question: Any, message_content: Any) -> str:
+    """Return the user-authored text that should be evaluated by input rails."""
+    if isinstance(question, str):
+        return question
+    return _extract_text_from_content(message_content)
 
 
 class Workflow:
@@ -74,24 +92,30 @@ class Workflow:
         self._history_prefix_len: int = 0
 
     async def _wait_for_ongoing_tool_calls(self):
-        """Waits for any tool calls that are currently in progress to complete."""
+        """Waits briefly for any tool calls that are currently in progress to complete.
+        
+        MCP tool calls don't set the 'completed' flag via capture_tool_end,
+        so we use a short timeout and then force-clear remaining entries.
+        """
         tool_capture = getattr(self.agent, 'tool_capture_instance', None)
         if not tool_capture:
             logger.info("No tool capture instance found, cannot wait for tool calls.")
             return
 
-        # Initial check for ongoing calls
         with tool_capture.lock:
-            ongoing_calls = list(tool_capture.current_tool_calls.keys())
+            ongoing_calls = [
+                k for k, v in tool_capture.current_tool_calls.items()
+                if not v.get('completed')
+            ]
 
         if not ongoing_calls:
             logger.info("No ongoing tool calls detected at the start of wait.")
             return
 
         logger.info(f"Waiting for {len(ongoing_calls)} tool call(s) to complete: {ongoing_calls}")
-        
-        POLL_INTERVAL = 0.5  # seconds
-        MAX_WAIT_TIME = 30   # seconds
+
+        POLL_INTERVAL = 0.5
+        MAX_WAIT_TIME = 5
         time_waited = 0
 
         while time_waited < MAX_WAIT_TIME:
@@ -99,21 +123,79 @@ class Workflow:
             time_waited += POLL_INTERVAL
 
             with tool_capture.lock:
-                # Check if the initial ongoing calls are still present
-                still_ongoing = [call_id for call_id in ongoing_calls if call_id in tool_capture.current_tool_calls]
-            
+                still_ongoing = [call_id for call_id in ongoing_calls if call_id in tool_capture.current_tool_calls and not tool_capture.current_tool_calls[call_id].get('completed')]
+
             if not still_ongoing:
                 logger.info(f"All tracked tool calls have completed after {time_waited:.1f}s.")
                 return
-            
+
             logger.debug(f"Still waiting for {len(still_ongoing)} tool call(s): {still_ongoing}")
 
+        with tool_capture.lock:
+            for call_id in ongoing_calls:
+                if call_id in tool_capture.current_tool_calls:
+                    tool_capture.current_tool_calls[call_id]['completed'] = True
+                    tool_capture.current_tool_calls[call_id]['completion_time'] = datetime.now(timezone.utc)
+        logger.info(f"Timed out after {MAX_WAIT_TIME}s, force-marked {len(ongoing_calls)} tool calls as completed.")
+
     def _create_workflow(self) -> StateGraph:
-        """Create and configure the workflow graph."""
+        """Create and configure the workflow graph.
+
+        When ORCHESTRATOR_ENABLED=false, returns the existing single-node graph
+        unchanged. Default is true. Orchestrator imports are lazy so the inert
+        path never pulls in orchestrator deps.
+        """
         workflow = StateGraph(State)
-        workflow.add_node("agentic_tool_flow", self.agent.agentic_tool_flow)
-        workflow.add_edge(START, "agentic_tool_flow") 
-        workflow.add_edge("agentic_tool_flow", END)
+
+        from chat.backend.agent.orchestrator import is_orchestrator_enabled
+
+        if not is_orchestrator_enabled():
+            workflow.add_node("agentic_tool_flow", self.agent.agentic_tool_flow)
+            workflow.add_edge(START, "agentic_tool_flow")
+            workflow.add_edge("agentic_tool_flow", END)
+            return workflow
+
+        # Multi-agent graph (only reached when ORCHESTRATOR_ENABLED=true)
+        from chat.backend.agent.orchestrator.triage import triage_node, route_triage
+        from chat.backend.agent.orchestrator.dispatcher import dispatch_node, dispatch_to_sub_agents
+        from chat.backend.agent.orchestrator.sub_agent import sub_agent_node
+        from chat.backend.agent.orchestrator.synthesis import synthesis_node, route_after_synthesis
+
+        workflow.add_node("triage", triage_node)
+        workflow.add_node("direct_react", self.agent.agentic_tool_flow)
+        workflow.add_node("dispatch", dispatch_node)
+        workflow.add_node("sub_agent", sub_agent_node)
+        workflow.add_node("synthesis", synthesis_node)
+
+        # Only background RCA sessions WITH an rca_context enter the
+        # orchestrator. Foreground chats, actions, and follow-up messages
+        # (which are background but lack rca_context) use direct_react.
+        def _route_start(state) -> str:
+            is_bg = getattr(state, "is_background", False)
+            rca_ctx = getattr(state, "rca_context", None)
+            if isinstance(state, dict):
+                is_bg = state.get("is_background", False)
+                rca_ctx = state.get("rca_context")
+            if (rca_ctx or {}).get("source") == "action":
+                return "direct_react"
+            return "triage" if (is_bg and rca_ctx) else "direct_react"
+
+        workflow.add_conditional_edges(
+            START, _route_start, {"triage": "triage", "direct_react": "direct_react"}
+        )
+        workflow.add_conditional_edges(
+            "triage",
+            route_triage,
+            {"direct_react": "direct_react", "dispatch": "dispatch"},
+        )
+        workflow.add_edge("direct_react", END)
+        workflow.add_conditional_edges("dispatch", dispatch_to_sub_agents, ["sub_agent"])
+        workflow.add_edge("sub_agent", "synthesis")
+        workflow.add_conditional_edges(
+            "synthesis",
+            route_after_synthesis,
+            {"dispatch": "dispatch", "end": END},
+        )
         return workflow
 
     def get_compiled_workflow(self) -> CompiledStateGraph:
@@ -204,8 +286,8 @@ class Workflow:
                     return False
                 cursor.execute("""
                     SELECT messages FROM chat_sessions 
-                    WHERE id = %s AND user_id = %s AND is_active = true
-                """, (input_state.session_id, input_state.user_id))
+                    WHERE id = %s AND is_active = true
+                """, (input_state.session_id,))
                 
                 result = cursor.fetchone()
                 if result and result[0]:
@@ -287,7 +369,7 @@ class Workflow:
                 existing_call.setdefault("tool_name", tool_name)
                 existing_call.setdefault("call_id", tool_call_id)
                 existing_call.setdefault("run_id", run_id)
-                existing_call.setdefault("start_time", datetime.now())
+                existing_call.setdefault("start_time", datetime.now(timezone.utc))
 
                 if meaningful_input:
                     existing_call["input"] = tool_input
@@ -534,7 +616,7 @@ class Workflow:
                             logger.error(f"Cannot extract valid JSON from malformed args, using empty dict")
                             args = {}
                     except (json.JSONDecodeError, Exception) as e:
-                        logger.error(f"Failed to clean malformed args: {e}, using empty dict")
+                        logger.exception(f"Failed to clean malformed args: {e}, using empty dict")
                         args = {}
                 
                 elif args_stripped.startswith('{') and args_stripped.endswith('}'):
@@ -720,8 +802,8 @@ class Workflow:
                                   i.aurora_status, i.source_type, cs.messages
                            FROM chat_sessions cs
                            JOIN incidents i ON i.id = cs.incident_id
-                           WHERE cs.id = %s AND cs.user_id = %s AND cs.incident_id IS NOT NULL""",
-                        (session_id, user_id),
+                           WHERE cs.id = %s AND cs.incident_id IS NOT NULL""",
+                        (session_id,),
                     )
                     row = cursor.fetchone()
                     if row:
@@ -735,7 +817,7 @@ class Workflow:
                             "ui_messages": row[6],
                         }
         except Exception as e:
-            logger.error(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
+            logger.exception(f"[RCA-Context] Failed to fetch RCA context for session {session_id}: {e}")
         return None
 
     @staticmethod
@@ -962,6 +1044,63 @@ class Workflow:
         history_prefix_len = len(input_state.messages) - new_turn_input_count
         self._history_prefix_len = history_prefix_len
 
+        # --- Input rail: check user message for prompt injection ---
+        from guardrails.input_rail import check_input, InputRailResult
+        last_msg = input_state.messages[-1] if input_state.messages else None
+        if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
+            # Skip persistence for scaffold messages (background prompts, not user input)
+            is_scaffold = getattr(last_msg, 'additional_kwargs', {}).get('is_rca_scaffold', False)
+
+            # RCA chat turns may prepend internal routing instructions to the
+            # HumanMessage so the agent calls trigger_rca. Guardrails and chat
+            # persistence should evaluate the user's original text only.
+            msg_text = _get_input_rail_text(
+                getattr(input_state, "question", None),
+                last_msg.content,
+            )
+            # Skip rail when there is no untrusted text to evaluate (e.g.
+            # prediscovery prompts are entirely system-authored).
+            if not msg_text:
+                rail_result = InputRailResult(blocked=False)
+            else:
+                rail_result = await check_input(msg_text)
+            if rail_result.blocked:
+                emit_block_event(
+                    user_id=getattr(input_state, "user_id", "") or "",
+                    session_id=getattr(input_state, "session_id", "") or "",
+                    layer="input_rail",
+                    tool="workflow",
+                    subject=msg_text,
+                    reason=rail_result.reason,
+                    latency_ms=rail_result.latency_ms,
+                )
+                from guardrails.input_rail import _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
+                _RAIL_USER_MESSAGES = {
+                    _BLOCKED_REASON: "Your message was blocked by our safety system. Please rephrase your request.",
+                    _FAIL_CLOSED_AUTH: "There is an issue with the AI service configuration. Please try again later.",
+                    _FAIL_CLOSED_CONNECTIVITY: "The AI service is temporarily unavailable. Please try again in a moment.",
+                }
+                # Background chats have no interactive user: hard block stays.
+                # Foreground chats that were genuinely blocked: taint the session
+                # so every subsequent tool call goes through the command gate.
+                if getattr(input_state, "is_background", False) or rail_result.reason != _BLOCKED_REASON:
+                    input_state.guardrail_blocked = True
+                    yield ("token", _RAIL_USER_MESSAGES.get(rail_result.reason, "Something went wrong. Please try again."))
+                    return
+                from utils.auth.command_gate import mark_session_tainted
+                mark_session_tainted(
+                    getattr(input_state, "session_id", None),
+                    getattr(input_state, "user_id", None),
+                )
+
+            # Rail passed: NOW it's safe to persist the user message.
+            # Kept inside the rail gate so blocked messages never touch
+            # chat_sessions.messages (which legacy migration rehydrates into
+            # llm_context_history on the next turn).
+            if input_state.session_id and input_state.user_id and not is_scaffold:
+                from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
+                handle_immediate_save(input_state.session_id, input_state.user_id, msg_text)
+
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
         
@@ -1005,22 +1144,36 @@ class Workflow:
 
                 # Handle token streaming from LLM
                 elif event_type == "on_chat_model_stream":
+                    # Suppress triage/synthesis chunks — they emit structured-output
+                    # JSON that would leak into chat. Sub-agent tokens are intentionally
+                    # allowed through so the user sees live progress in Thoughts while
+                    # N sub-agents run; routing them into per-agent panels is future work.
+                    _node = (event.get("metadata") or {}).get("langgraph_node")
+                    if _node in ("triage", "synthesis"):
+                        continue
                     _token_count += 1
                     chunk_data = event.get("data", {})
                     chunk_obj = chunk_data.get("chunk")
                     if chunk_obj:
                         content = ""
+                        reasoning = ""
+
+                        # Check for reasoning content (OpenRouter, DeepSeek-R1 etc.)
+                        if hasattr(chunk_obj, 'additional_kwargs'):
+                            reasoning = chunk_obj.additional_kwargs.get("reasoning_content", "")
+
+                        # Extract visible content. _ReasoningChatOpenAI clears
+                        # chunk_obj.content for reasoning-only chunks upstream, so
+                        # this is safe to call unconditionally.
+                        is_background = getattr(input_state, "is_background", False)
                         if hasattr(chunk_obj, 'content') and chunk_obj.content:
-                            # Extract text content (handles Gemini thinking model list format)
-                            # include_thinking=True so reasoning flows to save_incident_thought() for RCA
-                            content = _extract_text_from_content(chunk_obj.content, include_thinking=True)
+                            content = _extract_text_from_content(chunk_obj.content, include_thinking=is_background)
 
-                        # Check for reasoning content (OpenRouter reasoning, DeepSeek-R1 etc.)
-                        # regardless of whether content was found above
-                        if not content and hasattr(chunk_obj, 'additional_kwargs'):
-                            content = chunk_obj.additional_kwargs.get("reasoning_content", "")
+                        # For background RCA chats, reasoning feeds into incident thoughts
+                        if not content and reasoning and is_background:
+                            content = reasoning
 
-                        # Only yield if we have actual text content
+                        # Only yield if we have actual text content (not reasoning)
                         if content:
                             chunk_id = getattr(chunk_obj, 'id', None)
                             if chunk_id:
@@ -1053,6 +1206,41 @@ class Workflow:
                 # Handle model turn completion — extract thinking/text as fallback
                 # when on_chat_model_stream didn't fire (LangGraph + Gemini bug)
                 elif event_type == "on_chat_model_end":
+                    # Don't render orchestrator-aux model turns into the lead's
+                    # chat: triage/synthesis use structured output that would
+                    # leak as JSON tokens, and sub-agents own their own
+                    # tool_capture. For triage/synthesis we still accumulate
+                    # usage; sub-agent usage is persisted under child sessions.
+                    _meta = event.get("metadata") or {}
+                    _node = _meta.get("langgraph_node") or ""
+                    _ns = _meta.get("langgraph_checkpoint_ns") or ""
+                    _is_subagent = _node == "sub_agent" or "sub_agent:" in _ns
+                    _is_orch_aux = _node in ("triage", "synthesis") or any(
+                        seg in _ns for seg in ("triage:", "synthesis:")
+                    )
+                    if _is_orch_aux:
+                        _aux_output = (event.get("data") or {}).get("output")
+                        _aux_usage = getattr(_aux_output, "usage_metadata", None) if _aux_output else None
+                        if _aux_usage:
+                            input_tokens = _aux_usage.get("input_tokens", 0)
+                            output_tokens = _aux_usage.get("output_tokens", 0)
+                            input_details = _aux_usage.get("input_token_details", {})
+                            cached_input_tokens = (
+                                input_details.get("cache_read", 0)
+                                if isinstance(input_details, dict) else 0
+                            )
+                            from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+                            estimated_cost = LLMUsageTracker.calculate_cost(
+                                input_tokens, output_tokens, input_state.model or "",
+                                cached_input_tokens=cached_input_tokens,
+                            )
+                            _session_usage["total_input_tokens"] += input_tokens
+                            _session_usage["total_output_tokens"] += output_tokens
+                            _session_usage["total_cost"] += estimated_cost
+                            _session_usage["request_count"] += 1
+                        continue
+                    if _is_subagent:
+                        continue
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
                     if output:
@@ -1069,10 +1257,13 @@ class Workflow:
                         # when tools are bound in LangGraph (langgraph#4877).
                         if _model_turn_tokens == 0:
                             content = ""
+                            is_background = getattr(input_state, "is_background", False)
                             if hasattr(output, 'content') and output.content:
-                                content = _extract_text_from_content(output.content, include_thinking=True)
+                                content = _extract_text_from_content(output.content, include_thinking=is_background)
                             if not content and hasattr(output, 'additional_kwargs'):
-                                content = output.additional_kwargs.get("reasoning_content", "")
+                                reasoning = output.additional_kwargs.get("reasoning_content", "")
+                                if reasoning and is_background:
+                                    content = reasoning
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
                                 msg_id = getattr(output, 'id', None)
@@ -1145,7 +1336,7 @@ class Workflow:
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
         except Exception as stream_exception:
-            logger.error(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}", exc_info=True)
+            logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
             raise
         
         # Consolidate message chunks and save final state
@@ -1289,8 +1480,7 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                # include_thinking=True so reasoning is preserved in the saved message
-                msg_content = _extract_text_from_content(msg.content or "", include_thinking=True)
+                msg_content = _extract_text_from_content(msg.content or "", include_thinking=False)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1438,6 +1628,10 @@ class Workflow:
                 if '[URGENT CANCELLATION]' in content:
                     continue
 
+                # Skip scaffold messages (background chat prompts not authored by the user)
+                if getattr(msg, 'additional_kwargs', {}).get('is_rca_scaffold'):
+                    continue
+
                 # Strip context wrapper — backend wraps user questions in
                 # <user_message> tags for the LLM; store only the raw question.
                 match = _USER_MESSAGE_RE.search(content)
@@ -1457,18 +1651,14 @@ class Workflow:
                 # Skip synthetic RCA summary injected by _compress_rca_context
                 if isinstance(raw_content, str) and raw_content.startswith(RCA_SUMMARY_PREFIX):
                     continue
-                # Extract text content (handles Gemini thinking model list format).
-                # Include thinking when text is empty and message has tool calls,
-                # so Gemini's reasoning appears in chat alongside tool cards.
-                # (Claude generates inline text with tool calls; Gemini puts reasoning
-                # in thinking blocks only, leaving text empty.)
+                # Extract text content (handles Gemini thinking model list format)
                 content = _extract_text_from_content(raw_content)
                 has_tool_calls = (
                     getattr(msg, 'tool_calls', [])
                     or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
                 )
                 if not content and has_tool_calls:
-                    content = _extract_text_from_content(raw_content, include_thinking=True)
+                    content = _extract_text_from_content(raw_content, include_thinking=False)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)
@@ -1560,8 +1750,16 @@ class Workflow:
                         break
                 if already_present:
                     continue
+
+                # Output redaction (Hook 3): RCA context payloads come from
+                # PagerDuty incident bodies which can carry tokens. Every
+                # other writer to tool_call['output'] in this file runs
+                # through _redact_for_ui; skipping it here would let raw
+                # secrets land in chat_sessions.messages unredacted.
+                redacted_content = self._redact_for_ui(
+                    content, tool_name="rca_context_update"
+                )
                 
-                # Create a new bot message for the context update
                 context_update_message = {
                     "message_number": len(ui_messages) + 1,
                     "text": "",
@@ -1577,7 +1775,7 @@ class Workflow:
                             "source": update.get("source", "pagerduty"),
                             "injected_at": injected_at,
                         }),
-                        "output": content,
+                        "output": redacted_content,
                         "status": "completed",
                         "timestamp": injected_at or datetime.now().isoformat(),
                     }],
@@ -1616,15 +1814,15 @@ class Workflow:
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET messages = %s, ui_state = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
-                    """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id, user_id))
+                        WHERE id = %s
+                    """, (json.dumps(ui_messages), json.dumps(ui_state), datetime.now(), session_id))
                 else:
                     # Fallback to only updating messages if no UI state provided
                     cursor.execute("""
                         UPDATE chat_sessions 
                         SET messages = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
-                    """, (json.dumps(ui_messages), datetime.now(), session_id, user_id))
+                        WHERE id = %s
+                    """, (json.dumps(ui_messages), datetime.now(), session_id))
                 
                 if cursor.rowcount > 0:
                     conn.commit()
@@ -1635,7 +1833,7 @@ class Workflow:
                     return False
                     
         except Exception as e:
-            logger.error(f"Error saving UI messages: {e}")
+            logger.exception(f"Error saving UI messages: {e}")
             return False
 
     def _append_new_turn_ui_messages(
@@ -1662,8 +1860,8 @@ class Workflow:
                     return False
 
                 cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s AND user_id = %s FOR UPDATE",
-                    (session_id, user_id),
+                    "SELECT messages FROM chat_sessions WHERE id = %s FOR UPDATE",
+                    (session_id,),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -1676,10 +1874,26 @@ class Workflow:
                 if not isinstance(existing, list):
                     existing = []
 
+                # Drop mid-stream `_streaming` rows before computing dedup and
+                # the merged write-back. Those rows are appended by
+                # save_streaming_chat_message during token streaming and
+                # removed seconds later by finalize_streaming_chat_message —
+                # but in background-task ordering they're still present here
+                # and would mask the seeded user row from
+                # create_background_chat_session, causing the dedup below to
+                # never match the real prior user message. Net effect: the
+                # user's question persisted twice and message_number got a
+                # gap (1 → 3 → 4) once finalize wiped the streaming row.
+                existing = [
+                    m for m in existing
+                    if not (isinstance(m, dict) and m.get('_streaming'))
+                ]
+
                 to_append = list(turn_ui_messages)
                 if (
                     to_append
                     and existing
+                    and isinstance(existing[-1], dict)
                     and to_append[0].get('sender') == 'user'
                     and existing[-1].get('sender') == 'user'
                     and (existing[-1].get('text') or '') == (to_append[0].get('text') or '')
@@ -1698,18 +1912,18 @@ class Workflow:
                         """
                         UPDATE chat_sessions
                         SET messages = %s, ui_state = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s
                         """,
-                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id, user_id),
+                        (json.dumps(merged), json.dumps(ui_state), datetime.now(), session_id),
                     )
                 else:
                     cursor.execute(
                         """
                         UPDATE chat_sessions
                         SET messages = %s, updated_at = %s
-                        WHERE id = %s AND user_id = %s
+                        WHERE id = %s
                         """,
-                        (json.dumps(merged), datetime.now(), session_id, user_id),
+                        (json.dumps(merged), datetime.now(), session_id),
                     )
                 conn.commit()
                 logger.info(
@@ -1720,8 +1934,70 @@ class Workflow:
 
         except Exception as e:
             # Broad catch: DB/persistence errors must not abort the workflow.
-            logger.error(f"Error appending UI messages: {e}")
+            logger.exception(f"Error appending UI messages: {e}")
             return False
+
+    def _redact_for_ui(self, content: Any, tool_name: str = "") -> str:
+        """Output redaction (Hook 3) on tool output as it is stitched onto
+        the persisted UI transcript.
+
+        Hook 1 redacts ``send_tool_completion``'s outbound payload; this hook
+        covers the parallel assignment to ``tool_call['output']`` that lands
+        in ``chat_sessions.messages`` (rendered by the UI on reload) and that
+        Hook 1 never sees. Idempotent; fail-open on any unexpected error.
+        """
+        text = str(content or "")
+        if not text or not _guardrails_config.enabled:
+            return text
+        try:
+            t0 = time.perf_counter()
+            redacted, findings = _redact(text)
+            if not findings:
+                return redacted
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            session_id = ""
+            user_id = ""
+            try:
+                session_id = self.config["configurable"]["thread_id"]
+            except Exception as e:
+                logger.debug(
+                    "Output redaction (ui_message): thread_id unavailable; defaulting session_id='': %s",
+                    e,
+                )
+            try:
+                user_id = self._get_state_attr(self._last_state, "user_id") or ""
+            except Exception as e:
+                logger.debug(
+                    "Output redaction (ui_message): user_id unavailable; defaulting user_id='': %s",
+                    e,
+                )
+            for idx, f in enumerate(findings):
+                try:
+                    _emit_redaction(
+                        user_id=user_id,
+                        session_id=session_id,
+                        rule_id=f.rule_id,
+                        value_hash=f.value_hash,
+                        location="ui_message",
+                        tool=tool_name,
+                        # Per-call scan latency only on the first finding;
+                        # remaining events report 0 so dashboards summing
+                        # the field do not overcount by a factor of N.
+                        latency_ms=latency_ms if idx == 0 else 0.0,
+                    )
+                except Exception as audit_err:
+                    # Audit emit is best-effort: never let a logger/transport
+                    # failure escape and trigger the outer fail-open, which
+                    # would return the un-redacted text.
+                    logger.warning(
+                        "output-redaction ui_message audit emit failed for %s: %s",
+                        tool_name,
+                        audit_err,
+                    )
+            return redacted
+        except Exception as e:
+            logger.exception(f"Output redaction (ui_message) failed open: {e}")
+            return text
 
     def _associate_tool_calls_with_output(self, ui_messages, tool_messages):
         """Associate tool calls with output in the UI messages."""
@@ -1776,7 +2052,10 @@ class Workflow:
                                     continue
                             
                             # Update the tool call with output (ID match is sufficient)
-                            tool_call['output'] = str(getattr(msg, 'content', ''))
+                            tool_call['output'] = self._redact_for_ui(
+                                getattr(msg, 'content', ''),
+                                tool_name=tool_call.get('tool_name') or '',
+                            )
                             tool_call['status'] = 'completed'
                             tool_call['timestamp'] = datetime.now().isoformat()  # Update timestamp to completion time
                             updated = True
@@ -1807,7 +2086,10 @@ class Workflow:
                     f"extras will be dropped"
                 )
             for msg, tc in zip(unmatched_tool_messages, running_tool_calls):
-                tc['output'] = str(getattr(msg, 'content', ''))
+                tc['output'] = self._redact_for_ui(
+                    getattr(msg, 'content', ''),
+                    tool_name=tc.get('tool_name') or '',
+                )
                 tc['status'] = 'completed'
                 tc['timestamp'] = datetime.now().isoformat()
 

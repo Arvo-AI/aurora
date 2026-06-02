@@ -8,6 +8,7 @@ from utils.web.cors_utils import create_cors_response
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.web.limiter_ext import limiter
+from utils.db.connection_pool import db_pool
 
 
 # Configure logging
@@ -136,31 +137,29 @@ def create_chat_session(user_id):
         # Generate title from messages if not provided
         if not title:
             title = generate_chat_title(messages)
-        
-        # Generate unique session ID
+
         session_id = str(uuid.uuid4())
-        
+        now = datetime.now()
+
         conn = connect_to_db_as_user()
         cursor = conn.cursor()
-        
+
         set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-        
-        # Insert new chat session
+
         cursor.execute("""
             INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (session_id, user_id, org_id, title, json.dumps(messages), json.dumps(ui_state), datetime.now(), datetime.now()))
-        
+        """, (session_id, user_id, org_id, title, json.dumps(messages), json.dumps(ui_state), now, now))
+
         conn.commit()
-        
-        # Prepare response data
+
         response_data = {
             'id': session_id,
             'title': title,
             'messages': messages,
             'ui_state': ui_state,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat(),
+            'created_at': now.isoformat(),
+            'updated_at': now.isoformat(),
             'status': 'active'
         }
         
@@ -199,7 +198,8 @@ def get_chat_session(user_id, session_id):
                    CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
                    COALESCE(status, 'active') as status,
                    user_id,
-                   incident_id
+                   incident_id,
+                   pending_turn
             FROM chat_sessions 
             WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
         """, (session_id, org_id))
@@ -276,6 +276,7 @@ def get_chat_session(user_id, session_id):
             'user_id': session_data[7],
             'is_own': session_data[7] == user_id,
             'incident_id': str(session_data[8]) if session_data[8] else None,
+            'pending_turn': session_data[9] if session_data[9] else None,
         }
         
         return jsonify(result), 200
@@ -488,6 +489,180 @@ def delete_chat_session(user_id, session_id):
             cursor.close()
         if 'conn' in locals() and conn:
             conn.close() 
+
+# ---------------------------------------------------------------------------
+# Message-level routes — used by MCP's chat_with_aurora and any non-WebSocket
+# client. Dispatches the same Celery-driven agent the WebSocket handler uses.
+# ---------------------------------------------------------------------------
+
+_MAX_MESSAGE_CHARS = 8000
+
+
+@chat_bp.route('/sessions/<session_id>/messages', methods=['POST'])
+@require_permission("chat", "write")
+def post_chat_message(user_id, session_id):
+    """Append a user message to a session and dispatch Aurora's agent.
+
+    Returns immediately with the assigned sequence number; clients poll
+    GET /sessions/<id>/messages?after=<seq> for the assistant reply.
+    """
+    org_id = get_org_id_from_request()
+    data = request.get_json(silent=True) or {}
+
+    message = (data.get('message') or '').strip()
+    mode = data.get('mode', 'chat')
+    if mode not in ('chat', 'rca', 'ask', 'agent'):
+        return jsonify({'error': 'invalid mode'}), 400
+    if not message:
+        return jsonify({'error': 'message is required'}), 400
+    if len(message) > _MAX_MESSAGE_CHARS:
+        return jsonify({'error': f'message too long (max {_MAX_MESSAGE_CHARS} chars)'}), 400
+
+    try:
+        from chat.background.task import run_background_chat
+
+        now = datetime.now()
+        new_user_msg = {
+            'sender': 'user',
+            'text': message,
+            'timestamp': now.isoformat(),
+        }
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+
+                # Append directly via JSONB || so we don't read+rewrite the
+                # full messages array on every turn (O(N²) over a session).
+                # RETURNING gives us the new message's index for the caller.
+                cursor.execute(
+                    """
+                    UPDATE chat_sessions
+                       SET messages = COALESCE(messages, '[]'::jsonb) || %s::jsonb,
+                           status = 'in_progress',
+                           updated_at = %s
+                     WHERE id = %s AND org_id = %s AND user_id = %s
+                       AND is_active = true
+                       AND COALESCE(status, 'active') != 'cancelled'
+                 RETURNING jsonb_array_length(messages) - 1 AS seq
+                    """,
+                    (json.dumps([new_user_msg]), now, session_id, org_id, user_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    # Either session doesn't exist or was cancelled — disambiguate.
+                    cursor.execute(
+                        "SELECT status FROM chat_sessions "
+                        "WHERE id = %s AND org_id = %s AND user_id = %s AND is_active = true",
+                        (session_id, org_id, user_id),
+                    )
+                    existing = cursor.fetchone()
+                    if not existing:
+                        return jsonify({'error': 'session not found'}), 404
+                    return jsonify({'error': 'session is cancelled'}), 409
+                user_seq = int(row[0])
+            conn.commit()
+
+        # `rca` and `chat` both map to ask-mode for the background agent task;
+        # only `agent` mode enables execution. `ask` is read-only by design.
+        task_mode = 'agent' if mode == 'agent' else 'ask'
+        try:
+            run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=message,
+                trigger_metadata={'source': 'chat_messages_route', 'mode': mode},
+                provider_preference=None,
+                incident_id=None,
+                send_notifications=False,
+                mode=task_mode,
+            )
+        except Exception:
+            # Broker unreachable — the user message is already committed and
+            # the session is marked in_progress. Flip it back so it doesn't
+            # appear stuck forever; the persisted message stays for context.
+            logging.exception("Failed to enqueue run_background_chat for session %s", session_id)
+            try:
+                with db_pool.get_admin_connection() as conn:
+                    with conn.cursor() as cursor:
+                        set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                        cursor.execute(
+                            "UPDATE chat_sessions SET status = 'error', updated_at = NOW() "
+                            "WHERE id = %s AND org_id = %s AND user_id = %s",
+                            (session_id, org_id, user_id),
+                        )
+                    conn.commit()
+            except Exception:
+                logging.exception("Failed to mark session %s as error after enqueue failure", session_id)
+            return jsonify({'error': 'Failed to dispatch chat task'}), 500
+
+        return jsonify({'session_id': session_id, 'seq': user_seq, 'status': 'in_progress'}), 202
+
+    except Exception:
+        logging.exception("Error posting chat message")
+        return jsonify({'error': 'Failed to post chat message'}), 500
+
+
+@chat_bp.route('/sessions/<session_id>/messages', methods=['GET'])
+@limiter.exempt
+@require_permission("chat", "read")
+def get_chat_messages(user_id, session_id):
+    """Return messages after a given sequence number plus session status.
+
+    Used by MCP's chat_with_aurora to poll for the assistant's reply.
+    """
+    org_id = get_org_id_from_request()
+    try:
+        after = int(request.args.get('after', 0))
+    except (TypeError, ValueError):
+        after = 0
+    # Negative `after` would slice from the tail and surface unrelated history.
+    after = max(0, after)
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                cursor.execute(
+                    """
+                    SELECT messages,
+                           COALESCE(status, 'active') AS status
+                    FROM chat_sessions
+                    WHERE id = %s AND org_id = %s AND is_active = true
+                    """,
+                    (session_id, org_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({'error': 'session not found'}), 404
+
+                messages = row[0] or []
+                status = row[1]
+
+        total = len(messages)
+        new_msgs = messages[after:] if after < total else []
+
+        # Pull citations from the latest assistant message (if any).
+        # Canonical sender for assistant rows in chat_sessions.messages is
+        # 'bot'; 'aurora' is accepted for legacy/MCP-bridge symmetry.
+        citations = []
+        for m in reversed(messages):
+            if m.get('sender') in ('bot', 'aurora') and m.get('citations'):
+                citations = m['citations']
+                break
+
+        return jsonify({
+            'session_id': session_id,
+            'status': status,
+            'seq': total,
+            'messages': new_msgs,
+            'citations': citations,
+        }), 200
+
+    except Exception:
+        logging.exception("Error fetching chat messages")
+        return jsonify({'error': 'Failed to fetch chat messages'}), 500
+
 
 @chat_bp.route('/sessions/bulk-delete', methods=['DELETE'])
 @require_permission("chat", "write")

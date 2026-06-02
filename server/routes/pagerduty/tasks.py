@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_pagerduty_rca_prompt
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 from utils.auth.stateless_auth import set_rls_context
@@ -224,6 +224,7 @@ def _process_custom_field_update(
                         "source": "pagerduty",
                         "custom_fields_updated": True,
                     },
+                    org_id=org_id,
                 )
             except Exception as e:
                 logger.warning(
@@ -347,13 +348,14 @@ def trigger_delayed_rca(
 
                         event_data = consolidated_payload.get("event", {})
                         incident_data = event_data.get("data", {})
-                        rca_prompt = build_pagerduty_rca_prompt(
-                            incident_data, user_id=user_id
+                        rca_prompt, rail_text = build_rca_prompt(
+                            "pagerduty", incident_title, incident_data, user_id=user_id
                         )
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         rca_prompt = (
                             f"PagerDuty incident #{incident_number}: {incident_title}"
                         )
+                        rail_text = f"PagerDuty incident #{incident_number}: {incident_title}"
                         logger.warning(
                             "[PAGERDUTY][RCA-DELAYED] Failed to parse consolidated payload: %s",
                             e,
@@ -362,6 +364,7 @@ def trigger_delayed_rca(
                     rca_prompt = (
                         f"PagerDuty incident #{incident_number}: {incident_title}"
                     )
+                    rail_text = f"PagerDuty incident #{incident_number}: {incident_title}"
 
                 # Try to fetch and attach runbook if available
                 if runbook_url:
@@ -404,6 +407,7 @@ def trigger_delayed_rca(
                         "incident_number": incident_number,
                     },
                     incident_id=incident_db_id,
+                    rail_text=rail_text,
                 )
                 
                 # Store Celery task ID immediately for cancellation support
@@ -771,6 +775,7 @@ def process_pagerduty_event(
                                 "incident_id": str(incident_db_id),
                                 "source": "pagerduty",
                             },
+                            org_id=org_id,
                         )
                     except Exception as e:
                         logger.warning(

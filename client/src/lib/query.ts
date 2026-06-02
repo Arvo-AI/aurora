@@ -25,6 +25,7 @@ export interface QueryOptions<T = unknown> {
   timeout?: number;          // abort after ms (default 20_000)
   revalidateOnFocus?: boolean;
   revalidateOnEvents?: string[];
+  refreshInterval?: number;  // poll every N ms (0 = disabled)
   enabled?: boolean;
   onSuccess?: (data: T) => void;
   onError?: (err: Error) => void;
@@ -303,6 +304,15 @@ export function useQuery<T>(
     evts.forEach(e => window.addEventListener(e, h));
     return () => { evts.forEach(e => window.removeEventListener(e, h)); };
   }, [active, opts.revalidateOnEvents.join(',')]);
+
+  const refreshInterval = options?.refreshInterval ?? 0;
+  useEffect(() => {
+    if (!active || !refreshInterval) return;
+    const id = setInterval(() => {
+      queryClient.invalidate(active, fetcherRef.current, optsRef.current).catch(() => {});
+    }, refreshInterval);
+    return () => clearInterval(id);
+  }, [active, refreshInterval]);
 
   useEffect(() => () => {
     if (!active) return;

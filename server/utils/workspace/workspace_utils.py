@@ -12,34 +12,55 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 
-def get_or_create_workspace(user_id: str, workspace_name: str = "default") -> Dict[str, Any]:
+def _has_request_context() -> bool:
+    try:
+        from flask import has_request_context
+        return has_request_context()
+    except ImportError:
+        return False
+
+
+def get_or_create_workspace(user_id: str, workspace_name: str = "default", org_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Get existing workspace or create a new one for a user.
-    
+
     Args:
         user_id: User identifier
         workspace_name: Workspace name (defaults to "default")
-        
+        org_id: Organization ID (required for RLS-protected inserts)
+
     Returns:
         Dictionary with workspace data
-        
+
     Raises:
         Exception: Database or validation errors
     """
     if not user_id:
         raise ValueError("user_id is required")
-    
+
+    from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
+
+    if not org_id:
+        org_id = get_org_id_for_user(user_id)
+
+    if not org_id:
+        raise ValueError(
+            f"Cannot resolve org_id for user {sanitize(user_id)}; "
+            "workspace INSERT would violate RLS policy"
+        )
+
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            
+            set_rls_context(cursor, conn, user_id)
+
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
                 "aws_discovery_artifact_key, aws_discovery_summary, created_at, updated_at "
                 "FROM workspaces WHERE user_id = %s AND name = %s",
                 (user_id, workspace_name)
             )
-            
+
             result = cursor.fetchone()
             if result:
                 # Deserialize JSON data from database
@@ -49,7 +70,7 @@ def get_or_create_workspace(user_id: str, workspace_name: str = "default") -> Di
                         discovery_summary = json.loads(discovery_summary)
                     except (json.JSONDecodeError, TypeError):
                         discovery_summary = None
-                
+
                 workspace = {
                     'id': result[0],
                     'user_id': result[1],
@@ -63,19 +84,19 @@ def get_or_create_workspace(user_id: str, workspace_name: str = "default") -> Di
                 }
                 logger.info(f"Retrieved existing workspace {workspace['id']} for user {user_id}")
                 return workspace
-            
+
             # Create new workspace
             workspace_id = str(uuid.uuid4())
             external_id = str(uuid.uuid4())  # Generate ExternalId immediately
-            
+
             cursor.execute(
-                "INSERT INTO workspaces (id, user_id, name, aws_external_id) "
-                "VALUES (%s, %s, %s, %s)",
-                (workspace_id, user_id, workspace_name, external_id)
+                "INSERT INTO workspaces (id, user_id, org_id, name, aws_external_id) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (workspace_id, user_id, org_id, workspace_name, external_id)
             )
-            
+
             conn.commit()
-            
+
             # Return the created workspace
             workspace = {
                 'id': workspace_id,
@@ -88,7 +109,7 @@ def get_or_create_workspace(user_id: str, workspace_name: str = "default") -> Di
                 'created_at': None,  # Will be set by database
                 'updated_at': None
             }
-            
+
             logger.info(f"Created new workspace {workspace_id} for user {user_id} with external_id {external_id}")
             return workspace
             
@@ -155,12 +176,13 @@ def update_workspace_aws_role(
         raise
 
 
-def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
+def get_workspace_by_id(workspace_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Get workspace by ID.
     
     Args:
         workspace_id: Workspace identifier
+        user_id: User identifier (required in background/Celery context for RLS)
         
     Returns:
         Workspace dictionary or None if not found
@@ -171,6 +193,10 @@ def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+
+            if user_id and not _has_request_context():
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cursor, conn, user_id, log_prefix="[Workspace:getById]")
             
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "
@@ -224,6 +250,10 @@ def get_user_workspaces(user_id: str) -> list:
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+
+            if not _has_request_context():
+                from utils.auth.stateless_auth import set_rls_context
+                set_rls_context(cursor, conn, user_id, log_prefix="[Workspace:list]")
             
             cursor.execute(
                 "SELECT id, user_id, name, aws_external_id, aws_discovery_artifact_bucket, "

@@ -44,6 +44,37 @@ POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 ```
 
+## Concurrency & Connection Pool
+
+Tuning parameters for gunicorn, Celery, and the database connection pool. Defaults work for small deployments; increase for higher concurrency.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GUNICORN_WORKERS` | `2` | Number of gunicorn worker processes |
+| `GUNICORN_THREADS` | `4` | Threads per gunicorn worker (total parallel requests = workers x threads) |
+| `CELERY_CONCURRENCY` | `4` | Number of concurrent Celery task workers |
+| `DB_POOL_MIN` | `2` | Minimum database connections kept open per process |
+| `DB_POOL_MAX` | `20` | Maximum database connections per process (must be >= workers x threads) |
+
+```bash
+GUNICORN_WORKERS=2
+GUNICORN_THREADS=4
+CELERY_CONCURRENCY=4
+DB_POOL_MIN=2
+DB_POOL_MAX=20
+```
+
+For higher concurrency, scale these together. Example for a 4-vCPU pod:
+
+```bash
+GUNICORN_WORKERS=4
+GUNICORN_THREADS=8
+DB_POOL_MAX=40
+CELERY_CONCURRENCY=8
+```
+
+On Kubernetes, prefer horizontal pod autoscaling over large per-pod thread counts. See the [Kubernetes deployment guide](../deployment/kubernetes#autoscaling) for HPA configuration.
+
 ## Redis
 
 Redis connection for Celery task queue and caching.
@@ -256,9 +287,22 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. |
-| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-3-haiku`, `false` = `anthropic/claude-opus-4.5` |
+| `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Used by the legacy single-agent RCA path; ignored when `ORCHESTRATOR_ENABLED=true`. |
+| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-4.6` |
+| `ORCHESTRATOR_ENABLED` | `true` | Multi-agent RCA orchestrator. When `true` (default), a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents. When `false`, RCA falls back to the legacy single-agent path with `RCA_MODEL`. |
+| `RCA_ORCHESTRATOR_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Brain model used for triage + synthesis decisions. Needs reliable structured-output JSON. No fallback — orchestrator nodes error out if unset and gracefully degrade to single-agent mode. Format: `provider/model`. |
+| `RCA_SUBAGENT_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Sub-agent investigator model. Needs reliable tool-calling — must always end its turn with a tool call (including the terminal `write_findings`). Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
+
+### AI Safety Guardrails
+
+Three-layer safety: input rail + signature matcher + LLM safety judge. See [Command Safety](./command-safety.md) for details.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
+| `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the vendored SigmaHQ rule corpus inside the signature matcher. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only hand-written rules. |
 
 ## Cloud Providers
 
@@ -305,15 +349,52 @@ These are Aurora's own AWS credentials for STS AssumeRole calls, not end-user cr
 
 ### GitHub
 
-| Variable | Description |
-|----------|-------------|
-| `GH_OAUTH_CLIENT_ID` | GitHub OAuth App Client ID |
-| `GH_OAUTH_CLIENT_SECRET` | GitHub OAuth App Client Secret |
+GitHub App is the default auth path. OAuth is a flag-gated fallback for
+on-prem deployments that cannot expose a public webhook URL.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_AUTH_MODE` | `app` | One of `app` \| `oauth` \| `hybrid`. Controls which CTA the connector dialog renders and which auth paths the backend accepts. |
+| `GITHUB_APP_ID` | | Numeric App ID from the App settings page. |
+| `GITHUB_APP_CLIENT_ID` | | App's Client ID (starts with `Iv23l...`). |
+| `NEXT_PUBLIC_GITHUB_APP_SLUG` | | The App's URL slug (e.g. `aurora-acme`). Used by the frontend to build install management URLs. |
+| `GITHUB_APP_WEBHOOK_URL` | | Public URL Aurora exposes for webhooks. Must match what's configured on the App. Example: `https://aurora.example.com/github/webhook`. |
+| `GITHUB_APP_SETUP_URL` | | Post-install redirect URL. Example: `https://aurora.example.com/github/app/install/callback`. |
+| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — Vault path `aurora/system/github-app/webhook-secret` takes precedence. |
+| `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
+| `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
+
+App-mode (recommended):
 
 ```bash
-GH_OAUTH_CLIENT_ID=your-client-id
-GH_OAUTH_CLIENT_SECRET=your-client-secret
+GITHUB_AUTH_MODE=app
+GITHUB_APP_ID=12345
+GITHUB_APP_CLIENT_ID=Iv23liExampleClientId
+NEXT_PUBLIC_GITHUB_APP_SLUG=aurora-acme
+GITHUB_APP_WEBHOOK_URL=https://aurora.example.com/github/webhook
+GITHUB_APP_SETUP_URL=https://aurora.example.com/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=
+# (private key PEM lives in Vault at aurora/system/github-app/private-key)
 ```
+
+Hybrid (App + OAuth, e.g. for a migration window):
+
+```bash
+GITHUB_AUTH_MODE=hybrid
+# all GITHUB_APP_* vars from the App-mode block above, plus:
+GH_OAUTH_CLIENT_ID=your-oauth-client-id
+GH_OAUTH_CLIENT_SECRET=your-oauth-client-secret
+```
+
+OAuth-only (on-prem fallback when public webhook ingress is unavailable):
+
+```bash
+GITHUB_AUTH_MODE=oauth
+GH_OAUTH_CLIENT_ID=your-oauth-client-id
+GH_OAUTH_CLIENT_SECRET=your-oauth-client-secret
+```
+
+See the [GitHub connector setup walkthroughs](../integrations/connectors.md#github) for the full operator click-through.
 
 ### Slack
 
@@ -500,11 +581,14 @@ RATE_LIMIT_HEADERS_ENABLED=true
 
 ## Docker Compose Files
 
-| File | Purpose |
-|------|---------|
-| `docker-compose.yaml` | Development stack |
-| `docker-compose.prod-local.yml` | Production-like testing and deployment |
+| File | Purpose | Gunicorn mode |
+|------|---------|---------------|
+| `docker-compose.yaml` | Development stack | `--reload` (auto-restart on code changes) |
+| `docker-compose.prod-local.yml` | Production-like local deployment | `--preload` (load app before forking workers) |
+| `docker-compose.airtight.yml` | Air-gapped deployment from pre-built images | `--preload` |
+
+All three files read `GUNICORN_WORKERS`, `GUNICORN_THREADS`, `CELERY_CONCURRENCY`, `DB_POOL_MIN`, and `DB_POOL_MAX` from the `.env` file. Set them there to tune concurrency across all environments.
 
 :::warning Keep Docker Compose Files in Sync
-When adding new environment variables, update both Docker Compose files to ensure consistency.
+When adding new environment variables, update all three Docker Compose files to ensure consistency.
 :::

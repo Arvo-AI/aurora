@@ -2,6 +2,7 @@ import psycopg2
 import psycopg2.pool
 import logging
 import os
+import time
 import threading
 from dotenv import load_dotenv
 from contextlib import contextmanager
@@ -12,6 +13,10 @@ load_dotenv()
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# How long to wait for a connection before giving up (seconds)
+_POOL_WAIT_TIMEOUT = 5.0
+
 
 class DatabaseConnectionPool:
     """Centralized database connection pool manager."""
@@ -45,9 +50,8 @@ class DatabaseConnectionPool:
             if pg_sslrootcert:
                 self.db_params['sslrootcert'] = pg_sslrootcert
 
-        # Connection pool configuration
-        self.min_connections = 1
-        self.max_connections = 50
+        self.min_connections = int(os.getenv('DB_POOL_MIN', '2'))
+        self.max_connections = int(os.getenv('DB_POOL_MAX', '20'))
 
         # Single connection pool
         self._pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
@@ -55,15 +59,18 @@ class DatabaseConnectionPool:
         # Track which PID created the pool so we can detect post-fork reuse
         self._pool_pid: Optional[int] = None
 
+        # Condition variable for waiting when pool is exhausted
+        self._pool_available = threading.Condition(threading.Lock())
+
         # Initialize pool on first access
         self._pool_lock = threading.Lock()
         self._initialized = True
 
         logger.info("DatabaseConnectionPool initialized")
-    
+
     def _get_pool(self) -> psycopg2.pool.ThreadedConnectionPool:
         """Get or create the connection pool.
-        
+
         Detects process forks (e.g. Gunicorn with --preload) and recreates
         the pool in child workers. psycopg2 connections are not fork-safe.
         """
@@ -97,11 +104,43 @@ class DatabaseConnectionPool:
                         logger.error(f"Failed to create connection pool: {e}")
                         raise
         return self._pool
-    
+
+    def _getconn_with_retry(self, pool):
+        """Get a connection, waiting up to _POOL_WAIT_TIMEOUT if exhausted.
+
+        psycopg2's ThreadedConnectionPool raises PoolError immediately when
+        all connections are checked out. This wrapper retries with backoff so
+        that short-lived queries (sub-agents, tool callbacks) don't fail just
+        because they collided at the same instant.
+        """
+        deadline = time.monotonic() + _POOL_WAIT_TIMEOUT
+        attempt = 0
+        while True:
+            try:
+                return pool.getconn()
+            except psycopg2.pool.PoolError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                attempt += 1
+                if attempt == 1:
+                    logger.warning(
+                        "Connection pool exhausted — waiting up to %.1fs for a free connection",
+                        remaining,
+                    )
+                with self._pool_available:
+                    self._pool_available.wait(timeout=min(0.1, remaining))
+
+    def _putconn_notify(self, pool, connection):
+        """Return a connection to the pool and notify waiters."""
+        pool.putconn(connection)
+        with self._pool_available:
+            self._pool_available.notify()
+
     @contextmanager
     def get_connection(self):
         """Get a connection from the pool with automatic cleanup.
-        
+
         Automatically sets RLS session variables (myapp.current_user_id,
         myapp.current_org_id) from the Flask request context when available.
         This ensures all queries on RLS-protected tables work correctly
@@ -110,7 +149,7 @@ class DatabaseConnectionPool:
         pool = self._get_pool()
         connection = None
         try:
-            connection = pool.getconn()
+            connection = self._getconn_with_retry(pool)
             if connection:
                 connection.autocommit = False
                 self._set_rls_vars(connection)
@@ -138,7 +177,7 @@ class DatabaseConnectionPool:
                 except Exception as e:
                     logger.warning("Failed to reset session vars on pool return: %s", e)
                 try:
-                    pool.putconn(connection)
+                    self._putconn_notify(pool, connection)
                 except Exception as e:
                     logger.error("Error returning connection to pool: %s", e)
 
@@ -173,7 +212,7 @@ class DatabaseConnectionPool:
     def get_admin_connection(self):
         """Alias for get_connection() - kept for backward compatibility."""
         return self.get_connection()
-    
+
     def get_pool_status(self) -> dict:
         """Get status information about the connection pool."""
         status = {'pool': None}
@@ -210,4 +249,4 @@ class DatabaseConnectionPool:
                 logger.info("Connection pool closed")
 
 # Global instance
-db_pool = DatabaseConnectionPool() 
+db_pool = DatabaseConnectionPool()

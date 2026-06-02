@@ -1,5 +1,6 @@
 """Email service for sending RCA investigation notifications via SMTP."""
 
+import html
 import logging
 import os
 import smtplib
@@ -514,6 +515,104 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
 </html>
 """
         
+        return self._send_email(to_email, subject, html_body, text_body)
+
+    def send_action_completed_email(
+        self,
+        to_email: str,
+        action_data: Dict[str, Any],
+    ) -> bool:
+        """Send email notification when an Aurora Action completes.
+
+        Args:
+            to_email: Recipient email address
+            action_data: Dictionary containing action details
+                - action_name: Name of the action
+                - run_id: Action run UUID
+                - status: 'success' or 'error'
+                - error: Optional error message
+                - started_at: When the action started
+                - completed_at: When the action finished
+                - session_id: Chat session ID (for link)
+
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        action_name = str(action_data.get('action_name', 'Unknown Action'))
+        status = action_data.get('status', 'success')
+        error_msg = str(action_data.get('error')) if action_data.get('error') else None
+        action_name_html = html.escape(action_name)
+        error_msg_html = html.escape(error_msg) if error_msg else None
+        started_at = action_data.get('started_at')
+        completed_at = action_data.get('completed_at')
+        session_id = action_data.get('session_id')
+
+        duration_str = 'Unknown'
+        if isinstance(started_at, datetime) and isinstance(completed_at, datetime):
+            duration = completed_at - started_at
+            minutes = int(duration.total_seconds() / 60)
+            if minutes < 1:
+                duration_str = 'Less than 1 minute'
+            elif minutes == 1:
+                duration_str = '1 minute'
+            else:
+                duration_str = f'{minutes} minutes'
+
+        is_success = status == 'success'
+        status_label = 'Completed Successfully' if is_success else 'Failed'
+        status_color = '#16a34a' if is_success else '#dc2626'
+
+        subject = f"[Aurora] Action {status_label} - {action_name}"
+
+        session_url = f"{self.frontend_url}/chat?sessionId={session_id}" if session_id else f"{self.frontend_url}/actions"
+        logo_url = self._get_logo_url()
+
+        text_body = f"""ACTION {status_label.upper()}
+
+Action: {action_name}
+Status: {status_label}
+Duration: {duration_str}
+"""
+        if error_msg:
+            text_body += f"Error: {error_msg}\n"
+        text_body += f"\nView details: {session_url}{self._text_footer()}"
+
+        error_section = ""
+        if error_msg:
+            error_section = f"""<div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 16px; margin-bottom: 32px;">
+                                <div style="font-size: 11px; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px;">Error</div>
+                                <div style="font-size: 14px; color: #7f1d1d; line-height: 1.5;">{error_msg_html}</div>
+                            </div>"""
+
+        html_body = f"""{self._email_header_html(logo_url)}
+{self._status_banner_html("Action " + status_label, f"Duration: {duration_str}")}
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 48px 40px;">
+                            {self._alert_title_card_html("Action", action_name_html)}
+
+                            <!-- Status -->
+                            <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
+                                <tr>
+                                    <td style="padding: 20px 16px 20px 0; vertical-align: top; width: 50%; border-top: 1px solid #e5e5e5;">
+                                        <div style="font-size: 11px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px;">Status</div>
+                                        <span style="display: inline-block; background-color: {status_color}; color: #ffffff; padding: 6px 16px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">{status_label}</span>
+                                    </td>
+                                    <td style="padding: 20px 0 20px 16px; vertical-align: top; width: 50%; border-top: 1px solid #e5e5e5;">
+                                        {self._detail_field_html("Duration", duration_str)}
+                                    </td>
+                                </tr>
+                            </table>
+
+                            {error_section}
+
+                            <!-- CTA Button -->
+                            {self._cta_button_html(session_url, "View Action Details")}
+                        </td>
+                    </tr>
+{self._email_footer_html()}"""
+
         return self._send_email(to_email, subject, html_body, text_body)
 
 

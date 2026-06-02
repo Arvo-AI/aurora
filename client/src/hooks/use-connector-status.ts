@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { GitHubIntegrationService } from "@/components/github-provider-integration";
+
 import { BitbucketIntegrationService } from "@/components/bitbucket-provider-integration";
 import { isOvhEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "@/components/connectors/types";
@@ -13,7 +14,7 @@ import { fetchR } from '@/lib/query';
 
 const pagerdutyService = require("@/lib/services/pagerduty").pagerdutyService;
 
-const SPECIAL_CONNECTORS = new Set(["github", "bitbucket", "onprem", "slack", "google_chat", "pagerduty"]);
+const SPECIAL_CONNECTORS = new Set(["github", "gitlab", "bitbucket", "onprem", "slack", "google_chat", "pagerduty"]);
 
 /**
  * Connection status for a single connector card.
@@ -57,15 +58,44 @@ export function useConnectorStatus(
     if (hasOverride || !isSpecial) return;
     const check = () => {
       if (connector.id === "github") checkGitHubStatus();
+      else if (connector.id === "gitlab") checkGitLabStatus();
       else if (connector.id === "bitbucket") checkBitbucketStatus();
       else if (connector.id === "slack") checkSlackStatus();
       else if (connector.id === "google_chat") checkGoogleChatStatus();
       else if (connector.id === "pagerduty") checkPagerDutyStatus();
       else if (connector.id === "onprem") checkVmConfigStatus();
     };
+    const allowedOrigins = new Set<string>();
+    allowedOrigins.add(window.location.origin);
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+    if (backendUrl) {
+      try {
+        allowedOrigins.add(new URL(backendUrl).origin);
+      } catch {
+        /* ignore malformed env */
+      }
+    }
+    const onMessage = (event: MessageEvent) => {
+      if (!allowedOrigins.has(event.origin)) return;
+      const data = event.data as { type?: string } | null;
+      if (data && data.type === 'github_auth_success' && connector.id === 'github') {
+        check();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') check();
+    };
     check();
     window.addEventListener("providerStateChanged", check);
-    return () => window.removeEventListener("providerStateChanged", check);
+    window.addEventListener("message", onMessage);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("providerStateChanged", check);
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [connector.id, userId, hasOverride, isSpecial]);
 
   // Fetch display details for messaging connectors even when batch-overridden
@@ -79,6 +109,18 @@ export function useConnectorStatus(
   const checkGitHubStatus = async () => {
     try {
       const data = await GitHubIntegrationService.checkStatus();
+      setIsConnected(data.connected || false);
+    } catch {
+      setIsConnected(false);
+    } finally {
+      setIsCheckingConnection(false);
+    }
+  };
+
+  const checkGitLabStatus = async () => {
+    try {
+      const res = await fetch('/api/proxy/gitlab/status');
+      const data = res.ok ? await res.json() : { connected: false };
       setIsConnected(data.connected || false);
     } catch {
       setIsConnected(false);
@@ -188,6 +230,7 @@ export function useConnectorStatus(
   const checkConnectionStatus = () => {
     if (typeof window === "undefined") return;
     if (connector.id === "github") checkGitHubStatus();
+    else if (connector.id === "gitlab") checkGitLabStatus();
     else if (connector.id === "bitbucket") checkBitbucketStatus();
     else if (connector.id === "onprem") checkVmConfigStatus();
     else if (connector.id === "slack") checkSlackStatus();
@@ -207,6 +250,7 @@ export function useConnectorStatus(
     slackStatus,
     googleChatStatus,
     checkGitHubStatus,
+    checkGitLabStatus,
     checkBitbucketStatus,
     checkSlackStatus,
     checkGoogleChatStatus,

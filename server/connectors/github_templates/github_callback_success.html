@@ -52,21 +52,29 @@
     </div>
 
     <script>
-        console.log('GitHub authentication successful. Sending token to parent window.');
-        // Send message to parent window
-        window.opener.postMessage(
-            {
-                type: 'github_auth_success',
-                token: '{{ token }}',
-                username: '{{ github_username }}'
-            },
-            '{{ frontend_url }}'
-        );
-        
-        // Close this window after a short delay
-        setTimeout(function() {
-            window.close();
-        }, 2000);
+        try {
+            if (window.opener) {
+                var configured = '{{ frontend_url|default("", true) }}';
+                var targetOrigin = '';
+                if (configured && configured !== 'None') {
+                    try {
+                        targetOrigin = new URL(configured).origin;
+                    } catch (urlErr) {
+                        console.warn('github_callback_success: bad frontend_url, skip postMessage', urlErr);
+                        targetOrigin = '';
+                    }
+                }
+                if (targetOrigin) {
+                    window.opener.postMessage(
+                        { type: 'github_auth_success' },
+                        targetOrigin
+                    );
+                }
+            }
+        } catch (e) {
+            console.warn('github_callback_success: postMessage failed (opener likely navigated away)', e);
+        }
+        setTimeout(function() { window.close(); }, 250);
     </script>
 </body>
 </html> 

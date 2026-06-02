@@ -9,7 +9,7 @@ from utils.db.connection_pool import db_pool
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
-from utils.log_sanitizer import sanitize
+from utils.log_sanitizer import hash_for_log, sanitize
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -56,12 +56,15 @@ def _parse_suggestion_id(suggestion_id: str) -> Optional[int]:
 def _build_source_url(source_type: str, user_id: str) -> str:
     """Build platform URL from user's integration settings."""
     try:
+        from utils.db.org_scope import resolve_org, org_read_predicate
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
-                    "SELECT client_id FROM user_tokens WHERE user_id=%s AND provider=%s",
-                    (user_id, source_type),
+                    f"SELECT client_id FROM user_tokens WHERE {predicate} AND provider=%s LIMIT 1",
+                    (*pred_params, source_type),
                 )
                 row = cursor.fetchone()
                 client_id = row[0] if row else None
@@ -403,7 +406,7 @@ def get_incident(user_id, incident_id: str):
                     except (ValueError, TypeError):
                         logger.debug(
                             "[INCIDENTS] Skipping payload fetch for composite netdata alert_id: %s",
-                            source_alert_id,
+                            hash_for_log(source_alert_id),
                         )
                 elif source_type == "grafana":
                     # source_alert_id is grafana_alerts.id * 100 + alert_index.
@@ -801,9 +804,23 @@ def get_incident(user_id, incident_id: str):
                     usage_params = None
 
                     if all_session_ids:
+                        # Match parent sessions + child sub-agent sessions ({parent}::sa_N).
+                        # Children use a prefix range scan per parent (index-friendly,
+                        # immune to wildcards in session_id). Upper bound replaces the
+                        # trailing `:` with `;` — the smallest string strictly greater
+                        # than every `{sid}::*`.
                         placeholders = ",".join(["%s"] * len(all_session_ids))
-                        session_where = f"session_id IN ({placeholders})"
-                        session_params = tuple(all_session_ids)
+                        range_clauses = " OR ".join(
+                            ["(session_id >= %s AND session_id < %s)"] * len(all_session_ids)
+                        )
+                        session_where = (
+                            f"(session_id IN ({placeholders}) OR ({range_clauses}))"
+                        )
+                        range_params: list = []
+                        for sid in all_session_ids:
+                            range_params.append(f"{sid}::")
+                            range_params.append(f"{sid}:;")
+                        session_params = tuple(all_session_ids) + tuple(range_params)
 
                         cursor.execute(
                             f"""
@@ -1090,20 +1107,22 @@ def update_incident(user_id, incident_id: str):
                     conn.commit()
                     _record_audit_event(org_id or "", user_id, f"incident_{event_type}", "incident", incident_id, {"from": previous_status, "to": data["status"]}, request)
 
-                # Trigger postmortem generation only on transition to resolved
+                # Trigger on_incident actions for the "resolved" event
                 if data.get("status") == "resolved" and previous_status != "resolved":
                     try:
-                        from chat.background.postmortem_generator import generate_postmortem
-                        generate_postmortem.delay(incident_id, user_id, org_id)
+                        from services.actions.executor import dispatch_on_incident_actions
+                        from services.actions.system_actions import seed_system_actions
+                        if org_id:
+                            seed_system_actions(org_id, user_id)
+                        dispatch_on_incident_actions(user_id, incident_id, timing="resolved")
                         logger.info(
-                            "[INCIDENTS] Triggered postmortem generation for resolved incident %s",
+                            "[INCIDENTS] Dispatched on-resolved actions for incident %s",
                             sanitize(incident_id),
                         )
-                    except Exception as pm_exc:
+                    except Exception:
                         logger.warning(
-                            "[INCIDENTS] Failed to trigger postmortem generation for incident %s: %s",
+                            "[INCIDENTS] on-resolved actions failed for %s",
                             sanitize(incident_id),
-                            pm_exc,
                         )
 
                 logger.info(
@@ -1343,6 +1362,13 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             incident_id=None,  # Don't trigger RCA workflow - this is a Q&A chat
             send_notifications=False,  # No notifications for Q&A
             mode=mode,  # Pass mode for execution capability
+            # `full_message` wraps `question` in <context>/<user_message> tags
+            # for the LLM. State.question (used by immediate_save and the
+            # input rail) must be the bare user text so the persistence-layer
+            # dedup matches the pre-seeded user row from
+            # create_background_chat_session — otherwise the question lands
+            # in chat_sessions.messages 2–3 times per turn.
+            rail_text=question,
         )
 
         logger.info(
@@ -1517,6 +1543,32 @@ def mark_suggestion_executed(user_id, suggestion_id: str):
         return jsonify({"error": "Failed to mark suggestion"}), 500
 
 
+def _reload_applied_pr_info(suggestion_id_int: int, suggestion_id_raw: str) -> tuple[Optional[str], Optional[int]]:
+    """Reload the stored PR url/number for a successfully applied suggestion.
+
+    Re-reading from the DB (instead of trusting the return value of
+    github_apply_fix) breaks any taint flow from MCP exception text into
+    the response body.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pr_url, pr_number FROM incident_suggestions WHERE id = %s",
+                (suggestion_id_int,),
+            )
+            row = cursor.fetchone()
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to reload PR info for suggestion %s", sanitize(suggestion_id_raw))
+        return None, None
+
+    if not row:
+        return None, None
+    pr_url = row[0] if isinstance(row[0], str) and row[0].startswith("http") else None
+    pr_number = int(row[1]) if row[1] is not None else None
+    return pr_url, pr_number
+
+
 @incidents_bp.route(
     "/api/incidents/suggestions/<suggestion_id>/apply", methods=["POST"]
 )
@@ -1550,35 +1602,77 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
     target_branch = data.get("targetBranch")
 
     try:
-        from chat.backend.agent.tools.github_apply_fix_tool import github_apply_fix
+        # Determine which provider owns this suggestion's repository
+        provider = None
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                cursor.execute(
+                    """SELECT s.repository FROM incident_suggestions s
+                       WHERE s.id = %s""",
+                    (suggestion_id_int,),
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    repo_name = row[0]
+                    cursor.execute(
+                        """SELECT provider FROM connected_repos
+                           WHERE repo_full_name = %s LIMIT 1""",
+                        (repo_name,),
+                    )
+                    provider_row = cursor.fetchone()
+                    if provider_row:
+                        provider = provider_row[0]
 
-        result_json = github_apply_fix(
-            suggestion_id=suggestion_id_int,
-            use_edited_content=use_edited_content,
-            target_branch=target_branch,
-            user_id=user_id,
-        )
+        if not provider:
+            return jsonify({"error": "Cannot determine VCS provider for this suggestion — repository not found in connected repos"}), 400
+
+        if provider == "gitlab":
+            from chat.backend.agent.tools.gitlab_tool import gitlab_tool
+            result_json = gitlab_tool(
+                action="apply_fix",
+                suggestion_id=suggestion_id_int,
+                target_branch=target_branch,
+                use_edited_content=use_edited_content,
+                user_id=user_id,
+            )
+        elif provider == "github":
+            from chat.backend.agent.tools.github_apply_fix_tool import github_apply_fix
+            result_json = github_apply_fix(
+                suggestion_id=suggestion_id_int,
+                use_edited_content=use_edited_content,
+                target_branch=target_branch,
+                user_id=user_id,
+            )
+        else:
+            return jsonify({"error": f"Unsupported VCS provider: {provider}"}), 400
         result = json.loads(result_json)
 
         if result.get("success"):
+            pr_url, pr_number = _reload_applied_pr_info(suggestion_id_int, suggestion_id)
             logger.info(
                 "[INCIDENTS] Applied fix suggestion %s, PR: %s",
                 sanitize(suggestion_id),
-                result.get("pr_url"),
+                pr_url,
             )
             _record_audit_event(org_id or "", user_id, "apply_fix", "suggestion", suggestion_id,
-                                {"pr_url": result.get("pr_url")}, request)
-            return jsonify(result), 200
+                                {"pr_url": pr_url}, request)
+            return jsonify({
+                "success": True,
+                "message": "PR created successfully",
+                "prUrl": pr_url,
+                "prNumber": pr_number,
+            }), 200
 
         logger.warning(
             "[INCIDENTS] Failed to apply fix suggestion %s: %s",
             sanitize(suggestion_id),
             result.get("error"),
         )
-        return jsonify(result), 400
+        return jsonify({"success": False, "error": "Failed to apply fix suggestion"}), 400
 
     except Exception as exc:
-        logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", suggestion_id)
+        logger.exception("[INCIDENTS] Failed to apply fix suggestion %s", sanitize(suggestion_id))
         return jsonify({"error": "Failed to apply fix suggestion"}), 500
 
 
@@ -1905,3 +1999,57 @@ def get_recent_unlinked_incidents(user_id):
     except Exception as exc:
         logger.exception("[INCIDENTS] Failed to get recent unlinked incidents")
         return jsonify({"error": "Failed to get recent incidents"}), 500
+
+
+_ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
+
+
+@incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])
+@require_permission("incidents", "write")
+def trigger_rca_from_chat(user_id):
+    """Create an incident from a free-text description and dispatch the full
+    background RCA pipeline. Same code path the UI's RCA button invokes
+    (via the agent's `trigger_rca` LangChain tool), exposed as a direct
+    endpoint so MCP / API clients can hit it without going through the chat
+    agent. Returns the new incident_id and an RCA session_id for tracking.
+    """
+    data = request.get_json(silent=True) or {}
+    issue_description = (data.get("issue_description") or "").strip()
+    if not issue_description:
+        return jsonify({"error": "issue_description is required"}), 400
+    if len(issue_description) > 4000:
+        return jsonify({"error": "issue_description too long (max 4000 chars)"}), 400
+
+    title = (data.get("title") or "").strip()
+    service = (data.get("service") or "").strip()
+    severity = (data.get("severity") or "medium").strip().lower()
+    if severity not in _ALLOWED_SEVERITIES:
+        return jsonify({
+            "error": f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}"
+        }), 400
+
+    from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
+    try:
+        raw = _agent_trigger_rca(
+            issue_description=issue_description,
+            title=title,
+            service=service,
+            severity=severity,
+            user_id=user_id,
+        )
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool raised")
+        return jsonify({"error": "RCA dispatch failed"}), 500
+
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool returned unparseable payload")
+        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+
+    if not isinstance(payload, dict):
+        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+
+    if payload.get("error") and not payload.get("incident_id"):
+        return jsonify(payload), 400
+    return jsonify(payload), 200

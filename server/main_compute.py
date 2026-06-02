@@ -13,7 +13,7 @@ import logging
 import os
 import hmac
 import secrets
-import hmac
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
@@ -24,16 +24,6 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(leve
 # Silence verbose loggers
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('utils.auth.stateless_auth').setLevel(logging.INFO)
- 
-import os
-import secrets  # For generating a secure random key
-import flask
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-from utils.db.db_utils import (
-    ensure_database_exists,
-    initialize_tables,
-)
 
 
 # Initialize Flask application
@@ -195,6 +185,12 @@ _HEALTH_PATH = "/health"
 _OPEN_PREFIXES = (
     _HEALTH_PATH,
     "/callback",
+    # GitHub App install callback — verified via signed state token, not session.
+    "/github/app/install/callback",
+    "/github/webhook",
+    # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
+    # listed here unconditionally so the gate applies even if OAuth flips on
+    # at runtime.
     "/github/callback",
     "/bitbucket/callback",
     "/slack/callback",
@@ -209,6 +205,7 @@ _OPEN_PREFIXES = (
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
     "/newrelic/webhook/",
+    "/sentry/webhook/",
     "/pagerduty/webhook/",
     "/opsgenie/webhook/",
     "/jenkins/webhook/",
@@ -223,6 +220,7 @@ _OPEN_PREFIXES = (
     "/aws/setup-role",
     "/aws/setup-script-ps1",
     "/aws/setup-role-ps1",
+    "/aws/cloudwatch/webhook/",
 )
 
 @app.before_request
@@ -335,13 +333,25 @@ app.register_blueprint(org_bp)
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
 
-# --- GitHub Integration Routes ---
-from routes.github.github import github_bp
+# --- Tool Permissions Routes ---
+from routes.tool_permissions import tool_permissions_bp
+app.register_blueprint(tool_permissions_bp)
+
+# --- GitHub Integration Routes (App-first, OAuth gated by GITHUB_AUTH_MODE) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
-app.register_blueprint(github_bp, url_prefix="/github")
+from routes.github.github_webhook import github_webhook_bp
+from routes.github.github_app import github_app_bp
+from routes.github.github_oauth import github_oauth_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
+app.register_blueprint(github_webhook_bp, url_prefix="/github")
+app.register_blueprint(github_app_bp, url_prefix="/github")
+app.register_blueprint(github_oauth_bp, url_prefix="/github")
+
+# --- GitLab Integration Routes ---
+from routes.gitlab.gitlab_routes import gitlab_bp
+app.register_blueprint(gitlab_bp, url_prefix="/gitlab")
 
 # --- kubectl Agent Token Routes ---
 from routes.kubectl_token_routes import kubectl_token_bp
@@ -429,6 +439,11 @@ from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
 import routes.newrelic.tasks  # noqa: F401
 
+# --- Sentry Integration Routes ---
+from routes.sentry import bp as sentry_bp  # noqa: F401
+app.register_blueprint(sentry_bp, url_prefix="/sentry")
+from routes.sentry import tasks as _sentry_tasks  # noqa: F401
+
 # --- PagerDuty Integration Routes ---
 from routes.pagerduty.pagerduty_routes import pagerduty_bp  # noqa: F401
 app.register_blueprint(pagerduty_bp, url_prefix="/pagerduty")
@@ -485,6 +500,11 @@ from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
 app.register_blueprint(incident_feedback_bp)
+from routes.incidents_findings import findings_bp
+app.register_blueprint(findings_bp)
+
+from routes.actions import actions_bp
+app.register_blueprint(actions_bp, url_prefix="/api/actions")
 
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
@@ -630,9 +650,24 @@ def list_api_routes():
 # ============================================================================
 
 def initialize_app():
-    # Initialize database
-    ensure_database_exists()
-    initialize_tables()
+    # Acquire a session-level advisory lock so that concurrent gunicorn workers
+    # serialise DDL (CREATE TABLE / ALTER TABLE) instead of deadlocking.
+    from utils.db.db_utils import connect_to_db_as_admin
+    conn = connect_to_db_as_admin()
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(42)")
+        conn.autocommit = False
+        try:
+            ensure_database_exists()
+            initialize_tables()
+        finally:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(42)")
+    finally:
+        conn.close()
 
     # Initialize Casbin RBAC enforcer (seeds default policies on first run)
     try:
@@ -642,12 +677,27 @@ def initialize_app():
     except Exception as e:
         logging.getLogger(__name__).warning("Casbin enforcer init deferred: %s", e)
 
+    # Pre-flight GitHub App config validation (degraded-mode fallback).
+    # Must NOT crash startup if env vars are missing — the auth router falls
+    # back to OAuth-only mode and App-only routes (install/webhook) gate at
+    # handler-time on app.config["GITHUB_APP_ENABLED"].
+    try:
+        from connectors.github_connector.config import validate_github_app_config
+        enabled, missing = validate_github_app_config()
+        app.config["GITHUB_APP_ENABLED"] = enabled
+        if enabled:
+            logging.getLogger(__name__).info("github_app_status=enabled")
+        else:
+            logging.getLogger(__name__).warning(
+                "github_app_status=disabled missing=%s", missing
+            )
+    except Exception as e:
+        # Defensive: never crash startup over a config check.
+        app.config["GITHUB_APP_ENABLED"] = False
+        logging.getLogger(__name__).warning(
+            "github_app_status=disabled missing=['validation_error'] error_class=%s",
+            type(e).__name__,
+        )
+
 # Always run initialization when module is imported (for Gunicorn and direct execution)
 initialize_app()
-
-if __name__ == "__main__":
-    # Development mode: run Flask's built-in server
-    # Port configurable via FLASK_PORT env var (set in .env file)
-    # Note: Default is 5080 to avoid conflict with macOS AirPlay Receiver (port 5000)
-    port = int(os.getenv("FLASK_PORT"))
-    app.run(host="0.0.0.0", port=port, debug=False)

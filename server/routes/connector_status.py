@@ -270,22 +270,50 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_github(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """Mirrors /github/status — validates via GitHub user API."""
-    access_token = creds.get("access_token")
-    if not access_token:
-        return {"connected": False}
-    try:
-        r = requests.get(
-            "https://api.github.com/user",
-            headers={"Authorization": f"token {access_token}"},
-            timeout=HTTP_TIMEOUT,
-        )
-        if r.status_code == 200:
-            return {"connected": True}
-        return {"connected": False}
-    except Exception:
-        return {"connected": False}
+def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str, Any]:
+    """Mirrors /github/status — App-aware AND OAuth-aware (hybrid mode).
+
+    Accepts either a credentials dict (with ``_user_id``) for generic
+    PROVIDER_CHECKERS dispatch, or a plain user_id string for direct callers.
+    """
+    from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
+
+    if isinstance(creds_or_user_id, dict):
+        user_id = creds_or_user_id.get("_user_id", "")
+    else:
+        user_id = creds_or_user_id
+
+    if is_app_enabled() and app_runtime_ready:
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT 1
+                             FROM user_github_installations ugi
+                             JOIN github_installations gi
+                                  ON gi.installation_id = ugi.installation_id
+                            WHERE ugi.user_id = %s
+                              AND ugi.disconnected_at IS NULL
+                              AND gi.suspended_at IS NULL
+                            LIMIT 1""",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+            if row:
+                return {"connected": True}
+        except Exception as exc:
+            logger.debug("[STATUS] github App check failed: %s", exc)
+
+    if is_oauth_enabled():
+        try:
+            from utils.auth.token_management import get_token_data
+            creds = get_token_data(user_id, "github")
+            if creds and creds.get("access_token"):
+                return {"connected": True}
+        except Exception as exc:
+            logger.debug("[STATUS] github OAuth check failed: %s", exc)
+
+    return {"connected": False}
 
 
 def _check_bitbucket(creds: Dict[str, Any]) -> Dict[str, Any]:
@@ -673,6 +701,54 @@ def _check_netdata(creds: Dict[str, Any]) -> Dict[str, Any]:
     return {"connected": True, "spaceName": creds.get("space_name")}
 
 
+def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate Sentry credentials by hitting the org endpoint."""
+    auth_token = creds.get("auth_token")
+    org_slug = creds.get("org_slug")
+    if not auth_token or not org_slug:
+        return {"connected": False}
+    region = (creds.get("region") or "us").strip().lower()
+    base_url = "https://de.sentry.io" if region == "eu" else "https://sentry.io"
+    try:
+        r = requests.get(
+            f"{base_url}/api/0/organizations/{org_slug}/",
+            headers={"Authorization": f"Bearer {auth_token}", "Accept": "application/json"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code == 200:
+            data = r.json() if r.content else {}
+            return {
+                "connected": True,
+                "orgSlug": org_slug,
+                "orgName": data.get("name"),
+                "region": region,
+                "hasWebhookSecret": bool(creds.get("client_secret")),
+            }
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
+def _check_gitlab(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /gitlab/status — validates via GitLab user API."""
+    access_token = creds.get("access_token")
+    if not access_token:
+        return {"connected": False}
+    base_url = creds.get("base_url", "https://gitlab.com").rstrip("/")
+    try:
+        r = requests.get(
+            f"{base_url}/api/v4/user",
+            headers={"PRIVATE-TOKEN": access_token},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return {"connected": True, "username": data.get("username", "")}
+        return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
 # ── Provider checker registry ──────────────────────────────────────
 
 
@@ -689,6 +765,7 @@ PROVIDER_CHECKERS = {
     "slack": _check_slack,
     "google_chat": _check_google_chat,
     "github": _check_github,
+    "gitlab": _check_gitlab,
     "bitbucket": _check_bitbucket,
     "thousandeyes": _check_thousandeyes,
     "scaleway": _check_scaleway,
@@ -701,6 +778,7 @@ PROVIDER_CHECKERS = {
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
     "tailscale": _check_tailscale,
+    "sentry": _check_sentry,
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
@@ -717,17 +795,28 @@ PROVIDER_CHECKERS = {
 @require_permission("connectors", "read")
 def all_connector_status(user_id):
     org_id = get_org_id_from_request() or ""
-    results = _check_all_connectors(user_id, org_id)
+    from flask import current_app
+    app_runtime_ready = bool(current_app.config.get("GITHUB_APP_ENABLED"))
+    results = _check_all_connectors(user_id, org_id, app_runtime_ready=app_runtime_ready)
     return jsonify({"connectors": results})
 
 
 def get_connected_count(user_id: str, org_id: str) -> int:
     """Return the number of connectors with a live connection."""
-    results = _check_all_connectors(user_id, org_id)
+    from flask import current_app
+    try:
+        app_runtime_ready = bool(current_app.config.get("GITHUB_APP_ENABLED"))
+    except RuntimeError:
+        app_runtime_ready = False
+    results = _check_all_connectors(user_id, org_id, app_runtime_ready=app_runtime_ready)
     return sum(1 for c in results.values() if c.get("connected"))
 
 
-def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]]:
+def _check_all_connectors(
+    user_id: str,
+    org_id: str,
+    app_runtime_ready: bool = False,
+) -> Dict[str, Dict[str, Any]]:
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
@@ -768,6 +857,8 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
             return provider, _check_kubectl(user_id, org_id)
         if provider == "grafana":
             return provider, _check_grafana(user_id, org_id)
+        if provider == "github":
+            return provider, _check_github(user_id, app_runtime_ready)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
@@ -791,6 +882,9 @@ def _check_all_connectors(user_id: str, org_id: str) -> Dict[str, Dict[str, Any]
     providers.setdefault("onprem", user_id)
     providers.setdefault("kubectl", user_id)
     providers.setdefault("grafana", user_id)
+    # github status comes from user_github_installations, not user_tokens,
+    # so seed it explicitly so the dispatcher always evaluates it.
+    providers.setdefault("github", user_id)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = {

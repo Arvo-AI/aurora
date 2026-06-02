@@ -14,9 +14,108 @@ Aurora works without any cloud provider accounts. You only need an LLM API key t
 
 ### GCP (Google Cloud Platform)
 
-OAuth 2.0 authentication for Google Cloud Platform.
+Two authentication methods are available: **OAuth 2.0** (interactive, per-user consent) or **Service Account Key** (non-interactive, ideal for automation and cross-project setups).
 
-#### 1. Create OAuth Credentials
+:::tip PII-Safe Configuration
+For environments with strict data privacy requirements, see [Configuration > Data Access > GCP](/docs/configuration/data-access/gcp) for PII redaction options and recommended minimal-permission roles.
+:::
+
+#### Option A: Service Account Key
+
+Upload a GCP service account JSON key directly — no OAuth consent screen, no redirect URIs, no browser flow. The uploaded key becomes the working identity (Aurora skips its per-user SA impersonation chain).
+
+##### 1. Create a Service Account
+
+```bash
+gcloud iam service-accounts create aurora-connector \
+  --project=YOUR_PROJECT_ID \
+  --display-name="Aurora Connector"
+```
+
+##### 2. Grant Roles
+
+At minimum, grant read-only roles for investigation:
+
+```bash
+SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/logging.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/monitoring.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/container.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/compute.viewer"
+```
+
+For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
+
+##### 3. Download Key
+
+```bash
+gcloud iam service-accounts keys create aurora-sa-key.json \
+  --iam-account=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+##### 4. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **GCP**
+2. Select **Service Account** authentication
+3. Upload or paste the JSON key file contents
+4. Aurora validates the key, lists accessible projects, and connects
+
+##### 5. Auto-discover all your projects
+
+By default Aurora only sees the project the key was created in. Project enumeration uses Cloud Resource Manager v1 `projects.list`, which returns every project the SA has IAM access to anywhere in the hierarchy. Two roles matter and they do different things:
+
+| Role granted at org/folder | Project shows up in Aurora | SA can investigate it |
+|---|---|---|
+| `roles/browser` | ✅ yes | ❌ no — directory-listing only |
+| `roles/viewer` | ✅ yes | ✅ yes, but grants org-wide read of every resource (logs, IAM, billing, …) |
+
+The recommended split is **`roles/browser` for enumeration** + **`roles/viewer`-family roles per project for inspection**:
+
+```bash
+SA=aurora-connector@YOUR_PROJECT_ID.iam.gserviceaccount.com
+
+# Enumerate every project under the org
+gcloud organizations add-iam-policy-binding YOUR_ORG_ID \
+  --member="serviceAccount:$SA" --role="roles/browser"
+
+# Then grant viewer-tier roles on the projects you actually want Aurora to use
+gcloud projects add-iam-policy-binding TARGET_PROJECT \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+```
+
+Bind at the **organization** level to reach everything; a **folder**-level binding only enumerates projects under that folder (sibling folders stay invisible — bind each individually or move up to the org).
+
+If your security model allows org-wide read in one shot, you can grant `roles/viewer` at the org level instead of `roles/browser`. It's much broader; only use it if you've cleared the blast radius.
+
+##### 6. Manage projects in the connector UI (optional)
+
+Once connected, the **GCP Project Management** dialog lets you scope Aurora to a subset of what the SA can reach:
+
+- **Enable / disable** individual projects. Disabled projects are excluded from Aurora's discovery scans, and the chat agent refuses `cloud_exec` commands that target them (returns `GCP_PROJECT_DISABLED`).
+- **Set as Root** pins which enabled project Aurora uses as the default context for agent commands. Lookup order: per-call override → root preference → the `project_id` baked into your SA key. If you disable your SA's default project, pin a root explicitly so commands have somewhere to land — otherwise the auto-injected `--project` would target a disabled project and every command would be blocked.
+
+##### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Service account key is malformed" | Verify the JSON file is complete and `private_key` is a valid PEM |
+| "Credential refresh failed" | The SA may be disabled or the key revoked — create a new key |
+| "No accessible projects" | Grant at least `roles/viewer` on the target project |
+
+---
+
+#### Option B: OAuth 2.0
+
+Interactive OAuth flow — best for development or when users connect their own GCP accounts.
+
+##### 1. Create OAuth Credentials
 
 1. Go to [GCP Console > Credentials](https://console.cloud.google.com/apis/credentials)
 2. If this is your first OAuth app, configure the **OAuth consent screen**:
@@ -32,7 +131,7 @@ OAuth 2.0 authentication for Google Cloud Platform.
    - Authorized redirect URIs: `http://localhost:5080/callback`
 4. Copy the **Client ID** and **Client Secret**
 
-#### 2. Configure Environment
+##### 2. Configure Environment
 
 Add to your `.env`:
 
@@ -41,7 +140,7 @@ CLIENT_ID=123456789-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
 CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-#### 3. Enable Required APIs
+##### 3. Enable Required APIs
 
 In GCP Console, enable these APIs for your project:
 - Cloud Resource Manager API
@@ -49,7 +148,7 @@ In GCP Console, enable these APIs for your project:
 - Cloud Logging API
 - Cloud Monitoring API
 
-#### Troubleshooting
+##### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
@@ -252,33 +351,179 @@ OVH_US_REDIRECT_URI=https://abc123.ngrok-free.app/ovh_api/ovh/oauth2/callback
 
 ### GitHub
 
-OAuth App authentication for GitHub repositories and issues.
+Aurora ships with **GitHub App** as the default and recommended auth path.
+On-prem deployments that cannot host their own App can fall back to a
+classic OAuth App via the `GITHUB_AUTH_MODE` flag (or run both side-by-side
+in `hybrid` mode).
 
-#### 1. Create OAuth App
+#### Auth modes
+
+| `GITHUB_AUTH_MODE` | When to use | What the user sees |
+|---|---|---|
+| `app` (default) | Most deployments. Per-installation tokens, fine-grained perms, real-time webhooks. | "Install GitHub App" CTA only. |
+| `oauth` | On-prem boxes that cannot expose a public webhook URL. | "Connect via OAuth" CTA only. |
+| `hybrid` | Migration windows or operators who want to offer both. | Both CTAs; App is recommended. |
+
+#### Path A — GitHub App (recommended)
+
+##### Quickstart (local dev or single-tenant)
+
+The bootstrap script registers an App via GitHub's App Manifest flow,
+captures the post-create redirect, and writes `.env` + Vault for you:
+
+```bash
+python3 server/scripts/register_github_app.py --org <your-github-org>
+```
+
+For a manual click-through (every form field, permissions table, event
+list, troubleshooting), the operator walkthrough lives in the source
+tree at [`server/connectors/github_connector/SETUP_GITHUB_APP.md`](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md).
+
+Required env (set in `.env`):
+
+```bash
+GITHUB_AUTH_MODE=app
+
+GITHUB_APP_ID=<numeric, from App settings>
+GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
+NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
+GITHUB_APP_WEBHOOK_URL=https://<your-host>/github/webhook
+GITHUB_APP_SETUP_URL=https://<your-host>/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
+```
+
+The App's private key (PEM) goes into Vault at
+`aurora/system/github-app/private-key`, not into `.env`.
+
+##### On-prem deployment
+
+When Aurora runs on customer infrastructure (private cloud, on-prem
+datacenter, customer-managed VPC) the operator owns both the App and
+the ingress. There is **no shared "Aurora SaaS" GitHub App** — each
+customer creates their own App in their own GitHub org and points it at
+their own Aurora hostname.
+
+**Prerequisites:**
+
+| Requirement | Why |
+|---|---|
+| Public hostname Aurora can be reached at | GitHub.com posts webhooks from public IPs; tunnel-only setups break under load. |
+| Valid TLS cert (Let's Encrypt or chained to a public root) | GitHub refuses webhook delivery to invalid certs. |
+| Outbound HTTPS to `api.github.com` | Aurora calls GitHub for installation token mint, repo metadata, etc. |
+| GitHub org admin role | Creating an App on an org requires owner. |
+| Aurora deployment shell + Vault access | You need to write App private key + webhook secret into Vault. |
+
+**Step 1 — Create the App in the customer's org**:
+
+```
+https://github.com/organizations/<customer-org>/settings/apps/new
+```
+
+| Field | Value |
+|---|---|
+| GitHub App name | `aurora-<customer-slug>` (globally unique). Examples: `aurora-acme-prod`, `aurora-acme-staging`. |
+| Homepage URL | `<BASE_URL>` (the customer's Aurora hostname) |
+| Callback URL | `<BASE_URL>/github/app/install/callback` |
+| Setup URL | Same as Callback URL |
+| Webhook URL | `<BASE_URL>/github/webhook` |
+| Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to Vault |
+| Where can be installed? | **Only on this account** (locks the App to the customer org) |
+
+Permissions and events match the dev walkthrough — see
+[SETUP_GITHUB_APP.md § Step 3 / § Step 4](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md#step-3-permissions-checklist).
+
+**Step 2 — Download the private key**: on the App's settings page after
+creation, **Generate a private key** downloads a `.pem` file once. Back
+it up before closing the tab.
+
+**Step 3 — Write secrets to the customer's Vault**:
+
+```bash
+vault kv put aurora/system/github-app/webhook-secret value=<the secret>
+vault kv put aurora/system/github-app/private-key value=@<path-to-pem>
+```
+
+**Step 4 — Set Aurora env vars** in the customer's `.env` (same keys as
+the Quickstart block above), with `GITHUB_APP_*` URLs pointing at the
+customer's `<BASE_URL>`. Set `AURORA_ENV=production` and a rotated
+`INTERNAL_API_SECRET` so the runtime startup check enforces both.
+
+**Step 5 — Reverse-proxy sketch (nginx)**: terminate TLS at the edge,
+forward to `aurora-server:5080`.
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name aurora.example.com;
+    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://aurora-server:5080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+Traefik labels achieve the same; the only requirements are TLS
+termination and Host-header preservation.
+
+**Per-environment Apps**: create separate `aurora-<customer>-prod`,
+`aurora-<customer>-staging`, `aurora-<customer>-dev` Apps. Aurora reads
+`GITHUB_APP_*` env per deployment, so each env gets its own App keys
+and a stray callback-URL change in dev cannot break prod webhook
+delivery.
+
+**Verification**: open `<BASE_URL>` in a browser, navigate to **Settings →
+Connectors → GitHub** → **Connect** → **Install GitHub App**. The popup
+goes to GitHub.com, you approve repository access, and the dialog flips
+from "Not connected" to "Available" or "Connected". `aurora-server` logs
+should show `200 GET /github/app/install/callback` followed by the new
+`installation_id`.
+
+#### Path B — OAuth fallback (on-prem only, when public ingress isn't possible)
 
 1. Go to [GitHub > Settings > Developer settings > OAuth Apps](https://github.com/settings/developers)
 2. Click **New OAuth App**
    - Application name: `Aurora`
-   - Homepage URL: `http://localhost:3000`
+   - Homepage URL: `http://localhost:3000` (or your real `BASE_URL`)
    - Authorization callback URL: `http://localhost:5080/github/callback`
-3. Click **Register application**
-4. Copy the **Client ID**
-5. Click **Generate a new client secret** and copy it
-
-#### 2. Configure Environment
+3. Click **Register application** and copy the **Client ID** + a freshly-generated **Client secret**
 
 ```bash
+GITHUB_AUTH_MODE=oauth   # or hybrid if you also have an App
 GH_OAUTH_CLIENT_ID=your-github-client-id
 GH_OAUTH_CLIENT_SECRET=your-github-client-secret
-NEXT_PUBLIC_GITHUB_CLIENT_ID=your-github-client-id
 ```
+
+OAuth gives Aurora a user token and uses polling for repo state. You
+lose real-time webhook delivery (no push for `pull_request`,
+`workflow_run`, etc.) — incident correlation features that depend on
+webhooks degrade to lag-based polling.
+
+#### GitHub Enterprise Server (GHES)
+
+**Not currently supported.** Aurora's GitHub-API call sites still
+hardcode `https://api.github.com`. Enabling GHES requires routing every
+hardcoded `api.github.com` and `github.com` reference through
+configurable base URLs (`GH_API_BASE_URL`, `GH_BASE_URL`). Until that
+work lands, GHES customers must run Aurora at a public hostname and
+talk to a public GHES URL (which usually defeats the point of GHES) or
+use the OAuth fallback above.
 
 #### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
-| "No authorization code provided" | Verify callback URL matches exactly: `http://localhost:5080/github/callback` |
-| "Bad credentials" | Regenerate client secret and update `.env` |
+| "No authorization code provided" | OAuth callback URL must match what's registered exactly. Default: `http://localhost:5080/github/callback`. |
+| "Bad credentials" | Regenerate the OAuth Client secret and update `.env`. |
+| "GitHub App install URL is missing the required state parameter" | `GITHUB_APP_SETUP_URL` doesn't match what's registered on the App settings page. Update `.env` to match. |
+| "Failed to initiate GitHub OAuth" | `GH_OAUTH_CLIENT_ID`/`SECRET` empty when `GITHUB_AUTH_MODE=oauth` or `hybrid`. Set them and restart. |
+| Webhook deliveries fail with 4xx | Webhook secret in Vault doesn't match what's registered on the App. `vault kv put aurora/system/github-app/webhook-secret value=<secret>` and re-save the App secret. |
 
 ---
 
@@ -589,6 +834,10 @@ To receive PagerDuty alerts in Aurora:
 
 API Key + Application Key authentication.
 
+:::tip Data Security
+If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other compliance requirements), see the [Datadog PII Filtering guide](../configuration/data-access/datadog.md) after completing the setup below.
+:::
+
 #### 1. Create API Key
 
 1. Go to [Datadog](https://app.datadoghq.com/) > avatar > **Organization Settings** > **API Keys**
@@ -734,6 +983,85 @@ Aurora can also poll NerdGraph for active issues. Trigger manually via `POST /ne
 | "Invalid API key" | Ensure the key starts with `NRAK-` and belongs to a user with read access to APM, Infrastructure, Logs, and Alerts |
 | "Account not found" | Verify the Account ID is correct and the API key has access to that account |
 | "EU region issues" | Make sure you selected "EU" in the region selector if your account is on the EU data center |
+
+---
+
+### Sentry
+
+Internal Integration auth token authentication for ingesting issue/error webhooks and querying full stacktraces during RCA.
+
+#### 1. Open the Sentry Integration in Aurora
+
+Navigate to **Connectors** > **Sentry**. The page shows the **Webhook URL** Aurora expects (`https://your-aurora-domain/sentry/webhook/{user_id}`) — copy it now; you'll paste it into Sentry on the next step.
+
+#### 2. Create an Internal Integration in Sentry
+
+1. In Sentry, go to **Settings > Custom Integrations** (under *Developer Settings*)
+2. Click **Create New Integration** and choose **Internal Integration**
+3. Name it `Aurora` and paste the webhook URL from step 1 into the **Webhook URL** field
+4. Under **Permissions**, grant **read** access to: **Issue & Event**, **Project**, **Organization**
+5. Under **Webhooks**, subscribe to `issue` and `error` (the `error` resource requires a Business/Enterprise plan)
+6. Click **Save Changes**. Under **Credentials**, copy the **Client Secret** (long hex string).
+7. Scroll to the **Tokens** section and click **Create New Token**. Sentry does **not** generate an auth token automatically — you must create one. Copy the resulting `sntrys_…` token immediately; it's shown once.
+
+> **Read-only is sufficient.** Aurora never writes to Sentry during RCA. Granting read scopes only means revoking the integration immediately revokes Aurora's access.
+
+#### 3. Identify Your Region
+
+| Region | Host |
+|--------|------|
+| US | `sentry.io` |
+| EU | `de.sentry.io` |
+
+#### 4. Connect via Aurora UI
+
+1. Return to the Aurora Sentry page
+2. Fill in:
+   - **Organization Slug** — the slug in your Sentry URL (e.g. `acme-co`, not the display name)
+   - **Region** — US or EU
+   - **Auth Token** — the `sntrys_…` token from step 2
+   - **Client Secret** — the secret from step 2
+3. Click **Connect**
+
+Aurora validates the token against the org, lists accessible projects, and stores both secrets in Vault.
+
+#### What Aurora Queries
+
+Aurora uses the [Sentry web API](https://docs.sentry.io/api/) to:
+- Validate the organization and list accessible projects
+- Search **issues** by query (e.g. `is:unresolved`), time window, project, and environment
+- Fetch **issue metadata** plus the **latest event** for an issue (includes full stacktrace, breadcrumbs, tags)
+- Run **Discover-style event searches** across the org
+
+All requests use `Authorization: Bearer <auth_token>` against `https://sentry.io` (or `https://de.sentry.io` for EU). The integration is strictly read-only.
+
+#### How Aurora Processes Sentry Webhooks
+
+Sentry signs every webhook with HMAC-SHA256 of the raw JSON body using the integration's client secret. The signature lives in the `Sentry-Hook-Signature` header (hex digest, no prefix). Aurora rejects any request whose signature does not constant-time-match the secret stored at connect.
+
+For each accepted webhook Aurora:
+1. Persists the raw payload to `sentry_events` (deduplicated by `org_id + issue_id + action`)
+2. Runs alert correlation against existing open incidents (services, fingerprints, time window)
+3. Either attaches to a correlated incident or creates a new one with `source_type='sentry'`
+4. Generates an incident summary from the payload
+5. Kicks off a background RCA chat session pre-loaded with the Sentry skill context
+
+Subscribed resources: `issue` and `error`. The route also accepts `installation` and `comment` payloads from Sentry but only `issue` / `error` drive incident creation.
+
+#### Disconnecting
+
+Disconnecting deletes the user's Vault-stored credentials. Webhook deliveries for that user are rejected with `404` until the integration is reconnected. The Internal Integration object in Sentry is untouched — revoke it in Sentry separately if you want to invalidate the token immediately.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid Sentry auth token or insufficient permissions" | Verify the token starts with `sntrys_` and the Internal Integration grants `Issue & Event: Read`, `Project: Read`, `Organization: Read` |
+| "Sentry organization '\<slug\>' not found" | Use the slug in your Sentry URL (lowercase, hyphenated), not the display name |
+| "Webhook signing secret not configured" on incoming webhooks | Reconnect Sentry with the client secret — Aurora cannot verify signatures without it |
+| "Invalid webhook signature" | Confirm the **Client Secret** in Aurora matches what Sentry shows under the integration's *Credentials* section. Save the integration in Sentry to rotate if needed |
+| No webhooks arriving despite events firing | In Sentry, open the Aurora integration and confirm `issue` and `error` are checked under **Webhooks**, and that the Webhook URL field matches the URL Aurora shows |
+| "EU region issues" | Select **EU** in the region selector when connecting if your org is hosted on `de.sentry.io` |
 
 ---
 

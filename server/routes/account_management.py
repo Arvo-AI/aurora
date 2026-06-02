@@ -191,9 +191,6 @@ def get_connected_accounts(user_id, target_user_id):
             if result.get("connected"):
                 accounts["onprem"] = {"isConnected": True, "name": "Instances SSH Access", "displayText": "VM SSH Access"}
 
-        cursor.close()
-        conn.close()
-
         return jsonify({"accounts": accounts})
 
     except Exception as e:
@@ -219,21 +216,23 @@ def delete_connected_account(user_id, target_user_id, provider):
 
         # Get secret_ref BEFORE deleting to clear cache properly
         secret_ref = None
+        conn = None
         try:
             conn = connect_to_db_as_admin()
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
-            cursor.execute(
-                "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
-                (user_id, org_id, provider)
-            )
-            result = cursor.fetchone()
-            if result:
-                secret_ref = result[0]
-            cursor.close()
-            conn.close()
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
+                cursor.execute(
+                    "SELECT secret_ref FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                    (user_id, org_id, provider)
+                )
+                result = cursor.fetchone()
+                if result:
+                    secret_ref = result[0]
         except Exception as e:
             logging.warning(f"Failed to get secret_ref before deletion: {e}")
+        finally:
+            if conn:
+                conn.close()
         
         provider_lc = provider.lower()
         deletion_ok = True
@@ -245,18 +244,17 @@ def delete_connected_account(user_id, target_user_id, provider):
         else:
             # For providers that don't use Vault, delete from DB directly
             conn = connect_to_db_as_admin()
-            cursor = conn.cursor()
-            set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
-
-            cursor.execute(
-                "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
-                (user_id, org_id, provider)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-
-            cursor.close()
-            conn.close()
+            try:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
+                    cursor.execute(
+                        "DELETE FROM user_tokens WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND provider = %s",
+                        (user_id, org_id, provider)
+                    )
+                    deleted = cursor.rowcount
+                conn.commit()
+            finally:
+                conn.close()
 
         # --------------------------------------------------
         # Clear caching layers after token deletion
@@ -271,21 +269,23 @@ def delete_connected_account(user_id, target_user_id, provider):
                 logging.warning(f"Failed to clear GCP caches for user {user_id}: {e}")
             
             # Clear GCP root project preference
+            conn = None
             try:
                 conn = connect_to_db_as_admin()
-                cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
-                cursor.execute(
-                    "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
-                    (user_id, org_id)
-                )
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix=_DELETE_LOG_PREFIX)
+                    cursor.execute(
+                        "DELETE FROM user_preferences WHERE user_id = %s AND (org_id = %s OR org_id IS NULL) AND preference_key = 'gcp_root_project'",
+                        (user_id, org_id)
+                    )
+                    if cursor.rowcount > 0:
+                        logging.info(f"Cleared GCP root project preference for user {user_id}")
                 conn.commit()
-                if cursor.rowcount > 0:
-                    logging.info(f"Cleared GCP root project preference for user {user_id}")
-                cursor.close()
-                conn.close()
             except Exception as e:
                 logging.warning(f"Failed to clear GCP root project preference for user {user_id}: {e}")
+            finally:
+                if conn:
+                    conn.close()
         
         # 2) Clear Redis secret cache for this secret_ref (if present)
         if secret_ref:
@@ -301,16 +301,16 @@ def delete_connected_account(user_id, target_user_id, provider):
         # --------------------------------------------------------------
         if provider_lc == "aws":
             from utils.db.connection_utils import (
-                list_active_connections,
+                get_all_user_aws_connections,
                 delete_connection_secret,
             )
-            
-            active = list_active_connections(user_id)
+
+            active = get_all_user_aws_connections(user_id)
             if not active:
                 logging.info("No active AWS connections found for user %s", user_id)
-            
-            for conn in active:
-                acc_id = conn["account_id"]
+
+            for aws_conn in active:
+                acc_id = aws_conn["account_id"]
                 _ok = delete_connection_secret(user_id, "aws", acc_id)
                 try:
                     from utils.auth.stateless_auth import invalidate_cached_aws_creds
@@ -318,18 +318,39 @@ def delete_connected_account(user_id, target_user_id, provider):
                 except Exception:
                     pass
                 deletion_ok = deletion_ok and _ok
-            
+
+            # Clean up Memgraph discovery nodes for AWS before returning.
+            try:
+                from services.graph.memgraph_client import get_memgraph_client
+                get_memgraph_client().delete_services_for_provider(user_id, "aws")
+            except Exception as e:
+                logging.warning(
+                    "Failed to delete Memgraph nodes for user=%s provider=aws: %s",
+                    user_id, e,
+                )
+
             record_audit_event(org_id or "", user_id, "disconnect_provider", "connected_account", provider,
                                {"provider": provider}, request)
             return jsonify({"success": True, "message": "AWS connection(s) removed"}), 200
-        
+
+        # Clean up Memgraph discovery nodes for all other providers that reach this
+        # generic path (GCP, Azure, and any provider that uses Vault-backed tokens).
+        try:
+            from services.graph.memgraph_client import get_memgraph_client
+            get_memgraph_client().delete_services_for_provider(user_id, provider_lc)
+        except Exception as e:
+            logging.warning(
+                "Failed to delete Memgraph nodes for user=%s provider=%s: %s",
+                user_id, provider_lc, e,
+            )
+
         # Idempotent behaviour: If there were no credentials stored in the first place
         # treat the request as successfully processed. This prevents unnecessary 404
         # errors that bubble up to the frontend when a user disconnects a provider
         # that was never connected (common after manual DB cleanup).
         if deleted == 0 and deletion_ok:
             return jsonify({"success": True, "message": "No tokens found for provider – nothing to delete"}), 200
-        
+
         if not deletion_ok:
             record_audit_event(org_id or "", user_id, "disconnect_provider", "connected_account", provider,
                                {"provider": provider, "partial": True}, request)

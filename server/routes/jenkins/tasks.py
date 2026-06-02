@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
 
@@ -54,15 +55,6 @@ def _extract_git(payload: Dict[str, Any]) -> Dict[str, str]:
         "branch": payload.get("branch", ""),
         "repository": payload.get("repository", ""),
     }
-
-
-def _build_rca_prompt(payload: Dict[str, Any], user_id: Optional[str] = None, source: str = "jenkins") -> str:
-    """Build an RCA prompt from a deployment failure using the full prompt builder."""
-    if source == "cloudbees":
-        from chat.background.rca_prompt_builder import build_cloudbees_rca_prompt
-        return build_cloudbees_rca_prompt(payload, user_id=user_id)
-    from chat.background.rca_prompt_builder import build_jenkins_rca_prompt
-    return build_jenkins_rca_prompt(payload, user_id=user_id)
 
 
 @celery_app.task(
@@ -282,6 +274,7 @@ def process_jenkins_deployment(
                             broadcast_incident_update_to_user_connections(
                                 user_id,
                                 {"type": "incident_update", "incident_id": str(incident_id), "source": source},
+                                org_id=org_id,
                             )
                         except Exception as e:
                             logger.warning("%s SSE notify failed: %s", log_prefix, e)
@@ -374,13 +367,14 @@ def _trigger_rca(
                 },
                 incident_id=str(incident_id),
             )
-            rca_prompt = _build_rca_prompt(payload, user_id=user_id, source=source)
+            rca_prompt, rail_text = build_rca_prompt(source, alert_title, payload, user_id=user_id)
             task = run_background_chat.delay(
                 user_id=user_id,
                 session_id=session_id,
                 initial_message=rca_prompt,
                 trigger_metadata={"source": source, "result": result},
                 incident_id=str(incident_id),
+                rail_text=rail_text,
             )
             cursor.execute(
                 "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",

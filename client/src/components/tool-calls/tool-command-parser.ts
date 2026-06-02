@@ -15,33 +15,6 @@ const getProviderCli = (provider: string): string => {
 // Helper: Check if command already has recognized CLI prefix
 const RECOGNIZED_CLI_REGEX = /^(gcloud|kubectl|gsutil|bq|aws|az)\b/i
 
-export function extractIacPath(toolInput?: string): string | undefined {
-  if (!toolInput) return undefined
-  try {
-    const parsed = JSON.parse(toolInput)
-    if (parsed?.kwargs?.path && typeof parsed.kwargs.path === 'string') {
-      return parsed.kwargs.path
-    }
-    if (parsed?.path && typeof parsed.path === 'string') {
-      return parsed.path
-    }
-  } catch (error) {
-    // Ignore JSON parse errors and try regex fallback
-  }
-
-  const regexMatch = toolInput.match(/"path"\s*:\s*"([^"\\]+)"/)
-  if (regexMatch?.[1]) {
-    return regexMatch[1]
-  }
-
-  const singleQuoteMatch = toolInput.match(/'path'\s*:\s*'([^'\\]+)'/)
-  if (singleQuoteMatch?.[1]) {
-    return singleQuoteMatch[1]
-  }
-
-  return undefined
-}
-
 export function extractIacAction(toolInput?: string, fallback?: string): string | undefined {
   if (!toolInput) return fallback
   try {
@@ -77,38 +50,35 @@ export function parseCloudExecCommand(
   toolOutput: any,
   defaultCommand: string
 ): ParsedCloudExecCommand {
-  let command = defaultCommand
-
-  // Phase 1: Extract from input (available immediately when tool starts)
-  if (toolInput && !toolOutput) {
+  // Always extract from input when present so we have a fallback if the output
+  // is missing, partial, or truncated (sub-agent citations carry truncated
+  // output_excerpts that can't be JSON-parsed).
+  let inputCommand: string | undefined
+  if (toolInput) {
     try {
       const inputStr = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput)
-      const parsableInput = inputStr.replace(/'/g, '"')
-      const parsed = JSON.parse(parsableInput)
-      const inputCommand = parsed.command || parsed.kwargs?.command
-      if (inputCommand && typeof inputCommand === 'string') {
+      const parsed = JSON.parse(inputStr.replaceAll("'", '"'))
+      const raw = parsed.command || parsed.kwargs?.command
+      if (raw && typeof raw === 'string') {
         const provider = parsed.provider || parsed.kwargs?.provider
-
         if (provider) {
           const providerCli = getProviderCli(provider)
-          // Backend sends raw command without prefix; add it for immediate display
-          command = RECOGNIZED_CLI_REGEX.test(inputCommand.trim())
-            ? inputCommand
-            : providerCli ? `${providerCli} ${inputCommand}` : inputCommand
+          inputCommand = RECOGNIZED_CLI_REGEX.test(raw.trim())
+            ? raw
+            : providerCli ? `${providerCli} ${raw}` : raw
         } else {
-          command = inputCommand
+          inputCommand = raw
         }
       }
-      return { command, phase: 'input' }
     } catch (error) {
-      console.warn('[parseCloudExecCommand] Phase 1 parse failed:', {
+      console.warn('[parseCloudExecCommand] input parse failed:', {
         input_preview: typeof toolInput === 'string' ? toolInput.substring(0, 100) : '[object]',
         error: error instanceof Error ? error.message : String(error)
       })
     }
   }
 
-  // Phase 2: Extract from output (available after completion, shows full command with flags)
+  // Output's final_command shows shell substitutions resolved — prefer it when available.
   if (toolOutput) {
     try {
       const outputStr = typeof toolOutput === 'string' ? toolOutput : JSON.stringify(toolOutput)
@@ -117,14 +87,14 @@ export function parseCloudExecCommand(
         return { command: parsed.final_command, phase: 'output' }
       }
     } catch (error) {
-      console.warn('[parseCloudExecCommand] Phase 2 parse failed:', {
+      console.warn('[parseCloudExecCommand] output parse failed:', {
         output_preview: typeof toolOutput === 'string' ? toolOutput.substring(0, 100) : '[object]',
         error: error instanceof Error ? error.message : String(error)
       })
     }
   }
 
-  return { command, phase: 'input' }
+  return { command: inputCommand ?? defaultCommand, phase: 'input' }
 }
 
 export function parseGitHubToolCommand(toolName: string, toolInput: string): string {
@@ -380,6 +350,60 @@ export function parseGitHubRcaCommand(toolInput: string): string {
   }
 }
 
+export function parseGitLabToolCommand(toolInput: string): string {
+  try {
+    const parsableCommand = toolInput.replace(/'/g, '"')
+    const parsed = JSON.parse(parsableCommand)
+    const args = parsed?.kwargs || parsed || {}
+    const action = args.action || "investigate"
+    const repo = args.repo || ""
+
+    switch(action) {
+      case "list_projects":
+        return "GitLab: List connected projects"
+      case "deployment_check":
+        return `GitLab: Check pipelines${repo ? ` in ${repo}` : ""}`
+      case "commits":
+        return `GitLab: List recent commits${repo ? ` in ${repo}` : ""}`
+      case "diff": {
+        const sha = args.commit_sha ? ` (${args.commit_sha.substring(0, 7)})` : ""
+        return `GitLab: Get commit diff${sha}${repo ? ` in ${repo}` : ""}`
+      }
+      case "merge_requests":
+        return `GitLab: List merged MRs${repo ? ` in ${repo}` : ""}`
+      case "suggest_fix":
+        return `GitLab: Suggest fix${args.file_path ? ` for ${args.file_path.split('/').pop()}` : ""}`
+      case "apply_fix":
+        return `GitLab: Apply fix${args.suggestion_id ? ` #${args.suggestion_id}` : ""}`
+      case "commit_terraform":
+        return `GitLab: Push Terraform${repo ? ` to ${repo}` : ""}`
+      case "create_branch": {
+        const branch = args.branch || ""
+        const base = args.target_branch || "default"
+        return `GitLab: Create branch${branch ? ` '${branch}'` : ""}${repo ? ` in ${repo}` : ""} from ${base}`
+      }
+      case "push_files": {
+        const filePath = args.file_path ? args.file_path.split('/').pop() : ""
+        const branch = args.branch || ""
+        return `GitLab: Push${filePath ? ` ${filePath}` : " files"}${branch ? ` to ${branch}` : ""}${repo ? ` in ${repo}` : ""}`
+      }
+      case "create_merge_request": {
+        const branch = args.branch || ""
+        const target = args.target_branch || "default"
+        return `GitLab: Create MR from ${branch || "branch"} → ${target}${repo ? ` in ${repo}` : ""}`
+      }
+      case "delete_branch": {
+        const branch = args.branch || ""
+        return `GitLab: Delete branch${branch ? ` '${branch}'` : ""}${repo ? ` in ${repo}` : ""}`
+      }
+      default:
+        return `GitLab: ${action.replace(/_/g, " ")}`
+    }
+  } catch {
+    return "GitLab Tool"
+  }
+}
+
 function parseCIRcaCommand(toolInput: string, label: string): string {
   try {
     let parsed: Record<string, unknown> | null = null
@@ -520,4 +544,38 @@ export function parseCloudflareCommand(toolName: string, toolInput: string): str
   }
 
   return `Cloudflare: ${toolName.replace(/cloudflare_?/g, "").replace(/_/g, " ") || "query"}`
+}
+
+export function parseSlackCommand(toolName: string, toolInput: string): string {
+  let args: Record<string, any> = {}
+  try {
+    args = JSON.parse(toolInput.replace(/'/g, '"'))
+    if (args.kwargs) args = { ...args, ...args.kwargs }
+  } catch {
+    // fall through
+  }
+
+  if (toolName === "list_slack_channels") {
+    return "Slack: List channels"
+  }
+
+  if (toolName === "get_channel_history") {
+    const parts: string[] = []
+    if (args.channel_id) parts.push(`#${args.channel_id}`)
+    if (args.oldest) parts.push(`from ${args.oldest}`)
+    if (args.latest) parts.push(`to ${args.latest}`)
+    if (args.limit && args.limit !== 100) parts.push(`limit ${args.limit}`)
+    const detail = parts.length ? ` (${parts.join(", ")})` : ""
+    return `Slack: Get channel history${detail}`
+  }
+
+  if (toolName === "get_thread_replies") {
+    const parts: string[] = []
+    if (args.channel_id) parts.push(`#${args.channel_id}`)
+    if (args.thread_ts) parts.push(`thread ${args.thread_ts}`)
+    const detail = parts.length ? ` (${parts.join(", ")})` : ""
+    return `Slack: Get thread replies${detail}`
+  }
+
+  return `Slack: ${toolName.replace(/slack_?/g, "").replace(/_/g, " ")}`
 }

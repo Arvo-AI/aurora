@@ -66,7 +66,9 @@ class VisualizationExtractor:
         import time as _time
         start_time = _time.time()
         try:
-            extractor = self.llm.with_structured_output(VisualizationData, include_raw=True)
+            extractor = self.llm.with_structured_output(
+                VisualizationData, include_raw=True, method="function_calling"
+            )
             result = extractor.invoke(prompt)
             new_viz = result["parsed"]
             raw_response = result.get("raw")
