@@ -382,6 +382,8 @@ def _fetch_fix_suggestions(incident_id: str, _retries: int = 2) -> List[Dict[str
                 )
                 return []
 
+    return []
+
 
 def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Fetch minimal incident fields needed for chat-based summarization."""
