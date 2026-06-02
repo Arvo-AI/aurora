@@ -613,7 +613,9 @@ def run_background_chat(
         
         # Hook: check if LLM call is allowed
         from utils.hooks import get_hook
-        hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+        from utils.auth.stateless_auth import get_org_id_for_user as _get_org
+        _hook_org_id = _get_org(user_id) if user_id else None
+        hook_allowed, hook_message = get_hook("before_llm_call")(_hook_org_id, user_id)
         if not hook_allowed:
             logger.warning(f"[BackgroundChat] Hook blocked for user {user_id}: {hook_message}")
             if incident_id:
