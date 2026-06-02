@@ -1124,13 +1124,13 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
             "FLY_API_TOKEN": api_token,
         }
 
-        logger.info(f"Fly.io isolated environment configured (org: {org_slug})")
-        logger.info(f"TIME: setup_flyio_environment_isolated completed in {time.perf_counter() - fn_start:.2f}s")
+        logger.info("Fly.io isolated environment configured (org: %s)", org_slug)
+        logger.info("TIME: setup_flyio_environment_isolated completed in %.2fs", time.perf_counter() - fn_start)
 
         return True, org_slug, "api_token", isolated_env
 
     except Exception as e:
-        logger.error(f"Failed to setup Fly.io environment: {e}")
+        logger.exception("Failed to setup Fly.io environment")
         return False, None, None, None
 
 
@@ -1466,7 +1466,7 @@ Security & Compliance
             # Fly.io isolated setup - uses FLY_API_TOKEN env var
             success, org_slug, auth_method, isolated_env = setup_flyio_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
+                return json.dumps({"error": "Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
             resource_id = org_slug
         elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
             return json.dumps({

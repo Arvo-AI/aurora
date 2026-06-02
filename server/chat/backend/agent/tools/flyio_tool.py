@@ -33,7 +33,7 @@ class FlyioMetricsQueryArgs(BaseModel):
     time: Optional[str] = Field(default=None, description="Evaluation time (RFC3339 or Unix timestamp). Defaults to now.")
 
 
-def query_flyio_metrics(query: str, time: Optional[str] = None, user_id: str = None) -> str:
+def query_flyio_metrics(query: str, time: Optional[str] = None, user_id: str = None, session_id: str = None) -> str:
     """Query Fly.io Prometheus metrics endpoint."""
     token_data = get_token_data(user_id, "flyio")
     if not token_data:
