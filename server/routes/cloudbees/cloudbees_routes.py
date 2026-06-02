@@ -64,6 +64,8 @@ def connect(user_id):
 
     if not base_url:
         return jsonify({"error": "CloudBees CI URL is required"}), 400
+    if not base_url.startswith("http://") and not base_url.startswith("https://"):
+        return jsonify({"error": "CloudBees CI URL must start with http:// or https://"}), 400
     if not username:
         return jsonify({"error": "CloudBees CI username is required"}), 400
     if not api_token or not isinstance(api_token, str):
@@ -249,6 +251,8 @@ def connect_platform(user_id):
 
     if not oc_url:
         return jsonify({"error": "Operations Center URL is required"}), 400
+    if not oc_url.startswith("http://") and not oc_url.startswith("https://"):
+        return jsonify({"error": "Operations Center URL must start with http:// or https://"}), 400
     if not username:
         return jsonify({"error": "Username is required"}), 400
     if not api_token or not isinstance(api_token, str):
@@ -309,45 +313,31 @@ def connect_platform(user_id):
 @cloudbees_bp.route("/platform-status", methods=["GET"])
 @require_permission("connectors", "read")
 def platform_status(user_id):
-    """Return Operations Center controller list and Feature Management connection status."""
+    """Return Operations Center and Feature Management connection status.
+
+    This endpoint only checks whether credentials exist -- it does NOT
+    call validate_token or list_applications on every request to avoid
+    excessive API calls.  Full validation happens on /connect-platform.
+    """
     oc_status = {"connected": False}
     fm_status = {"connected": False}
 
-    # Check OC
+    # Check OC credentials exist
     oc_creds = get_token_data(user_id, CLOUDBEES_OC_PROVIDER)
     if oc_creds and oc_creds.get("base_url") and oc_creds.get("username") and oc_creds.get("api_token"):
-        from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
-
-        oc_client = CloudBeesOCClient(
-            base_url=oc_creds["base_url"],
-            username=oc_creds["username"],
-            api_token=oc_creds["api_token"],
-        )
-        success, controllers, error = oc_client.discover_controllers()
         oc_status = {
             "connected": True,
             "url": oc_creds["base_url"],
             "username": oc_creds["username"],
-            "controllers": controllers if success else [],
-            "controller_count": len(controllers) if success else 0,
-            "error": error if not success else None,
         }
 
-    # Check FM
+    # Check FM credentials exist
     fm_creds = get_token_data(user_id, CLOUDBEES_FM_PROVIDER)
     if fm_creds and fm_creds.get("api_token"):
-        from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
-
-        fm_client = CloudBeesFMClient(api_token=fm_creds["api_token"])
-        if fm_client.validate_token():
-            success, apps, _ = fm_client.list_applications()
-            fm_status = {
-                "connected": True,
-                "app_id": fm_creds.get("app_id"),
-                "applications": apps if success else [],
-            }
-        else:
-            fm_status = {"connected": False, "error": "Token validation failed"}
+        fm_status = {
+            "connected": True,
+            "app_id": fm_creds.get("app_id"),
+        }
 
     return jsonify({
         "operations_center": oc_status,

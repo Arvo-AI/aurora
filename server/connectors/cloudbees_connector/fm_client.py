@@ -9,6 +9,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import httpx
 
@@ -45,6 +46,13 @@ class CloudBeesFMClient:
         if self._http_client and not self._http_client.is_closed:
             self._http_client.close()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def _rate_limit_wait(self):
         """Enforce rate limit of 1 request per second."""
         now = time.monotonic()
@@ -71,7 +79,14 @@ class CloudBeesFMClient:
             if response.status_code == 404:
                 return False, None, "Resource not found."
             if response.status_code == 429:
-                return False, None, "Rate limit exceeded. Please try again later."
+                # Retry once after a short delay
+                time.sleep(2.0)
+                try:
+                    response = client.request(method=method, url=url, params=params)
+                except httpx.HTTPError:
+                    return False, None, "Rate limit exceeded. Please try again later."
+                if response.status_code == 429:
+                    return False, None, "Rate limit exceeded. Please try again later."
             if response.status_code >= 400:
                 return False, None, f"Feature Management API error ({response.status_code})"
 
@@ -119,7 +134,7 @@ class CloudBeesFMClient:
         and filter by updatedAt timestamps.
         """
         success, data, error = self._request(
-            "GET", f"/applications/{app_id}/flags"
+            "GET", f"/applications/{quote(app_id, safe='')}/flags"
         )
         if not success:
             return False, [], error
@@ -165,4 +180,4 @@ class CloudBeesFMClient:
         self, app_id: str, flag_name: str
     ) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """Get the current status of a specific feature flag."""
-        return self._request("GET", f"/applications/{app_id}/flags/{flag_name}")
+        return self._request("GET", f"/applications/{quote(app_id, safe='')}/flags/{quote(flag_name, safe='')}")

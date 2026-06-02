@@ -9,6 +9,7 @@ Uses Jenkins API format (HTTP Basic Auth with username + api_token).
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -26,6 +27,9 @@ class CloudBeesOCClient:
 
     def __init__(self, base_url: str, username: str, api_token: str):
         self.base_url = base_url.rstrip("/")
+        parsed = urlparse(self.base_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Invalid URL scheme: {parsed.scheme!r}. Only http and https are allowed.")
         self.username = username
         self.api_token = api_token
         self.timeout = DEFAULT_TIMEOUT
@@ -44,6 +48,20 @@ class CloudBeesOCClient:
         """Close the underlying HTTP client."""
         if self._http_client and not self._http_client.is_closed:
             self._http_client.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def _validate_controller_url(self, controller_url: str) -> None:
+        """Validate that a controller URL belongs to the same domain as the OC base URL."""
+        oc_host = urlparse(self.base_url).hostname
+        ctrl_host = urlparse(controller_url).hostname
+        if not ctrl_host or (ctrl_host != oc_host and not ctrl_host.endswith(f".{oc_host}")):
+            raise ValueError(f"Controller URL {controller_url} does not match OC domain {oc_host}")
 
     def _request(
         self, method: str, path: str, params: Optional[Dict] = None
@@ -147,6 +165,7 @@ class CloudBeesOCClient:
 
     def get_controller_client(self, controller_url: str) -> JenkinsClient:
         """Return a JenkinsClient configured for a specific managed controller."""
+        self._validate_controller_url(controller_url)
         return JenkinsClient(
             base_url=controller_url.rstrip("/"),
             username=self.username,
@@ -177,10 +196,11 @@ class CloudBeesOCClient:
                 continue
 
             try:
+                self._validate_controller_url(controller_url)
                 client = self.get_controller_client(controller_url)
                 ok, jobs, err = client.list_jobs()
                 if not ok:
-                    errors.append(f"{controller['name']}: {err}")
+                    errors.append(f"{controller['name']}: Failed to query controller")
                     continue
 
                 # Filter by service name if provided
@@ -203,7 +223,7 @@ class CloudBeesOCClient:
                 logger.warning(
                     "Failed to query controller %s: %s", controller.get("name"), e
                 )
-                errors.append(f"{controller.get('name', 'unknown')}: {str(e)}")
+                errors.append(f"{controller.get('name', 'unknown')}: Failed to query controller")
 
         # Sort by timestamp descending
         all_builds.sort(key=lambda b: b.get("timestamp", 0), reverse=True)
