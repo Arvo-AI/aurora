@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Check, Copy, Loader2, AlertCircle } from "lucide-react";
+import { Check, Copy, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -268,7 +268,7 @@ export default function KubectlAuthPage() {
                     >
                       {generatingToken ? (
                         <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
                           Generating...
                         </>
                       ) : (
@@ -376,7 +376,7 @@ export default function KubectlAuthPage() {
             <CardContent className="space-y-4">
               {!generatedToken && (
                 <Alert className="bg-zinc-900 border-zinc-800">
-                  <AlertCircle className="h-4 w-4 text-yellow-500" />
+                  <WarningCircle className="h-4 w-4 text-yellow-500" />
                   <AlertDescription className="text-sm text-zinc-300">
                     Generate a token in Step 1 first, then this command will automatically include it. The agent runs in the <code className="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-300 text-[11px] font-mono">default</code> namespace with read-only cluster access (you can change the namespace with <code className="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-300 text-[11px] font-mono">--namespace</code>). No credentials leave the cluster.
                   </AlertDescription>
@@ -416,7 +416,7 @@ export default function KubectlAuthPage() {
                 </div>
               ) : agentStatus === 'checking' ? (
                 <div className="flex items-center gap-3 p-4 bg-zinc-900 border border-zinc-800 rounded-lg">
-                  <Loader2 className="h-5 w-5 text-zinc-400 animate-spin" />
+                  <SpinnerGap className="h-5 w-5 text-zinc-400 animate-spin" />
                   <div>
                     <p className="text-zinc-300 text-sm">Waiting for agent...</p>
                     <p className="text-zinc-500 text-xs mt-0.5">Deploy the agent using Step 3, Aurora will detect it automatically</p>
@@ -424,7 +424,7 @@ export default function KubectlAuthPage() {
                 </div>
               ) : (
                 <div className="flex items-center gap-3 p-4 bg-zinc-900 border border-zinc-800 rounded-lg">
-                  <AlertCircle className="h-5 w-5 text-zinc-400" />
+                  <WarningCircle className="h-5 w-5 text-zinc-400" />
                   <div>
                     <p className="text-zinc-300 text-sm">No agent detected</p>
                     <p className="text-zinc-500 text-xs mt-0.5">Complete Step 3 to deploy the agent to your cluster</p>

@@ -4,7 +4,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, Crown } from "lucide-react";
+import { SpinnerGap, Crown } from "@phosphor-icons/react";
 import { Project } from "../types";
 
 interface ProjectListItemProps {
@@ -79,7 +79,7 @@ export const ProjectListItem: React.FC<ProjectListItemProps> = ({
         )}
 
         {isLoading ? (
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          <SpinnerGap className="h-4 w-4 animate-spin text-primary" />
         ) : !showToggle ? null : (
           <Switch
             checked={project.enabled}

@@ -5,19 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { 
-  Loader2, 
-  CheckCircle, 
-  AlertCircle, 
-  Copy,
-  Cloud,
-  Info,
-  Download,
-  Trash2,
-  Upload,
-  Search,
-  ShieldAlert
-} from 'lucide-react';
+import { SpinnerGap, CheckCircle, WarningCircle, Copy, Cloud, Info, DownloadSimple, Trash, UploadSimple, MagnifyingGlass, ShieldWarning } from "@phosphor-icons/react";
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -98,7 +86,7 @@ function RoleTypeToggle({ value, onChange }: { value: 'ReadOnly' | 'Admin'; onCh
             value === 'ReadOnly' ? 'text-emerald-400' : 'text-white/30 hover:text-white/50'
           }`}
         >
-          <Search className="w-3 h-3" />
+          <MagnifyingGlass className="w-3 h-3" />
           Read-Only
         </button>
         <button
@@ -108,7 +96,7 @@ function RoleTypeToggle({ value, onChange }: { value: 'ReadOnly' | 'Admin'; onCh
             value === 'Admin' ? 'text-amber-400' : 'text-white/30 hover:text-white/50'
           }`}
         >
-          <ShieldAlert className="w-3 h-3" />
+          <ShieldWarning className="w-3 h-3" />
           Admin
         </button>
       </div>
@@ -181,7 +169,7 @@ function CloudWatchAlertToggle() {
           <p className="text-xs text-white/40 mt-0.5">Receive CloudWatch alarm notifications via SNS webhook</p>
         </div>
         {loading ? (
-          <Loader2 className="w-4 h-4 animate-spin text-white/30" />
+          <SpinnerGap className="w-4 h-4 animate-spin text-white/30" />
         ) : (
           <Switch
             checked={enabled}
@@ -260,7 +248,7 @@ function CloudWatchAlertToggle() {
               disabled={webhookLoading}
               className="flex items-center gap-1.5 text-xs text-white/50 hover:text-white disabled:opacity-50"
             >
-              {webhookLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+              {webhookLoading && <SpinnerGap className="w-3 h-3 animate-spin" />}
               {webhookLoading ? 'Loading…' : 'Show webhook URL'}
             </button>
           )}
@@ -788,7 +776,7 @@ export default function AWSOnboardingPage() {
       <ConnectorAuthGuard connectorName="AWS">
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-center">
-            <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
+            <SpinnerGap className="w-12 h-12 animate-spin mx-auto mb-6 text-blue-400" />
             <p className="text-slate-300 text-lg">Loading AWS onboarding...</p>
           </div>
         </div>
@@ -803,7 +791,7 @@ export default function AWSOnboardingPage() {
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
           <CardHeader className="pb-4">
             <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <WarningCircle className="w-5 h-5 flex-shrink-0" />
               <span className="break-words">AWS Credentials Not Configured</span>
             </CardTitle>
             <CardDescription className="text-white/50 mt-2 text-sm">
@@ -921,7 +909,7 @@ make dev`}</pre>
         <Card className="w-full max-w-2xl bg-black border-white/10 overflow-hidden">
           <CardHeader className="pb-4">
             <CardTitle className="text-white flex items-center space-x-2 text-lg sm:text-xl">
-              <AlertCircle className="w-5 h-5 flex-shrink-0 text-yellow-400" />
+              <WarningCircle className="w-5 h-5 flex-shrink-0 text-yellow-400" />
               <span className="break-words">AWS Credentials Issue</span>
             </CardTitle>
             <CardDescription className="text-white/50 mt-2 text-sm">
@@ -930,7 +918,7 @@ make dev`}</pre>
           </CardHeader>
           <CardContent className="space-y-4 overflow-x-hidden">
             <Alert className="bg-yellow-500/10 border-yellow-500/20">
-              <AlertCircle className="h-4 w-4 text-yellow-400" />
+              <WarningCircle className="h-4 w-4 text-yellow-400" />
               <AlertDescription className="text-sm text-yellow-400">
                 <strong>Configuration Issue:</strong> Your AWS credentials are set in the .env file, but Aurora couldn't retrieve your AWS account ID. This usually means the credentials are invalid, expired, or don't have the required permissions.
               </AlertDescription>
@@ -983,7 +971,7 @@ make dev`}</pre>
         <Card className="w-full max-w-2xl bg-slate-900 border-slate-700">
           <CardHeader>
             <CardTitle className="text-red-400 flex items-center space-x-2">
-              <AlertCircle className="w-5 h-5" />
+              <WarningCircle className="w-5 h-5" />
               <span>{formattedError.title}</span>
             </CardTitle>
           </CardHeader>
@@ -1103,7 +1091,7 @@ make dev`}</pre>
                   </div>
                 </div>
                 <Button variant="ghost" onClick={() => setDisconnectTarget('all')} disabled={isDisconnecting} className="text-white/50 hover:text-white hover:bg-white/5">
-                  {isDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Disconnect All'}
+                  {isDisconnecting ? <SpinnerGap className="w-4 h-4 animate-spin" /> : 'Disconnect All'}
                 </Button>
               </div>
             </CardHeader>
@@ -1142,7 +1130,7 @@ make dev`}</pre>
                             <td className="px-4 py-2 text-xs">{acct.last_verified_at ? new Date(acct.last_verified_at).toLocaleDateString() : '-'}</td>
                             <td className="px-4 py-2 text-right">
                               <Button variant="ghost" size="icon" onClick={() => setDisconnectTarget(acct.account_id)} className="h-7 w-7 text-white/30 hover:text-red-400 hover:bg-white/5">
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash className="w-3.5 h-3.5" />
                               </Button>
                             </td>
                           </tr>
@@ -1187,7 +1175,7 @@ make dev`}</pre>
                                 className="border-white/10 hover:bg-white/5 text-white/60 text-xs h-7"
                               >
                                 {reconnectingId === acct.account_id ? (
-                                  <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                  <SpinnerGap className="w-3 h-3 animate-spin mr-1" />
                                 ) : null}
                                 Reconnect
                               </Button>
@@ -1247,7 +1235,7 @@ make dev`}</pre>
                       Aurora hosts the template. Log into the target account, review the stack, and click Create.
                     </p>
                     <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs w-full justify-start">
-                      {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                      {isDownloadingCfn ? <SpinnerGap className="w-3 h-3 animate-spin mr-1.5" /> : <DownloadSimple className="w-3 h-3 mr-1.5" />}
                       Or download the template YAML
                     </Button>
                   </div>
@@ -1269,7 +1257,7 @@ make dev`}</pre>
                       size="sm"
                       className="bg-white text-black hover:bg-white/90 text-xs shrink-0"
                     >
-                      {isAddingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Connect'}
+                      {isAddingAccount ? <SpinnerGap className="w-3 h-3 animate-spin" /> : 'Connect'}
                     </Button>
                   </div>
                 </div>
@@ -1300,7 +1288,7 @@ make dev`}</pre>
                     )}
 
                     <Button onClick={() => setShowBulkForm(!showBulkForm)} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                      <Upload className="w-3 h-3 mr-1.5" />
+                      <UploadSimple className="w-3 h-3 mr-1.5" />
                       {showBulkForm ? 'Hide Bulk Register' : 'Bulk Register'}
                     </Button>
                   </div>
@@ -1326,9 +1314,9 @@ make dev`}</pre>
                   />
                   <Button onClick={handleBulkRegister} disabled={isBulkRegistering || !bulkInput.trim()} className="bg-white text-black hover:bg-white/90">
                     {isBulkRegistering ? (
-                      <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Registering...</>
+                      <><SpinnerGap className="w-4 h-4 animate-spin mr-2" /> Registering...</>
                     ) : (
-                      <><Upload className="w-4 h-4 mr-2" /> Register Accounts</>
+                      <><UploadSimple className="w-4 h-4 mr-2" /> Register Accounts</>
                     )}
                   </Button>
 
@@ -1433,7 +1421,7 @@ make dev`}</pre>
                     Log into the target AWS account, review the stack, check the IAM acknowledgement box, and click Create stack.
                   </p>
                   <Button onClick={handleDownloadCfnTemplate} disabled={isDownloadingCfn} variant="outline" size="sm" className="border-white/10 hover:bg-white/5 text-white/70 text-xs">
-                    {isDownloadingCfn ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Download className="w-3 h-3 mr-1.5" />}
+                    {isDownloadingCfn ? <SpinnerGap className="w-3 h-3 animate-spin mr-1.5" /> : <DownloadSimple className="w-3 h-3 mr-1.5" />}
                     Or download the template YAML
                   </Button>
                 </div>
@@ -1459,7 +1447,7 @@ make dev`}</pre>
               {error && (
                 <div className="space-y-3">
                   <Alert className="bg-red-500/10 border-red-500/20">
-                    <AlertCircle className="h-4 w-4 text-red-400" />
+                    <WarningCircle className="h-4 w-4 text-red-400" />
                     <AlertDescription className="text-sm text-red-400">
                       {error}
                     </AlertDescription>
@@ -1485,7 +1473,7 @@ make dev`}</pre>
               >
                 {isSettingRole ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" /> Connecting...
+                    <SpinnerGap className="w-4 h-4 animate-spin mr-2" /> Connecting...
                   </>
                 ) : (
                   <>

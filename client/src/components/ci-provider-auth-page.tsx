@@ -10,10 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import {
-  Check, ChevronLeft, Copy, ExternalLink, Eye, EyeOff,
-  Loader2, Rocket, ShieldCheck, Webhook, Zap,
-} from "lucide-react";
+import { Check, CaretLeft, Copy, ArrowSquareOut, Eye, EyeSlash, SpinnerGap, Rocket, ShieldCheck, WebhooksLogo, Lightning } from "@phosphor-icons/react";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import { formatTimeAgo, formatDuration } from "@/lib/utils/time-format";
 
@@ -193,7 +190,7 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
   if (checkingStatus && !status) {
     return (
       <div className="container mx-auto py-16 px-4 max-w-3xl flex flex-col items-center justify-center gap-3">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Checking connection status...</p>
       </div>
     );
@@ -205,7 +202,7 @@ export default function CIProviderAuthPage({ config }: { config: CIProviderConfi
         onClick={() => router.push("/connectors")}
         className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
       >
-        <ChevronLeft className="h-4 w-4" />
+        <CaretLeft className="h-4 w-4" />
         Back to Connectors
       </button>
 
@@ -294,7 +291,7 @@ function ConnectedView({
                 <a href={safeUrl} target="_blank" rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0">
                   Open Dashboard
-                  <ExternalLink className="h-3 w-3" />
+                  <ArrowSquareOut className="h-3 w-3" />
                 </a>
               ) : null;
             })()}
@@ -339,7 +336,7 @@ function ConnectedView({
           <div className="flex items-center justify-between">
             <div className="space-y-1 flex-1">
               <h4 className="font-medium flex items-center gap-2">
-                <Zap className="h-4 w-4" />
+                <Lightning className="h-4 w-4" />
                 Automatic RCA on Deployment Failures
               </h4>
               <p className="text-sm text-muted-foreground">
@@ -368,7 +365,7 @@ function ConnectedView({
         <p className="text-xs text-muted-foreground">Remove stored credentials and disconnect</p>
         <Button variant="ghost" size="sm" onClick={onDisconnect} disabled={loading}
           className="text-red-500 hover:text-red-600 hover:bg-red-500/10 dark:text-red-400 dark:hover:text-red-300 h-8 text-xs">
-          {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+          {loading ? <SpinnerGap className="h-3 w-3 animate-spin mr-1.5" /> : null}
           {loading ? "Disconnecting..." : "Disconnect"}
         </Button>
       </div>
@@ -422,7 +419,7 @@ function WebhookCard({
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
-          <Webhook className={`h-5 w-5 ${iconColor}`} />
+          <WebhooksLogo className={`h-5 w-5 ${iconColor}`} />
           <CardTitle className="text-lg">Send Deployment Events to Aurora</CardTitle>
         </div>
         <CardDescription>
@@ -444,7 +441,7 @@ function WebhookCard({
         <details className="text-xs group">
           <summary className="cursor-pointer text-muted-foreground hover:text-foreground flex items-center gap-1">
             <svg className="h-3 w-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
             Alternative snippets (with plugins)
           </summary>
@@ -523,7 +520,7 @@ function DeploymentsCard({ config, deployments }: { config: CIProviderConfig; de
                     <a href={safeBuildUrl} target="_blank" rel="noopener noreferrer"
                       className="ml-3 p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors shrink-0"
                       title={`View in ${config.displayName}`}>
-                      <ExternalLink className="h-4 w-4" />
+                      <ArrowSquareOut className="h-4 w-4" />
                     </a>
                   ) : null;
                 })()}
@@ -571,7 +568,7 @@ function SetupView({
               </div>
               <svg className={`w-5 h-5 text-muted-foreground transition-transform duration-200 ${expandedStep === 1 ? "rotate-180" : ""}`}
                 fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
               </svg>
             </button>
             {expandedStep === 1 && (
@@ -591,7 +588,7 @@ function SetupView({
                     <a href={config.docsUrl} target="_blank" rel="noopener noreferrer"
                       className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
                       {config.docsLabel}
-                      <ExternalLink className="w-3 h-3" />
+                      <ArrowSquareOut className="w-3 h-3" />
                     </a>
                   </div>
                 )}
@@ -609,7 +606,7 @@ function SetupView({
               </div>
               <svg className={`w-5 h-5 text-muted-foreground transition-transform duration-200 ${expandedStep === 2 ? "rotate-180" : ""}`}
                 fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
               </svg>
             </button>
             {expandedStep === 2 && (
@@ -635,7 +632,7 @@ function SetupView({
                       <button type="button" onClick={() => setShowToken(!showToken)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                         aria-label={showToken ? "Hide token" : "Show token"}>
-                        {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showToken ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
                   </div>
@@ -649,7 +646,7 @@ function SetupView({
                     </div>
                   </div>
                   <Button type="submit" disabled={loading || !baseUrl || !username || !apiToken} className="w-full h-10">
-                    {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : `Connect ${config.displayName}`}
+                    {loading ? (<><SpinnerGap className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : `Connect ${config.displayName}`}
                   </Button>
                 </form>
               </div>

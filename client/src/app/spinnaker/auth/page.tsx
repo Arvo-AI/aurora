@@ -14,7 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, ChevronLeft, Loader2 } from "lucide-react";
+import { Check, CaretLeft, SpinnerGap } from "@phosphor-icons/react";
 import { getUserFriendlyError } from "@/lib/utils";
 
 import { TokenAuthForm } from "./components/TokenAuthForm";
@@ -233,7 +233,7 @@ export default function SpinnakerAuthPage() {
   if (checkingStatus && !status) {
     return (
       <div className="container mx-auto py-16 px-4 max-w-3xl flex flex-col items-center justify-center gap-3">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Checking connection status...</p>
       </div>
     );
@@ -245,7 +245,7 @@ export default function SpinnakerAuthPage() {
         onClick={() => router.push("/connectors")}
         className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
       >
-        <ChevronLeft className="h-4 w-4" />
+        <CaretLeft className="h-4 w-4" />
         Back to Connectors
       </button>
 
@@ -279,7 +279,7 @@ export default function SpinnakerAuthPage() {
             <p className="text-xs text-muted-foreground">Remove stored credentials and disconnect</p>
             <Button variant="ghost" size="sm" onClick={handleDisconnect} disabled={loading}
               className="text-red-500 hover:text-red-600 hover:bg-red-500/10 dark:text-red-400 dark:hover:text-red-300 h-8 text-xs">
-              {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+              {loading ? <SpinnerGap className="h-3 w-3 animate-spin mr-1.5" /> : null}
               {loading ? "Disconnecting..." : "Disconnect"}
             </Button>
           </div>

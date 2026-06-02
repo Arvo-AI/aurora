@@ -6,13 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import {
-  AlertCircle,
-  Check,
-  Loader2,
-  ShieldCheck,
-  Upload,
-} from "lucide-react";
+import { WarningCircle, Check, SpinnerGap, ShieldCheck, UploadSimple } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
@@ -225,7 +219,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
             htmlFor="sa-upload"
             className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
           >
-            <Upload className="h-4 w-4" />
+            <UploadSimple className="h-4 w-4" />
             {fileName || "Choose JSON key file"}
           </Label>
           <input
@@ -268,7 +262,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
         />
         {showInlineValidationError && (
           <p className="text-xs text-destructive flex items-center gap-1.5">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <WarningCircle className="h-3.5 w-3.5 shrink-0" />
             {validation.error}
           </p>
         )}
@@ -311,7 +305,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
 
       {submitError && (
         <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
+          <WarningCircle className="h-4 w-4" />
           <AlertTitle>Failed to connect</AlertTitle>
           <AlertDescription className="text-sm">{submitError}</AlertDescription>
         </Alert>
@@ -324,7 +318,7 @@ export function GcpServiceAccountForm({ onSuccess }: GcpServiceAccountFormProps)
       >
         {loading ? (
           <>
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
             Connecting...
           </>
         ) : (

@@ -10,7 +10,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, ExternalLink, Globe, Copy, Check } from "lucide-react";
+import { Warning, ArrowSquareOut, Globe, Copy, Check } from "@phosphor-icons/react";
 import { detectWebView, type WebViewDetectionResult } from "@/lib/webview-detection";
 import { copyToClipboard } from "@/lib/utils";
 
@@ -148,7 +148,7 @@ export function WebViewWarning() {
         <AlertDialogHeader>
           <div className="flex items-center gap-3 mb-2">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
-              <AlertTriangle className="h-6 w-6 text-red-500" />
+              <Warning className="h-6 w-6 text-red-500" />
             </div>
             <AlertDialogTitle className="text-xl">
               Unsupported WebView
@@ -198,7 +198,7 @@ export function WebViewWarning() {
             onClick={handleOpenInBrowser}
             className="flex items-center gap-2 w-full sm:w-auto"
           >
-            <ExternalLink className="h-4 w-4" />
+            <ArrowSquareOut className="h-4 w-4" />
             Open in Browser
           </Button>
           <Button

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Check, Loader2, ShieldCheck, Upload } from "lucide-react";
+import { Check, SpinnerGap, ShieldCheck, UploadSimple } from "@phosphor-icons/react";
 
 interface X509AuthFormProps {
   baseUrl: string;
@@ -65,7 +65,7 @@ export function X509AuthForm({
             htmlFor="cert-upload"
             className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
           >
-            <Upload className="h-4 w-4" />
+            <UploadSimple className="h-4 w-4" />
             {certFileName || "Choose certificate file"}
           </Label>
           <input
@@ -92,7 +92,7 @@ export function X509AuthForm({
             htmlFor="key-upload"
             className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
           >
-            <Upload className="h-4 w-4" />
+            <UploadSimple className="h-4 w-4" />
             {keyFileName || "Choose key file"}
           </Label>
           <input
@@ -121,7 +121,7 @@ export function X509AuthForm({
             htmlFor="ca-upload"
             className="flex items-center gap-2 px-4 py-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors text-sm"
           >
-            <Upload className="h-4 w-4" />
+            <UploadSimple className="h-4 w-4" />
             {caFileName || "Choose CA bundle file"}
           </Label>
           <input
@@ -154,7 +154,7 @@ export function X509AuthForm({
       </div>
 
       <Button type="submit" disabled={loading || !isValid} className="w-full h-10">
-        {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Spinnaker"}
+        {loading ? (<><SpinnerGap className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Spinnaker"}
       </Button>
     </form>
   );

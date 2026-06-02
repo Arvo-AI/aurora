@@ -5,13 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertCircle,
-  Eye,
-  EyeOff,
-  Loader2,
-  ShieldCheck,
-} from "lucide-react";
+import { WarningCircle, Eye, EyeSlash, SpinnerGap, ShieldCheck } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 
@@ -215,7 +209,7 @@ export function NotionIntegrationTokenForm({
           >
             {revealed ? (
               <>
-                <EyeOff className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
+                <EyeSlash className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
                 Hide
               </>
             ) : (
@@ -267,7 +261,7 @@ export function NotionIntegrationTokenForm({
             id="notion-iit-error"
             className="text-xs text-destructive flex items-center gap-1.5"
           >
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <WarningCircle className="h-3.5 w-3.5 shrink-0" />
             {validation.error}
           </p>
         )}
@@ -287,7 +281,7 @@ export function NotionIntegrationTokenForm({
 
       {submitError && (
         <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
+          <WarningCircle className="h-4 w-4" />
           <AlertTitle>Failed to connect</AlertTitle>
           <AlertDescription className="text-sm">{submitError}</AlertDescription>
         </Alert>
@@ -300,7 +294,7 @@ export function NotionIntegrationTokenForm({
       >
         {loading ? (
           <>
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
             Connecting...
           </>
         ) : (

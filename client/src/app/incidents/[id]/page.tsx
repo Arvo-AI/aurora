@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { incidentsService, Incident, StreamingThought } from '@/lib/services/incidents';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, AlertTriangle, GitMerge } from 'lucide-react';
+import { ArrowLeft, Warning, GitMerge } from "@phosphor-icons/react";
 import { useAuth } from '@/hooks/useAuthHooks';
 import { canWrite } from '@/lib/roles';
 
@@ -116,7 +116,7 @@ export default function IncidentDetailPage() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <Warning className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <p className="text-red-400 mb-4">{error || 'Incident not found'}</p>
           <Button
             variant="outline"

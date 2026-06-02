@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { Trash2, FileText } from "lucide-react";
+import { Trash, FileText } from "@phosphor-icons/react";
 import { clearTerraformState } from "@/lib/services/userSettings";
 import { RCASettings } from "@/components/RCASettings";
 import { useUser } from "@/hooks/useAuthHooks";
@@ -73,7 +73,7 @@ export function GeneralSettings() {
                 disabled={isClearingTerraformState}
                 className="text-orange-600 border-orange-200 hover:bg-orange-50 hover:text-orange-700"
               >
-                <Trash2 className={`h-4 w-4 mr-2${isClearingTerraformState ? ' animate-pulse' : ''}`} />
+                <Trash className={`h-4 w-4 mr-2${isClearingTerraformState ? ' animate-pulse' : ''}`} />
                 {isClearingTerraformState ? 'Clearing...' : 'Clear State'}
               </Button>
             </div>

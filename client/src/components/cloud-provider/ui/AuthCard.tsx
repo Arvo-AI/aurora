@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 
 interface AuthCardProps {
   providerLogo: string;           // e.g. "/aws.ico"
@@ -91,7 +91,7 @@ const AuthCard: React.FC<AuthCardProps> = ({
       {connecting && (
         <div className="fixed inset-0 bg-background/70 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="flex items-center gap-3 bg-card border p-6 rounded-xl shadow-lg">
-            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            <SpinnerGap className="w-6 h-6 animate-spin text-primary" />
             <span className="font-medium">Establishing secure connection…</span>
           </div>
         </div>

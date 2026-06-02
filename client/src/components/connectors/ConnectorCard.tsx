@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
+import { Check, ArrowSquareOut, WarningCircle, SpinnerGap, ChartBar, SignOut, Key, GearSix, Lock } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
 import { slackService } from "@/lib/services/slack";
@@ -266,7 +266,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         </div>
       ) : (
         <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
-          <AlertCircle className="h-4 w-4" />
+          <WarningCircle className="h-4 w-4" />
           <span className="text-xs font-medium">Available</span>
         </div>
       );
@@ -275,7 +275,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     if (connector.id === "onprem" && isCheckingConnection) {
       return (
         <div className="flex items-center gap-1 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <SpinnerGap className="h-4 w-4 animate-spin" />
           <span className="text-xs font-medium">Checking...</span>
         </div>
       );
@@ -344,7 +344,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
             <div className="flex items-center gap-1.5 mt-2 text-xs">
               {syncStatus === "building" && (
                 <>
-                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                  <SpinnerGap className="h-3 w-3 animate-spin text-muted-foreground" />
                   <span className="text-muted-foreground">Building dependency graph...</span>
                 </>
               )}
@@ -356,7 +356,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
               )}
               {syncStatus === "error" && (
                 <>
-                  <AlertCircle className="h-3 w-3 text-red-600 dark:text-red-500" />
+                  <WarningCircle className="h-3 w-3 text-red-600 dark:text-red-500" />
                   <span className="text-red-600 dark:text-red-500">Graph sync failed</span>
                 </>
               )}
@@ -376,7 +376,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         className="w-full bg-white text-black hover:bg-gray-100"
                         disabled={!canWrite}
                       >
-                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <KeyRound className="h-4 w-4 mr-2 shrink-0" />}
+                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <Key className="h-4 w-4 mr-2 shrink-0" />}
                         <span className="truncate">SSH Keys</span>
                       </Button>
                     </span>
@@ -397,7 +397,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         className="w-full bg-white text-black hover:bg-gray-100"
                         disabled={!canWrite}
                       >
-                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <Settings className="h-4 w-4 mr-2 shrink-0" />}
+                        {!canWrite ? <Lock className="h-4 w-4 mr-2 shrink-0" /> : <GearSix className="h-4 w-4 mr-2 shrink-0" />}
                         <span className="truncate">VM Config</span>
                       </Button>
                     </span>
@@ -424,17 +424,17 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                       >
                         {isConnecting ? (
                           <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
                             {connector.id === "slack" && isConnected ? "Disconnecting..." : connector.id === "google_chat" && isConnected ? "Disconnecting..." : "Connecting..."}
                           </>
                         ) : connector.id === "slack" && isConnected ? (
                           <>
-                            <LogOut className="h-4 w-4 mr-2" />
+                            <SignOut className="h-4 w-4 mr-2" />
                             Disconnect
                           </>
                         ) : connector.id === "google_chat" && isConnected ? (
                           <>
-                            <LogOut className="h-4 w-4 mr-2" />
+                            <SignOut className="h-4 w-4 mr-2" />
                             Disconnect
                           </>
                         ) : isConnected ? (
@@ -445,7 +445,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                             </>
                           ) : (
                             <>
-                              <ExternalLink className="h-4 w-4 mr-2" />
+                              <ArrowSquareOut className="h-4 w-4 mr-2" />
                               {connector.id === 'kubectl' ? 'Manage Clusters' : 'Manage'}
                             </>
                           )
@@ -488,7 +488,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                   className="w-full sm:flex-1"
                   variant="secondary"
                 >
-                  <AlertCircle className="h-4 w-4 mr-2" />
+                  <WarningCircle className="h-4 w-4 mr-2" />
                   {connector.alertsLabel ?? "View Alerts"}
                 </Button>
               )}
@@ -498,7 +498,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                   className="w-full sm:flex-1"
                   variant="secondary"
                 >
-                  <BarChart2 className="h-4 w-4 mr-2" />
+                  <ChartBar className="h-4 w-4 mr-2" />
                   {connector.overviewLabel ?? "Overview"}
                 </Button>
               )}

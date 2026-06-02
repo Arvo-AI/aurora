@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Download, Check } from "lucide-react";
+import { SpinnerGap, DownloadSimple, Check } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { getEnv } from '@/lib/env';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -522,7 +522,7 @@ export default function AzureAuthPage() {
         >
           {isLoading ? (
             <div className="flex items-center justify-center">
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
           <span>Connecting to Azure...</span>
             </div>
           ) : (
@@ -707,7 +707,7 @@ export default function AzureAuthPage() {
                 </div>
 
                 <div className="space-y-6">
-                <h3 className="text-lg font-medium text-foreground">Download Setup Script</h3>
+                <h3 className="text-lg font-medium text-foreground">DownloadSimple Setup Script</h3>
                 <p className="text-muted-foreground">
                   Choose the appropriate script for your operating system:
                 </p>
@@ -723,8 +723,8 @@ export default function AzureAuthPage() {
                       variant="outline"
                       className="flex items-center space-x-2 w-full"
                     >
-                      <Download className="w-4 h-4" />
-                      <span>Download Bash Script</span>
+                      <DownloadSimple className="w-4 h-4" />
+                      <span>DownloadSimple Bash Script</span>
                     </Button>
                     <div className="mt-3 bg-muted rounded-md p-3">
                       <p className="text-xs text-muted-foreground mb-1">After downloading, run:</p>
@@ -742,8 +742,8 @@ export default function AzureAuthPage() {
                       variant="outline"
                       className="flex items-center space-x-2 w-full"
                     >
-                      <Download className="w-4 h-4" />
-                      <span>Download PowerShell Script</span>
+                      <DownloadSimple className="w-4 h-4" />
+                      <span>DownloadSimple PowerShell Script</span>
                     </Button>
                     <div className="mt-3 bg-muted rounded-md p-3">
                       <p className="text-xs text-muted-foreground mb-1">Run as Administrator:</p>
@@ -1176,7 +1176,7 @@ export default function AzureAuthPage() {
                     >
                       {isLoading ? (
                         <div className="flex items-center justify-center">
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
                           <span>Connecting, wait a few seconds to authenticate...</span>
               </div>
                       ) : (
@@ -1276,7 +1276,7 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
                         >
                           {isLoading ? (
                             <div className="flex items-center justify-center">
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
                               <span>Finalizing connection...</span>
                             </div>
                           ) : (
@@ -1301,7 +1301,7 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
             
             {isLoadingCredentials ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-8 w-8 text-blue-500 dark:text-blue-400 animate-spin" />
+                <SpinnerGap className="h-8 w-8 text-blue-500 dark:text-blue-400 animate-spin" />
                 <span className="ml-3 text-muted-foreground">Loading saved accounts...</span>
               </div>
             ) : storedCredentials.length > 0 ? (
@@ -1391,7 +1391,7 @@ kubectl create clusterrolebinding aurora-sp-admin-binding --clusterrole=cluster-
                 >
                   {isLoading ? (
                     <div className="flex items-center justify-center">
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
                       <span>Connecting, this may take a few seconds...</span>
                     </div>
                   ) : (

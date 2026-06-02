@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { ArrowSquareOut } from "@phosphor-icons/react";
 import {
   type CIProviderConfig,
   jenkinsService,
@@ -86,7 +86,7 @@ export const cloudbeesConfig: CIProviderConfig = {
         className="text-xs text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
       >
         CloudBees CI API Authentication Docs
-        <ExternalLink className="w-3 h-3" />
+        <ArrowSquareOut className="w-3 h-3" />
       </a>
     </div>
   ),

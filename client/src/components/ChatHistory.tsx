@@ -3,7 +3,7 @@
 import React, { useState, useContext, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Trash2, MoreVertical, Edit3, Loader2 } from 'lucide-react';
+import { Trash, DotsThreeVertical, PencilSimple, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -324,7 +324,7 @@ export default function ChatHistory({
                 <>
                   {/* Loading spinner for in_progress sessions */}
                   {isInProgress && (
-                    <Loader2 size={14} className="animate-spin text-muted-foreground mr-2 flex-shrink-0" />
+                    <SpinnerGap size={14} className="animate-spin text-muted-foreground mr-2 flex-shrink-0" />
                   )}
                   <div className="min-w-0 flex-1">
                     {isRenaming ? (
@@ -370,7 +370,7 @@ export default function ChatHistory({
                           onClick={(e) => e.stopPropagation()}
                           title="Chat options"
                         >
-                          <MoreVertical size={10} />
+                          <DotsThreeVertical size={10} />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-36">
@@ -378,7 +378,7 @@ export default function ChatHistory({
                           onClick={(e) => handleRenameSession(session.id, e)}
                           className="text-foreground focus:text-foreground"
                         >
-                          <Edit3 size={12} className="mr-2" />
+                          <PencilSimple size={12} className="mr-2" />
                           Rename
                         </DropdownMenuItem>
                         <DropdownMenuItem
@@ -386,7 +386,7 @@ export default function ChatHistory({
                           disabled={deletingId === session.id}
                           className="text-destructive focus:text-destructive"
                         >
-                          <Trash2 size={12} className="mr-2" />
+                          <Trash size={12} className="mr-2" />
                           {deletingId === session.id ? "Deleting..." : "Delete"}
                         </DropdownMenuItem>
                       </DropdownMenuContent>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, Fragment } from "react";
-import { Check, Minus, Plus, Loader2, ChevronDown, UserMinus, Users, Mail, Clock, X } from "lucide-react";
+import { Check, Minus, Plus, SpinnerGap, CaretDown, UserMinus, Users, Envelope, Clock, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -188,7 +188,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
             </div>
             <DialogFooter>
               <Button type="submit" disabled={checking} size="sm" className="gap-2">
-                {checking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {checking && <SpinnerGap className="h-3.5 w-3.5 animate-spin" />}
                 Continue
               </Button>
             </DialogFooter>
@@ -236,7 +236,7 @@ function AddUserDialog({ onCreated }: { onCreated: () => void }) {
                 Back
               </Button>
               <Button type="submit" disabled={saving} size="sm" className="gap-2">
-                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {saving && <SpinnerGap className="h-3.5 w-3.5 animate-spin" />}
                 Create Account
               </Button>
             </DialogFooter>
@@ -436,7 +436,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
                   disabled={removing === member.id}
                 >
                   {removing === member.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <SpinnerGap className="h-3 w-3 animate-spin" />
                   ) : (
                     <UserMinus className="h-3 w-3" />
                   )}
@@ -458,7 +458,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
       {isAdmin && pendingInvites.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+            <Envelope className="h-3.5 w-3.5 text-muted-foreground" />
             <p className="text-sm font-medium text-muted-foreground">
               Pending invitations ({pendingInvites.length})
             </p>
@@ -506,7 +506,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
                     title="Cancel invitation"
                   >
                     {cancellingInvite === invite.id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <SpinnerGap className="h-3 w-3 animate-spin" />
                     ) : (
                       <X className="h-3 w-3" />
                     )}
@@ -522,7 +522,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, onMembersChang
       <Collapsible open={permOpen} onOpenChange={setPermOpen}>
         <CollapsibleTrigger asChild>
           <button className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
-            <ChevronDown className={`h-3 w-3 transition-transform ${permOpen ? "rotate-180" : ""}`} />
+            <CaretDown className={`h-3 w-3 transition-transform ${permOpen ? "rotate-180" : ""}`} />
             Permissions reference
           </button>
         </CollapsibleTrigger>

@@ -1,14 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, memo } from 'react';
-import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  MinusCircle,
-} from 'lucide-react';
+import { WarningCircle, CheckCircle, CaretDown, CaretRight, SpinnerGap, MinusCircle } from "@phosphor-icons/react";
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { stripFindingsFrontMatter } from '@/lib/findings-markdown';
 import { formatRoleName } from '@/lib/sub-agent-format';
@@ -81,13 +74,13 @@ function isTerminal(status: string): boolean {
 
 function StatusIcon({ status }: Readonly<{ status: FindingStatus }>) {
   if (status === 'running') {
-    return <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-orange-400" />;
+    return <SpinnerGap className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-orange-400" />;
   }
   if (status === 'succeeded') {
-    return <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />;
+    return <CheckCircle className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />;
   }
   if (status === 'failed' || status === 'timeout' || status === 'cancelled') {
-    return <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />;
+    return <WarningCircle className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />;
   }
   return <MinusCircle className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />;
 }
@@ -238,9 +231,9 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
         )}
         <span className="mt-0.5">
           {expanded ? (
-            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
+            <CaretDown className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
           ) : (
-            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
+            <CaretRight className="h-3.5 w-3.5 flex-shrink-0 text-zinc-500" />
           )}
         </span>
       </button>
@@ -278,7 +271,7 @@ const SubAgentInvestigationRow = memo(function SubAgentInvestigationRow({
                 }
                 return (
                   <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <SpinnerGap className="h-3 w-3 animate-spin" />
                     <span>Waiting for tool activity...</span>
                   </div>
                 );

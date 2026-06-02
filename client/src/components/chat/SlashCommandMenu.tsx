@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useEffect, useRef } from 'react';
-import { Workflow } from 'lucide-react';
+import { FlowArrow } from "@phosphor-icons/react";
 
 export interface ActionItem {
   id: string;
@@ -52,7 +52,7 @@ export default function SlashCommandMenu({ input, actions, onSelect, onCommandSe
             highlightedIndex === 0 ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
           }`}
         >
-          <Workflow className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+          <FlowArrow className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
           <div>
             <span className="text-zinc-200 font-medium">/action</span>
             <span className="text-zinc-500 ml-2">Run a configured action</span>
@@ -88,7 +88,7 @@ function ActionsList({ actions, filtered, highlightedIndex, onSelect }: {
             i === highlightedIndex ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
           }`}
         >
-          <Workflow className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+          <FlowArrow className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
           <span className="truncate">{action.name}</span>
         </button>
       ))}

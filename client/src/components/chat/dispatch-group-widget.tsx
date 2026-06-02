@@ -3,13 +3,7 @@
 import * as React from "react";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Loader2,
-} from "lucide-react";
+import { WarningCircle, CheckCircle, CaretDown, CaretUp, SpinnerGap } from "@phosphor-icons/react";
 import { ToolCall } from "@/app/chat/types";
 import SubAgentRow from "@/components/chat/subagent-row";
 
@@ -47,12 +41,12 @@ function aggregateStatus(toolCalls: ToolCall[]): Aggregate {
 
 function AggregateIcon({ status }: Readonly<{ status: Aggregate }>) {
   if (status === "running") {
-    return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
+    return <SpinnerGap className="h-4 w-4 animate-spin text-muted-foreground" />;
   }
   if (status === "warning") {
-    return <AlertCircle className="h-4 w-4 text-amber-500 dark:text-amber-400" />;
+    return <WarningCircle className="h-4 w-4 text-amber-500 dark:text-amber-400" />;
   }
-  return <CheckCircle2 className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />;
+  return <CheckCircle className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />;
 }
 
 const DispatchGroupWidget = ({
@@ -99,9 +93,9 @@ const DispatchGroupWidget = ({
           className="flex flex-shrink-0 items-center justify-center text-muted-foreground"
         >
           {expanded ? (
-            <ChevronUp className="h-4 w-4" />
+            <CaretUp className="h-4 w-4" />
           ) : (
-            <ChevronDown className="h-4 w-4" />
+            <CaretDown className="h-4 w-4" />
           )}
         </span>
       </button>

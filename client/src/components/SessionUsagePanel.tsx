@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { ChevronDown, Activity, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { CaretDown, Heartbeat, TrendUp, TrendDown, Minus } from "@phosphor-icons/react";
 import { SessionUsageState, RequestUsage } from "@/hooks/useSessionUsage";
 
 function formatCost(cost: number): string {
@@ -138,13 +138,13 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
   if (totals.request_count === 0 && !currentStreaming) {
     return (
       <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-500">
-        <Activity className={`h-3.5 w-3.5 ${isSending ? "text-zinc-400 animate-pulse" : "text-zinc-600"}`} />
+        <Heartbeat className={`h-3.5 w-3.5 ${isSending ? "text-zinc-400 animate-pulse" : "text-zinc-600"}`} />
         {isSending && <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>}
       </div>
     );
   }
 
-  const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
+  const TrendIcon = trend === "up" ? TrendUp : trend === "down" ? TrendDown : Minus;
   const trendColor = trend === "up" ? "text-emerald-400" : trend === "down" ? "text-amber-400" : "text-zinc-500";
 
   return (
@@ -157,7 +157,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
         <div className="flex items-center gap-2 text-zinc-400">
           {currentStreaming ? (
             <>
-              <Activity className="h-3.5 w-3.5 text-yellow-400 animate-pulse" />
+              <Heartbeat className="h-3.5 w-3.5 text-yellow-400 animate-pulse" />
               <span className="text-yellow-300 font-mono tabular-nums">{formatTokens(currentStreaming.output_tokens)}</span>
               <span className="text-yellow-300/50 text-xs">chunks</span>
               {tokPerSec > 0 && (
@@ -169,12 +169,12 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
             </>
           ) : isSending ? (
             <>
-              <Activity className="h-3.5 w-3.5 text-zinc-400 animate-pulse" />
+              <Heartbeat className="h-3.5 w-3.5 text-zinc-400 animate-pulse" />
               <span className="text-zinc-400 text-xs transition-opacity duration-500">{thinkingMessage}</span>
             </>
           ) : (
             <>
-              <Activity className={`h-3.5 w-3.5 transition-colors duration-300 ${wasCanceled ? "text-red-400" : "text-zinc-600"}`} />
+              <Heartbeat className={`h-3.5 w-3.5 transition-colors duration-300 ${wasCanceled ? "text-red-400" : "text-zinc-600"}`} />
               {wasCanceled && <span className="text-red-400/80 text-xs">Operation cancelled</span>}
             </>
           )}
@@ -185,7 +185,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
           <span>{formatTokens(totals.total_input_tokens + totals.total_output_tokens)} tok</span>
           <span className="text-zinc-300">{formatCost(totals.total_cost)}</span>
           <span className="text-zinc-500 text-xs">{totals.request_count} req</span>
-          <ChevronDown
+          <CaretDown
             className={`h-3.5 w-3.5 text-zinc-500 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
           />
         </div>

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2, CheckCircle, XCircle } from "lucide-react";
+import { SpinnerGap, CheckCircle, XCircle } from "@phosphor-icons/react";
 import { sharepointService } from "@/lib/services/sharepoint";
 
 type Status = "loading" | "success" | "error";
@@ -206,7 +206,7 @@ export default function SharePointCallbackPage() {
       <div className="text-center space-y-4 p-8">
         {status === "loading" && (
           <>
-            <Loader2 className="h-12 w-12 animate-spin mx-auto text-primary" />
+            <SpinnerGap className="h-12 w-12 animate-spin mx-auto text-primary" />
             <p className="text-lg font-medium">{message}</p>
           </>
         )}

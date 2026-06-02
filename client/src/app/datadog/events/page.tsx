@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { datadogService, DatadogIngestedEvent } from "@/lib/services/datadog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { HelpCircle } from "lucide-react";
+import { Question } from "@phosphor-icons/react";
 
 export default function DatadogEventsPage() {
   const router = useRouter();
@@ -72,7 +72,7 @@ export default function DatadogEventsPage() {
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="How to test your Datadog webhook">
-                <HelpCircle className="h-4 w-4" />
+                <Question className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-80 text-sm space-y-2" align="end">

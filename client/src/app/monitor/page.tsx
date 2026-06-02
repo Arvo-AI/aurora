@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, DollarSign, HeartPulse, Timer, ShieldCheck } from 'lucide-react';
+import { Broadcast, CurrencyDollar, Heartbeat, Timer, ShieldCheck } from "@phosphor-icons/react";
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
 import UsageTab from './components/usage-tab';
@@ -10,9 +10,9 @@ import WaterfallTab from './components/waterfall-tab';
 import AuditTab from './components/audit-tab';
 
 const TABS = [
-  { id: 'fleet', label: 'Fleet', icon: Radar },
-  { id: 'usage', label: 'Usage & Cost', icon: DollarSign },
-  { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
+  { id: 'fleet', label: 'Fleet', icon: Broadcast },
+  { id: 'usage', label: 'Usage & Cost', icon: CurrencyDollar },
+  { id: 'sre', label: 'SRE Metrics', icon: Heartbeat },
   { id: 'waterfall', label: 'Execution', icon: Timer },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
 ] as const;

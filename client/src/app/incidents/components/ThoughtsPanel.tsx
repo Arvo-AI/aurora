@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { MessageSquare, Send } from 'lucide-react';
+import { ChatText, PaperPlaneRight } from "@phosphor-icons/react";
 import { StreamingThought, Incident, ChatSession, incidentsService } from '@/lib/services/incidents';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import SubAgentInvestigationsSection from '@/app/incidents/components/SubAgentInvestigationsSection';
@@ -491,7 +491,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
               activeTab === session.id ? 'bg-background text-white border-b-2 border-orange-500' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            <MessageSquare className="w-3.5 h-3.5" />
+            <ChatText className="w-3.5 h-3.5" />
             {stripIncidentPrefix(session.title)}
             {session.status === 'in_progress' && <span className="ml-1 w-2 h-2 bg-orange-400 rounded-full animate-pulse inline-block" />}
           </button>
@@ -554,7 +554,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                     disabled={!inputValue.trim() || isLoading}
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 disabled:text-zinc-700 transition-colors"
                   >
-                    <Send className="w-3.5 h-3.5" />
+                    <PaperPlaneRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
@@ -622,7 +622,7 @@ export default function ThoughtsPanel({ thoughts, incident, isVisible, canIntera
                     disabled={!inputValue.trim() || isLoading}
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 disabled:text-zinc-700 transition-colors"
                   >
-                    <Send className="w-3.5 h-3.5" />
+                    <PaperPlaneRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (

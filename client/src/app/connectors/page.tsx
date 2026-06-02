@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import { Loader2 } from "lucide-react";
 import ConnectorsClient from "./components/ConnectorsClient";
 
 export default async function ConnectorsPage() {
@@ -8,7 +7,7 @@ export default async function ConnectorsPage() {
       <Suspense 
         fallback={
           <div className="flex h-screen items-center justify-center">
-            <Loader2 className="h-8 w-8 animate-spin" />
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground" />
             <span className="ml-2 text-muted-foreground">Loading connectors...</span>
           </div>
         }

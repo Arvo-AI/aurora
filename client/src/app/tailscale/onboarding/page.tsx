@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, ExternalLink, CheckCircle2, AlertCircle, Info } from "lucide-react";
+import { SpinnerGap, ArrowSquareOut, CheckCircle, WarningCircle, Info } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
@@ -158,7 +158,7 @@ export default function TailscaleOnboardingPage() {
         {/* Error Display */}
         {error && (
           <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-6 flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+            <WarningCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
             <p className="text-sm text-destructive">{error}</p>
           </div>
         )}
@@ -172,12 +172,12 @@ export default function TailscaleOnboardingPage() {
         >
           {isLoading ? (
             <>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              <SpinnerGap className="mr-2 h-5 w-5 animate-spin" />
               Connecting...
             </>
           ) : (
             <>
-              <CheckCircle2 className="mr-2 h-5 w-5" />
+              <CheckCircle className="mr-2 h-5 w-5" />
               Connect to Tailscale
             </>
           )}
@@ -211,7 +211,7 @@ export default function TailscaleOnboardingPage() {
             className="inline-flex items-center mt-4 text-primary hover:underline"
           >
             Open Tailscale Admin Console
-            <ExternalLink className="ml-1 h-4 w-4" />
+            <ArrowSquareOut className="ml-1 h-4 w-4" />
           </a>
         </div>
 

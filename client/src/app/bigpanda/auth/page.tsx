@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, ExternalLink, Copy, CheckCircle2 } from "lucide-react";
+import { SpinnerGap, ArrowSquareOut, Copy, CheckCircle } from "@phosphor-icons/react";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
@@ -113,7 +113,7 @@ export default function BigPandaAuthPage() {
           {pageHeader}
           <Card>
             <CardContent className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
             </CardContent>
           </Card>
         </div>
@@ -159,12 +159,12 @@ export default function BigPandaAuthPage() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-blue-600 hover:underline mt-2"
                 >
-                  View BigPanda documentation <ExternalLink className="h-3 w-3" />
+                  View BigPanda documentation <ArrowSquareOut className="h-3 w-3" />
                 </a>
               </div>
 
               <Button type="submit" className="w-full" disabled={loading || !apiToken}>
-                {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Connecting...</> : "Connect to BigPanda"}
+                {loading ? <><SpinnerGap className="mr-2 h-4 w-4 animate-spin" /> Connecting...</> : "Connect to BigPanda"}
               </Button>
             </form>
           </CardContent>
@@ -174,7 +174,7 @@ export default function BigPandaAuthPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                <CheckCircle className="h-5 w-5 text-green-500" />
                 BigPanda Connected
               </CardTitle>
               <CardDescription>
@@ -185,7 +185,7 @@ export default function BigPandaAuthPage() {
             </CardHeader>
             <CardContent>
               <Button variant="destructive" onClick={handleDisconnect} disabled={loading}>
-                {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Disconnecting...</> : "Disconnect"}
+                {loading ? <><SpinnerGap className="mr-2 h-4 w-4 animate-spin" /> Disconnecting...</> : "Disconnect"}
               </Button>
             </CardContent>
           </Card>
@@ -206,7 +206,7 @@ export default function BigPandaAuthPage() {
                       className="font-mono text-sm"
                     />
                     <Button variant="outline" size="icon" onClick={handleCopyWebhookUrl}>
-                      {copied ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                      {copied ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                     </Button>
                   </div>
                 </div>

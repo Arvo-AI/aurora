@@ -6,7 +6,7 @@ import { useUser } from "@/hooks/useAuthHooks";
 import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
-import { Settings, LogOut } from "lucide-react";
+import { GearSix, SignOut } from "@phosphor-icons/react";
 import {
   Tooltip,
   TooltipContent,
@@ -138,7 +138,7 @@ const SidebarStrip = ({
                     </Tooltip>
                   </div>
                   
-                  {/* Settings Button */}
+                  {/* GearSix Button */}
                   <button
                     onClick={() => {
                       setIsSettingsModalOpen(true);
@@ -146,8 +146,8 @@ const SidebarStrip = ({
                     }}
                     className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
                   >
-                    <Settings className="h-4 w-4" />
-                    Settings
+                    <GearSix className="h-4 w-4" />
+                    GearSix
                   </button>
                   
                   {/* Sign Out Button */}
@@ -158,7 +158,7 @@ const SidebarStrip = ({
                     }}
                     className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
                   >
-                    <LogOut className="h-4 w-4" />
+                    <SignOut className="h-4 w-4" />
                     Sign out
                   </button>
                 </div>
@@ -303,7 +303,7 @@ function AppLayout({
         isPublicRoute ? children : <RedirectToSignIn />
       )}
 
-      {/* Settings Modal */}
+      {/* GearSix Modal */}
       <SettingsModal 
         isOpen={isSettingsModalOpen} 
         onClose={() => setIsSettingsModalOpen(false)} 

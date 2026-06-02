@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Copy, Check, ExternalLink } from "lucide-react";
+import { Copy, Check, ArrowSquareOut } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
 
@@ -164,7 +164,7 @@ export function PagerDutyWebhookStep() {
             rel="noopener noreferrer"
             className="text-xs text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 mt-2"
           >
-            PagerDuty Webhook Docs <ExternalLink className="w-3 h-3" />
+            PagerDuty Webhook Docs <ArrowSquareOut className="w-3 h-3" />
           </a>
         </div>
 

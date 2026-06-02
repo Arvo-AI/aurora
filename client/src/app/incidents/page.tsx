@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
+import { Lightning, Clock, CaretRight, SpinnerGap, CheckCircle, LinkSimple, GitMerge, Plus, Warning } from "@phosphor-icons/react";
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
@@ -121,14 +121,14 @@ export default function IncidentsPage() {
     <div className="max-w-4xl mx-auto py-8 px-4">
       <div className="mb-8">
         <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Zap className="h-6 w-6 text-foreground" />
+          <Lightning className="h-6 w-6 text-foreground" />
           Incidents
         </h1>
       </div>
 
       {isLoading ? (
         <div className="flex justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <SpinnerGap className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
         <div className="space-y-8">
@@ -156,7 +156,7 @@ export default function IncidentsPage() {
           {analyzedIncidents.length > 0 && (
             <div>
               <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                <CheckCircle className="h-4 w-4 text-muted-foreground" />
                 Analyzed
               </h2>
               <div className="space-y-2">
@@ -188,7 +188,7 @@ export default function IncidentsPage() {
                   <ConnectPlatformCTA />
                 ) : (
                   <>
-                    <CheckCircle2 className="h-10 w-10 mx-auto text-green-500 mb-3" />
+                    <CheckCircle className="h-10 w-10 mx-auto text-green-500 mb-3" />
                     <p className="font-medium">All clear</p>
                     <p className="text-sm text-muted-foreground">No incidents yet</p>
                   </>
@@ -231,16 +231,16 @@ function IncidentRow({ incident }: { incident: Incident }) {
                 </span>
                 {correlatedCount > 0 && (
                   <span className="flex items-center gap-1 text-muted-foreground">
-                    <Link2 className="h-3 w-3" />
+                    <LinkSimple className="h-3 w-3" />
                     {correlatedCount} related
                   </span>
                 )}
                 {isActive && (
                   <span className="flex items-center gap-1 text-muted-foreground">
                     {Date.now() - new Date(incident.startedAt).getTime() > 30 * 60 * 1000 ? (
-                      <><AlertTriangle className="h-3 w-3 text-red-400" /> Investigation stalled</>
+                      <><Warning className="h-3 w-3 text-red-400" /> Investigation stalled</>
                     ) : (
-                      <><Loader2 className="h-3 w-3 animate-spin" /> Aurora investigating</>
+                      <><SpinnerGap className="h-3 w-3 animate-spin" /> Aurora investigating</>
                     )}
                   </span>
                 )}
@@ -256,7 +256,7 @@ function IncidentRow({ incident }: { incident: Incident }) {
               </div>
             </div>
 
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            <CaretRight className="h-4 w-4 text-muted-foreground" />
           </div>
         </CardContent>
       </Card>

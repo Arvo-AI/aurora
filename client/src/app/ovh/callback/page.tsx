@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 import Image from "next/image";
 
 /**
@@ -82,7 +82,7 @@ function OvhCallbackContent() {
         />
         <h1 className="text-2xl font-bold text-foreground mb-2">Connecting to OVH Cloud</h1>
         <div className="flex items-center justify-center gap-2 text-muted-foreground">
-          <Loader2 className="w-5 h-5 animate-spin" />
+          <SpinnerGap className="w-5 h-5 animate-spin" />
           <span>Completing authentication...</span>
         </div>
       </div>
@@ -95,7 +95,7 @@ export default function OvhCallbackPage() {
     <Suspense fallback={
       <div className="min-h-screen bg-background flex items-center justify-center px-4">
         <div className="max-w-md w-full text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto text-muted-foreground" />
+          <SpinnerGap className="w-8 h-8 animate-spin mx-auto text-muted-foreground" />
         </div>
       </div>
     }>

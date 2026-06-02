@@ -10,7 +10,7 @@ import { CodeBlock } from "./code-block";
 import { processTextWithKeywords } from "./keyword-highlight";
 import { getLanguageFromCode } from "@/utils/language-detection";
 import { cn } from "@/lib/utils";
-import { ExternalLink } from "lucide-react";
+import { ArrowSquareOut } from "@phosphor-icons/react";
 
 interface MarkdownRendererProps {
   content: string;
@@ -32,7 +32,7 @@ function JiraLinkChip({ href, issueKey, isComment }: { href: string; issueKey: s
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/jira.svg" alt="" className="w-3 h-3 flex-shrink-0" />
       <span>{issueKey}{isComment ? " (comment)" : ""}</span>
-      <ExternalLink className="w-2.5 h-2.5 opacity-50 flex-shrink-0" />
+      <ArrowSquareOut className="w-2.5 h-2.5 opacity-50 flex-shrink-0" />
     </a>
   );
 }

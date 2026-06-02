@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, GitBranch } from 'lucide-react';
+import { SpinnerGap, Check, GitBranch } from "@phosphor-icons/react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import type { Workspace, Repo, Branch } from '@/services/bitbucket-integration-service';
@@ -186,7 +186,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
         <span className="text-sm font-medium mb-1.5 block">Workspace</span>
         {isLoadingWorkspaces ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
+            <SpinnerGap className="w-4 h-4 animate-spin" />
             Loading workspaces...
           </div>
         ) : (
@@ -215,7 +215,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
           </div>
           {isLoadingRepos ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <SpinnerGap className="w-4 h-4 animate-spin" />
               Loading repositories...
             </div>
           ) : repos.length > 0 ? (
@@ -251,7 +251,7 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
           <span className="text-sm font-medium mb-1.5 block">Branch</span>
           {isLoadingBranches ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <SpinnerGap className="w-4 h-4 animate-spin" />
               Loading branches...
             </div>
           ) : branches.length > 0 ? (

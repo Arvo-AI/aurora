@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { CheckCircle, Copy, ArrowSquareOut, SpinnerGap } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { splunkService, SplunkStatus, SplunkWebhookUrlResponse } from "@/lib/services/splunk";
 import { copyToClipboard } from "@/lib/utils";
@@ -106,7 +106,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
+          <CheckCircle className="h-5 w-5 text-green-500" />
           Connected to Splunk
         </CardTitle>
         <CardDescription>
@@ -162,7 +162,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
               </p>
             </div>
             {loadingRcaSettings ? (
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-5 w-5 animate-spin text-muted-foreground" />
             ) : (
               <Switch
                 id="rca-toggle"
@@ -181,7 +181,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
 
             {loadingWebhook ? (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <SpinnerGap className="h-4 w-4 animate-spin" />
                 Loading webhook URL...
               </div>
             ) : webhookData ? (
@@ -213,7 +213,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
                 >
-                  View Splunk Webhook Documentation <ExternalLink className="h-3 w-3" />
+                  View Splunk Webhook Documentation <ArrowSquareOut className="h-3 w-3" />
                 </a>
               </div>
             ) : (
@@ -232,7 +232,7 @@ export function SplunkWebhookStep({ status, onDisconnect, loading }: SplunkWebho
           >
             {loading ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                 Disconnecting...
               </>
             ) : (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { sharepointService, SharePointStatus } from "@/lib/services/sharepoint";
 import { Button } from "@/components/ui/button";
@@ -132,7 +132,7 @@ export default function SharePointConnectPage() {
         </div>
         <Card>
           <CardContent className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <SpinnerGap className="h-6 w-6 animate-spin text-muted-foreground" />
           </CardContent>
         </Card>
       </div>
@@ -168,7 +168,7 @@ export default function SharePointConnectPage() {
             <Button variant="destructive" onClick={handleDisconnect} disabled={isDisconnecting}>
               {isDisconnecting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                   Disconnecting...
                 </>
               ) : (
@@ -189,7 +189,7 @@ export default function SharePointConnectPage() {
             <Button onClick={handleOAuthConnect} disabled={isOauthConnecting}>
               {isOauthConnecting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                   Redirecting...
                 </>
               ) : (

@@ -2,19 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import {
-  Server,
-  Check,
-  X,
-  ChevronDown,
-  ChevronUp,
-  Loader2,
-  Plus,
-  RefreshCw,
-  ShieldCheck,
-  Link as LinkIcon,
-  BadgeCheck,
-} from "lucide-react";
+import { HardDrives, Check, X, CaretDown, CaretUp, SpinnerGap, Plus, ArrowsClockwise, ShieldCheck, SealCheck } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -734,7 +722,7 @@ export default function VMConfig() {
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -922,7 +910,7 @@ export default function VMConfig() {
                       >
                         {savingManualId === "new" ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                             Saving...
                           </>
                         ) : (
@@ -952,7 +940,7 @@ export default function VMConfig() {
                       className="grid w-full grid-cols-[minmax(0,3fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,3fr)_minmax(0,2fr)_minmax(0,2fr)] gap-4 px-6 py-4 text-left transition-colors hover:bg-muted/30"
                     >
                       <div className="flex items-center gap-3">
-                        <Server className="h-4 w-4 text-muted-foreground" />
+                        <HardDrives className="h-4 w-4 text-muted-foreground" />
                         <span className="font-medium">{vm.name}</span>
                       </div>
                       <div className="flex items-center">
@@ -1007,9 +995,9 @@ export default function VMConfig() {
                           </div>
                         )}
                         {expandedVMs.has(vm.id) ? (
-                          <ChevronUp className="ml-2 h-4 w-4 text-muted-foreground" />
+                          <CaretUp className="ml-2 h-4 w-4 text-muted-foreground" />
                         ) : (
-                          <ChevronDown className="ml-2 h-4 w-4 text-muted-foreground" />
+                          <CaretDown className="ml-2 h-4 w-4 text-muted-foreground" />
                         )}
                       </div>
                       <div />
@@ -1174,7 +1162,7 @@ export default function VMConfig() {
                                     >
                                       {savingManualId === vm.id ? (
                                         <>
-                                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                          <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                                           Saving...
                                         </>
                                       ) : (
@@ -1189,12 +1177,12 @@ export default function VMConfig() {
                                     >
                                       {savingManualId === vm.id ? (
                                         <>
-                                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                          <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                                           Testing...
                                         </>
                                       ) : (
                                         <>
-                                          <BadgeCheck className="mr-2 h-4 w-4" />
+                                          <SealCheck className="mr-2 h-4 w-4" />
                                           Test Connection
                                         </>
                                       )}
@@ -1312,7 +1300,7 @@ export default function VMConfig() {
                                     onClick={refreshKeys}
                                     disabled={savingVMs.has(vm.id)}
                                   >
-                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                    <ArrowsClockwise className="mr-2 h-4 w-4" />
                                     Refresh keys
                                   </Button>
                                 </div>
@@ -1341,7 +1329,7 @@ export default function VMConfig() {
                                   >
                                     {savingVMs.has(vm.id) ? (
                                       <>
-                                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                        <SpinnerGap className="mr-2 h-3 w-3 animate-spin" />
                                         Removing...
                                       </>
                                     ) : (
@@ -1369,7 +1357,7 @@ export default function VMConfig() {
                                   >
                                     {savingVMs.has(vm.id) ? (
                                       <>
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                                         Testing SSH...
                                       </>
                                     ) : (

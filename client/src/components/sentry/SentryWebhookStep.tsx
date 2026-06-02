@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Copy, Check, ExternalLink, Unplug } from "lucide-react";
+import { Copy, Check, ArrowSquareOut, PlugsConnected } from "@phosphor-icons/react";
 import type { SentryStatus } from "@/lib/services/sentry";
 import { SENTRY_PURPLE } from "./constants";
 
@@ -90,13 +90,13 @@ export function SentryWebhookStep({
             className="inline-flex items-center gap-1 text-xs hover:underline"
             style={{ color: SENTRY_PURPLE }}
           >
-            Sentry Internal Integration Documentation <ExternalLink className="h-3 w-3" />
+            Sentry Internal Integration Documentation <ArrowSquareOut className="h-3 w-3" />
           </a>
         </div>
 
         <div className="flex justify-end pt-2">
           <Button variant="destructive" onClick={onDisconnect} disabled={loading} size="sm">
-            <Unplug className="h-4 w-4 mr-2" />
+            <PlugsConnected className="h-4 w-4 mr-2" />
             {loading ? "Disconnecting..." : "Disconnect Sentry"}
           </Button>
         </div>

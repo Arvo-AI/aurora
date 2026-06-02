@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2, AlertTriangle } from "lucide-react";
+import { SpinnerGap, CheckCircle, ArrowSquareOut, PencilLine, FilePlus, Warning } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { atlassianService, AtlassianStatus } from "@/lib/services/atlassian";
 import { Button } from "@/components/ui/button";
@@ -162,7 +162,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-[#2684FF]" />
+        <SpinnerGap className="h-8 w-8 animate-spin text-[#2684FF]" />
       </div>
     );
   }
@@ -202,7 +202,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             </CardHeader>
             <CardFooter className="pt-0">
               <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={handleDisconnect} disabled={isDisconnecting}>
-                {isDisconnecting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                {isDisconnecting ? <SpinnerGap className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
                 Disconnect
               </Button>
             </CardFooter>
@@ -219,7 +219,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               <CardContent className="space-y-2 pt-0">
                 {isLoadingSettings ? (
                   <div className="flex items-center justify-center py-6">
-                    <Loader2 className="h-5 w-5 animate-spin text-[#2684FF]" />
+                    <SpinnerGap className="h-5 w-5 animate-spin text-[#2684FF]" />
                   </div>
                 ) : (
                   <>
@@ -239,7 +239,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <PenLine className="h-3.5 w-3.5 text-muted-foreground" />
+                          <PencilLine className="h-3.5 w-3.5 text-muted-foreground" />
                           <span className="text-sm font-medium">Comment only</span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
@@ -264,7 +264,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <FilePlus2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          <FilePlus className="h-3.5 w-3.5 text-muted-foreground" />
                           <span className="text-sm font-medium">Create & comment</span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
@@ -290,7 +290,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                       <CardTitle className="text-sm">Add {sibling.name}</CardTitle>
                       <CardDescription className="text-xs">{sibling.subtitle} — same Atlassian account</CardDescription>
                     </div>
-                    <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+                    <ArrowSquareOut className="h-4 w-4 text-muted-foreground ml-auto" />
                   </div>
                 </CardHeader>
               </Card>
@@ -312,7 +312,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                       </div>
                       <CardDescription className="text-xs">Configure RCA permissions for Jira</CardDescription>
                     </div>
-                    <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+                    <ArrowSquareOut className="h-4 w-4 text-muted-foreground ml-auto" />
                   </div>
                 </CardHeader>
               </Card>
@@ -326,7 +326,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
               <CardHeader className="pb-2">
                 <div className="flex items-start gap-3">
                   <div className="h-8 w-8 rounded-full bg-amber-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    <Warning className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                   </div>
                   <div className="space-y-1.5">
                     <CardTitle className="text-sm text-amber-700 dark:text-amber-300">Atlassian OAuth not configured</CardTitle>
@@ -349,7 +349,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-[#2684FF] hover:underline"
                 >
                   Create Atlassian OAuth app
-                  <ExternalLink className="h-3 w-3" />
+                  <ArrowSquareOut className="h-3 w-3" />
                 </a>
                 <span className="mx-2 text-muted-foreground/40">|</span>
                 <a
@@ -359,7 +359,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
                 >
                   Setup guide
-                  <ExternalLink className="h-3 w-3" />
+                  <ArrowSquareOut className="h-3 w-3" />
                 </a>
               </CardFooter>
             </Card>
@@ -383,7 +383,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
             </CardContent>
             <CardFooter>
               <Button onClick={handleOAuthConnect} disabled={isConnecting} className="w-full bg-[#2684FF] hover:bg-[#0052CC] text-white">
-                {isConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {isConnecting ? <SpinnerGap className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Connect with Atlassian
               </Button>
             </CardFooter>
@@ -410,7 +410,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   <Input id={`${product.key}PatToken`} type="password" placeholder={`Your ${product.name} PAT`} value={patToken} onChange={(e) => setPatToken(e.target.value)} required className="h-9" />
                 </div>
                 <Button type="submit" variant="outline" disabled={isPatConnecting} className="w-full">
-                  {isPatConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {isPatConnecting ? <SpinnerGap className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Connect
                 </Button>
               </form>

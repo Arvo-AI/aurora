@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink } from "lucide-react";
+import { ArrowSquareOut } from "@phosphor-icons/react";
 import type { SpinnakerStatus } from "@/lib/services/spinnaker";
 
 const toSafeExternalUrl = (value?: string): string | null => {
@@ -36,7 +36,7 @@ export function ConnectionInfo({ status }: ConnectionInfoProps) {
             <a href={safeUrl} target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0">
               Open Dashboard
-              <ExternalLink className="h-3 w-3" />
+              <ArrowSquareOut className="h-3 w-3" />
             </a>
           )}
         </div>

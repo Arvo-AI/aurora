@@ -1,6 +1,7 @@
+"use client";
 import React from "react";
 import { CardDescription } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 
 /**
  * Props for ConnectorCardContent component.
@@ -20,7 +21,7 @@ export function ConnectorCardContent({ isLoading, slackStatus, googleChatStatus,
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 py-2 text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerGap className="h-4 w-4 animate-spin" />
         <span className="text-sm">Loading connection details...</span>
       </div>
     );

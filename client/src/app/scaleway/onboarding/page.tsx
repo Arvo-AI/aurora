@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, ExternalLink, AlertCircle } from "lucide-react";
+import { SpinnerGap, ArrowSquareOut, WarningCircle } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
@@ -169,14 +169,14 @@ export default function ScalewayOnboardingPage() {
                 className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
               >
                 Open Scaleway Console
-                <ExternalLink className="w-3 h-3" />
+                <ArrowSquareOut className="w-3 h-3" />
               </a>
             </div>
           </div>
 
           {error && (
             <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <WarningCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <p className="text-sm text-destructive">{error}</p>
             </div>
           )}
@@ -236,7 +236,7 @@ export default function ScalewayOnboardingPage() {
               <Button type="submit" disabled={isLoading || !accessKey.trim() || !secretKey.trim()}>
                 {isLoading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                     Connecting...
                   </>
                 ) : (

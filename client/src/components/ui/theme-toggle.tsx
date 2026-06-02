@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown } from "lucide-react"
+import { CaretDown } from "@phosphor-icons/react"
 import { useTheme } from "next-themes"
 
 import { Button } from "@/components/ui/button"
@@ -20,7 +20,7 @@ export function ThemeToggle() {
       <DropdownMenuTrigger asChild>
         <Button variant="outline" className="flex items-center gap-2">
           <span className="capitalize">{theme || 'system'}</span>
-          <ChevronDown className="h-4 w-4" />
+          <CaretDown className="h-4 w-4" />
           <span className="sr-only">Toggle theme</span>
         </Button>
       </DropdownMenuTrigger>

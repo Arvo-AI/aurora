@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Loader2, ExternalLink, CheckCircle2 } from "lucide-react";
+import { SpinnerGap, ArrowSquareOut, CheckCircle } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import {
   Select,
@@ -158,7 +158,7 @@ export default function OvhOnboardingPage() {
           
           <div className="space-y-4">
             <div className="flex items-start gap-3 p-4 bg-muted rounded-lg">
-              <CheckCircle2 className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
+              <CheckCircle className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium text-foreground">Secure & Fast</p>
                 <p className="text-sm text-muted-foreground">
@@ -168,7 +168,7 @@ export default function OvhOnboardingPage() {
             </div>
 
             <div className="flex items-start gap-3 p-4 bg-muted rounded-lg">
-              <CheckCircle2 className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
+              <CheckCircle className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium text-foreground">Automatic Token Refresh</p>
                 <p className="text-sm text-muted-foreground">
@@ -191,7 +191,7 @@ export default function OvhOnboardingPage() {
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
                   Connecting to OVH Cloud...
                 </>
               ) : (
@@ -222,7 +222,7 @@ export default function OvhOnboardingPage() {
                 className="text-primary hover:underline inline-flex items-center gap-1"
               >
                 OVH Cloud Documentation
-                <ExternalLink className="w-3 h-3" />
+                <ArrowSquareOut className="w-3 h-3" />
               </a>
             </p>
             <p>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Trash2, Copy, Loader2, Key, Check } from "lucide-react";
+import { Plus, Trash, Copy, SpinnerGap, Key, Check } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -131,7 +131,7 @@ export default function McpTokens() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerGap className="h-4 w-4 animate-spin" />
         Loading tokens...
       </div>
     );
@@ -210,7 +210,7 @@ export default function McpTokens() {
                 <DialogFooter>
                   <Button variant="outline" onClick={() => handleDialogClose(false)}>Cancel</Button>
                   <Button onClick={createToken} disabled={creating || !newTokenName.trim()}>
-                    {creating && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                    {creating && <SpinnerGap className="h-3.5 w-3.5 animate-spin mr-1.5" />}
                     Generate
                   </Button>
                 </DialogFooter>
@@ -256,7 +256,7 @@ export default function McpTokens() {
                   onClick={() => revokeToken(t.id)}
                   disabled={revoking === t.id}
                 >
-                  {revoking === t.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {revoking === t.id ? <SpinnerGap className="h-3.5 w-3.5 animate-spin" /> : <Trash className="h-3.5 w-3.5" />}
                 </Button>
               )}
             </div>

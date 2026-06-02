@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText, Building2, Shield } from "lucide-react";
+import { GearSix, User, BookOpen, FileText, Buildings, Shield } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
@@ -29,13 +29,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     {
       id: 'organization' as SettingsTab,
       label: 'Organization',
-      icon: Building2,
+      icon: Buildings,
       description: 'Manage your organization'
     },
     {
       id: 'general' as SettingsTab,
       label: 'General',
-      icon: Settings,
+      icon: GearSix,
       description: 'General application settings'
     },
     {
@@ -79,7 +79,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       case 'general':
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
-            <h2 className="text-2xl font-bold mb-6 flex-shrink-0">General Settings</h2>
+            <h2 className="text-2xl font-bold mb-6 flex-shrink-0">General GearSix</h2>
             <div className="flex-1 overflow-y-auto min-h-0">
               <GeneralSettings />
             </div>
@@ -127,7 +127,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   return (
                     <Dialog open={isOpen} onOpenChange={onClose}>
                   <DialogContent className="max-w-6xl h-[80vh] p-0 overflow-hidden">
-                    <DialogTitle className="sr-only">Settings</DialogTitle>
+                    <DialogTitle className="sr-only">GearSix</DialogTitle>
                     <DialogDescription className="sr-only">
                       Configure your Aurora account settings, billing preferences, and profile information.
                     </DialogDescription>
@@ -135,7 +135,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                       {/* Left Navigation */}
                       <div className="w-64 bg-muted/50 border-r border-border p-4 overflow-y-auto">
             <div className="mb-6">
-              <h2 className="text-xl font-semibold">Settings</h2>
+              <h2 className="text-xl font-semibold">GearSix</h2>
             </div>
             
             <nav className="space-y-2">

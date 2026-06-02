@@ -1,4 +1,4 @@
-import { Github, Server } from "lucide-react";
+import { GithubLogo, HardDrives } from "@phosphor-icons/react";
 import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
@@ -15,7 +15,7 @@ class ConnectorRegistry {
       id: "onprem",
       name: "Instances SSH Access",
       description: "Manage SSH keys and configure virtual machines for on-premises and cloud infrastructure access.",
-      icon: Server,
+      icon: HardDrives,
       iconColor: "text-foreground",
       iconBgColor: "bg-muted",
       category: "Infrastructure",
@@ -259,7 +259,7 @@ class ConnectorRegistry {
       id: "github",
       name: "GitHub",
       description: "Integrate with GitHub to manage repositories, track issues, and automate workflows. Connect your GitHub account to enable seamless code collaboration.",
-      icon: Github,
+      icon: GithubLogo,
       iconColor: "text-gray-800 dark:text-gray-300",
       iconBgColor: "bg-gray-200 dark:bg-gray-800",
       category: "Development",

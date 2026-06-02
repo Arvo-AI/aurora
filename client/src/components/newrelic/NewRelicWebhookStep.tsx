@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Copy, Check, ExternalLink, Unplug } from "lucide-react";
+import { Copy, Check, ArrowSquareOut, PlugsConnected } from "@phosphor-icons/react";
 import type { NewRelicStatus } from "@/lib/services/newrelic";
 
 interface NewRelicWebhookStepProps {
@@ -119,13 +119,13 @@ export function NewRelicWebhookStep({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-[#00AC69] hover:underline"
           >
-            New Relic Webhook Documentation <ExternalLink className="h-3 w-3" />
+            New Relic Webhook Documentation <ArrowSquareOut className="h-3 w-3" />
           </a>
         </div>
 
         <div className="flex justify-end pt-2">
           <Button variant="destructive" onClick={onDisconnect} disabled={loading} size="sm">
-            <Unplug className="h-4 w-4 mr-2" />
+            <PlugsConnected className="h-4 w-4 mr-2" />
             {loading ? "Disconnecting..." : "Disconnect New Relic"}
           </Button>
         </div>

@@ -2,21 +2,7 @@
 
 import { Incident, AuroraStatus, Citation, Suggestion, incidentsService, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
 import { Badge } from '@/components/ui/badge';
-import {
-  ExternalLink,
-  Clock,
-  Server,
-  ChevronDown,
-  ChevronUp,
-  CheckCircle2,
-  AlertCircle,
-  ChevronRight,
-  Play,
-  GitBranch,
-  FileText,
-  Coins,
-  Activity,
-} from 'lucide-react';
+import { ArrowSquareOut, Clock, HardDrives, CaretDown, CaretUp, CheckCircle, WarningCircle, CaretRight, Play, GitBranch, FileText, Coins, Heartbeat } from "@phosphor-icons/react";
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useRouter } from 'next/navigation';
@@ -78,14 +64,14 @@ function StatusPill({ status }: { readonly status: AuroraStatus }) {
     case 'complete':
       return (
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/30">
-          <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />
+          <CheckCircle className="w-3.5 h-3.5 text-green-400" />
           <span className="text-xs font-semibold text-green-400">Analysis Complete</span>
         </div>
       );
     case 'error':
       return (
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-500/10 border border-red-500/30">
-          <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+          <WarningCircle className="w-3.5 h-3.5 text-red-400" />
           <span className="text-xs font-semibold text-red-400">Analysis Error</span>
         </div>
       );
@@ -345,8 +331,8 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                     <GitBranch className="w-3 h-3" />
                   ) : wasExecuted ? (
                     <>
-                      {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
-                      {execStatus === 'failed' && <AlertCircle className="w-3 h-3" />}
+                      {execStatus === 'completed' && <CheckCircle className="w-3 h-3" />}
+                      {execStatus === 'failed' && <WarningCircle className="w-3 h-3" />}
                       {execStatus === 'in_progress' && <span className="w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
                       {(execStatus === 'executed' || !execStatus) && <Play className="w-3 h-3" />}
                       <span className="text-[10px] font-medium">
@@ -403,7 +389,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors"
                 >
                   {sourceDisplayName(alert.source)} Alert
-                  <ExternalLink className="w-3.5 h-3.5" />
+                  <ArrowSquareOut className="w-3.5 h-3.5" />
                 </a>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-zinc-400">
@@ -427,7 +413,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <div className="flex flex-wrap items-center gap-4">
             {alert.service !== 'unknown' && (
               <div className="flex items-center gap-1.5">
-                <Server className="w-4 h-4" />
+                <HardDrives className="w-4 h-4" />
                 <span className="text-zinc-300">{alert.service}</span>
               </div>
             )}
@@ -503,9 +489,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               aria-expanded={showRawPayload}
             >
               {showRawPayload ? (
-                <ChevronUp className="w-4 h-4 mr-1" />
+                <CaretUp className="w-4 h-4 mr-1" />
               ) : (
-                <ChevronDown className="w-4 h-4 mr-1" />
+                <CaretDown className="w-4 h-4 mr-1" />
               )}
               Raw Alert
             </button>
@@ -576,7 +562,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               aria-expanded={showThoughts}
             >
               <span>{incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing' ? 'Thinking' : 'View Thoughts'}</span>
-              <ChevronRight className={`w-3 h-3 transition-transform ${showThoughts ? 'rotate-90' : ''}`} />
+              <CaretRight className={`w-3 h-3 transition-transform ${showThoughts ? 'rotate-90' : ''}`} />
             </button>
           </div>
 
@@ -614,7 +600,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
             >
               <span>Root Cause Analysis</span>
-              <ExternalLink className="w-3 h-3" />
+              <ArrowSquareOut className="w-3 h-3" />
             </Link>
           ) : (
             <button
@@ -641,7 +627,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               }`}
             >
               <span>Visualization</span>
-              <ChevronRight className={`w-3 h-3 transition-transform ${showVisualization ? 'rotate-90' : ''}`} />
+              <CaretRight className={`w-3 h-3 transition-transform ${showVisualization ? 'rotate-90' : ''}`} />
             </button>
           )}
 
@@ -652,7 +638,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               disabled={resolvingIncident}
               className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors text-green-400 hover:text-green-300 hover:bg-green-500/10 disabled:opacity-50"
             >
-              <CheckCircle2 className="w-3 h-3" />
+              <CheckCircle className="w-3 h-3" />
               {resolvingIncident ? 'Resolving...' : 'Resolve Incident'}
             </button>
           )}
@@ -684,7 +670,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             >
               <Coins className="w-3 h-3" />
               Token Usage
-              <ChevronRight className={`w-3 h-3 transition-transform ${showTokenUsage ? 'rotate-90' : ''}`} />
+              <CaretRight className={`w-3 h-3 transition-transform ${showTokenUsage ? 'rotate-90' : ''}`} />
             </button>
           )}
 
@@ -698,9 +684,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               }`}
             >
-              <Activity className="w-3 h-3" />
+              <Heartbeat className="w-3 h-3" />
               Waterfall
-              <ChevronRight className={`w-3 h-3 transition-transform ${showWaterfall ? 'rotate-90' : ''}`} />
+              <CaretRight className={`w-3 h-3 transition-transform ${showWaterfall ? 'rotate-90' : ''}`} />
             </button>
           )}
 

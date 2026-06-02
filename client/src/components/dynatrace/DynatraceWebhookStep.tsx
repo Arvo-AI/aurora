@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { CheckCircle, Copy, ArrowSquareOut, SpinnerGap } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
 import { dynatraceService, DynatraceStatus, DynatraceWebhookUrlResponse } from "@/lib/services/dynatrace";
@@ -69,7 +69,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
+          <CheckCircle className="h-5 w-5 text-green-500" />
           Connected to Dynatrace
         </CardTitle>
         <CardDescription>
@@ -101,7 +101,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
               <p className="text-sm text-muted-foreground">Automatically investigate Dynatrace problems with Aurora</p>
             </div>
             {settingsLoading ? (
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-5 w-5 animate-spin text-muted-foreground" />
             ) : (
               <Switch id="rca-toggle" checked={rcaEnabled} onCheckedChange={handleRcaToggle} disabled={updatingRca} />
             )}
@@ -113,7 +113,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
             <h3 className="font-medium mb-4">Configure Problem Notification Webhook</h3>
             {settingsLoading ? (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading webhook URL...
+                <SpinnerGap className="h-4 w-4 animate-spin" /> Loading webhook URL...
               </div>
             ) : webhookData ? (
               <div className="space-y-4">
@@ -152,7 +152,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
                 >
-                  View Dynatrace Webhook Documentation <ExternalLink className="h-3 w-3" />
+                  View Dynatrace Webhook Documentation <ArrowSquareOut className="h-3 w-3" />
                 </a>
               </div>
             ) : (
@@ -163,7 +163,7 @@ export function DynatraceWebhookStep({ status, onDisconnect, loading }: Dynatrac
 
         <div className="border-t pt-6">
           <Button variant="destructive" onClick={onDisconnect} disabled={loading} className="w-full">
-            {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Disconnecting...</> : "Disconnect Dynatrace"}
+            {loading ? <><SpinnerGap className="mr-2 h-4 w-4 animate-spin" /> Disconnecting...</> : "Disconnect Dynatrace"}
           </Button>
         </div>
       </CardContent>

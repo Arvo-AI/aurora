@@ -5,7 +5,7 @@ import { useUser, useAuth } from '@/hooks/useAuthHooks';
 import { canWrite } from '@/lib/roles';
 import { getEnv } from '@/lib/env';
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 import dynamic from "next/dynamic";
 // Core chat components
 import { MessageList } from "@/components/chat/message-list";
@@ -474,7 +474,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-8 w-8 animate-spin" />
+          <SpinnerGap className="h-8 w-8 animate-spin" />
           {isLoadingSessionMessages && (
             <span className="text-sm text-muted-foreground">Loading conversation...</span>
           )}

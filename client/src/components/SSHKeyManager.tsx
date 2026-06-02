@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
-import { Loader2, Plus, Copy, Check, Trash2, ShieldCheck } from "lucide-react";
+import { SpinnerGap, Plus, Copy, Check, Trash, ShieldCheck } from "@phosphor-icons/react";
 import { copyToClipboard } from "@/lib/utils";
 
 type ManagedSshKey = {
@@ -303,7 +303,7 @@ export function SSHKeyManager() {
         <div className="flex gap-2 flex-shrink-0">
           <Button onClick={handleGenerate} disabled={isCreating || disabled}>
             {isCreating ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
             ) : (
               <Plus className="mr-2 h-4 w-4" />
             )}
@@ -352,7 +352,7 @@ export function SSHKeyManager() {
                       >
                         {renamingId === key.id ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                             Renaming...
                           </>
                         ) : (
@@ -425,12 +425,12 @@ export function SSHKeyManager() {
                   >
                     {deletingId === key.id ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                         Deleting...
                       </>
                     ) : (
                       <>
-                        <Trash2 className="mr-2 h-4 w-4" />
+                        <Trash className="mr-2 h-4 w-4" />
                         Delete
                       </>
                     )}
@@ -522,7 +522,7 @@ export function SSHKeyManager() {
           <div className="flex justify-end">
             <Button onClick={handleTest} disabled={isTesting || disabled}>
               {isTesting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <ShieldCheck className="mr-2 h-4 w-4" />
               )}

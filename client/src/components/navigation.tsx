@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
+import { CaretLeft, GearSix, SignOut, User, Lightning, Plug, Gauge, NotePencil, FlowArrow } from "@phosphor-icons/react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -141,7 +141,7 @@ export default function Navigation({
             className="h-7 w-7 p-0"
             onClick={toggleNavigation}
           >
-            <ChevronLeft size={14} />
+            <CaretLeft size={14} />
           </Button>
         </div>
 
@@ -159,7 +159,7 @@ export default function Navigation({
               )}
             >
               <div className="flex items-center">
-                <SquarePen size={16} />
+                <NotePencil size={16} />
                 <span className="ml-2">New Chat</span>
               </div>
             </Link>
@@ -177,7 +177,7 @@ export default function Navigation({
                 )}
               >
                 <div className="flex items-center">
-                  <Zap size={16} className="text-foreground" />
+                  <Lightning size={16} className="text-foreground" />
                   <span className="ml-2">Incidents</span>
                 </div>
                 {/* Running indicator - shows when Aurora is investigating */}
@@ -236,7 +236,7 @@ export default function Navigation({
               )}
             >
               <div className="flex items-center">
-                <Workflow size={16} />
+                <FlowArrow size={16} />
                 <span className="ml-2">Actions</span>
               </div>
             </Link>
@@ -313,7 +313,7 @@ export default function Navigation({
                           </TooltipProvider>
                         </div>
                         
-                        {/* Settings Button */}
+                        {/* GearSix Button */}
                         <button
                           onClick={() => {
                             onSettingsClick?.();
@@ -321,8 +321,8 @@ export default function Navigation({
                           }}
                           className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
                         >
-                          <Settings className="h-4 w-4" />
-                          Settings
+                          <GearSix className="h-4 w-4" />
+                          GearSix
                         </button>
                         
                         {/* Sign Out Button */}
@@ -333,7 +333,7 @@ export default function Navigation({
                           }}
                           className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
                         >
-                          <LogOut className="h-4 w-4" />
+                          <SignOut className="h-4 w-4" />
                           Sign out
                         </button>
                       </div>

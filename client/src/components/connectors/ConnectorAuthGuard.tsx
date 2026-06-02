@@ -4,7 +4,7 @@ import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite } from "@/lib/roles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Lock } from "lucide-react";
+import { Lock } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 
 interface ConnectorAuthGuardProps {

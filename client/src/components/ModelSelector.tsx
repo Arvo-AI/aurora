@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
-import { Brain, ChevronDown } from 'lucide-react';
+import { Brain, CaretDown } from "@phosphor-icons/react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -128,7 +128,7 @@ export default function ModelSelector({
               )}
               <span className="truncate flex-1">{selectedModelData.displayName}</span>
             </div>
-            <ChevronDown className="h-2.5 w-2.5 ml-1 flex-shrink-0" />
+            <CaretDown className="h-2.5 w-2.5 ml-1 flex-shrink-0" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-[280px] max-h-[300px] overflow-y-auto" align="end">

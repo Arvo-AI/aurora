@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Download, ExternalLink, ChevronDown, ChevronRight, FileText, Edit2, Save, X, Upload } from 'lucide-react';
+import { DownloadSimple, ArrowSquareOut, CaretDown, CaretRight, FileText, PencilSimple, FloppyDisk, X, UploadSimple } from "@phosphor-icons/react";
 import { postmortemService, PostmortemListItem } from '@/lib/services/incidents';
 import { postmortemMarkdownComponents } from '@/lib/markdown-components';
 import ExportToNotionDialog from '@/components/postmortem/ExportToNotionDialog';
@@ -228,9 +228,9 @@ export function PostmortemsSettings() {
             >
               <div className="flex items-center gap-2 min-w-0">
                 {isExpanded ? (
-                  <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" />
+                  <CaretDown className="w-4 h-4 text-zinc-500 shrink-0" />
                 ) : (
-                  <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                  <CaretRight className="w-4 h-4 text-zinc-500 shrink-0" />
                 )}
                 <span className="text-sm text-white truncate">{title}</span>
               </div>
@@ -268,8 +268,8 @@ export function PostmortemsSettings() {
                         disabled={ed.saving}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
                       >
-                        <Save className="w-3 h-3" />
-                        {ed.saving ? 'Saving...' : 'Save'}
+                        <FloppyDisk className="w-3 h-3" />
+                        {ed.saving ? 'Saving...' : 'FloppyDisk'}
                       </button>
                       <button
                         onClick={() => updateEdit(item.id, { editing: false, draft: item.content })}
@@ -285,15 +285,15 @@ export function PostmortemsSettings() {
                         onClick={() => updateEdit(item.id, { editing: true, draft: item.content })}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                       >
-                        <Edit2 className="w-3 h-3" />
+                        <PencilSimple className="w-3 h-3" />
                         Edit
                       </button>
                       <button
                         onClick={() => handleDownload(item)}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                       >
-                        <Download className="w-3 h-3" />
-                        Download
+                        <DownloadSimple className="w-3 h-3" />
+                        DownloadSimple
                       </button>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -301,22 +301,22 @@ export function PostmortemsSettings() {
                             type="button"
                             className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                           >
-                            <Upload className="w-3 h-3" />
+                            <UploadSimple className="w-3 h-3" />
                             Export
-                            <ChevronDown className="w-3 h-3" />
+                            <CaretDown className="w-3 h-3" />
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40">
                           <DropdownMenuItem
                             onClick={() => setActiveExport({ id: item.id, type: 'confluence' })}
                           >
-                            <ExternalLink className="w-3 h-3" />
+                            <ArrowSquareOut className="w-3 h-3" />
                             Confluence
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => setActiveExport({ id: item.id, type: 'notion' })}
                           >
-                            <ExternalLink className="w-3 h-3" />
+                            <ArrowSquareOut className="w-3 h-3" />
                             Notion
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -400,7 +400,7 @@ export function PostmortemsSettings() {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
                     >
-                      <ExternalLink className="w-3 h-3" />
+                      <ArrowSquareOut className="w-3 h-3" />
                       View in Confluence
                     </a>
                   </div>
@@ -415,7 +415,7 @@ export function PostmortemsSettings() {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
                     >
-                      <ExternalLink className="w-3 h-3" />
+                      <ArrowSquareOut className="w-3 h-3" />
                       View in Notion
                     </a>
                   </div>

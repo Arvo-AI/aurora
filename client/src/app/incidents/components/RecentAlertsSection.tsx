@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { RecentIncident, incidentsService, AuroraStatus, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
-import { ChevronDown, Clock, Server, ArrowRight, Loader2, Check, X } from 'lucide-react';
+import { CaretDown, Clock, HardDrives, ArrowRight, SpinnerGap, Check, X } from "@phosphor-icons/react";
 import Image from 'next/image';
 
 interface RecentAlertsSectionProps {
@@ -46,7 +46,7 @@ function RecentAlertCard({
           
           <div className="flex items-center gap-2 mt-1 text-xs text-zinc-600">
             <div className="flex items-center gap-1">
-              <Server className="w-3 h-3" />
+              <HardDrives className="w-3 h-3" />
               <span>{incident.alertService}</span>
             </div>
             <span>•</span>
@@ -71,7 +71,7 @@ function RecentAlertCard({
                 title="Confirm merge"
               >
                 {isMerging ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <SpinnerGap className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <Check className="w-3.5 h-3.5" />
                 )}
@@ -181,7 +181,7 @@ export default function RecentAlertsSection({
           </span>
         </div>
         
-        <ChevronDown 
+        <CaretDown 
           className={`w-3.5 h-3.5 text-zinc-600 transition-transform duration-300 ease-out ${
             isExpanded ? 'rotate-180' : ''
           }`} 
@@ -200,7 +200,7 @@ export default function RecentAlertsSection({
         <div ref={contentRef} className="p-2 space-y-1.5">
           {loading ? (
             <div className="flex items-center justify-center py-4">
-              <Loader2 className="w-4 h-4 animate-spin text-zinc-600" />
+              <SpinnerGap className="w-4 h-4 animate-spin text-zinc-600" />
             </div>
           ) : recentIncidents.length === 0 ? (
             <p className="text-xs text-zinc-600 text-center py-3">

@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
+import { WarningCircle, SpinnerGap, ShieldCheck } from "@phosphor-icons/react";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { NotionIntegrationTokenForm } from "@/components/connectors/NotionIntegrationTokenForm";
 
@@ -298,7 +298,7 @@ export default function NotionConnectPage() {
       </div>
       {oauthError && (
         <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
+          <WarningCircle className="h-4 w-4" />
           <AlertTitle>Failed to start sign-in</AlertTitle>
           <AlertDescription className="text-sm">{oauthError}</AlertDescription>
         </Alert>
@@ -310,7 +310,7 @@ export default function NotionConnectPage() {
       >
         {oauthLoading ? (
           <>
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
             Waiting for Notion...
           </>
         ) : (
@@ -351,7 +351,7 @@ export default function NotionConnectPage() {
 
       {statusError && !statusLoading && (
         <Alert variant="destructive" className="mb-4">
-          <AlertCircle className="h-4 w-4" />
+          <WarningCircle className="h-4 w-4" />
           <AlertTitle>Could not load Notion status</AlertTitle>
           <AlertDescription className="text-sm">
             {statusError} — you can still try connecting below.
@@ -361,7 +361,7 @@ export default function NotionConnectPage() {
 
       {statusLoading || connected ? (
         <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
           {connected ? "Already connected — redirecting…" : "Loading Notion status…"}
         </div>
       ) : (

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { Bell, Plus, Trash2, Check, Clock, RefreshCw, Mail, Zap } from "lucide-react";
+import { Bell, Plus, Trash, Check, Clock, ArrowsClockwise, Envelope, Lightning } from "@phosphor-icons/react";
 import { useAuth } from "@/hooks/useAuthHooks";
 import { canWrite } from "@/lib/roles";
 import {
@@ -266,7 +266,7 @@ export function RCASettings() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Mail className="h-5 w-5" />
+            <Envelope className="h-5 w-5" />
             Notification Recipients
           </CardTitle>
           <CardDescription>
@@ -335,7 +335,7 @@ export function RCASettings() {
                       )}
                       {canEditNotifications && (
                         <Button variant="ghost" size="sm" onClick={() => handleRemoveEmail(email.id, email.email)}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
+                          <Trash className="h-4 w-4 text-destructive" />
                         </Button>
                       )}
                     </div>
@@ -385,7 +385,7 @@ export function RCASettings() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Zap className="h-5 w-5" />
+            <Lightning className="h-5 w-5" />
             Action Notifications
           </CardTitle>
           <CardDescription>
@@ -396,7 +396,7 @@ export function RCASettings() {
           <NotificationToggle
             title="Action Complete"
             description="Receive an email when an Aurora Action finishes running"
-            icon={<Zap className="h-4 w-4" />}
+            icon={<Lightning className="h-4 w-4" />}
             checked={preferences.action_email_notifications}
             onChange={(checked) => handlePreferenceChange('action_email_notifications', checked)}
             isLoading={isLoadingNotificationPref || savingPreferences.action_email_notifications}
@@ -474,14 +474,14 @@ export function RCASettings() {
               >
                 {isResending ? (
                   <>
-                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                    <ArrowsClockwise className="h-3 w-3 mr-1 animate-spin" />
                     Resending...
                   </>
                 ) : resendCooldown > 0 ? (
                   `Resend in ${resendCooldown}s`
                 ) : (
                   <>
-                    <RefreshCw className="h-3 w-3 mr-1" />
+                    <ArrowsClockwise className="h-3 w-3 mr-1" />
                     Resend Code
                   </>
                 )}

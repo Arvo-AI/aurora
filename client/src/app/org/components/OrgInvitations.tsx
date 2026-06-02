@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { Loader2, Mail, CheckCircle, XCircle } from "lucide-react";
+import { SpinnerGap, Envelope, CheckCircle, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import { useQuery, jsonFetcher } from "@/lib/query";
@@ -80,7 +80,7 @@ export default function OrgInvitations() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading invitations...
+        <SpinnerGap className="h-4 w-4 animate-spin mr-2" /> Loading invitations...
       </div>
     );
   }
@@ -88,7 +88,7 @@ export default function OrgInvitations() {
   if (invitations.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <Mail className="h-8 w-8 text-muted-foreground/30 mb-2" />
+        <Envelope className="h-8 w-8 text-muted-foreground/30 mb-2" />
         <p className="text-sm text-muted-foreground">No pending invitations</p>
         <p className="text-xs text-muted-foreground/60 mt-1">
           When someone invites you to their organization, it will appear here.
@@ -131,7 +131,7 @@ export default function OrgInvitations() {
               onClick={() => handleDecline(inv)}
               disabled={acting === inv.id}
             >
-              {acting === inv.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+              {acting === inv.id ? <SpinnerGap className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
               Decline
             </Button>
             <Button
@@ -140,7 +140,7 @@ export default function OrgInvitations() {
               onClick={() => handleAccept(inv)}
               disabled={acting === inv.id}
             >
-              {acting === inv.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
+              {acting === inv.id ? <SpinnerGap className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
               Accept
             </Button>
           </div>

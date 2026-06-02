@@ -1,21 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo } from 'react';
-import {
-  Play,
-  Plus,
-  ChevronRight,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  ArrowLeft,
-  Loader2,
-  Workflow,
-  AlertTriangle,
-  Hash,
-  RotateCcw,
-  Shield,
-} from 'lucide-react';
+import { Play, Plus, CaretRight, Clock, CheckCircle, XCircle, ArrowLeft, SpinnerGap, FlowArrow, Warning, Hash, ArrowCounterClockwise, Shield } from "@phosphor-icons/react";
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -150,9 +136,9 @@ function ModeBadge({ mode }: { readonly mode: Action['mode'] }) {
 
 function StatusDot({ status }: { readonly status: ActionRun['status'] }) {
   switch (status) {
-    case 'success': return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />;
+    case 'success': return <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />;
     case 'error': return <XCircle className="h-3.5 w-3.5 text-red-400" />;
-    case 'running': return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />;
+    case 'running': return <SpinnerGap className="h-3.5 w-3.5 animate-spin text-blue-400" />;
     default: return <Clock className="h-3.5 w-3.5 text-zinc-500" />;
   }
 }
@@ -170,14 +156,14 @@ function ActionsListView({ actions, onSelect, onCreate }: {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-3 gap-4">
-        <StatCard label="Total Actions" value={String(actions.length)} icon={Workflow} />
-        <StatCard label="Active" value={String(active)} icon={CheckCircle2} sub="Enabled and triggering" />
+        <StatCard label="Total Actions" value={String(actions.length)} icon={FlowArrow} />
+        <StatCard label="Active" value={String(active)} icon={CheckCircle} sub="Enabled and triggering" />
         <StatCard label="Total Runs" value={String(totalRuns)} icon={Play} />
       </div>
 
       {actions.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center border border-zinc-800/80 rounded-xl bg-zinc-900/60">
-          <Workflow className="h-8 w-8 text-zinc-700 mb-3" />
+          <FlowArrow className="h-8 w-8 text-zinc-700 mb-3" />
           <p className="text-sm text-zinc-500">No actions yet</p>
           <p className="text-xs text-zinc-600 mt-1 mb-4">Create your first action to automate SRE workflows</p>
           <Button variant="outline" size="sm" onClick={onCreate}>
@@ -221,7 +207,7 @@ function ActionsListView({ actions, onSelect, onCreate }: {
                     )}
                   </div>
                 </div>
-                <ChevronRight className="h-4 w-4 text-zinc-700 group-hover:text-zinc-400 transition-colors mt-0.5 flex-shrink-0" />
+                <CaretRight className="h-4 w-4 text-zinc-700 group-hover:text-zinc-400 transition-colors mt-0.5 flex-shrink-0" />
               </div>
             </button>
           ))}
@@ -347,7 +333,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
             </button>
             {action.is_system && action.is_modified && (
               <button onClick={handleRestoreDefault} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-indigo-500/30 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:bg-indigo-900/20 transition-all">
-                <RotateCcw className="h-3 w-3" /> Restore Default
+                <ArrowCounterClockwise className="h-3 w-3" /> Restore Default
               </button>
             )}
             {!action.is_system && (
@@ -361,7 +347,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
 
       <div className="grid grid-cols-3 gap-4">
         <StatCard label="Total Runs" value={String(runs.length)} icon={Hash} />
-        <StatCard label="Succeeded" value={String(succeeded)} icon={CheckCircle2} />
+        <StatCard label="Succeeded" value={String(succeeded)} icon={CheckCircle} />
         <StatCard label="Failed" value={String(failed)} icon={XCircle} />
       </div>
 
@@ -379,7 +365,7 @@ function ActionDetailView({ actionId, onBack, onEdit }: { readonly actionId: str
           </div>
           {action.mode === 'agent' && (
             <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/10 rounded-lg px-3 py-2">
-              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+              <Warning className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
               <span>Agent mode: Aurora can execute commands, modify Terraform, and open PRs. All actions are logged.</span>
             </div>
           )}
@@ -628,7 +614,7 @@ function ActionFormView({ onBack, onSaved, action }: {
 
               {mode === 'agent' && (
                 <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/10 rounded-lg px-3 py-2">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                  <Warning className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
                   <span>Agent mode allows Aurora to execute commands, modify infrastructure, and open PRs.</span>
                 </div>
               )}

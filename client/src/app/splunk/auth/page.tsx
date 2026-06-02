@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, ExternalLink } from "lucide-react";
+import { SpinnerGap, ArrowSquareOut } from "@phosphor-icons/react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { SplunkWebhookStep } from "@/components/splunk/SplunkWebhookStep";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -165,7 +165,7 @@ export default function SplunkAuthPage() {
           </div>
           <Card>
             <CardContent className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
             </CardContent>
           </Card>
         </div>
@@ -254,14 +254,14 @@ export default function SplunkAuthPage() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-blue-600 hover:underline mt-2"
                 >
-                  View Splunk documentation <ExternalLink className="h-3 w-3" />
+                  View Splunk documentation <ArrowSquareOut className="h-3 w-3" />
                 </a>
               </div>
 
               <Button type="submit" className="w-full" disabled={loading || !baseUrl || !apiToken}>
                 {loading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                     Connecting...
                   </>
                 ) : (

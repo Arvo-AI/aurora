@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 import { ProjectCache } from "@/components/cloud-provider/projects/projectUtils";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 import { GcpServiceAccountForm } from "@/components/connectors/GcpServiceAccountForm";
@@ -96,7 +96,7 @@ export default function GcpAuthPage() {
               >
                 {oauthLoading ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
                     Redirecting to Google...
                   </>
                 ) : (

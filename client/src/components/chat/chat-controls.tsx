@@ -3,7 +3,7 @@
 import ModelSelector from "@/components/ModelSelector";
 import ModeSelector from "@/components/ModeSelector";
 import { Button } from "@/components/ui/button";
-import { Radar } from "lucide-react";
+import { Broadcast } from "@phosphor-icons/react";
 import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 
 interface ChatControlsProps {
@@ -54,7 +54,7 @@ export default function ChatControls({
             }`}
             title={rcaActive ? "RCA mode active — click Send to investigate" : "Enable RCA mode"}
           >
-            <Radar className="h-3 w-3" />
+            <Broadcast className="h-3 w-3" />
             <span>RCA</span>
           </Button>
         )}

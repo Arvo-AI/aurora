@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Check, Copy, Webhook } from "lucide-react";
+import { Check, Copy, WebhooksLogo } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
 import type { SpinnakerWebhookInfo } from "@/lib/services/spinnaker";
@@ -30,7 +30,7 @@ export function WebhookPanel({ webhookInfo }: WebhookPanelProps) {
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
-          <Webhook className="h-5 w-5 text-teal-600" />
+          <WebhooksLogo className="h-5 w-5 text-teal-600" />
           <CardTitle className="text-lg">Send Deployment Events to Aurora</CardTitle>
         </div>
         <CardDescription>
@@ -39,7 +39,7 @@ export function WebhookPanel({ webhookInfo }: WebhookPanelProps) {
       </CardHeader>
       <CardContent className="space-y-3">
         <div>
-          <p className="text-xs font-medium text-muted-foreground mb-1.5">Webhook URL</p>
+          <p className="text-xs font-medium text-muted-foreground mb-1.5">WebhooksLogo URL</p>
           <div className="relative">
             <pre className="text-xs bg-muted p-3 rounded-lg whitespace-pre-wrap break-all pr-20">
               <code>{webhookInfo.webhookUrl}</code>

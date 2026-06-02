@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeSlash } from "@phosphor-icons/react";
 
 interface OpsGenieConnectionStepProps {
   apiKey: string;
@@ -170,7 +170,7 @@ export function OpsGenieConnectionStep({
                           onClick={() => setShowApiKey(!showApiKey)}
                           tabIndex={-1}
                         >
-                          {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          {showApiKey ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>
@@ -239,7 +239,7 @@ export function OpsGenieConnectionStep({
                           onClick={() => setShowApiKey(!showApiKey)}
                           tabIndex={-1}
                         >
-                          {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          {showApiKey ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>

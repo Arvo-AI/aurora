@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { CheckCircle, Copy, ArrowSquareOut, SpinnerGap } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { incidentIoService, IncidentIoWebhookUrlResponse } from "@/lib/services/incident-io";
 import { copyToClipboard } from "@/lib/utils";
@@ -38,7 +38,7 @@ function WebhookSecretField({
       {hasSecret && (
         <div className="mt-1 mb-2">
           <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
-            <CheckCircle2 className="h-4 w-4" />
+            <CheckCircle className="h-4 w-4" />
             Signing secret configured — webhook signatures are being verified.
           </div>
           <p className="text-xs text-muted-foreground mt-1">
@@ -67,7 +67,7 @@ function WebhookSecretField({
           onClick={onSave}
           disabled={saving || !value.trim()}
         >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : hasSecret ? "Update" : "Save"}
+          {saving ? <SpinnerGap className="h-4 w-4 animate-spin" /> : hasSecret ? "Update" : "Save"}
         </Button>
       </div>
     </div>
@@ -96,7 +96,7 @@ function WebhookConfig({
   if (loadingWebhook) {
     return (
       <div className="flex items-center gap-2 text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerGap className="h-4 w-4 animate-spin" />
         Loading webhook URL...
       </div>
     );
@@ -147,7 +147,7 @@ function WebhookConfig({
         rel="noopener noreferrer"
         className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
       >
-        View incident.io Webhook Documentation <ExternalLink className="h-3 w-3" />
+        View incident.io Webhook Documentation <ArrowSquareOut className="h-3 w-3" />
       </a>
     </div>
   );
@@ -282,7 +282,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
+          <CheckCircle className="h-5 w-5 text-green-500" />
           Connected to incident.io
         </CardTitle>
         <CardDescription>
@@ -307,7 +307,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
               </p>
             </div>
             {loadingSettings ? (
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-5 w-5 animate-spin text-muted-foreground" />
             ) : (
               <Switch
                 id="rca-toggle"
@@ -331,7 +331,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
                 </p>
               </div>
               {loadingSettings ? (
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <SpinnerGap className="h-5 w-5 animate-spin text-muted-foreground" />
               ) : (
                 <Switch
                   id="postback-toggle"
@@ -366,7 +366,7 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
           >
             {loading ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                 Disconnecting...
               </>
             ) : (

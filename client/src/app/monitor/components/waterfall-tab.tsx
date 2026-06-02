@@ -1,9 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import {
-  Timer, Wrench, CheckCircle2, XCircle, Clock, DollarSign,
-} from 'lucide-react';
+import { Timer, Wrench, CheckCircle, XCircle, Clock, CurrencyDollar } from "@phosphor-icons/react";
 import { useQuery, jsonFetcher } from '@/lib/query';
 import {
   StatCard, StatCardSkeleton, ChartPanel, ChartSkeleton, EmptyState,
@@ -72,9 +70,9 @@ export default function WaterfallTab({ period }: { period: Period }) {
         ) : rca ? (
           <>
             <StatCard label="Total RCAs" value={String(rca.total_rcas)} icon={Timer} sub={`${rca.failed_rcas} failed`} />
-            <StatCard label="Success Rate" value={successRateDisplay} icon={CheckCircle2} />
+            <StatCard label="Success Rate" value={successRateDisplay} icon={CheckCircle} />
             <StatCard label="Avg Duration" value={formatDuration(rca.avg_rca_duration_seconds)} icon={Clock} sub={rca.avg_tool_calls_per_rca ? `~${Math.round(rca.avg_tool_calls_per_rca)} tool calls` : undefined} />
-            <StatCard label="Avg Cost / RCA" value={rca.avg_cost_per_rca ? formatCost(rca.avg_cost_per_rca) : '—'} icon={DollarSign} sub={rca.avg_tokens_per_rca ? `~${formatCompact(rca.avg_tokens_per_rca)} tokens` : undefined} />
+            <StatCard label="Avg Cost / RCA" value={rca.avg_cost_per_rca ? formatCost(rca.avg_cost_per_rca) : '—'} icon={CurrencyDollar} sub={rca.avg_tokens_per_rca ? `~${formatCompact(rca.avg_tokens_per_rca)} tokens` : undefined} />
           </>
         ) : null}
       </div>

@@ -2,13 +2,7 @@
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronRight,
-  Loader2,
-  XCircle,
-} from "lucide-react";
+import { WarningCircle, CheckCircle, CaretRight, SpinnerGap, XCircle } from "@phosphor-icons/react";
 import { ToolCall, parseDispatchToolCall } from "@/app/chat/types";
 import { formatRoleName } from "@/lib/sub-agent-format";
 
@@ -19,7 +13,7 @@ interface SubAgentRowProps {
 
 function StatusIcon({ toolCall }: Readonly<{ toolCall: ToolCall }>) {
   if (toolCall.status === "running" || toolCall.status === "pending") {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />;
+    return <SpinnerGap className="h-3.5 w-3.5 animate-spin text-muted-foreground" />;
   }
   if (toolCall.status === "error" || toolCall.status === "cancelled") {
     return <XCircle className="h-3.5 w-3.5 text-red-500 dark:text-red-400" />;
@@ -29,9 +23,9 @@ function StatusIcon({ toolCall }: Readonly<{ toolCall: ToolCall }>) {
       ? (toolCall.output as { status?: string }).status
       : undefined;
   if (outStatus === "failed" || outStatus === "timeout" || outStatus === "cancelled") {
-    return <AlertCircle className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />;
+    return <WarningCircle className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />;
   }
-  return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />;
+  return <CheckCircle className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />;
 }
 
 const STRENGTH_TONE_CLASSES: Record<string, string> = {
@@ -84,7 +78,7 @@ const SubAgentRow = ({ toolCall, onSelect }: SubAgentRowProps) => {
         <StrengthChip strength={parsed.self_assessed_strength} />
       )}
       {clickable && (
-        <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+        <CaretRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
       )}
     </>
   );

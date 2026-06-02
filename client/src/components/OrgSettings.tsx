@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useUser } from "@/hooks/useAuthHooks";
 import { useSession } from "next-auth/react";
 import { isAdmin as checkAdmin } from "@/lib/roles";
-import { Pencil, Check, X, Loader2 } from "lucide-react";
+import { PencilSimple, Check, X, SpinnerGap } from "@phosphor-icons/react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -105,7 +105,7 @@ export function OrgSettings() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerGap className="h-4 w-4 animate-spin" />
         Loading...
       </div>
     );
@@ -155,7 +155,7 @@ export function OrgSettings() {
             >
               {org.name}
               {isAdmin && (
-                <Pencil className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors" />
+                <PencilSimple className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors" />
               )}
             </button>
           )}

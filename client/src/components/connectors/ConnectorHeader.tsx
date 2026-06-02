@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Search } from "lucide-react";
+import { MagnifyingGlass } from "@phosphor-icons/react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
@@ -26,12 +26,12 @@ export default function ConnectorHeader({
         <h1 className="text-3xl font-bold mb-3">Connectors</h1>
       </div>
 
-      {/* Search Bar */}
+      {/* MagnifyingGlass Bar */}
       <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <MagnifyingGlass className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           type="text"
-          placeholder="Search connectors..."
+          placeholder="MagnifyingGlass connectors..."
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           className="pl-10"

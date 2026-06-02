@@ -1,5 +1,4 @@
 import React, { Suspense } from "react";
-import { Loader2 } from "lucide-react";
 import ChatClient from "./components/ChatClient";
 
 // Server component for chat page
@@ -33,7 +32,7 @@ export default async function ChatPage({
       <Suspense 
         fallback={
           <div className="flex h-screen items-center justify-center">
-            <Loader2 className="h-8 w-8 animate-spin" />
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground" />
             <span className="ml-2 text-muted-foreground">Loading chat...</span>
           </div>
         }

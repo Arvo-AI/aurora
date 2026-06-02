@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Infinity, MessageSquare, ChevronDown } from "lucide-react";
+import { Infinity, ChatText, CaretDown } from "@phosphor-icons/react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +29,7 @@ const modeOptions: ModeOption[] = [
   {
     id: "ask",
     displayName: "Ask (Read Mode)",
-    icon: <MessageSquare className="w-2 h-2 flex-shrink-0" />,
+    icon: <ChatText className="w-2 h-2 flex-shrink-0" />,
   },
   {
     id: "agent",
@@ -78,7 +78,7 @@ export default function ModeSelector({
               {selectedModeData.displayName}
             </span>
           </div>
-          <ChevronDown className="h-2.5 w-2.5 ml-1 flex-shrink-0" />
+          <CaretDown className="h-2.5 w-2.5 ml-1 flex-shrink-0" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-[160px]" align="start">

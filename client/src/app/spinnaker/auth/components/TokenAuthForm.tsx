@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
+import { Eye, EyeSlash, SpinnerGap, ShieldCheck } from "@phosphor-icons/react";
 
 interface TokenAuthFormProps {
   baseUrl: string;
@@ -75,7 +75,7 @@ export function TokenAuthForm({
             className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
             aria-label={showPassword ? "Hide password" : "Show password"}
           >
-            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            {showPassword ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </button>
         </div>
       </div>
@@ -91,7 +91,7 @@ export function TokenAuthForm({
       </div>
 
       <Button type="submit" disabled={loading || !isValid} className="w-full h-10">
-        {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Spinnaker"}
+        {loading ? (<><SpinnerGap className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Spinnaker"}
       </Button>
     </form>
   );

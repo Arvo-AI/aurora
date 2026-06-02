@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ExternalLink, AlertCircle, CheckCircle2, Globe, Shield, LogOut, ChevronDown, ChevronUp } from "lucide-react";
+import { SpinnerGap, ArrowSquareOut, WarningCircle, CheckCircle, Globe, Shield, SignOut, CaretDown, CaretUp } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -64,12 +64,12 @@ function PermissionStatus({ permissions }: { permissions: string[] }) {
       <div className="flex items-center gap-2">
         {hasAllWrite && missingReadEntries.length === 0 ? (
           <>
-            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <CheckCircle className="h-4 w-4 text-green-500" />
             <span className="text-sm font-medium">Full access</span>
           </>
         ) : hasWrite ? (
           <>
-            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <CheckCircle className="h-4 w-4 text-green-500" />
             <span className="text-sm font-medium">Read + partial write</span>
           </>
         ) : (
@@ -96,7 +96,7 @@ function PermissionStatus({ permissions }: { permissions: string[] }) {
           <p className="text-xs text-muted-foreground">Write permissions granted:</p>
           {grantedWriteKeys.map(key => (
             <div key={key} className="flex items-center gap-2">
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+              <CheckCircle className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
               <span className="text-xs">{key}</span>
             </div>
           ))}
@@ -124,7 +124,7 @@ function PermissionStatus({ permissions }: { permissions: string[] }) {
         className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
       >
         {showAll ? "Hide" : "Show"} all {permissions.length} permissions
-        {showAll ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        {showAll ? <CaretUp className="h-3 w-3" /> : <CaretDown className="h-3 w-3" />}
       </button>
 
       {showAll && (
@@ -309,7 +309,7 @@ export default function CloudflareAuthPage() {
     return (
       <ConnectorAuthGuard connectorName="Cloudflare">
         <div className="container mx-auto py-8 px-4 max-w-3xl flex justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <SpinnerGap className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       </ConnectorAuthGuard>
     );
@@ -330,7 +330,7 @@ export default function CloudflareAuthPage() {
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  <CheckCircle className="h-5 w-5 text-green-500" />
                   <div>
                     <CardTitle>Cloudflare Connected</CardTitle>
                     <CardDescription>Your Cloudflare account is linked to Aurora</CardDescription>
@@ -361,7 +361,7 @@ export default function CloudflareAuthPage() {
 
                 {status.tokenType === "user" && (
                   <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg flex items-start gap-2.5">
-                    <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                    <WarningCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
                     <div className="text-xs text-muted-foreground">
                       <p className="font-medium text-yellow-600 dark:text-yellow-400">Using a personal token</p>
                       <p className="mt-0.5">
@@ -374,7 +374,7 @@ export default function CloudflareAuthPage() {
 
                 {isLoadingZones ? (
                   <div className="flex items-center gap-2 py-4 justify-center text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <SpinnerGap className="h-4 w-4 animate-spin" />
                     <span className="text-sm">Loading zones...</span>
                   </div>
                 ) : zones.length > 0 ? (
@@ -447,12 +447,12 @@ export default function CloudflareAuthPage() {
                   >
                     {isDisconnecting ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                         Disconnecting...
                       </>
                     ) : (
                       <>
-                        <LogOut className="mr-2 h-4 w-4" />
+                        <SignOut className="mr-2 h-4 w-4" />
                         Disconnect
                       </>
                     )}
@@ -482,7 +482,7 @@ export default function CloudflareAuthPage() {
                         <p>
                           In the{" "}
                           <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1">
-                            Cloudflare Dashboard <ExternalLink className="w-3 h-3" />
+                            Cloudflare Dashboard <ArrowSquareOut className="w-3 h-3" />
                           </a>
                           , go to <strong>Manage Account</strong> → <strong>Account API Tokens</strong>
                         </p>
@@ -533,7 +533,7 @@ export default function CloudflareAuthPage() {
 
               {error && (
                 <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 flex items-start gap-3">
-                  <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+                  <WarningCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
                   <p className="text-sm text-destructive">{error}</p>
                 </div>
               )}
@@ -556,7 +556,7 @@ export default function CloudflareAuthPage() {
                   <Button type="submit" disabled={isLoading || !apiToken.trim()}>
                     {isLoading ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                         Connecting...
                       </>
                     ) : (

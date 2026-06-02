@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, Loader2, LogOut } from "lucide-react";
+import { WarningCircle, SpinnerGap, SignOut } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { fetchConnectedAccounts } from "@/lib/connected-accounts-cache";
 
@@ -181,7 +181,7 @@ export default function NotionProviderIntegration({
   if (loadError) {
     return (
       <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
+        <WarningCircle className="h-4 w-4" />
         <AlertTitle>Failed to load Notion status</AlertTitle>
         <AlertDescription className="text-sm">{loadError}</AlertDescription>
       </Alert>
@@ -191,7 +191,7 @@ export default function NotionProviderIntegration({
   if (!status?.connected) {
     return (
       <Alert>
-        <AlertCircle className="h-4 w-4" />
+        <WarningCircle className="h-4 w-4" />
         <AlertTitle>Notion not connected</AlertTitle>
         <AlertDescription className="text-sm space-y-2">
           <p>
@@ -236,12 +236,12 @@ export default function NotionProviderIntegration({
         >
           {isDisconnecting ? (
             <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
               Disconnecting...
             </>
           ) : (
             <>
-              <LogOut className="h-4 w-4 mr-2" />
+              <SignOut className="h-4 w-4 mr-2" />
               Disconnect
             </>
           )}

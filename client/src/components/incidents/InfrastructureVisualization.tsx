@@ -24,7 +24,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import './visualization.css';
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Loader2, Maximize, RotateCcw, Container, Layers, Network, Database, Server, Zap, HardDrive, Archive, Grid3x3, FolderTree, MapPin, Bell, Activity, LucideIcon, Boxes, Trash2, Plus, Download } from 'lucide-react';
+import { SpinnerGap, ArrowsOut, ArrowCounterClockwise, Package, Stack, Graph, Database, HardDrives, Lightning, HardDrive, Archive, GridNine, FolderOpen, MapPin, Bell, Heartbeat, Cube, Trash, Plus, DownloadSimple } from "@phosphor-icons/react";
 import { toPng } from 'html-to-image';
 import { toast } from '@/hooks/use-toast';
 
@@ -47,15 +47,15 @@ const CHILD_NODE_HEIGHT = 100;
 const CHILD_NODE_SPACING = 30;
 const CHILD_TOTAL_HEIGHT = CHILD_NODE_HEIGHT + CHILD_NODE_SPACING;
 
-function getIconForType(type: string): LucideIcon | null {
-  const iconMap: Record<string, LucideIcon> = {
-    pod: Container, deployment: Layers, service: Network, statefulset: Database, daemonset: Grid3x3, replicaset: Layers,
-    vm: Server, instance: Server, lambda: Zap, 'cloud-function': Zap, node: HardDrive,
-    'load-balancer': Network, ingress: Network, 'api-gateway': Network,
+function getIconForType(type: string): React.ComponentType<any> | null {
+  const iconMap: Record<string, React.ComponentType<any>> = {
+    pod: Package, deployment: Stack, service: Graph, statefulset: Database, daemonset: GridNine, replicaset: Stack,
+    vm: HardDrives, instance: HardDrives, lambda: Lightning, 'cloud-function': Lightning, node: HardDrive,
+    'load-balancer': Graph, ingress: Graph, 'api-gateway': Graph,
     database: Database, postgres: Database, mysql: Database, mongodb: Database, redis: Database, elasticsearch: Database,
-    bucket: Archive, pvc: HardDrive, queue: Activity,
-    cluster: Boxes, namespace: FolderTree, region: MapPin,
-    alert: Bell, event: Activity, metric: Activity,
+    bucket: Archive, pvc: HardDrive, queue: Heartbeat,
+    cluster: Cube, namespace: FolderOpen, region: MapPin,
+    alert: Bell, event: Heartbeat, metric: Heartbeat,
   };
   return iconMap[type.toLowerCase()] || null;
 }
@@ -857,7 +857,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
   if (isLoading) {
     return (
       <div className={`${className} flex items-center justify-center bg-zinc-900/50 rounded-lg border border-zinc-800`}>
-        <Loader2 className="w-6 h-6 text-zinc-400 animate-spin" />
+        <SpinnerGap className="w-6 h-6 text-zinc-400 animate-spin" />
       </div>
     );
   }
@@ -911,13 +911,13 @@ export default function InfrastructureVisualization({ incidentId, className }: P
         <Background color="#27272a" gap={16} />
         <Controls showInteractive={false} showFitView={false}>
           <ControlButton onClick={exportAsPng} title={isExporting ? 'Exporting...' : 'Export as PNG'} disabled={isExporting}>
-            <Download size={16} strokeWidth={2} style={{ stroke: isExporting ? '#71717a' : '#fafafa', fill: 'none' }} />
+            <DownloadSimple size={16} style={{ stroke: isExporting ? '#71717a' : '#fafafa', fill: 'none' }} />
           </ControlButton>
           <ControlButton onClick={handleCenter} title="Center view">
-            <RotateCcw size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
+            <ArrowCounterClockwise size={16} style={{ stroke: '#fafafa', fill: 'none' }} />
           </ControlButton>
           <ControlButton onClick={handleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
-            <Maximize size={16} strokeWidth={2} style={{ stroke: '#fafafa', fill: 'none' }} />
+            <ArrowsOut size={16} style={{ stroke: '#fafafa', fill: 'none' }} />
           </ControlButton>
         </Controls>
         
@@ -958,7 +958,7 @@ export default function InfrastructureVisualization({ incidentId, className }: P
                     fontWeight: 500
                   }}
                 >
-                  <Trash2 size={isFullscreen ? 14 : 12} />
+                  <Trash size={isFullscreen ? 14 : 12} />
                   Delete Node
                 </button>
               </div>

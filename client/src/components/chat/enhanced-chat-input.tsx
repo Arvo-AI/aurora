@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { Send, Loader2, Square, X } from "lucide-react";
+import { PaperPlaneRight, SpinnerGap, Square, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
@@ -261,7 +261,7 @@ export default function EnhancedChatInput({
             maxRows={6}
           />
           
-          {/* Send/Cancel button */}
+          {/* PaperPlaneRight/Cancel button */}
           <div className="absolute right-2 bottom-2 flex items-center space-x-2">
             {isSending && onCancel ? (
               <Button
@@ -279,9 +279,9 @@ export default function EnhancedChatInput({
                 size="sm"
               >
                 {isSending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <SpinnerGap className="h-4 w-4 animate-spin" />
                 ) : (
-                  <Send className="h-4 w-4" />
+                  <PaperPlaneRight className="h-4 w-4" />
                 )}
               </Button>
             )}

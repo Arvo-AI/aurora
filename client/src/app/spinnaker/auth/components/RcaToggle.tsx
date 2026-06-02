@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { Zap } from "lucide-react";
+import { Lightning } from "@phosphor-icons/react";
 import type { SpinnakerRcaSettings } from "@/lib/services/spinnaker";
 
 interface RcaToggleProps {
@@ -18,7 +18,7 @@ export function RcaToggle({ rcaSettings, loading, onToggle }: RcaToggleProps) {
         <div className="flex items-center justify-between">
           <div className="space-y-1 flex-1">
             <h4 className="font-medium flex items-center gap-2">
-              <Zap className="h-4 w-4" />
+              <Lightning className="h-4 w-4" />
               Automatic RCA on Deployment Failures
             </h4>
             <p className="text-sm text-muted-foreground">

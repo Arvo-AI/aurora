@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
-import { ChevronDown, ChevronUp, AlertCircle, Settings2 } from "lucide-react"
+import { CaretDown, CaretUp, WarningCircle, Sliders } from "@phosphor-icons/react"
 import CommandLogo from "./CommandLogo"
 import { useTheme } from "next-themes"
 import { GitHubCommitTool } from "@/components/GitHubCommitTool"
@@ -352,9 +352,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
               className="flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
             >
               {showOutput ? (
-                <ChevronUp className="h-4 w-4" />
+                <CaretUp className="h-4 w-4" />
               ) : (
-                <ChevronDown className="h-4 w-4" />
+                <CaretDown className="h-4 w-4" />
               )}
             </button>
           </div>
@@ -396,7 +396,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
 
             {isNotionReauth && (
               <div className="mx-4 mt-3 flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 text-sm">
-                <AlertCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                <WarningCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                 <span className="flex-1 text-muted-foreground">Notion credentials expired</span>
                 <a
                   href="/notion/connect"
@@ -499,7 +499,7 @@ const ConfirmationPanel = ({ tool, command, userId, sessionId, sendRaw, onToolUp
   return (
     <div className="border-t border-border bg-muted/30 px-4 py-2 flex items-center justify-between gap-3">
       <div className="flex items-center gap-2 min-w-0 text-sm text-muted-foreground">
-        <AlertCircle className="h-4 w-4 flex-shrink-0" />
+        <WarningCircle className="h-4 w-4 flex-shrink-0" />
         <span className="truncate">
           Approval needed for <code className="font-mono text-foreground">{summary}</code>
         </span>
@@ -529,7 +529,7 @@ const ConfirmationPanel = ({ tool, command, userId, sessionId, sendRaw, onToolUp
                 className="h-7 px-3 text-xs font-medium gap-1 bg-blue-600 text-white hover:bg-blue-600/90 dark:bg-blue-500 dark:hover:bg-blue-500/90"
               >
                 Always
-                <Settings2 className="h-3 w-3" />
+                <Sliders className="h-3 w-3" />
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" sideOffset={6} className="w-80 p-3 flex flex-col gap-2">

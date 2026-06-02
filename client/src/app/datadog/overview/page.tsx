@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { datadogService } from "@/lib/services/datadog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { HelpCircle } from "lucide-react";
+import { Question } from "@phosphor-icons/react";
 
 const toISOString = (minutesAgo: number) => {
   const now = new Date();
@@ -112,7 +112,7 @@ export default function DatadogOverviewPage() {
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Log search tips">
-                <HelpCircle className="h-4 w-4" />
+                <Question className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-80 text-sm space-y-2" align="end">
@@ -157,7 +157,7 @@ export default function DatadogOverviewPage() {
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Metrics query tips">
-                <HelpCircle className="h-4 w-4" />
+                <Question className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-80 text-sm space-y-2" align="end">
@@ -202,7 +202,7 @@ export default function DatadogOverviewPage() {
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Events API tips">
-                <HelpCircle className="h-4 w-4" />
+                <Question className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-80 text-sm space-y-2" align="end">

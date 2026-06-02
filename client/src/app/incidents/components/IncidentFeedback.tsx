@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, ReactNode } from 'react';
-import { ThumbsUp, ThumbsDown, Loader2, LucideIcon } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -25,7 +25,7 @@ interface IncidentFeedbackProps {
 }
 
 interface FeedbackButtonProps {
-  icon: LucideIcon;
+  icon: React.ComponentType<any>;
   tooltip: string;
   onClick?: () => void;
   disabled?: boolean;
@@ -58,7 +58,7 @@ function FeedbackButton({
             disabled={disabled}
             className={`h-8 w-8 ${isSelected ? colorClasses.selected : colorClasses.hover}`}
           >
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />}
+            {isLoading ? <SpinnerGap className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />}
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-zinc-800 text-zinc-100 border-zinc-700">
@@ -222,7 +222,7 @@ export default function IncidentFeedback({
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                  <SpinnerGap className="w-4 h-4 mr-1.5 animate-spin" />
                   Submitting...
                 </>
               ) : (

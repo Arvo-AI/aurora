@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Radar, Check, X } from "lucide-react";
+import { Broadcast, Check, X } from "@phosphor-icons/react";
 import { useAuth } from "@/hooks/useAuthHooks";
 
 export function DiscoverySettings() {
@@ -228,7 +228,7 @@ export function DiscoverySettings() {
             </Button>
           ) : (
             <Button variant="outline" onClick={runDiscovery} disabled={discovering}>
-              <Radar className={`h-4 w-4 mr-2 ${discovering ? "animate-spin" : ""}`} />
+              <Broadcast className={`h-4 w-4 mr-2 ${discovering ? "animate-spin" : ""}`} />
               {discovering ? "Starting..." : "Run Now"}
             </Button>
           )}

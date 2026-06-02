@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Download, Edit2, Save, X, ExternalLink, RefreshCw, FileText, Upload, ChevronDown, History, RotateCcw, MessageSquare } from 'lucide-react';
+import { DownloadSimple, PencilSimple, FloppyDisk, X, ArrowSquareOut, ArrowsClockwise, FileText, UploadSimple, CaretDown, ClockCounterClockwise, ArrowCounterClockwise, ChatText } from "@phosphor-icons/react";
 import { postmortemService, type PostmortemData, type PostmortemVersion } from '@/lib/services/incidents';
 import { postmortemMarkdownComponents } from '@/lib/markdown-components';
 import ExportToNotionDialog from '@/components/postmortem/ExportToNotionDialog';
@@ -35,7 +35,7 @@ function PostmortemContent({ postmortem, regenerating, postmortemNotFound, regen
   if (postmortem === null && regenerating) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
-        <RefreshCw className="w-5 h-5 animate-spin" />
+        <ArrowsClockwise className="w-5 h-5 animate-spin" />
         <p className="text-xs">{prevContent ? 'Regenerating postmortem...' : 'Generating postmortem...'}</p>
       </div>
     );
@@ -50,7 +50,7 @@ function PostmortemContent({ postmortem, regenerating, postmortemNotFound, regen
           disabled={regenerating || regenerateSubmitting}
           className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
         >
-          <RotateCcw className={`w-3 h-3 ${regenerateSubmitting ? 'animate-spin' : ''}`} />
+          <ArrowCounterClockwise className={`w-3 h-3 ${regenerateSubmitting ? 'animate-spin' : ''}`} />
           {regenerateSubmitting ? 'Starting...' : 'Generate Postmortem'}
         </button>
       </div>
@@ -59,7 +59,7 @@ function PostmortemContent({ postmortem, regenerating, postmortemNotFound, regen
   if (postmortem === null) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-zinc-500 gap-2">
-        <RefreshCw className="w-5 h-5 animate-spin" />
+        <ArrowsClockwise className="w-5 h-5 animate-spin" />
         <p className="text-xs">Loading...</p>
       </div>
     );
@@ -299,7 +299,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
             className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
             title="Refresh postmortem"
           >
-            <RefreshCw className="w-3 h-3" />
+            <ArrowsClockwise className="w-3 h-3" />
           </button>
           {postmortem && !editing && (
             <>
@@ -309,7 +309,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
                 title="Regenerate postmortem with latest data"
               >
-                <RotateCcw className={`w-3 h-3 ${regenerating || regenerateSubmitting ? 'animate-spin' : ''}`} />
+                <ArrowCounterClockwise className={`w-3 h-3 ${regenerating || regenerateSubmitting ? 'animate-spin' : ''}`} />
                 {regenerating || regenerateSubmitting ? 'Generating...' : 'Regenerate'}
               </button>
               <button
@@ -318,22 +318,22 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                 title="View version history"
               >
-                <History className="w-3 h-3" />
-                History
+                <ClockCounterClockwise className="w-3 h-3" />
+                ClockCounterClockwise
               </button>
               <button
                 onClick={() => setEditing(true)}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
               >
-                <Edit2 className="w-3 h-3" />
+                <PencilSimple className="w-3 h-3" />
                 Edit
               </button>
               <button
                 onClick={handleDownload}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
               >
-                <Download className="w-3 h-3" />
-                Download
+                <DownloadSimple className="w-3 h-3" />
+                DownloadSimple
               </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -341,18 +341,18 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                     type="button"
                     className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                   >
-                    <Upload className="w-3 h-3" />
+                    <UploadSimple className="w-3 h-3" />
                     Export
-                    <ChevronDown className="w-3 h-3" />
+                    <CaretDown className="w-3 h-3" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-40">
                   <DropdownMenuItem onClick={() => setActiveExport('confluence')}>
-                    <ExternalLink className="w-3 h-3" />
+                    <ArrowSquareOut className="w-3 h-3" />
                     Confluence
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setActiveExport('notion')}>
-                    <ExternalLink className="w-3 h-3" />
+                    <ArrowSquareOut className="w-3 h-3" />
                     Notion
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -366,8 +366,8 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                 disabled={saving}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-green-400 hover:text-green-300 hover:bg-green-500/10 transition-colors disabled:opacity-50"
               >
-                <Save className="w-3 h-3" />
-                {saving ? 'Saving...' : 'Save'}
+                <FloppyDisk className="w-3 h-3" />
+                {saving ? 'Saving...' : 'FloppyDisk'}
               </button>
               <button
                 onClick={() => { setEditing(false); setEditContent(postmortem?.content || ''); }}
@@ -438,7 +438,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       {/* Regenerating banner */}
       {regenerating && postmortem && (
         <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
-          <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+          <ArrowsClockwise className="w-3.5 h-3.5 animate-spin text-amber-400" />
           <p className="text-xs text-amber-400">Regenerating postmortem — this may take a minute...</p>
         </div>
       )}
@@ -447,7 +447,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
       {showVersionHistory && (
         <div className="mb-4 p-4 rounded-lg bg-zinc-900 border border-zinc-800">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-zinc-400 font-medium">Version History</p>
+            <p className="text-xs text-zinc-400 font-medium">Version ClockCounterClockwise</p>
             <button
               onClick={() => setShowVersionHistory(false)}
               className="text-xs text-zinc-500 hover:text-zinc-300"
@@ -486,7 +486,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                         href={`/chat?sessionId=${v.generationSessionId}`}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-zinc-400 hover:text-zinc-200 bg-zinc-700/40 hover:bg-zinc-700/70 border border-zinc-700 transition-colors"
                       >
-                        <MessageSquare className="w-3 h-3" />
+                        <ChatText className="w-3 h-3" />
                         Log
                       </a>
                     )}
@@ -499,7 +499,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
                         onClick={() => handleRestoreVersion(v.id)}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 transition-colors"
                       >
-                        <RotateCcw className="w-3 h-3" />
+                        <ArrowCounterClockwise className="w-3 h-3" />
                         Restore
                       </button>
                     )}
@@ -532,7 +532,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
           >
-            <ExternalLink className="w-3 h-3" />
+            <ArrowSquareOut className="w-3 h-3" />
             View in Confluence
           </a>
         </div>
@@ -547,7 +547,7 @@ export default function PostmortemPanel({ incidentId, incidentTitle, isVisible, 
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
           >
-            <ExternalLink className="w-3 h-3" />
+            <ArrowSquareOut className="w-3 h-3" />
             View in Notion
           </a>
         </div>

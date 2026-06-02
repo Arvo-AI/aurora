@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { AlertCircle, Loader2, X } from "lucide-react";
+import { WarningCircle, SpinnerGap, X } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
@@ -269,7 +269,7 @@ const SubAgentDetailPanel = ({
               }
               return (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <SpinnerGap className="h-3.5 w-3.5 animate-spin" />
                   <span>Waiting for tool activity...</span>
                 </div>
               );
@@ -314,7 +314,7 @@ const SubAgentDetailPanel = ({
             if (error) {
               return (
                 <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
-                  <AlertCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                  <WarningCircle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                   <span className="flex-1 text-muted-foreground">
                     Couldn&apos;t load findings
                   </span>
@@ -338,7 +338,7 @@ const SubAgentDetailPanel = ({
             }
             return (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <SpinnerGap className="h-3.5 w-3.5 animate-spin" />
                 <span>Waiting for findings...</span>
               </div>
             );

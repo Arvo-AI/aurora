@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { useUser } from "@/hooks/useAuthHooks";
 import { isAdmin } from "@/lib/roles";
-import { Trash2, Plus, Terminal, ChevronRight, ChevronDown, Loader2, Lock, CheckCircle2, XCircle, Shield, ShieldCheck, ShieldX, BookOpen } from "lucide-react";
+import { Trash, Plus, Terminal, CaretRight, CaretDown, SpinnerGap, Lock, CheckCircle, XCircle, Shield, ShieldCheck, ShieldSlash, BookOpen } from "@phosphor-icons/react";
 import { commandPolicyService, type CommandPolicyRule, type PolicyTemplate } from "@/lib/services/command-policies";
 import { toolPermissionService, type ToolPermission } from "@/lib/services/tool-permissions";
 import { getConnectedAccounts, fetchConnectedAccounts, subscribe as subscribeAccounts } from "@/lib/connected-accounts-cache";
@@ -72,7 +72,7 @@ function RuleList({
             onClick={() => onDelete(rule.id)}
             aria-label={`Delete rule: ${rule.pattern}`}
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <Trash className="h-3.5 w-3.5" />
           </Button>
         </div>
       ))}
@@ -177,7 +177,7 @@ function TemplatePicker({
                   {active ? (
                     <div className="flex items-center gap-1.5">
                       <span className="inline-flex items-center gap-1 h-6 px-2 text-xs text-green-500">
-                        <CheckCircle2 className="h-3.5 w-3.5" /> Active
+                        <CheckCircle className="h-3.5 w-3.5" /> Active
                       </span>
                       <button type="button" className="text-[11px] text-muted-foreground hover:text-destructive" onClick={() => onRemove()}>
                         Remove
@@ -192,7 +192,7 @@ function TemplatePicker({
                         onClick={() => { onApply(tpl.id); setConfirmId(null); }}
                       >
                         {applying === tpl.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <SpinnerGap className="h-3 w-3 animate-spin" />
                         ) : (
                           "Confirm"
                         )}
@@ -224,7 +224,7 @@ function TemplatePicker({
                   className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                   onClick={() => setExpandedId(expanded ? null : tpl.id)}
                 >
-                  {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  {expanded ? <CaretDown className="h-3 w-3" /> : <CaretRight className="h-3 w-3" />}
                   Preview rules
                 </button>
                 <Badge variant="secondary" className="text-[10px] font-normal">
@@ -232,7 +232,7 @@ function TemplatePicker({
                   {tpl.allow_count} allow
                 </Badge>
                 <Badge variant="secondary" className="text-[10px] font-normal">
-                  <ShieldX className="h-2.5 w-2.5 mr-1" />
+                  <ShieldSlash className="h-2.5 w-2.5 mr-1" />
                   {tpl.deny_count} deny
                 </Badge>
               </div>
@@ -505,7 +505,7 @@ export function SecuritySettings() {
           onClick={() => toggleConnectorExpanded(connector)}
         >
           <div className="flex items-center gap-2">
-            {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+            {expanded ? <CaretDown className="h-3.5 w-3.5 text-muted-foreground" /> : <CaretRight className="h-3.5 w-3.5 text-muted-foreground" />}
             {CONNECTOR_ICONS[connector] && (
               <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white dark:bg-white/10 shrink-0">
                 <Image src={CONNECTOR_ICONS[connector]} alt={connector} width={16} height={16} className={connector === "github" ? "dark:invert" : ""} />
@@ -562,7 +562,7 @@ export function SecuritySettings() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <SpinnerGap className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -636,7 +636,7 @@ export function SecuritySettings() {
             <div className={`flex h-7 w-7 items-center justify-center rounded-md ${
               denylistEnabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
             }`}>
-              <ShieldX className="h-3.5 w-3.5" />
+              <ShieldSlash className="h-3.5 w-3.5" />
             </div>
             <div>
               <h3 className="text-sm font-medium">Denylist</h3>
@@ -739,9 +739,9 @@ export function SecuritySettings() {
             />
             <Button onClick={handleTest} disabled={testLoading || !testCmd.trim()} size="sm" className="h-8 text-xs">
               {testLoading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <SpinnerGap className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <>Test<ChevronRight className="ml-1 h-3.5 w-3.5" /></>
+                <>Test<CaretRight className="ml-1 h-3.5 w-3.5" /></>
               )}
             </Button>
           </div>
@@ -752,7 +752,7 @@ export function SecuritySettings() {
                 : "border-muted-foreground/30 bg-muted/50"
             }`}>
               {testResult.allowed ? (
-                <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                <CheckCircle className="h-4 w-4 text-primary shrink-0" />
               ) : (
                 <XCircle className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
@@ -785,7 +785,7 @@ export function SecuritySettings() {
           if (toolPermsLoading) {
             return (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <SpinnerGap className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             );
           }

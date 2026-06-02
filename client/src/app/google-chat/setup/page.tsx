@@ -10,13 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Loader2,
-  CheckCircle,
-  AlertCircle,
-  Copy,
-  ExternalLink,
-} from "lucide-react";
+import { SpinnerGap, CheckCircle, WarningCircle, Copy, ArrowSquareOut } from "@phosphor-icons/react";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 import { googleChatService } from "@/lib/services/google-chat";
 import { copyToClipboard } from "@/lib/utils";
@@ -169,7 +163,7 @@ export default function GoogleChatSetupPage() {
       <ConnectorAuthGuard connectorName="Google Chat">
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-center">
-            <Loader2 className="w-12 h-12 animate-spin mx-auto mb-6 text-gray-600" />
+            <SpinnerGap className="w-12 h-12 animate-spin mx-auto mb-6 text-gray-600" />
             <p className="text-slate-300 text-lg">
               {isConnecting ? "Redirecting to Google..." : "Checking Google Chat configuration..."}
             </p>
@@ -210,7 +204,7 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
           <Card className="bg-black border-white/10 overflow-hidden">
             <CardHeader className="pb-4">
               <CardTitle className="text-white flex items-center gap-2 text-lg">
-                <AlertCircle className="w-5 h-5" />
+                <WarningCircle className="w-5 h-5" />
                 Google Chat Not Configured
               </CardTitle>
               <CardDescription className="text-white/50 mt-2 text-sm">
@@ -233,7 +227,7 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                     {item.ok ? (
                       <CheckCircle className="w-3 h-3 text-green-500 shrink-0" />
                     ) : (
-                      <AlertCircle className="w-3 h-3 text-red-400 shrink-0" />
+                      <WarningCircle className="w-3 h-3 text-red-400 shrink-0" />
                     )}
                     <span
                       className={
@@ -254,7 +248,7 @@ GOOGLE_CHAT_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'`;
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 p-4 rounded-lg bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/15 transition-colors"
               >
-                <ExternalLink className="w-5 h-5 text-blue-400 shrink-0" />
+                <ArrowSquareOut className="w-5 h-5 text-blue-400 shrink-0" />
                 <div>
                   <p className="text-blue-300 font-medium text-sm">
                     Full Setup Guide →

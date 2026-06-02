@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Copy, Check, Terminal, Clock } from 'lucide-react';
+import { Copy, Check, Terminal, Clock } from "@phosphor-icons/react";
 import { copyToClipboard } from '@/lib/utils';
 import { RenderOutput } from '@/components/tool-calls/tool-output-renderer';
 

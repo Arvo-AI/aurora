@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { GitBranch, GitCommit, Upload, Check, Loader2, X } from "lucide-react"
+import { GitBranch, GitCommit, UploadSimple, Check, SpinnerGap, X } from "@phosphor-icons/react"
 import Image from "next/image"
 
 interface GitHubCommitToolProps {
@@ -102,7 +102,7 @@ export function GitHubCommitTool({
           className="bg-white dark:bg-gray-900/50 border-gray-300 dark:border-gray-700/50 text-gray-900 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/50 h-8 px-3"
         >
           {isCommitting ? (
-            <Loader2 className="w-3 h-3 animate-spin" />
+            <SpinnerGap className="w-3 h-3 animate-spin" />
           ) : isCommitted ? (
             <Check className="w-3 h-3" />
           ) : (
@@ -118,11 +118,11 @@ export function GitHubCommitTool({
           className="bg-blue-600 hover:bg-blue-700 text-white h-8 px-3 shadow-sm"
         >
           {isPushing ? (
-            <Loader2 className="w-3 h-3 animate-spin" />
+            <SpinnerGap className="w-3 h-3 animate-spin" />
           ) : isPushed ? (
             <Check className="w-3 h-3" />
           ) : (
-            <Upload className="w-3 h-3" />
+            <UploadSimple className="w-3 h-3" />
           )}
           <span className="ml-1">{isPushing ? "Pushing..." : isPushed ? "Pushed" : "Push"}</span>
         </Button>

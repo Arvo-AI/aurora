@@ -7,7 +7,7 @@ import {
   ReferenceArea,
   TooltipProps,
 } from 'recharts';
-import { Loader2, ZoomIn, RotateCcw } from 'lucide-react';
+import { SpinnerGap, MagnifyingGlassPlus, ArrowCounterClockwise } from "@phosphor-icons/react";
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -144,7 +144,7 @@ export function ChartPanel({
           <h3 className="text-sm font-medium text-zinc-300">{title}</h3>
           {subtitle && <p className="text-xs text-zinc-500 mt-0.5">{subtitle}</p>}
         </div>
-        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-600" />}
+        {loading && <SpinnerGap className="h-3.5 w-3.5 animate-spin text-zinc-600" />}
       </div>
       {children}
     </div>
@@ -261,7 +261,7 @@ function ZoomResetButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/90 border border-zinc-700/50 text-[10px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/90 transition-all duration-150"
     >
-      <RotateCcw className="h-3 w-3" />
+      <ArrowCounterClockwise className="h-3 w-3" />
       Reset zoom
     </button>
   );
@@ -270,7 +270,7 @@ function ZoomResetButton({ onClick }: { onClick: () => void }) {
 function ZoomHint() {
   return (
     <div className="absolute bottom-1 right-2 z-10 flex items-center gap-1 text-[10px] text-zinc-600 pointer-events-none select-none">
-      <ZoomIn className="h-3 w-3" />
+      <MagnifyingGlassPlus className="h-3 w-3" />
       Drag to zoom
     </div>
   );
@@ -448,7 +448,6 @@ export function GrafanaAreaChart({
               stackId={s.stacked !== false ? '1' : undefined}
               stroke={s.color || CHART_COLORS[i % CHART_COLORS.length]}
               fill={`url(#grad-${s.key})`}
-              strokeWidth={1.5}
               dot={false}
               activeDot={{ r: 3, strokeWidth: 0 }}
               animationDuration={ANIMATION_DURATION}
@@ -596,7 +595,6 @@ export function GrafanaLineChart({
               dataKey={s.key}
               name={s.name || s.key}
               stroke={s.color || CHART_COLORS[i % CHART_COLORS.length]}
-              strokeWidth={1.5}
               strokeDasharray={s.dashed ? '6 3' : undefined}
               dot={false}
               activeDot={{ r: 3, strokeWidth: 0 }}

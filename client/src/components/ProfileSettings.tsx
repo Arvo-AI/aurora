@@ -5,7 +5,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Eye, Pencil, Crown, Shield, Mail } from "lucide-react"
+import { Eye, PencilSimple, Crown, Shield, Envelope } from "@phosphor-icons/react"
 import { ROLE_ADMIN } from "@/lib/roles"
 
 const ROLE_INFO = {
@@ -17,7 +17,7 @@ const ROLE_INFO = {
     description: "Read-only access to incidents, postmortems, dashboards, and chat. Cannot connect integrations, upload documents, or manage users.",
   },
   editor: {
-    icon: Pencil,
+    icon: PencilSimple,
     label: "Editor",
     color: "text-amber-500",
     badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
@@ -184,7 +184,7 @@ export function ProfileSettings() {
                   <div className="space-y-1">
                     {admins.map((admin) => (
                       <div key={admin.email} className="flex items-center gap-2 text-sm">
-                        <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Envelope className="h-3.5 w-3.5 text-muted-foreground" />
                         <span className="font-medium">{admin.name || admin.email}</span>
                         {admin.name && (
                           <span className="text-muted-foreground">({admin.email})</span>

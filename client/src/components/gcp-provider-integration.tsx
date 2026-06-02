@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, RefreshCw, LogOut } from 'lucide-react';
+import { SpinnerGap, ArrowsClockwise, SignOut } from "@phosphor-icons/react";
 import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem';
 import { fetchProjects, saveProjects, ProjectCache } from '@/components/cloud-provider/projects/projectUtils';
 import { useSetAsRoot } from '@/components/cloud-provider/projects/useSetAsRoot';
@@ -151,7 +151,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        <SpinnerGap className="h-6 w-6 animate-spin text-primary" />
         <span className="ml-2 text-sm text-muted-foreground">Loading projects...</span>
       </div>
     );
@@ -180,7 +180,7 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
             onClick={() => loadProjects(true)}
             disabled={isLoading}
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+            <ArrowsClockwise className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
           <Button
@@ -191,12 +191,12 @@ export default function GcpProviderIntegration({ onDisconnect }: GcpProviderInte
           >
             {isDisconnecting ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
                 Disconnecting...
               </>
             ) : (
               <>
-                <LogOut className="h-4 w-4 mr-2" />
+                <SignOut className="h-4 w-4 mr-2" />
                 Disconnect
               </>
             )}

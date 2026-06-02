@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Check, X } from "lucide-react";
+import { Check, X } from "@phosphor-icons/react";
 import type { PagerDutyStatus } from "@/lib/services/pagerduty";
 
 interface PagerDutyConnectedViewProps {

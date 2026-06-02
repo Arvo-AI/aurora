@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, LogOut, RefreshCw } from 'lucide-react';
+import { SpinnerGap, Check, SignOut, ArrowsClockwise } from "@phosphor-icons/react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import BitbucketWorkspaceBrowser from '@/components/bitbucket-workspace-browser';
@@ -155,7 +155,7 @@ export default function BitbucketProviderIntegration() {
   if (isCheckingStatus) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 border border-border rounded-lg">
-        <Loader2 className="w-4 h-4 animate-spin" />
+        <SpinnerGap className="w-4 h-4 animate-spin" />
         Checking Bitbucket connection...
       </div>
     );
@@ -189,7 +189,7 @@ export default function BitbucketProviderIntegration() {
             <Button onClick={handleOAuthLogin} disabled={isLoading || !userId} className="w-full">
               {isLoading ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
                   Connecting...
                 </>
               ) : (
@@ -225,7 +225,7 @@ export default function BitbucketProviderIntegration() {
             <Button onClick={handleApiTokenLogin} disabled={isLoading || !userId || !email || !apiToken} className="w-full">
               {isLoading ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <SpinnerGap className="h-4 w-4 mr-2 animate-spin" />
                   Connecting...
                 </>
               ) : (
@@ -258,7 +258,7 @@ export default function BitbucketProviderIntegration() {
               onClick={checkStatus}
               title="Refresh"
             >
-              <RefreshCw className="h-4 w-4" />
+              <ArrowsClockwise className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
@@ -267,7 +267,7 @@ export default function BitbucketProviderIntegration() {
               onClick={handleDisconnect}
               title="Disconnect Bitbucket"
             >
-              <LogOut className="h-4 w-4" />
+              <SignOut className="h-4 w-4" />
             </Button>
           </div>
         </div>

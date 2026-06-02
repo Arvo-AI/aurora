@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { CorrelatedAlert, incidentsService, getSourceIconSrc, getSourceIconBgColor } from '@/lib/services/incidents';
-import { ChevronDown, Link2, Clock, Server, Zap, Target, Type } from 'lucide-react';
+import { CaretDown, LinkSimple, Clock, HardDrives, Lightning, Crosshair, TextT } from "@phosphor-icons/react";
 import Image from 'next/image';
 
 interface CorrelatedAlertsSectionProps {
@@ -12,13 +12,13 @@ interface CorrelatedAlertsSectionProps {
 function getStrategyIcon(strategy: string) {
   switch (strategy) {
     case 'topology':
-      return <Target className="w-3 h-3" />;
+      return <Crosshair className="w-3 h-3" />;
     case 'time_window':
       return <Clock className="w-3 h-3" />;
     case 'similarity':
-      return <Type className="w-3 h-3" />;
+      return <TextT className="w-3 h-3" />;
     default:
-      return <Zap className="w-3 h-3" />;
+      return <Lightning className="w-3 h-3" />;
   }
 }
 
@@ -102,7 +102,7 @@ function CorrelatedAlertCard({ alert, isNew }: { alert: CorrelatedAlert; isNew: 
           {/* Metadata row */}
           <div className="flex items-center gap-3 mt-1.5 text-xs text-zinc-500">
             <div className="flex items-center gap-1">
-              <Server className="w-3 h-3" />
+              <HardDrives className="w-3 h-3" />
               <span className="text-zinc-400">{alert.alertService}</span>
             </div>
             <div className="flex items-center gap-1">
@@ -190,7 +190,7 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
       >
         <div className="flex items-center gap-3">
           <div className={`p-1.5 rounded-md transition-colors duration-200 ${hasNewAlerts ? 'bg-amber-500/20' : 'bg-zinc-800'}`}>
-            <Link2 className={`w-4 h-4 transition-colors duration-200 ${hasNewAlerts ? 'text-amber-400' : 'text-zinc-400'}`} />
+            <LinkSimple className={`w-4 h-4 transition-colors duration-200 ${hasNewAlerts ? 'text-amber-400' : 'text-zinc-400'}`} />
           </div>
           <div className="text-left">
             <div className="flex items-center gap-2">
@@ -221,7 +221,7 @@ export default function CorrelatedAlertsSection({ alerts }: CorrelatedAlertsSect
         </div>
         
         <div className={`p-1 rounded transition-all duration-200 ${isExpanded ? 'bg-zinc-700' : 'hover:bg-zinc-800'}`}>
-          <ChevronDown 
+          <CaretDown 
             className={`w-4 h-4 text-zinc-400 transition-transform duration-300 ease-out ${
               isExpanded ? 'rotate-180' : ''
             }`} 

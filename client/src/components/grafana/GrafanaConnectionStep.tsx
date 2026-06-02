@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { CheckCircle, Copy, ArrowSquareOut, SpinnerGap } from "@phosphor-icons/react";
 import { grafanaService } from "@/lib/services/grafana";
 import { copyToClipboard } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -64,7 +64,7 @@ export function GrafanaConnectionStep({ onConnected }: GrafanaConnectionStepProp
               <div className="flex gap-2">
                 <Input readOnly value={webhookUrl} className="font-mono text-sm" />
                 <Button variant="outline" size="icon" onClick={handleCopy}>
-                  {copied ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                  {copied ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -85,20 +85,20 @@ export function GrafanaConnectionStep({ onConnected }: GrafanaConnectionStepProp
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-blue-600 hover:underline mt-3 text-xs"
               >
-                Grafana webhook docs <ExternalLink className="h-3 w-3" />
+                Grafana webhook docs <ArrowSquareOut className="h-3 w-3" />
               </a>
             </div>
 
             {polling && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground pt-1">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <SpinnerGap className="h-4 w-4 animate-spin" />
                 Waiting for test webhook from Grafana...
               </div>
             )}
           </>
         ) : (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerGap className="h-4 w-4 animate-spin" />
             Loading webhook URL...
           </div>
         )}

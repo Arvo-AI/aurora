@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
-import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
+import { SpinnerGap, Check, ArrowSquareOut, SignOut, CaretDown, CaretRight, ArrowsClockwise, PencilSimple, X, MagnifyingGlass, ArrowClockwise, Trash, WarningCircle, ShieldWarning, FolderMinus } from "@phosphor-icons/react";
 import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -755,7 +755,7 @@ export default function GitHubProviderIntegration() {
   if (!userId || githubStatus.hasReposConnected === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 border border-border rounded-lg">
-        <Loader2 className="w-4 h-4 animate-spin" />Checking GitHub connection...
+        <SpinnerGap className="w-4 h-4 animate-spin" />Checking GitHub connection...
       </div>
     );
   }
@@ -834,7 +834,7 @@ export default function GitHubProviderIntegration() {
                     <span className="text-xs text-muted-foreground">{savedRepos.length} repo{savedRepos.length !== 1 ? 's' : ''} connected</span>
                   ) : (
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <SpinnerGap className="w-3 h-3 animate-spin" />
                       Loading repositories…
                     </span>
                   )}
@@ -852,10 +852,10 @@ export default function GitHubProviderIntegration() {
           {githubStatus.isAuthenticated && (
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" className="px-3" onClick={(e) => { e.stopPropagation(); fetchAllRepos(); loadSavedRepos(); }} title="Refresh">
-                <RefreshCw className="h-4 w-4" />
+                <ArrowsClockwise className="h-4 w-4" />
               </Button>
               <Button variant="ghost" size="sm" className="px-3 text-red-600 hover:text-red-700 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); openDisconnectDialog(); }} title="Disconnect">
-                <LogOut className="h-4 w-4" />
+                <SignOut className="h-4 w-4" />
               </Button>
             </div>
           )}
@@ -867,7 +867,7 @@ export default function GitHubProviderIntegration() {
               aria-label={expanded ? 'Collapse GitHub section' : 'Expand GitHub section'}
               aria-expanded={expanded}
             >
-              {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+              {expanded ? <CaretDown className="w-4 h-4 text-muted-foreground" /> : <CaretRight className="w-4 h-4 text-muted-foreground" />}
             </button>
           )}
         </div>
@@ -910,7 +910,7 @@ export default function GitHubProviderIntegration() {
                   disabled={isClaimingInstallation}
                   data-testid={`claim-installation-${d.installation_id}`}
                 >
-                  {isClaimingInstallation ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                  {isClaimingInstallation ? <SpinnerGap className="h-3 w-3 animate-spin mr-2" /> : null}
                   Link to Aurora
                 </Button>
               </div>
@@ -956,7 +956,7 @@ export default function GitHubProviderIntegration() {
                 size="sm"
                 data-testid="github-install-app-cta"
               >
-                {isInstallingApp ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                {isInstallingApp ? <SpinnerGap className="h-3 w-3 animate-spin mr-2" /> : null}
                 Install GitHub App
               </Button>
             )}
@@ -968,7 +968,7 @@ export default function GitHubProviderIntegration() {
                 variant={authConfig.app_enabled ? 'outline' : 'default'}
                 data-testid="github-oauth-cta"
               >
-                {isConnectingOAuth ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                {isConnectingOAuth ? <SpinnerGap className="h-3 w-3 animate-spin mr-2" /> : null}
                 Connect via OAuth
               </Button>
             )}
@@ -1038,7 +1038,7 @@ export default function GitHubProviderIntegration() {
                           title="Manage on GitHub"
                           data-testid={`installation-manage-${installation.installation_id}`}
                         >
-                          <ExternalLink className="h-3 w-3 mr-1" />
+                          <ArrowSquareOut className="h-3 w-3 mr-1" />
                           Manage
                         </Button>
                         <Button
@@ -1049,7 +1049,7 @@ export default function GitHubProviderIntegration() {
                           title="Unlink installation"
                           data-testid={`installation-unlink-${installation.installation_id}`}
                         >
-                          <Trash2 className="h-3 w-3" />
+                          <Trash className="h-3 w-3" />
                         </Button>
                       </div>
                     </div>
@@ -1095,7 +1095,7 @@ export default function GitHubProviderIntegration() {
                               title={isEditing ? 'Cancel edit' : 'Edit description'}
                               data-testid={`repo-edit-${repo.repo_full_name}`}
                             >
-                              {isEditing ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                              {isEditing ? <X className="h-3 w-3" /> : <PencilSimple className="h-3 w-3" />}
                             </Button>
                             <Button
                               variant="ghost"
@@ -1105,7 +1105,7 @@ export default function GitHubProviderIntegration() {
                               title="Regenerate description"
                               data-testid={`repo-regenerate-${repo.repo_full_name}`}
                             >
-                              <RotateCw className="h-3 w-3" />
+                              <ArrowClockwise className="h-3 w-3" />
                             </Button>
                           </>
                         )}
@@ -1125,7 +1125,7 @@ export default function GitHubProviderIntegration() {
 
                     {isPending && (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <SpinnerGap className="h-3 w-3 animate-spin" />
                         Generating description...
                       </div>
                     )}
@@ -1178,9 +1178,9 @@ export default function GitHubProviderIntegration() {
               variant={activeInstallationState === 'suspended' ? 'destructive' : 'default'}
               data-testid={`installation-banner-${activeInstallationState}`}
             >
-              {activeInstallationState === 'suspended' && <ShieldAlert className="h-4 w-4" />}
-              {activeInstallationState === 'pending_permissions' && <AlertCircle className="h-4 w-4" />}
-              {activeInstallationState === 'no_repos' && <FolderX className="h-4 w-4" />}
+              {activeInstallationState === 'suspended' && <ShieldWarning className="h-4 w-4" />}
+              {activeInstallationState === 'pending_permissions' && <WarningCircle className="h-4 w-4" />}
+              {activeInstallationState === 'no_repos' && <FolderMinus className="h-4 w-4" />}
               <AlertTitle>
                 {activeInstallationState === 'suspended' && 'Installation suspended'}
                 {activeInstallationState === 'pending_permissions' && 'New permissions required'}
@@ -1204,7 +1204,7 @@ export default function GitHubProviderIntegration() {
                   onClick={() => window.open(installationManageUrl(activeInstallation), '_blank', 'noopener,noreferrer')}
                   data-testid={`installation-banner-cta-${activeInstallationState}`}
                 >
-                  <ExternalLink className="h-3 w-3 mr-1" />
+                  <ArrowSquareOut className="h-3 w-3 mr-1" />
                   {activeInstallationState === 'suspended' && 'Re-enable on GitHub'}
                   {activeInstallationState === 'pending_permissions' && 'Review permissions on GitHub'}
                   {activeInstallationState === 'no_repos' && 'Add repositories on GitHub'}
@@ -1243,7 +1243,7 @@ export default function GitHubProviderIntegration() {
 
               {allRepos.length > 10 && (
                 <div className="relative">
-                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                  <MagnifyingGlass className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                   <Input
                     placeholder="Filter repositories..."
                     value={searchFilter}
@@ -1322,7 +1322,7 @@ export default function GitHubProviderIntegration() {
                   size="sm"
                   className="w-full"
                 >
-                  {isSaving ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                  {isSaving ? <SpinnerGap className="h-3 w-3 animate-spin mr-2" /> : null}
                   {hasUnsavedChanges ? `Save ${checkedRepos.size} Repositories` : `${checkedRepos.size} Repositories Saved`}
                 </Button>
               )}
@@ -1384,7 +1384,7 @@ export default function GitHubProviderIntegration() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="disconnect-confirm"
             >
-              {isDisconnecting ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+              {isDisconnecting ? <SpinnerGap className="h-3 w-3 animate-spin mr-2" /> : null}
               {alsoUninstallOnGitHub && installations.length > 0
                 ? 'Disconnect & Uninstall'
                 : 'Disconnect'}

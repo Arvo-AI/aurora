@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "./card";
 import { Button } from "./button";
-import { Copy, Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Copy, Check, CaretDown, CaretUp } from "@phosphor-icons/react";
 import { cn, copyToClipboard } from "@/lib/utils";
 import { getLanguageFromCode, getLanguageDisplayName } from "@/utils/language-detection";
 // Import Prism.js with type assertion
@@ -166,9 +166,9 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
             className="flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
           >
             {isCollapsed ? (
-              <ChevronDown className="h-4 w-4" />
+              <CaretDown className="h-4 w-4" />
             ) : (
-              <ChevronUp className="h-4 w-4" />
+              <CaretUp className="h-4 w-4" />
             )}
           </button>
         </div>

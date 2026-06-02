@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Shield, ChevronLeft, ChevronRight, Filter, User, Clock } from 'lucide-react';
+import { Shield, CaretLeft, CaretRight, Funnel, User, Clock } from "@phosphor-icons/react";
 import { useQuery, jsonFetcher } from '@/lib/query';
 import { ChartPanel, EmptyState, type Period } from './charts';
 
@@ -107,11 +107,11 @@ export default function AuditTab({ period }: { period: Period }) {
         {/* Filters */}
         <div className="flex items-center gap-3 mb-4">
           <div className="flex items-center gap-1.5">
-            <Filter className="h-3.5 w-3.5 text-zinc-500" />
+            <Funnel className="h-3.5 w-3.5 text-zinc-500" />
             <input
               type="text"
-              placeholder="Filter by action..."
-              aria-label="Filter by action"
+              placeholder="Funnel by action..."
+              aria-label="Funnel by action"
               value={actionFilter}
               onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}
               className="bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2.5 py-1 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 w-36 transition-all"
@@ -119,8 +119,8 @@ export default function AuditTab({ period }: { period: Period }) {
           </div>
           <input
             type="text"
-            placeholder="Filter by resource..."
-            aria-label="Filter by resource"
+            placeholder="Funnel by resource..."
+            aria-label="Funnel by resource"
             value={resourceFilter}
             onChange={(e) => { setResourceFilter(e.target.value); setPage(1); }}
             className="bg-zinc-800/50 border border-zinc-700/50 rounded-md px-2.5 py-1 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 w-36 transition-all"
@@ -193,7 +193,7 @@ export default function AuditTab({ period }: { period: Period }) {
                     aria-label="Previous page"
                     className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
-                    <ChevronLeft className="h-4 w-4" />
+                    <CaretLeft className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => goPage(page + 1)}
@@ -201,7 +201,7 @@ export default function AuditTab({ period }: { period: Period }) {
                     aria-label="Next page"
                     className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
-                    <ChevronRight className="h-4 w-4" />
+                    <CaretRight className="h-4 w-4" />
                   </button>
                 </div>
               </div>

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronDown, ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
+import { CaretDown, CaretRight, CaretLeft, SpinnerGap } from "@phosphor-icons/react";
 import { splunkService, SplunkJobStatus } from "@/lib/services/splunk";
 import { useToast } from "@/hooks/use-toast";
 
@@ -58,7 +58,7 @@ function EventRow({ row, index }: { row: Record<string, unknown>; index: number 
       >
         <td className="p-2 w-8">
           {rawEvent ? (
-            expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />
+            expanded ? <CaretDown className="h-4 w-4" /> : <CaretRight className="h-4 w-4" />
           ) : null}
         </td>
         <td className="p-2 font-mono text-xs text-muted-foreground whitespace-nowrap">
@@ -307,7 +307,7 @@ export default function SplunkSearchPage() {
           onClick={() => goToPage(currentPage - 1)}
           disabled={currentPage === 1}
         >
-          <ChevronLeft className="h-4 w-4" />
+          <CaretLeft className="h-4 w-4" />
           Prev
         </Button>
 
@@ -336,7 +336,7 @@ export default function SplunkSearchPage() {
           disabled={currentPage === totalPages}
         >
           Next
-          <ChevronRight className="h-4 w-4" />
+          <CaretRight className="h-4 w-4" />
         </Button>
       </div>
     );
@@ -430,7 +430,7 @@ export default function SplunkSearchPage() {
         <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <Loader2 className="h-5 w-5 animate-spin" />
+              <SpinnerGap className="h-5 w-5 animate-spin" />
               <div>
                 <p className="font-medium">
                   {searchMode === "async" && jobStatus

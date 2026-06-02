@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Loader2, Copy, CheckCircle2, AlertCircle, Terminal, Key, ArrowLeft } from "lucide-react";
+import { SpinnerGap, Copy, CheckCircle, WarningCircle, Terminal, Key, ArrowLeft } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
@@ -83,7 +83,7 @@ export default function TailscaleSSHSetupPage() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
+          <SpinnerGap className="h-8 w-8 animate-spin mx-auto text-primary" />
           <p className="mt-4 text-muted-foreground">Loading SSH setup...</p>
         </div>
       </div>
@@ -95,7 +95,7 @@ export default function TailscaleSSHSetupPage() {
       <div className="min-h-screen bg-background py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-2xl mx-auto">
           <div className="text-center mb-8">
-            <AlertCircle className="h-16 w-16 text-destructive mx-auto mb-4" />
+            <WarningCircle className="h-16 w-16 text-destructive mx-auto mb-4" />
             <h1 className="text-3xl font-bold text-foreground">SSH Setup Unavailable</h1>
             <p className="mt-2 text-muted-foreground">{error}</p>
           </div>
@@ -158,7 +158,7 @@ export default function TailscaleSSHSetupPage() {
               onClick={() => handleCopyToClipboard(sshData?.sshPublicKey || '', 'key')}
             >
               {copied === 'key' ? (
-                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <CheckCircle className="h-4 w-4 text-green-500" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}
@@ -187,7 +187,7 @@ export default function TailscaleSSHSetupPage() {
               onClick={() => handleCopyToClipboard(sshData?.command || '', 'command')}
             >
               {copied === 'command' ? (
-                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <CheckCircle className="h-4 w-4 text-green-500" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}
@@ -220,7 +220,7 @@ export default function TailscaleSSHSetupPage() {
 
         {/* Security Note */}
         <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 mb-6 flex items-start gap-3">
-          <AlertCircle className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
+          <WarningCircle className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-medium text-yellow-500">Security Note</p>
             <p className="text-xs text-yellow-400 mt-1">
@@ -232,7 +232,7 @@ export default function TailscaleSSHSetupPage() {
 
         {/* Success indicator */}
         <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4 mb-6 flex items-start gap-3">
-          <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" />
+          <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-medium text-green-500">Ready to Use</p>
             <p className="text-xs text-green-400 mt-1">

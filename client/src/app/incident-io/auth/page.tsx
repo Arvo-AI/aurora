@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
+import { SpinnerGap } from "@phosphor-icons/react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { IncidentIoWebhookStep } from "@/components/incident-io/IncidentIoWebhookStep";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
@@ -75,7 +75,7 @@ export default function IncidentIoAuthPage() {
         <div className="container mx-auto py-8 px-4 max-w-2xl">
           <Card>
             <CardContent className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
             </CardContent>
           </Card>
         </div>
@@ -153,7 +153,7 @@ export default function IncidentIoAuthPage() {
                 <Button type="submit" className="w-full" disabled={loading || !apiKey}>
                   {loading ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                       Connecting...
                     </>
                   ) : (

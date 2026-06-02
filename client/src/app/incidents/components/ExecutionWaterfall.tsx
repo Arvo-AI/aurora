@@ -1,13 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import {
-  Brain,
-  Terminal,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-} from 'lucide-react';
+import { Brain, Terminal, CaretDown, CaretRight, SpinnerGap } from "@phosphor-icons/react";
 
 interface ExecutionStep {
   type: 'thought' | 'tool_call';
@@ -133,9 +127,9 @@ function StepRow({ step, baseTime }: { step: ExecutionStep; baseTime: Date }) {
               >
                 <div className="flex items-start gap-1">
                   {expanded ? (
-                    <ChevronDown className="w-3 h-3 text-zinc-600 mt-0.5 shrink-0" />
+                    <CaretDown className="w-3 h-3 text-zinc-600 mt-0.5 shrink-0" />
                   ) : (
-                    <ChevronRight className="w-3 h-3 text-zinc-600 mt-0.5 shrink-0" />
+                    <CaretRight className="w-3 h-3 text-zinc-600 mt-0.5 shrink-0" />
                   )}
                   <p className="text-xs text-zinc-500 break-words">
                     {expanded ? content : truncatedContent}
@@ -190,7 +184,7 @@ export default function ExecutionWaterfall({ incidentId }: { incidentId: string 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="w-4 h-4 text-zinc-500 animate-spin" />
+        <SpinnerGap className="w-4 h-4 text-zinc-500 animate-spin" />
         <span className="text-xs text-zinc-500 ml-2">Loading execution trace...</span>
       </div>
     );

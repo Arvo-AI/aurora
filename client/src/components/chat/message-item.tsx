@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { DISPATCH_SUBAGENT_TOOL_NAME, Message, ToolCall } from "@/app/chat/types";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/utils";
 

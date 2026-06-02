@@ -14,18 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useUserId } from "@/hooks/use-user-id";
-import {
-  Loader2,
-  Upload,
-  Trash2,
-  FileText,
-  BookOpen,
-  Brain,
-  Sparkles,
-  Check,
-  AlertCircle,
-  RefreshCw,
-} from "lucide-react";
+import { SpinnerGap, UploadSimple, Trash, FileText, BookOpen, Brain, Sparkle, Check, WarningCircle, ArrowsClockwise } from "@phosphor-icons/react";
 import { userPreferencesService } from "@/lib/services/incident-feedback";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
@@ -239,7 +228,7 @@ export function KnowledgeBaseSettings() {
     }
   };
 
-  // Upload document
+  // UploadSimple document
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file || !userId) return;
@@ -305,7 +294,7 @@ export function KnowledgeBaseSettings() {
       }
     } catch (error) {
       toast({
-        title: "Upload failed",
+        title: "UploadSimple failed",
         description: error instanceof Error ? error.message : "An error occurred",
         variant: "destructive",
       });
@@ -364,13 +353,13 @@ export function KnowledgeBaseSettings() {
       uploading: {
         variant: "secondary" as const,
         className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-        icon: <Loader2 className="mr-1 h-3 w-3 animate-spin" />,
+        icon: <SpinnerGap className="mr-1 h-3 w-3 animate-spin" />,
         label: "Uploading",
       },
       processing: {
         variant: "secondary" as const,
         className: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-        icon: <RefreshCw className="mr-1 h-3 w-3 animate-spin" />,
+        icon: <ArrowsClockwise className="mr-1 h-3 w-3 animate-spin" />,
         label: "Processing",
       },
       ready: {
@@ -382,7 +371,7 @@ export function KnowledgeBaseSettings() {
       failed: {
         variant: "destructive" as const,
         className: "",
-        icon: <AlertCircle className="mr-1 h-3 w-3" />,
+        icon: <WarningCircle className="mr-1 h-3 w-3" />,
         label: "Failed",
       },
     };
@@ -407,7 +396,7 @@ export function KnowledgeBaseSettings() {
   if (userLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <SpinnerGap className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -434,11 +423,11 @@ export function KnowledgeBaseSettings() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
+              <Sparkle className="h-5 w-5 text-primary" />
               <CardTitle>Aurora Learn</CardTitle>
             </div>
             {isLoadingLearn ? (
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-5 w-5 animate-spin text-muted-foreground" />
             ) : (
               <Switch
                 checked={auroraLearnEnabled}
@@ -471,7 +460,7 @@ export function KnowledgeBaseSettings() {
         <CardContent className="space-y-4">
           {isLoadingMemory ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
             <>
@@ -493,7 +482,7 @@ export function KnowledgeBaseSettings() {
                 >
                   {isSavingMemory ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                       Saving...
                     </>
                   ) : (
@@ -514,7 +503,7 @@ export function KnowledgeBaseSettings() {
             <CardTitle>Documents</CardTitle>
           </div>
           <CardDescription>
-            Upload runbooks, architecture docs, and postmortems for Aurora to
+            UploadSimple runbooks, architecture docs, and postmortems for Aurora to
             search during investigations.
           </CardDescription>
           {usage && (
@@ -524,7 +513,7 @@ export function KnowledgeBaseSettings() {
           )}
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Upload Button */}
+          {/* UploadSimple Button */}
           <div>
             <input
               ref={fileInputRef}
@@ -541,13 +530,13 @@ export function KnowledgeBaseSettings() {
             >
               {isUploading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                   Uploading...
                 </>
               ) : (
                 <>
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload Document
+                  <UploadSimple className="mr-2 h-4 w-4" />
+                  UploadSimple Document
                 </>
               )}
             </Button>
@@ -560,13 +549,13 @@ export function KnowledgeBaseSettings() {
           {/* Documents List */}
           {isLoadingDocs ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <SpinnerGap className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : documents.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center">
               <FileText className="mx-auto h-12 w-12 text-muted-foreground/50" />
               <p className="mt-2 text-sm text-muted-foreground">
-                No documents uploaded yet. Upload your first document to get
+                No documents uploaded yet. UploadSimple your first document to get
                 started.
               </p>
             </div>
@@ -609,9 +598,9 @@ export function KnowledgeBaseSettings() {
                       disabled={deletingId === doc.id || !canWrite}
                     >
                       {deletingId === doc.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <SpinnerGap className="h-4 w-4 animate-spin" />
                       ) : (
-                        <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                        <Trash className="h-4 w-4 text-muted-foreground hover:text-destructive" />
                       )}
                     </Button>
                   </div>

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useGitLabStatus } from "@/hooks/use-gitlab-status";
-import { ArrowLeft, Loader2, Check, LogOut, Pencil, X, RotateCw } from "lucide-react";
+import { ArrowLeft, SpinnerGap, Check, SignOut, PencilSimple, X, ArrowClockwise } from "@phosphor-icons/react";
 
 interface ConnectedProject {
   repo_full_name: string;
@@ -234,7 +234,7 @@ export default function GitLabConnectPage() {
                 </div>
 
                 <Button onClick={handleConnect} disabled={isConnecting} className="w-full">
-                  {isConnecting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Connecting...</> : "Connect GitLab"}
+                  {isConnecting ? <><SpinnerGap className="mr-2 h-4 w-4 animate-spin" /> Connecting...</> : "Connect GitLab"}
                 </Button>
               </div>
             </div>
@@ -247,7 +247,7 @@ export default function GitLabConnectPage() {
                   <Badge variant="secondary" className="text-xs">{baseUrl || baseUrlInput}</Badge>
                 </div>
                 <Button variant="ghost" size="sm" onClick={handleDisconnect} disabled={isDisconnecting}>
-                  {isDisconnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                  {isDisconnecting ? <SpinnerGap className="h-4 w-4 animate-spin" /> : <SignOut className="h-4 w-4" />}
                 </Button>
               </div>
 
@@ -275,10 +275,10 @@ export default function GitLabConnectPage() {
                                     setEditingMetadata(prev => ({ ...prev, [p.repo_full_name]: p.metadata_summary || "" }));
                                   }
                                 }} title="Edit description">
-                                  {editingMetadata[p.repo_full_name] !== undefined ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                                  {editingMetadata[p.repo_full_name] !== undefined ? <X className="h-3 w-3" /> : <PencilSimple className="h-3 w-3" />}
                                 </Button>
                                 <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleRegenerate(p.repo_full_name)} title="Regenerate">
-                                  <RotateCw className="h-3 w-3" />
+                                  <ArrowClockwise className="h-3 w-3" />
                                 </Button>
                               </>
                             )}
@@ -290,7 +290,7 @@ export default function GitLabConnectPage() {
 
                         {(p.metadata_status === "pending" || p.metadata_status === "generating") && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />Generating description...
+                            <SpinnerGap className="h-3 w-3 animate-spin" />Generating description...
                           </div>
                         )}
                         {p.metadata_status === "error" && (

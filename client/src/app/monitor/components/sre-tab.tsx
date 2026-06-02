@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Activity, Zap, AlertTriangle, Radio, Timer, Brain } from 'lucide-react';
+import { Heartbeat, Lightning, Warning, Broadcast, Timer, Brain } from "@phosphor-icons/react";
 import { useQuery, jsonFetcher } from '@/lib/query';
 import type {
   MetricsSummary, MttrResponse, MttsResponse, IncidentFrequencyResponse,
@@ -158,7 +158,7 @@ export default function SreTab({ period }: { period: Period }) {
   if (summaryError && !summary) {
     return (
       <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-8 text-center">
-        <AlertTriangle className="h-8 w-8 mx-auto text-red-400/80 mb-3" />
+        <Warning className="h-8 w-8 mx-auto text-red-400/80 mb-3" />
         <p className="text-zinc-300 font-medium">Failed to load metrics</p>
         <p className="text-zinc-500 text-sm mt-1">{summaryError.message}</p>
       </div>
@@ -173,10 +173,10 @@ export default function SreTab({ period }: { period: Period }) {
           Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
         ) : summary ? (
           <>
-            <StatCard label="Total Incidents" value={String(summary.totalIncidents)} icon={Activity} sub={`${summary.activeIncidents} active`} />
+            <StatCard label="Total Incidents" value={String(summary.totalIncidents)} icon={Heartbeat} sub={`${summary.activeIncidents} active`} />
             <StatCard label="MTTS" value={formatDuration(summary.avgMttsSeconds)} icon={Brain} sub="Aurora solution time" />
             <StatCard label="MTTR" value={summary.avgMttrSeconds ? formatDuration(summary.avgMttrSeconds) : '—'} icon={Timer} sub={summary.avgMttrSeconds ? 'human resolution time' : 'no resolved incidents yet'} />
-            <StatCard label="MTTD" value={formatDuration(summary.avgMttdSeconds)} icon={Zap} sub="mean time to detect" />
+            <StatCard label="MTTD" value={formatDuration(summary.avgMttdSeconds)} icon={Lightning} sub="mean time to detect" />
           </>
         ) : null}
       </div>
@@ -225,7 +225,7 @@ export default function SreTab({ period }: { period: Period }) {
           {mttdLoading ? (
             <ChartSkeleton height={220} />
           ) : !mttdBarData.length ? (
-            <EmptyState icon={Radio} message="No MTTD data available" hint="MTTD requires alert_fired_at from your alerting provider" />
+            <EmptyState icon={Broadcast} message="No MTTD data available" hint="MTTD requires alert_fired_at from your alerting provider" />
           ) : (
             <GrafanaBarChart
               data={mttdBarData}
@@ -349,7 +349,7 @@ export default function SreTab({ period }: { period: Period }) {
         {freqLoading ? (
           <ChartSkeleton />
         ) : !freqChartData.length ? (
-          <EmptyState icon={Activity} message="No incident data for this period" />
+          <EmptyState icon={Heartbeat} message="No incident data for this period" />
         ) : (
           <GrafanaAreaChart
             data={freqChartData}
@@ -363,7 +363,7 @@ export default function SreTab({ period }: { period: Period }) {
         {agentLoading ? (
           <ChartSkeleton height={220} />
         ) : !agentExec ? (
-          <EmptyState icon={Zap} message="No agent execution data" />
+          <EmptyState icon={Lightning} message="No agent execution data" />
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">

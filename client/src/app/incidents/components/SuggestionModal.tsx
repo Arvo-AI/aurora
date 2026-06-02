@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, Play, Terminal, AlertTriangle, Shield, MessageSquare, Loader2 } from 'lucide-react';
+import { Copy, Check, Play, Terminal, Warning, Shield, ChatText, SpinnerGap } from "@phosphor-icons/react";
 import { copyToClipboard } from '@/lib/utils';
 
 interface SuggestionModalProps {
@@ -25,7 +25,7 @@ interface SuggestionModalProps {
 const typeIcons = {
   diagnostic: Terminal,
   mitigation: Shield,
-  communication: MessageSquare,
+  communication: ChatText,
 };
 
 const typeLabels = {
@@ -169,7 +169,7 @@ export default function SuggestionModal({
           {requiresConfirmation && (
             <div className="space-y-3">
               <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
+                <Warning className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-yellow-300">
                   This command may modify your infrastructure. Review carefully before executing.
                 </p>
@@ -228,7 +228,7 @@ export default function SuggestionModal({
               onClick={handleViewOutput}
               className="border-zinc-700 hover:bg-zinc-800 text-green-400"
             >
-              <MessageSquare className="w-4 h-4 mr-2" />
+              <ChatText className="w-4 h-4 mr-2" />
               View Output
             </Button>
           )}

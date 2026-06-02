@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Loader2, LogOut, RefreshCw, Copy, Check } from "lucide-react";
+import { ArrowLeft, SpinnerGap, SignOut, ArrowsClockwise, Copy, Check } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
 import { useQuery, jsonFetcher } from "@/lib/query";
@@ -153,7 +153,7 @@ export default function ManageKubectlClustersPage() {
                   disabled={loading}
                   className="border-zinc-700 hover:bg-zinc-900"
                 >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                  <ArrowsClockwise className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                   Refresh
                 </Button>
                 <Button
@@ -170,7 +170,7 @@ export default function ManageKubectlClustersPage() {
           <CardContent>
             {loading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
+                <SpinnerGap className="h-8 w-8 animate-spin text-zinc-400" />
               </div>
             ) : connections.length === 0 ? (
               <div className="text-center py-12">
@@ -243,10 +243,10 @@ export default function ManageKubectlClustersPage() {
                           className="text-red-400 hover:text-red-300 hover:bg-red-950/20"
                         >
                           {disconnecting === conn.cluster_id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <SpinnerGap className="h-4 w-4 animate-spin" />
                           ) : (
                             <>
-                              <LogOut className="h-4 w-4 mr-2" />
+                              <SignOut className="h-4 w-4 mr-2" />
                               Remove
                             </>
                           )}

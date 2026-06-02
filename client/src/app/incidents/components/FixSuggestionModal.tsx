@@ -15,18 +15,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import {
-  GitBranch,
-  FileCode,
-  AlertTriangle,
-  Loader2,
-  ExternalLink,
-  Check,
-  X,
-  Edit3,
-  GitCompare,
-  Code
-} from 'lucide-react';
+import { GitBranch, FileCode, Warning, SpinnerGap, ArrowSquareOut, Check, X, PencilSimple, GitDiff, Code } from "@phosphor-icons/react";
 
 interface FixSuggestionModalProps {
   suggestion: Suggestion | null;
@@ -50,7 +39,7 @@ function AlertBanner({ variant, children, action }: AlertBannerProps): JSX.Eleme
 
   const icons = {
     success: <Check className="w-4 h-4 text-green-400" />,
-    warning: <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />,
+    warning: <Warning className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />,
     error: <X className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />,
   };
 
@@ -173,7 +162,7 @@ function ContentEditor({
               onClick={() => onViewModeChange('diff')}
               className={viewMode === 'diff' ? 'bg-zinc-700' : 'text-zinc-400 hover:text-white'}
             >
-              <GitCompare className="w-4 h-4 mr-1" />
+              <GitDiff className="w-4 h-4 mr-1" />
               Diff
             </Button>
             <Button
@@ -191,7 +180,7 @@ function ContentEditor({
               onClick={() => onViewModeChange('edit')}
               className={viewMode === 'edit' ? 'bg-zinc-700' : 'text-zinc-400 hover:text-white'}
             >
-              <Edit3 className="w-4 h-4 mr-1" />
+              <PencilSimple className="w-4 h-4 mr-1" />
               Edit
             </Button>
           </div>
@@ -372,7 +361,7 @@ export default function FixSuggestionModal({
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 text-sm text-green-400 hover:text-green-300"
                 >
-                  View PR <ExternalLink className="w-3 h-3" />
+                  View PR <ArrowSquareOut className="w-3 h-3" />
                 </a>
               }
             >
@@ -429,7 +418,7 @@ export default function FixSuggestionModal({
             >
               {isCreatingPR ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <SpinnerGap className="w-4 h-4 mr-2 animate-spin" />
                   Creating PR...
                 </>
               ) : (

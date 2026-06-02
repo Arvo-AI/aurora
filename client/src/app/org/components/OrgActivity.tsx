@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Clock, AlertTriangle, Plug, ChevronDown, ChevronUp } from "lucide-react";
+import { SpinnerGap, Clock, Warning, Plug, CaretDown, CaretUp } from "@phosphor-icons/react";
 import { useQuery, jsonFetcher } from "@/lib/query";
 
 interface ActivityEvent {
@@ -125,7 +125,7 @@ function EventIcon({ event }: { event: ActivityEvent }) {
     }
     return (
       <div className="h-8 w-8 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center flex-shrink-0">
-        <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+        <Warning className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
       </div>
     );
   }
@@ -252,7 +252,7 @@ export default function OrgActivity() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground gap-2 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerGap className="h-4 w-4 animate-spin" />
         Loading...
       </div>
     );
@@ -309,12 +309,12 @@ export default function OrgActivity() {
         >
           {showAll ? (
             <>
-              <ChevronUp className="h-3 w-3" />
+              <CaretUp className="h-3 w-3" />
               Show less
             </>
           ) : (
             <>
-              <ChevronDown className="h-3 w-3" />
+              <CaretDown className="h-3 w-3" />
               Show {events.length - INITIAL_COUNT} more events
             </>
           )}

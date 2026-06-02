@@ -1,11 +1,11 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback } from 'react';
-import { DollarSign, Cpu, Zap, AlertTriangle, Hash } from 'lucide-react';
+import { CurrencyDollar, Cpu, Lightning, Warning, Hash } from "@phosphor-icons/react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea,
 } from 'recharts';
-import { RotateCcw, ZoomIn } from 'lucide-react';
+import { CurrencyDollar, Cpu, Lightning, Warning, Hash } from "@phosphor-icons/react";
 import { useQuery, jsonFetcher } from '@/lib/query';
 import {
   StatCard, StatCardSkeleton, ChartPanel, ChartSkeleton, EmptyState,
@@ -265,7 +265,6 @@ function DualAxisTokenChart({ data, timeFormat }: { data: Array<{ date: string; 
             dataKey="input"
             name="Input Tokens"
             stroke={INPUT_COLOR}
-            strokeWidth={2}
             fill="url(#inputGrad)"
             animationDuration={800}
             dot={false}
@@ -277,7 +276,6 @@ function DualAxisTokenChart({ data, timeFormat }: { data: Array<{ date: string; 
             dataKey="output"
             name="Output Tokens"
             stroke={OUTPUT_COLOR}
-            strokeWidth={2}
             fill="url(#outputGrad)"
             animationDuration={800}
             dot={false}
@@ -400,10 +398,10 @@ export default function UsageTab({ period }: { period: Period }) {
           Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
         ) : summary ? (
           <>
-            <StatCard label="Total Cost" value={formatCost(summary.total_cost)} icon={DollarSign} sub={`${period} period`} />
+            <StatCard label="Total Cost" value={formatCost(summary.total_cost)} icon={CurrencyDollar} sub={`${period} period`} />
             <StatCard label="Total Tokens" value={formatCompact(summary.total_tokens)} icon={Hash} sub={`${formatCompact(summary.total_input_tokens)} in / ${formatCompact(summary.total_output_tokens)} out`} />
-            <StatCard label="Requests" value={formatCompact(summary.total_requests)} icon={Zap} sub={summary.avg_response_ms ? `avg ${summary.avg_response_ms}ms` : undefined} />
-            <StatCard label="Error Rate" value={`${summary.error_rate}%`} icon={AlertTriangle} sub={`${summary.error_count} errors`} />
+            <StatCard label="Requests" value={formatCompact(summary.total_requests)} icon={Lightning} sub={summary.avg_response_ms ? `avg ${summary.avg_response_ms}ms` : undefined} />
+            <StatCard label="Error Rate" value={`${summary.error_rate}%`} icon={Warning} sub={`${summary.error_count} errors`} />
           </>
         ) : null}
       </div>
@@ -413,7 +411,7 @@ export default function UsageTab({ period }: { period: Period }) {
         {costLoading ? (
           <ChartSkeleton />
         ) : !costChartData.length ? (
-          <EmptyState icon={DollarSign} message="No cost data for this period" />
+          <EmptyState icon={CurrencyDollar} message="No cost data for this period" />
         ) : (
           <GrafanaLineChart
             data={costChartData}

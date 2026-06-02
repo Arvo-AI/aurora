@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GrafanaStatus } from "@/lib/services/grafana";
-import { CheckCircle2, Copy, ExternalLink } from "lucide-react";
+import { CheckCircle, Copy, ArrowSquareOut } from "@phosphor-icons/react";
 
 interface GrafanaWebhookStepProps {
   status: GrafanaStatus;
@@ -36,7 +36,7 @@ export function GrafanaWebhookStep({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <CheckCircle2 className="h-5 w-5 text-green-500" />
+            <CheckCircle className="h-5 w-5 text-green-500" />
             Grafana Connected
           </CardTitle>
           <CardDescription>{label}</CardDescription>
@@ -64,7 +64,7 @@ export function GrafanaWebhookStep({
             <div className="flex gap-2">
               <Input readOnly value={webhookUrl} className="font-mono text-sm" />
               <Button variant="outline" size="icon" onClick={onCopy}>
-                {copied ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                {copied ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
           </div>
@@ -85,7 +85,7 @@ export function GrafanaWebhookStep({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-blue-600 hover:underline mt-3 text-xs"
             >
-              Grafana webhook docs <ExternalLink className="h-3 w-3" />
+              Grafana webhook docs <ArrowSquareOut className="h-3 w-3" />
             </a>
           </div>
         </CardContent>

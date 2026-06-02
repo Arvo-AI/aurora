@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { KeyRound, Server, Settings } from "lucide-react";
+import { Key, HardDrives, GearSix } from "@phosphor-icons/react";
 
 export default function OnPremCard() {
   const router = useRouter();
@@ -16,7 +16,7 @@ export default function OnPremCard() {
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-muted">
-              <Server className="h-6 w-6 text-foreground" />
+              <HardDrives className="h-6 w-6 text-foreground" />
             </div>
             <div>
               <CardTitle className="text-lg">On Prem</CardTitle>
@@ -39,7 +39,7 @@ export default function OnPremCard() {
           onClick={() => router.push("/settings/ssh-keys")}
           className="w-full bg-white text-black hover:bg-gray-100"
         >
-          <KeyRound className="h-4 w-4 mr-2" />
+          <Key className="h-4 w-4 mr-2" />
           SSH Keys
         </Button>
         
@@ -47,7 +47,7 @@ export default function OnPremCard() {
           onClick={() => router.push("/vm-config")}
           className="w-full bg-white text-black hover:bg-gray-100"
         >
-          <Settings className="h-4 w-4 mr-2" />
+          <GearSix className="h-4 w-4 mr-2" />
           VM Config
         </Button>
       </CardFooter>

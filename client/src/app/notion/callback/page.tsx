@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Loader2, CheckCircle, XCircle } from "lucide-react";
+import { SpinnerGap, CheckCircle, XCircle } from "@phosphor-icons/react";
 
 type Status = "loading" | "success" | "error" | "orphan";
 
@@ -73,7 +73,7 @@ function NotionCallbackInner() {
       <div className="text-center space-y-4 p-8 max-w-md">
         {status === "loading" && (
           <>
-            <Loader2 className="h-12 w-12 animate-spin mx-auto text-muted-foreground" />
+            <SpinnerGap className="h-12 w-12 animate-spin mx-auto text-muted-foreground" />
             <p className="text-lg font-medium">{message}</p>
           </>
         )}
@@ -109,7 +109,7 @@ export default function NotionCallbackPage() {
     <Suspense
       fallback={
         <div className="flex items-center justify-center min-h-screen bg-background">
-          <Loader2 className="h-12 w-12 animate-spin text-muted-foreground" />
+          <SpinnerGap className="h-12 w-12 animate-spin text-muted-foreground" />
         </div>
       }
     >

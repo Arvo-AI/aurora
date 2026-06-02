@@ -1,10 +1,11 @@
-import { LucideIcon } from "lucide-react";
+import { IconProps } from "@phosphor-icons/react";
+import { ComponentType } from "react";
 
 export interface ConnectorConfig {
   id: string;
   name: string;
   description: string;
-  icon?: LucideIcon;
+  icon?: ComponentType<IconProps>;
   iconPath?: string;
   iconClassName?: string;
   iconColor?: string;

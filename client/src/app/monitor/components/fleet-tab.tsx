@@ -1,11 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import {
-  Activity, CheckCircle2, XCircle, Clock, Loader2,
-  ChevronDown, ChevronRight, Zap, AlertTriangle, Lightbulb,
-  ExternalLink, Search, Shield,
-} from 'lucide-react';
+import { Heartbeat, CheckCircle, XCircle, Clock, SpinnerGap, CaretDown, CaretRight, Lightning, Warning, Lightbulb, ArrowSquareOut, MagnifyingGlass, Shield } from "@phosphor-icons/react";
 import { useQuery, jsonFetcher } from '@/lib/query';
 import {
   StatCard, StatCardSkeleton, ChartPanel, EmptyState,
@@ -139,9 +135,9 @@ export default function FleetTab({ period }: { period: Period }) {
           Array.from({ length: 5 }).map((_, i) => <StatCardSkeleton key={i} />)
         ) : summary ? (
           <>
-            <StatCard label="Total Runs" value={String(summary.total_agent_runs)} icon={Activity} />
-            <StatCard label="Active" value={String(summary.active_count)} icon={Loader2} sub="currently running" />
-            <StatCard label="Completed" value={String(summary.completed_count)} icon={CheckCircle2} />
+            <StatCard label="Total Runs" value={String(summary.total_agent_runs)} icon={Heartbeat} />
+            <StatCard label="Active" value={String(summary.active_count)} icon={SpinnerGap} sub="currently running" />
+            <StatCard label="Completed" value={String(summary.completed_count)} icon={CheckCircle} />
             <StatCard label="Errors" value={String(summary.error_count)} icon={XCircle} />
             <StatCard label="Avg RCA Time" value={formatDuration(summary.avg_rca_duration_seconds)} icon={Clock} sub={summary.critical_count > 0 ? `${summary.critical_count} critical` : undefined} />
           </>
@@ -167,7 +163,7 @@ export default function FleetTab({ period }: { period: Period }) {
         </div>
 
         {!runs || runs.length === 0 ? (
-          <EmptyState icon={Zap} message="No agent runs found for this period" hint="Runs appear when Aurora investigates incidents" />
+          <EmptyState icon={Lightning} message="No agent runs found for this period" hint="Runs appear when Aurora investigates incidents" />
         ) : (
           <div className="space-y-2">
             {runs.map(run => (
@@ -219,7 +215,7 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
         className="w-full text-left px-4 py-3 flex items-start gap-3"
       >
         <div className="mt-0.5 text-zinc-600 shrink-0">
-          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          {expanded ? <CaretDown className="h-4 w-4" /> : <CaretRight className="h-4 w-4" />}
         </div>
 
         <div className="flex-1 min-w-0">
@@ -286,7 +282,7 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
           {run.aurora_summary && trimSummary(run.aurora_summary) && (
             <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/50 p-3">
               <div className="flex items-center gap-1.5 mb-2">
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500/70" />
+                <CheckCircle className="h-3.5 w-3.5 text-emerald-500/70" />
                 <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Resolution Summary</span>
               </div>
               <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-line">
@@ -308,7 +304,7 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
           {/* Diagnostic Steps */}
           {diagnostics.length > 0 && (
             <SuggestionBlock
-              icon={Search}
+              icon={MagnifyingGlass}
               iconColor="text-blue-400/70"
               label="Diagnostic Steps"
               items={diagnostics}
@@ -325,7 +321,7 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
             />
           )}
 
-          {/* Activity timeline */}
+          {/* Heartbeat timeline */}
           <ActivitySection incidentId={run.incident_id} />
 
           {/* Link to incident */}
@@ -333,7 +329,7 @@ function RunCard({ run, expanded, onToggle }: { run: FleetRun; expanded: boolean
             href={`/incidents?id=${run.incident_id}`}
             className="inline-flex items-center gap-1.5 text-xs text-blue-400/80 hover:text-blue-400 transition-colors"
           >
-            <ExternalLink className="h-3 w-3" />
+            <ArrowSquareOut className="h-3 w-3" />
             View full incident
           </a>
         </div>
@@ -355,7 +351,7 @@ function ActivitySection({ incidentId }: { incidentId: string }) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 text-zinc-500 text-xs py-2">
-        <Loader2 className="h-3 w-3 animate-spin" /> Loading activity...
+        <SpinnerGap className="h-3 w-3 animate-spin" /> Loading activity...
       </div>
     );
   }
@@ -368,9 +364,9 @@ function ActivitySection({ incidentId }: { incidentId: string }) {
   return (
     <div className="rounded-lg bg-zinc-900/60 border border-zinc-800/50 p-3">
       <div className="flex items-center gap-1.5 mb-2">
-        <Activity className="h-3.5 w-3.5 text-blue-400/70" />
+        <Heartbeat className="h-3.5 w-3.5 text-blue-400/70" />
         <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
-          Tool Activity
+          Tool Heartbeat
           <span className="text-zinc-600 font-normal ml-1">({events.length} events)</span>
         </span>
       </div>
@@ -393,7 +389,7 @@ function ActivitySection({ incidentId }: { incidentId: string }) {
             )}
             {evt.error_message && (
               <span className="text-red-400/80 flex items-center gap-1 truncate">
-                <AlertTriangle className="h-3 w-3 shrink-0" /> {evt.error_message.slice(0, 60)}
+                <Warning className="h-3 w-3 shrink-0" /> {evt.error_message.slice(0, 60)}
               </span>
             )}
           </div>

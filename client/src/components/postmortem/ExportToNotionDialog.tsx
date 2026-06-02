@@ -1,15 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import {
-  AlertCircle,
-  Check,
-  CheckCircle2,
-  ChevronsUpDown,
-  ExternalLink,
-  Loader2,
-  Search,
-} from 'lucide-react';
+import { WarningCircle, Check, CheckCircle, CaretUpDown, ArrowSquareOut, SpinnerGap, MagnifyingGlass } from "@phosphor-icons/react";
 
 import {
   Dialog,
@@ -187,7 +179,7 @@ function DatabasePicker({
           <span className="truncate text-left">
             {value ? valueTitle || value : placeholder}
           </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          <CaretUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -195,19 +187,19 @@ function DatabasePicker({
         align="start"
       >
         <div className="flex items-center gap-2 border-b px-3 py-2">
-          <Search className="h-4 w-4 shrink-0 opacity-50" />
+          <MagnifyingGlass className="h-4 w-4 shrink-0 opacity-50" />
           <input
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search Notion databases..."
+            placeholder="MagnifyingGlass Notion databases..."
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
         </div>
         <div className="max-h-64 overflow-y-auto py-1">
           {loading && (
             <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <SpinnerGap className="h-3 w-3 animate-spin" />
               Searching...
             </div>
           )}
@@ -449,7 +441,7 @@ export default function ExportToNotionDialog({
           // -----------------------------------------------------------------
           <div className="flex flex-col items-center gap-4 py-4 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-500/10">
-              <CheckCircle2 className="h-6 w-6 text-green-500" />
+              <CheckCircle className="h-6 w-6 text-green-500" />
             </div>
             <div>
               <p className="text-base font-medium">
@@ -470,7 +462,7 @@ export default function ExportToNotionDialog({
                 rel="noopener noreferrer"
                 className="inline-flex items-center justify-center gap-1.5 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ArrowSquareOut className="h-4 w-4" />
                 Open in Notion
               </a>
               <Button
@@ -488,7 +480,7 @@ export default function ExportToNotionDialog({
           <div className="space-y-5">
             {reauthRequired && (
               <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
+                <WarningCircle className="h-4 w-4" />
                 <AlertTitle>Notion credentials expired</AlertTitle>
                 <AlertDescription className="flex flex-col gap-2">
                   <span>
@@ -501,7 +493,7 @@ export default function ExportToNotionDialog({
                     rel="noopener noreferrer"
                     className="inline-flex w-fit items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-accent"
                   >
-                    <ExternalLink className="h-3 w-3" />
+                    <ArrowSquareOut className="h-3 w-3" />
                     Reconnect Notion
                   </a>
                 </AlertDescription>
@@ -510,7 +502,7 @@ export default function ExportToNotionDialog({
 
             {submitError && !reauthRequired && (
               <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
+                <WarningCircle className="h-4 w-4" />
                 <AlertTitle>Export failed</AlertTitle>
                 <AlertDescription>{submitError}</AlertDescription>
               </Alert>
@@ -536,12 +528,12 @@ export default function ExportToNotionDialog({
               <div className="space-y-1.5">
                 {detailLoading ? (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <SpinnerGap className="h-3 w-3 animate-spin" />
                     Inspecting database schema...
                   </div>
                 ) : detailError ? (
                   <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
+                    <WarningCircle className="h-4 w-4" />
                     <AlertDescription>{detailError}</AlertDescription>
                   </Alert>
                 ) : databaseDetail?.titleProperty ? (
@@ -555,7 +547,7 @@ export default function ExportToNotionDialog({
                   </div>
                 ) : (
                   <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
+                    <WarningCircle className="h-4 w-4" />
                     <AlertTitle>No title property found</AlertTitle>
                     <AlertDescription>
                       This database has no title property. Choose a different
@@ -674,7 +666,7 @@ export default function ExportToNotionDialog({
             >
               {submitting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                   Exporting...
                 </>
               ) : (

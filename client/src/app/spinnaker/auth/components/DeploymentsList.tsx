@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Rocket } from "lucide-react";
+import { Rocket } from "@phosphor-icons/react";
 import { formatTimeAgo } from "@/lib/utils/time-format";
 import type { SpinnakerDeploymentEvent } from "@/lib/services/spinnaker";
 
