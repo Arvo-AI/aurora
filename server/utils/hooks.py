@@ -19,8 +19,8 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_hooks_module = None
-_hooks_loaded = False
+_hooks_module: object = None
+_hooks_loaded: bool = False
 _hook_cache: dict = {}
 
 
