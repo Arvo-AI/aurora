@@ -1,13 +1,12 @@
 "use client";
 
-import CIProviderAuthPage from "@/components/ci-provider-auth-page";
-import { cloudbeesConfig } from "@/lib/services/ci-provider-configs";
+import CloudBeesAuthPage from "./components/CloudBeesAuthPage";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
-export default function CloudBeesAuthPage() {
+export default function CloudBeesAuthPageWrapper() {
   return (
     <ConnectorAuthGuard connectorName="CloudBees">
-      <CIProviderAuthPage config={cloudbeesConfig} />
+      <CloudBeesAuthPage />
     </ConnectorAuthGuard>
   );
 }
