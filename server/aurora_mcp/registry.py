@@ -1002,7 +1002,7 @@ def _entry_token_match_count(entry: "DispatchEntry", tokens: List[str]) -> int:
     treats as "matches every entry that passes the hard filters"."""
     if not tokens:
         return 0
-    haystack = entry.name.lower() + " " + entry.description.lower()
+    haystack = (entry.name + " " + entry.description).lower()
     return sum(1 for t in tokens if t in haystack)
 
 
@@ -1030,7 +1030,7 @@ def search_dispatch_entries(
     tokens = _tokenize_query(q)
     # Collect ALL matches first (cannot break early at `limit`) so the
     # match-count ranking is computed over the full candidate set before
-    # truncation. The allowlist is small (~60 entries) so this is cheap.
+    # truncation. The allowlist is small (~70 entries) so this is cheap.
     scored: List[Tuple[int, int, DispatchEntry]] = []
     for idx, entry in enumerate(DISPATCH_ALLOWLIST):
         if not _entry_passes_filters(entry, cat, conn, user_id):

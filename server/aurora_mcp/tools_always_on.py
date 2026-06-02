@@ -343,6 +343,12 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         Confluence pages via call_tool('confluence_fetch_page', { url })."""
         return await _do_search_runbooks(api_call, query, limit)
 
+    # The next three tools (get_infrastructure_context, list_services,
+    # service_impact) are promoted from the Tier-3 dispatch allowlist to
+    # first-class tools. They intentionally shadow the former
+    # get_infrastructure_context / graph_list_services / graph_service_impact
+    # dispatch entries — do NOT re-add those to DISPATCH_ALLOWLIST (see the NOTE
+    # in registry.py); double-exposure is asserted against in tests.
     @mcp.tool()
     async def get_infrastructure_context() -> Dict[str, Any]:
         """Get the system's infrastructure context: environments, services,
