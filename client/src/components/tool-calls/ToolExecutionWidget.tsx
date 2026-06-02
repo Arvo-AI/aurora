@@ -165,6 +165,15 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   else if (tool.tool_name === "mcp_call_aws" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseAwsMcpCommand(command)
   }
+  // Fly.io metrics tool parsing
+  else if (tool.tool_name === "query_flyio_metrics") {
+    try {
+      const parsed = JSON.parse(normalizedInput)
+      command = parsed.query || "query_flyio_metrics"
+    } catch {
+      command = "query_flyio_metrics"
+    }
+  }
   else if (tool.tool_name === "mcp_suggest_aws_commands" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseAwsSuggestCommand(command)
   }

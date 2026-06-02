@@ -21,8 +21,10 @@ class FlyioClient:
     def __init__(self, api_token: str, org_slug: str):
         self.api_token = api_token
         self.org_slug = org_slug
+
+        auth_value = api_token if api_token.startswith("FlyV1") else f"Bearer {api_token}"
         self._headers = {
-            "Authorization": f"Bearer {api_token}",
+            "Authorization": auth_value,
             "Content-Type": "application/json",
         }
 

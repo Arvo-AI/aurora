@@ -1687,6 +1687,9 @@ Security & Compliance
         elif provider.lower() == 'scaleway':
             supported_cli_tools = ['scw', 'kubectl', 'helm', 'terraform']
             default_cli = 'scw'
+        elif provider.lower() == 'flyio':
+            supported_cli_tools = ['fly', 'flyctl']
+            default_cli = 'fly'
         else:
             supported_cli_tools = []
             default_cli = ''
@@ -1707,6 +1710,8 @@ Security & Compliance
             command = f"ovhcloud {command}"
         elif provider.lower() == 'scaleway' and cli_tool == 'scw' and not terraform_invocation and not command.strip().startswith('scw'):
             command = f"scw {command}"
+        elif provider.lower() == 'flyio' and cli_tool == 'fly' and not command.strip().startswith(('fly ', 'flyctl ')):
+            command = f"fly {command}"
 
         # Apply provider-specific convenience flags
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud':

@@ -669,6 +669,9 @@ def get_policy_templates() -> List[dict]:
                 # Tailscale
                 {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
                  "description": "Tailscale read-only operations"},
+                # Fly.io
+                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machines?\s+(list|status)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+show|regions|platform)\b",
+                 "description": "Fly.io read-only operations"},
                 # Terraform / IaC read-only
                 {"priority": 130, "pattern": r"^(terraform|tofu)\s+(init|plan|validate|fmt|output|show|state\s+(list|show|pull)|version)\b",
                  "description": "Non-destructive Terraform operations"},
@@ -749,6 +752,9 @@ def get_policy_templates() -> List[dict]:
                 # Tailscale
                 {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
                  "description": "Tailscale read-only operations"},
+                # Fly.io
+                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machines?\s+(list|status)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+show|regions|platform)\b",
+                 "description": "Fly.io read-only operations"},
                 # SSH access
                 {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
                  "description": "SSH, SCP, and SFTP access"},
@@ -812,6 +818,9 @@ def get_policy_templates() -> List[dict]:
                 # Tailscale
                 {"priority": 140, "pattern": r"^tailscale\s+\w",
                  "description": "All Tailscale operations"},
+                # Fly.io
+                {"priority": 139, "pattern": r"^(fly|flyctl)\s+\w",
+                 "description": "All Fly.io operations"},
                 # SSH
                 {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
                  "description": "SSH, SCP, and SFTP access"},

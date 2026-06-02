@@ -9,11 +9,12 @@ const getProviderCli = (provider: string): string => {
   if (provider === 'gcp') return 'gcloud'
   if (provider === 'aws') return 'aws'
   if (provider === 'azure') return 'az'
+  if (provider === 'flyio') return 'fly'
   return ''
 }
 
 // Helper: Check if command already has recognized CLI prefix
-const RECOGNIZED_CLI_REGEX = /^(gcloud|kubectl|gsutil|bq|aws|az)\b/i
+const RECOGNIZED_CLI_REGEX = /^(gcloud|kubectl|gsutil|bq|aws|az|fly|flyctl)\b/i
 
 export function extractIacAction(toolInput?: string, fallback?: string): string | undefined {
   if (!toolInput) return fallback

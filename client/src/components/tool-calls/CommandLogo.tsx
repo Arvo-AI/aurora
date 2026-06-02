@@ -116,6 +116,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Tailscale logo:', e)}
     />
   ),
+  flyio: (
+    <img
+      src="/flyio.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Fly.io"
+      onError={(e) => console.error('Failed to load Fly.io logo:', e)}
+    />
+  ),
   splunk: (
     <img
       src="/splunk.svg"
@@ -387,6 +395,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Tailscale - check provider prop (cloud_exec passes provider)
   if (prov === 'tailscale' || tool.includes('tailscale') || cmd.includes('tailscale')) {
     return 'tailscale'
+  }
+
+  // Fly.io - check provider prop (cloud_exec passes provider)
+  if (prov === 'flyio' || tool.includes('flyio') || cmd.startsWith('fly ') || cmd.startsWith('flyctl ')) {
+    return 'flyio'
   }
 
   // Load skill tool
