@@ -1028,9 +1028,28 @@ def search_dispatch_entries(
     """
     q, cat, conn = _normalize_search_filters(query, category, connector)
     tokens = _tokenize_query(q)
-    # Collect ALL matches first (cannot break early at `limit`) so the
-    # match-count ranking is computed over the full candidate set before
-    # truncation. The allowlist is small (~70 entries) so this is cheap.
+    results = _ranked_matches(tokens, cat, conn, user_id, limit)
+    # Graceful fallback: an LLM frequently guesses a plausible-but-wrong
+    # `category` (e.g. category="metrics" for an LLM-usage/cost question whose
+    # tools live under category="usage"). When a category/connector filter
+    # combined with a real query returns nothing, retry on the query alone so a
+    # bad filter guess can't hide a strong token match — otherwise the agent
+    # sees zero results and falls back to chat. Empty-query searches keep their
+    # explicit scoping (no fallback).
+    if not results and tokens and (cat or conn):
+        results = _ranked_matches(tokens, "", "", user_id, limit)
+    return results
+
+
+def _ranked_matches(
+    tokens: List[str], cat: str, conn: str, user_id: Optional[str], limit: int,
+) -> List[DispatchEntry]:
+    """Rank allowlist entries by token-match count under the given filters.
+
+    Collects ALL matches first (cannot break early at `limit`) so the
+    match-count ranking is computed over the full candidate set before
+    truncation. The allowlist is small (~70 entries) so this is cheap.
+    """
     scored: List[Tuple[int, int, DispatchEntry]] = []
     for idx, entry in enumerate(DISPATCH_ALLOWLIST):
         if not _entry_passes_filters(entry, cat, conn, user_id):

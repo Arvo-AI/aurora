@@ -61,6 +61,38 @@ def test_search_dispatch_entries_empty_query_returns_up_to_limit():
     assert len(out) == 5
 
 
+def test_search_wrong_category_falls_back_to_query_only():
+    """An LLM guessing a plausible-but-wrong category must not hide a real token
+    match. The LLM-usage tools are category="usage"; a search scoped to
+    category="metrics" should still surface them via the query-only fallback."""
+    out = registry.search_dispatch_entries(
+        query="llm usage cost", category="metrics", user_id=None, limit=10,
+    )
+    names = {e.name for e in out}
+    assert "llm_usage_summary" in names
+    assert "llm_usage_cost_over_time" in names
+
+
+def test_search_correct_category_still_narrows():
+    """The fallback only triggers on empty results — a correct category that
+    matches keeps scoping the search."""
+    out = registry.search_dispatch_entries(
+        query="mttr", category="metrics", user_id=None, limit=10,
+    )
+    assert out
+    assert all(e.category == "metrics" for e in out)
+
+
+def test_search_empty_query_with_category_does_not_fall_back():
+    """No query means no token signal — explicit category scoping is preserved
+    (no fallback to the full allowlist)."""
+    out = registry.search_dispatch_entries(
+        query="", category="ticketing", user_id=None, limit=50,
+    )
+    assert out
+    assert all(e.category == "ticketing" for e in out)
+
+
 def test_promoted_graph_tools_removed_from_allowlist():
     """The 3 graph/infra reads are now first-class Tier-1 tools, not dispatch
     entries — they must not appear twice."""
