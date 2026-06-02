@@ -625,7 +625,7 @@ def run_background_chat(
                             set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:HookBlocked]")
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = %s, updated_at = %s WHERE id = %s",
-                                ('hook_blocked', datetime.now(), incident_id),
+                                ('hook_blocked', datetime.now(timezone.utc), incident_id),
                             )
                         conn.commit()
                         logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to 'hook_blocked'")

@@ -57,7 +57,8 @@ def update_visualization(
 
     # Hook: check if LLM call is allowed
     from utils.hooks import get_hook
-    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    from utils.auth.stateless_auth import get_org_id_for_user
+    hook_allowed, hook_message = get_hook("before_llm_call")(get_org_id_for_user(user_id), user_id)
     if not hook_allowed:
         logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
