@@ -524,6 +524,13 @@ def generate_incident_summary(
         f"{_LOG_PREFIX} Generating summary for incident {incident_id} (user={user_id}, source={source_type})"
     )
 
+    # Hook: check if LLM call is allowed
+    from utils.hooks import get_hook
+    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    if not hook_allowed:
+        logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
+        return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
+
     try:
         # Build the prompt
         prompt = _build_summary_prompt(
@@ -634,6 +641,13 @@ def generate_incident_summary_from_chat(
     logger.info(
         f"{_LOG_PREFIX} Regenerating summary from chat for incident {incident_id} (user={user_id}, session={session_id})"
     )
+
+    # Hook: check if LLM call is allowed
+    from utils.hooks import get_hook
+    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    if not hook_allowed:
+        logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
+        return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
 
     try:
         basics = _fetch_incident_basics(incident_id, user_id=user_id)

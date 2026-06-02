@@ -611,6 +611,13 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
         
+        # Hook: check if LLM call is allowed (billing, rate limiting, etc.)
+        from utils.hooks import get_hook
+        hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+        if not hook_allowed:
+            logger.warning(f"[BackgroundChat] Hook blocked for user {user_id}: {hook_message}")
+            return {"session_id": session_id, "status": "hook_blocked", "error": hook_message}
+
         # Run the async workflow in the sync Celery context
         logger.info(f"[BackgroundChat] Starting workflow execution for session {session_id}, incident {incident_id}")
         try:

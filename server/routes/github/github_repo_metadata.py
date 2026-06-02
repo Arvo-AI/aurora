@@ -116,6 +116,15 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
     )
 
     logger.info(f"Generating metadata for {repo_full_name} (user {user_id})")
+
+    # Hook: check if LLM call is allowed
+    from utils.hooks import get_hook
+    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    if not hook_allowed:
+        logger.warning(f"Hook blocked for user {user_id}: {hook_message}")
+        _update_metadata(user_id, repo_full_name, None, "error")
+        return
+
     _update_metadata(user_id, repo_full_name, None, "generating")
 
     try:

@@ -200,6 +200,13 @@ def run_prediscovery(
 
     logger.info(f"[Prediscovery] Starting for user {user_id} (trigger={trigger})")
 
+    # Hook: check if LLM call is allowed
+    from utils.hooks import get_hook
+    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    if not hook_allowed:
+        logger.warning(f"[Prediscovery] Hook blocked for user {user_id}: {hook_message}")
+        return {"status": "hook_blocked", "error": hook_message}
+
     try:
         providers = get_user_providers(user_id)
         integrations = _get_connected_integrations(user_id)

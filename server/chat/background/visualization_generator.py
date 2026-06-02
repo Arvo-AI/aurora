@@ -54,7 +54,14 @@ def update_visualization(
         tool_calls_json: JSON string of recent tool calls to process
     """
     logger.info(f"{_LOG_PREFIX} Starting update for incident {incident_id} (force_full={force_full})")
-    
+
+    # Hook: check if LLM call is allowed
+    from utils.hooks import get_hook
+    hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
+    if not hook_allowed:
+        logger.warning(f"{_LOG_PREFIX} Hook blocked for user {user_id}: {hook_message}")
+        return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
+
     try:
         # Get recent tool calls
         if tool_calls_json:

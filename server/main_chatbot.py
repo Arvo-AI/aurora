@@ -1221,6 +1221,19 @@ async def handle_connection(websocket) -> None:
                 except Exception as e:
                     logger.error("Error checking incident session RBAC: %s", e)
             
+            # Hook: check if LLM call is allowed (billing, rate limiting, etc.)
+            if user_id:
+                from utils.hooks import get_hook
+                hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
+                if not hook_allowed:
+                    logger.warning("Hook blocked LLM call for user=%s org=%s: %s", user_id, org_id, hook_message)
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "session_id": session_id,
+                        "data": {"text": hook_message, "code": "BUDGET_EXCEEDED"}
+                    }))
+                    continue
+
             # Get verified providers (cloud + SkillRegistry-validated integrations)
             from chat.background.rca_prompt_builder import get_user_providers
             if user_id:
