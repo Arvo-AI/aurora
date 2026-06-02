@@ -147,7 +147,7 @@ def _generate_summary(user_id: str, context: str) -> str:
     hook_allowed, hook_message = get_hook("before_llm_call")(None, user_id)
     if not hook_allowed:
         logger.warning("Hook blocked repo metadata LLM call for user=%s: %s", user_id, hook_message)
-        return "Summary generation blocked by policy"
+        raise RuntimeError(f"hook_blocked: {hook_message}")
 
     llm = create_chat_model(
         ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,

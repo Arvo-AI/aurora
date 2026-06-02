@@ -1221,19 +1221,6 @@ async def handle_connection(websocket) -> None:
                 except Exception as e:
                     logger.error("Error checking incident session RBAC: %s", e)
             
-            # Hook: check if LLM call is allowed
-            if user_id:
-                from utils.hooks import get_hook
-                hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
-                if not hook_allowed:
-                    logger.warning("Hook blocked LLM call for user=%s org=%s: %s", user_id, org_id, hook_message)
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "session_id": session_id,
-                        "data": {"text": hook_message, "code": "HOOK_BLOCKED"}
-                    }))
-                    continue
-
             # Get verified providers (cloud + SkillRegistry-validated integrations)
             from chat.background.rca_prompt_builder import get_user_providers
             if user_id:
@@ -1505,6 +1492,19 @@ async def handle_connection(websocket) -> None:
                 agent = Agent(weaviate_client=weaviate_client, postgres_client=postgres_client, websocket_sender=websocket_sender, event_loop=asyncio.get_event_loop())
                 logger.info(f"Created agent with websocket sender")
             
+            # Hook: check if LLM call is allowed
+            if user_id:
+                from utils.hooks import get_hook
+                hook_allowed, hook_message = get_hook("before_llm_call")(org_id, user_id)
+                if not hook_allowed:
+                    logger.warning("Hook blocked LLM call for user=%s org=%s: %s", user_id, org_id, hook_message)
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "session_id": session_id,
+                        "data": {"text": hook_message, "code": "HOOK_BLOCKED"}
+                    }))
+                    continue
+
             # Create session-specific workflow instance to allow resumption while preventing cross-session leakage
             # Generate a temporary session_id if none provided (for new chats)
             effective_session_id = session_id or f"temp_{user_id}_{uuid.uuid4().hex[:8]}"
