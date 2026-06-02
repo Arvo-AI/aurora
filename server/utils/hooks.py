@@ -74,8 +74,7 @@ def get_hook(name: str):
     _load_hooks()
 
     if name not in _HOOK_REGISTRY:
-        logger.error("Unknown hook '%s' requested", name)
-        return _HOOK_REGISTRY.get("before_llm_call", _default_before_llm_call)
+        raise ValueError(f"Unknown hook '{name}' — valid hooks: {list(_HOOK_REGISTRY.keys())}")
 
     # Return cached closure if available
     if name in _hook_cache:
