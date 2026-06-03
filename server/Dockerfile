@@ -207,7 +207,8 @@ RUN ARCH=$(uname -m) && \
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
 # Install Fly.io CLI (flyctl) for Fly.io connector
-RUN curl -fsSL "https://fly.io/install.sh" | FLYCTL_INSTALL="/usr/local" sh
+ARG FLYCTL_VERSION=0.4.57
+RUN curl -fsSL "https://fly.io/install.sh" | FLYCTL_INSTALL="/usr/local" FLYCTL_VERSION=${FLYCTL_VERSION} sh
 
 # Install Node.js for MCP servers
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \

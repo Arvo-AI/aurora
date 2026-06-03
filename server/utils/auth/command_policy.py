@@ -670,7 +670,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
                  "description": "Tailscale read-only operations"},
                 # Fly.io
-                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machines?\s+(list|status)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+show|regions|platform)\b",
+                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machine\s+(list|status)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+show|platform|services)\b",
                  "description": "Fly.io read-only operations"},
                 # Terraform / IaC read-only
                 {"priority": 130, "pattern": r"^(terraform|tofu)\s+(init|plan|validate|fmt|output|show|state\s+(list|show|pull)|version)\b",
@@ -753,8 +753,8 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
                  "description": "Tailscale read-only operations"},
                 # Fly.io
-                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machines?\s+(list|status)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+show|regions|platform)\b",
-                 "description": "Fly.io read-only operations"},
+                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machine\s+(list|status|restart|stop|start)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+(show|count)|platform|ssh|proxy|config\s+show|secrets\s+list|deploy|services)\b",
+                 "description": "Fly.io standard operations"},
                 # SSH access
                 {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",
                  "description": "SSH, SCP, and SFTP access"},

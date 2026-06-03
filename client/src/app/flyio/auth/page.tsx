@@ -11,11 +11,16 @@ import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from '@/lib/services/providerPreferences';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
+interface FlyioApp {
+  name: string;
+  status: string;
+}
+
 interface FlyioStatus {
   connected: boolean;
   org_slug?: string;
   tier?: "readonly" | "full";
-  app_names?: string[];
+  apps?: FlyioApp[];
 }
 
 export default function FlyioAuthPage() {
@@ -28,31 +33,56 @@ export default function FlyioAuthPage() {
   const [status, setStatus] = useState<FlyioStatus | null>(null);
   const { toast } = useToast();
 
-  const checkStatus = useCallback(async () => {
-    setIsCheckingStatus(true);
-    try {
-      const response = await fetch(`/api/proxy/flyio/status?validate=true`);
-      if (response.ok) {
-        const data = await response.json();
-        setStatus({
-          connected: data.connected === true,
-          org_slug: data.org_slug,
-          tier: data.tier,
-          app_names: data.app_names,
-        });
-      } else {
-        setStatus({ connected: false });
-      }
-    } catch {
-      setStatus({ connected: false });
-    } finally {
-      setIsCheckingStatus(false);
+  const applyStatusResponse = useCallback((data: { connected?: boolean; org_slug?: string; tier?: string; apps?: FlyioApp[] }) => {
+    const connected = data.connected === true;
+    if (connected) {
+      localStorage.setItem("isFlyioConnected", "true");
+    } else {
+      localStorage.removeItem("isFlyioConnected");
     }
+    setStatus({
+      connected,
+      org_slug: data.org_slug,
+      tier: data.tier as FlyioStatus["tier"],
+      apps: data.apps,
+    });
   }, []);
 
   useEffect(() => {
-    checkStatus();
-  }, [checkStatus]);
+    let cancelled = false;
+
+    async function loadStatus() {
+      // Fast cached read -- renders UI immediately
+      try {
+        const cached = await fetch(`/api/proxy/flyio/status`);
+        if (!cancelled && cached.ok) {
+          const data = await cached.json();
+          applyStatusResponse(data);
+        }
+      } catch { /* ignore */ }
+      setIsCheckingStatus(false);
+
+      // Background live validation -- silently corrects if token expired
+      try {
+        const validated = await fetch(`/api/proxy/flyio/status?validate=true`);
+        if (!cancelled && validated.ok) {
+          const data = await validated.json();
+          applyStatusResponse(data);
+        } else if (!cancelled) {
+          localStorage.removeItem("isFlyioConnected");
+          setStatus({ connected: false });
+        }
+      } catch {
+        if (!cancelled) {
+          localStorage.removeItem("isFlyioConnected");
+          setStatus({ connected: false });
+        }
+      }
+    }
+
+    loadStatus();
+    return () => { cancelled = true; };
+  }, [applyStatusResponse]);
 
   const handleConnect = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -85,7 +115,7 @@ export default function FlyioAuthPage() {
 
       toast({
         title: "Fly.io Connected",
-        description: `Connected to org "${data.org_slug}" with ${data.tier === "readonly" ? "read-only" : "full"} access. Found ${data.app_names?.length ?? 0} app(s).`,
+        description: `Connected to org "${data.org_slug}" with ${data.tier === "readonly" ? "read-only" : "full"} access. Found ${data.apps?.length ?? 0} app(s).`,
       });
 
       setApiToken("");
@@ -94,7 +124,7 @@ export default function FlyioAuthPage() {
         connected: true,
         org_slug: data.org_slug,
         tier: data.tier,
-        app_names: data.app_names,
+        apps: data.apps,
       });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to connect to Fly.io';
@@ -190,16 +220,28 @@ export default function FlyioAuthPage() {
                   </div>
                 </div>
 
-                {status.app_names && status.app_names.length > 0 && (
+                {status.apps && status.apps.length > 0 && (
                   <div className="space-y-2">
                     <p className="text-sm font-medium">
-                      Apps ({status.app_names.length})
+                      Apps ({status.apps.length})
                     </p>
                     <div className="max-h-48 overflow-y-auto rounded-lg border border-border divide-y divide-border">
-                      {status.app_names.map((name) => (
-                        <div key={name} className="flex items-center gap-2 px-3 py-2 text-sm">
-                          <Server className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                          <span className="font-mono text-xs truncate">{name}</span>
+                      {status.apps.map((app) => (
+                        <div key={app.name} className="flex items-center justify-between px-3 py-2 text-sm">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Server className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                            <span className="font-mono text-xs truncate">{app.name}</span>
+                          </div>
+                          <Badge
+                            variant={app.status === "deployed" ? "default" : "secondary"}
+                            className={`text-[10px] ml-2 flex-shrink-0 ${
+                              app.status === "deployed" ? "bg-green-600 hover:bg-green-700" :
+                              app.status === "suspended" ? "bg-yellow-600 hover:bg-yellow-700" :
+                              ""
+                            }`}
+                          >
+                            {app.status}
+                          </Badge>
                         </div>
                       ))}
                     </div>

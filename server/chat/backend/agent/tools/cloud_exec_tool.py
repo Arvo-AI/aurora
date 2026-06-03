@@ -1404,9 +1404,16 @@ Security & Compliance
         if not gate.allowed:
             logger.warning("cloud_exec blocked for user %s (%s): %s",
                            user_id, gate.code, gate.block_reason[:200])
+            error_msg = gate.block_reason
+            if gate.code == "POLICY_DENIED" and "No matching allow rule" in error_msg:
+                error_msg += (
+                    f". To allow {prefix or provider} commands, go to Settings > Security > "
+                    "Command Policies and re-apply the 'Observability Only' or "
+                    "'Standard Operations' template, or manually add an allow rule."
+                )
             return json.dumps({
                 "success": False,
-                "error": gate.block_reason,
+                "error": error_msg,
                 "code": gate.code,
                 "final_command": command,
                 "provider": provider.lower(),

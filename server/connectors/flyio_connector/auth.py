@@ -35,12 +35,15 @@ def validate_flyio_token(api_token: str, org_slug: str) -> Tuple[bool, Optional[
         return False, None, "Failed to connect to Fly.io. Check your token and org slug."
 
     tier = "full" if client.has_write_access() else "readonly"
-    app_names = [a.get("name", a.get("id", "unknown")) for a in apps]
+    apps_info = [
+        {"name": a.get("name", a.get("id", "unknown")), "status": a.get("status", "unknown")}
+        for a in apps
+    ]
 
     token_info = {
         "org_slug": org_slug,
         "tier": tier,
-        "app_names": app_names,
+        "apps": apps_info,
     }
 
     return True, token_info, None

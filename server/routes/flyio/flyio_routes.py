@@ -68,18 +68,18 @@ def flyio_connect(user_id):
             "api_token": api_token,
             "org_slug": org_slug,
             "tier": token_info["tier"],
-            "app_names": token_info["app_names"],
+            "apps": token_info["apps"],
         }
 
         store_tokens_in_db(user_id, token_data, "flyio")
         set_connection_status(user_id, "flyio", org_slug, "connected")
 
-        logger.info(f"Fly.io connected for user {user_id}, org: {org_slug}, tier: {token_info['tier']}, apps: {len(token_info['app_names'])}")
+        logger.info(f"Fly.io connected for user {user_id}, org: {org_slug}, tier: {token_info['tier']}, apps: {len(token_info['apps'])}")
 
         return jsonify({
             "org_slug": org_slug,
             "tier": token_info["tier"],
-            "app_names": token_info["app_names"],
+            "apps": token_info["apps"],
         }), 200
 
     except Exception as e:
@@ -103,24 +103,29 @@ def flyio_status(user_id):
 
         org_slug = token_data.get("org_slug")
         tier = token_data.get("tier", "readonly")
-        app_names = token_data.get("app_names", [])
+        apps = token_data.get("apps", [])
 
         if request.args.get("validate", "").lower() == "true":
             api_token = token_data.get("api_token")
             if not api_token or not org_slug:
                 return jsonify({"connected": False}), 200
 
-            apps = FlyioClient(api_token, org_slug).list_apps()
-            if apps is None:
+            live_apps = FlyioClient(api_token, org_slug).list_apps()
+            if live_apps is None:
+                delete_user_secret(user_id, "flyio")
+                set_connection_status(user_id, "flyio", org_slug, "disconnected")
                 return jsonify({"connected": False, "reason": "token_invalid"}), 200
 
-            app_names = [a.get("name", a.get("id", "unknown")) for a in apps]
+            apps = [
+                {"name": a.get("name", a.get("id", "unknown")), "status": a.get("status", "unknown")}
+                for a in live_apps
+            ]
 
         return jsonify({
             "connected": True,
             "org_slug": org_slug,
             "tier": tier,
-            "app_names": app_names,
+            "apps": apps,
         }), 200
 
     except Exception as e:
