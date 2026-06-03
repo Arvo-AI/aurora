@@ -128,7 +128,7 @@ def _do_search_tools(
             "total_matches": len(ordered),
             "hint": (
                 "Aurora exposes many more tools than the few shown upfront — "
-                "logs, metrics, traces, deployments (Jenkins/CloudBees/Spinnaker), "
+                "logs, metrics, deployments (Jenkins/CloudBees/Spinnaker), "
                 "Jira, GitHub, Sentry, Grafana, postmortems, and DORA metrics "
                 "(MTTR/MTTD/CFR). Search here before assuming a capability is "
                 "missing or defaulting to chat_with_aurora. call_tool requires a "
@@ -203,7 +203,7 @@ def register_dispatch_tools(
     ) -> Dict[str, Any]:
         """Discover the many tools Aurora exposes beyond the few shown upfront.
         Call this BEFORE assuming a capability is missing or defaulting to
-        chat_with_aurora. Searchable families include logs, metrics, traces,
+        chat_with_aurora. Searchable families include logs, metrics,
         deployments (Jenkins/CloudBees/Spinnaker), Jira, GitHub, Sentry, Grafana,
         Bitbucket, Notion, Confluence/SharePoint runbooks, postmortems, and DORA
         metrics (MTTR/MTTD/CFR/incident frequency). Then invoke a result with

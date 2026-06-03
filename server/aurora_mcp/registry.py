@@ -15,6 +15,7 @@ are intentionally excluded.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -974,11 +975,12 @@ def _normalize_search_filters(
 
 def _tokenize_query(q: str) -> List[str]:
     """Split a search query into tokens, dropping fragments shorter than 3
-    chars. A natural-language query like "rca tools steps" becomes
-    ["rca", "tools", "steps"] so each token can be matched independently —
-    the whole-string substring match used previously found nothing for such
-    queries and forced a fallback to chat."""
-    return [t for t in q.split() if len(t) >= 3]
+    chars. Splits on any non-alphanumeric run so punctuation-attached tokens
+    ("deployments?", "mttr/dora", "rca,tools") separate correctly. A query like
+    "rca tools steps" becomes ["rca", "tools", "steps"] so each token can be
+    matched independently — the whole-string substring match used previously
+    found nothing for such queries and forced a fallback to chat."""
+    return [t for t in re.findall(r"[a-z0-9]+", q.lower()) if len(t) >= 3]
 
 
 def _entry_passes_filters(

@@ -140,7 +140,7 @@ def test_new_connector_entries_present_and_gated():
 def test_new_connector_entries_gated_in_search(monkeypatch):
     """Gated entries are only callable_now once their skill is connected."""
     monkeypatch.setattr(
-        registry, "_check_skill_connected", lambda s, u: s == "sentry",
+        registry, "_check_skill_connected", lambda s, _u: s == "sentry",
     )
     visible = registry.search_dispatch_entries(
         query="sentry", user_id="u1", limit=50,
