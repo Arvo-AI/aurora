@@ -249,33 +249,36 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         mode: str = "chat",
         poll_only: bool = False,
     ) -> Dict[str, Any]:
-        """Aurora's agentic investigator — use ONLY for open-ended, multi-source
-        questions that need synthesis or a root-cause investigation (e.g. "why did
-        checkout-svc page at 3am — dig into it"). Runs the full agent workflow; it is
-        slower and heavier than a direct read, so reach here only when no specific
-        tool fits.
+        """Aurora's autonomous cloud-ops agent for YOUR connected systems. It both
+        INVESTIGATES (multi-source RCA across your incidents and connected
+        observability — logs, metrics, traces, alerts) and ACTS (provisions/changes
+        infrastructure via Terraform/IaC, kubectl, and cloud CLIs; applies code
+        fixes; runs remediations), using Aurora's knowledge of your connected
+        integrations. Use it for work needing planning + multi-step action or
+        cross-source synthesis — e.g. "why did checkout-svc page at 3am — dig into
+        it", "set up auto-scaling for my cluster", "create a GKE cluster". It runs
+        the full agent workflow (slower than a direct read), so use it only when the
+        task needs the agent, not as a default.
 
-        NOT a structured-data lookup. To list or fetch incidents (incl. the most
-        recent — use list_incidents(limit=1)), alerts (incident_list_alerts),
-        topology (get_infrastructure_context / service_impact), metrics, what an RCA
-        did (incident_findings / incident_finding_detail), or a postmortem, call the
-        direct tool or `search_tools` — those are faster and cheaper.
+        Do NOT use it for:
+        • Simple lookups now covered by direct tools: incidents (latest =
+          list_incidents(limit=1)), alerts, topology, metrics, RCA findings, a
+          postmortem, or your actions (list_actions) — use those, faster/cheaper.
+        • Questions about the Aurora product itself (how the app works, its
+          features, UI, settings) — answer from your own knowledge.
 
-        SESSION THREADING — READ THIS BEFORE CALLING:
-        Aurora chats are session-scoped. Every call returns a `session_id`. For ANY
-        follow-up turn in the same conversation (clarifications, "and also…", "what
-        about X?", re-asking after a partial answer, polling) you MUST pass that
-        `session_id` back. Omit it ONLY when the user clearly starts an unrelated new
-        topic. When in doubt, reuse the last `session_id` — a fresh session loses all
-        prior context, tools, and citations, and is almost always wrong.
+        SESSION THREADING — READ FIRST:
+        Chats are session-scoped; every call returns a `session_id`. On ANY
+        follow-up in the same conversation (clarifications, "what about X?",
+        polling) you MUST pass that `session_id` back. Omit it only to start an
+        unrelated topic — a fresh session loses all prior context and citations.
 
         Args:
-          message: User question. Ignored when poll_only=True. First turn: pass
-            message, note result.session_id; follow-up: pass message + that id.
-          session_id: The `session_id` from the previous result. REQUIRED on every
-            follow-up turn; omit only to start a new, unrelated chat.
+          message: User question. Ignored when poll_only=True.
+          session_id: from the previous result; REQUIRED on every follow-up turn,
+            omit only to start a new, unrelated chat.
           mode: "chat" (default) or "rca" for the deeper RCA pipeline.
-          poll_only: True to keep polling a running session (requires session_id).
+          poll_only: keep polling a running session (requires session_id).
 
         Returns: dict with `session_id` (always — keep for the next call), `status`,
           and either `response` + `citations`, `partial` + `hint`, or `error`.

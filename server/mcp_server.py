@@ -288,9 +288,13 @@ mcp = FastMCP(
         "(incident_list_alerts). For metrics (MTTR/DORA), postmortems, runbooks, "
         "deployments, logs, or anything not shown upfront, call `search_tools` to "
         "find the direct tool before assuming it's missing. Reserve "
-        "`chat_with_aurora` for open-ended, multi-source investigation or synthesis "
-        "(it runs the full agent workflow and is slower) — it is the escalation "
-        "path, not the default. Invoke discovered tools via call_tool."
+        "`chat_with_aurora` for work that needs Aurora's autonomous agent over the "
+        "user's connected systems — multi-source investigation/RCA OR taking action "
+        "(provisioning or changing infra via Terraform/kubectl/cloud CLIs, applying "
+        "code fixes, remediating). It runs the full agent workflow and is slower, so "
+        "it's the escalation path, not the default. It is NOT for questions about "
+        "the Aurora product itself (how the app works, its features, UI, settings) — "
+        "answer those from your own knowledge. Invoke discovered tools via call_tool."
     ),
     host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token
     stateless_http=True,

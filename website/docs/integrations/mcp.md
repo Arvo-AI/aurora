@@ -30,7 +30,7 @@ The surface is **hybrid**: a small set of always-visible tools handles the 80% c
 | `regenerate_rca` | Re-run RCA for an existing incident |
 | `knowledge_base_search` | Semantic search across Aurora's ingested docs |
 | `search_runbooks` | Unified runbook search across the knowledge base, Confluence, SharePoint |
-| `chat_with_aurora` | **Escalation path, not the default.** Aurora's agentic investigator for open-ended, multi-source questions that need synthesis or a root-cause investigation. Runs the full agent workflow (slower) — use a direct tool above for factual lookups. |
+| `chat_with_aurora` | **Escalation path, not the default.** Aurora's autonomous agent over your connected systems — investigates (multi-source RCA) *and acts* (provisions/changes infra via Terraform/kubectl/cloud CLIs, applies code fixes, remediates). Runs the full agent workflow (slower) — use a direct tool above for factual lookups. |
 | `search_tools` | Discover additional tools available behind the long-tail dispatch |
 | `call_tool` | Invoke a tool returned by `search_tools` |
 
@@ -38,7 +38,9 @@ The surface is **hybrid**: a small set of always-visible tools handles the 80% c
 
 Reach for a **direct tool** for any factual lookup — listing or fetching incidents (incl. the most recent via `list_incidents(limit=1)`), alerts, topology, service impact, RCA findings, metrics, or a postmortem. These are single proxied reads and return in roughly a second. `search_tools` finds direct tools that aren't in the upfront list (metrics, postmortems, deployments, logs, …).
 
-Reserve **`chat_with_aurora`** for open-ended, multi-source questions that need Aurora to synthesize across sources or run a fresh investigation (e.g. *"why did checkout-svc page at 3am — dig into it"*). It runs the full background agent workflow and is meaningfully slower, so it's the escalation path, not the default.
+Reserve **`chat_with_aurora`** for work that needs Aurora's autonomous agent over **your connected systems** — either multi-source investigation/RCA *or taking action*: provisioning and changing infrastructure (Terraform/IaC, kubectl, cloud CLIs), applying code fixes, and remediating (e.g. *"why did checkout-svc page at 3am — dig into it"*, *"set up auto-scaling for my cluster"*, *"create a GKE cluster"*). It runs the full background agent workflow and is meaningfully slower, so it's the escalation path, not the default.
+
+It is **not** a Q&A about the Aurora product itself — questions like *"how does Aurora work?"*, *"what does this feature do?"*, or *"where's that setting?"* should be answered from the assistant's own knowledge (or these docs), not by calling `chat_with_aurora`, which only investigates your operational data via connectors.
 
 > **Steering across clients:** the routing rubric lives in each tool's **description**, which every MCP client loads upfront. The server `instructions` string additionally reinforces it on clients that honor it (Claude Code, Codex); other clients (Cursor, Windsurf, VS Code Copilot) rely on the descriptions alone.
 
