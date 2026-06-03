@@ -266,6 +266,10 @@ async def _api(
             method, path, code, detail,
         )
         raise ValueError(f"Aurora API returned status {code}") from exc
+    # 204 No Content (e.g. DELETE) and other empty bodies have no JSON to parse;
+    # resp.json() would raise. Return a small ack so the MCP client sees success.
+    if resp.status_code == 204 or not resp.content:
+        return {"status": "ok", "status_code": resp.status_code}
     return resp.json()
 
 

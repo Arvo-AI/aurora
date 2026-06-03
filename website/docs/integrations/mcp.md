@@ -22,6 +22,9 @@ The surface is **hybrid**: a small set of always-visible tools handles the 80% c
 | `get_infrastructure_context` | System topology: environments, services, dependencies, CI/CD, monitoring. Read this first to understand the system |
 | `list_services` | Services in the dependency graph (filters: `resource_type`, `provider`) |
 | `service_impact` | Blast radius — downstream services that depend on a given service |
+| `list_actions` | List the org's Aurora actions (automations): trigger, mode, run count, last-run status |
+| `get_action` | One action's config plus its 20 most recent runs |
+| `list_action_runs` | An action's run history: status, timing, errors (`limit`, `offset`) |
 | `ask_incident` | Incident-scoped free-text follow-up (runs an investigation) |
 | `trigger_rca` | Start a new RCA from a free-text description |
 | `regenerate_rca` | Re-run RCA for an existing incident |
@@ -63,7 +66,8 @@ Specific endpoints are not in the upfront list. Discover them with `search_tools
 - **CI/CD deployments** — `jenkins_list_deployments`, `cloudbees_list_deployments`, `spinnaker_list_deployments` / `spinnaker_list_applications` / `spinnaker_list_pipelines` / `spinnaker_app_health` (great for *"what deployed right before this incident?"*)
 - **Sentry** — `sentry_list_projects`, `sentry_list_issues`, `sentry_list_events`
 - **Grafana** — `grafana_list_alerts`
-- **Logs / metrics / traces, Jira, GitHub, Bitbucket, Notion, Confluence/SharePoint runbooks** — and more
+- **Action writes** — `action_create`, `action_update`, `action_delete`, `action_restore_default`, `action_trigger` (the action *reads* are first-class Tier-1 tools above)
+- **Logs / metrics, Jira, GitHub, Bitbucket, Notion, Confluence/SharePoint runbooks** — and more
 
 **Out of scope for MCP** (deliberately not in the allowlist): Terraform apply/destroy, kubectl mutations, raw shell exec, Cloudflare WAF/DNS writes. These remain in the agent's internal surface only.
 

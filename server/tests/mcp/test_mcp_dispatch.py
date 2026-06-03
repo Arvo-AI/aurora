@@ -128,6 +128,27 @@ def test_call_tool_missing_path_arg_returns_error(monkeypatch, api_call):
     assert result["arg"] == "issue_key"
 
 
+def test_call_tool_routes_action_delete(monkeypatch, api_call, captured_calls):
+    """DELETE action routes the path arg with no body/params (always-on entry)."""
+    tools = _wire(monkeypatch, api_call, connected=[])
+    asyncio.run(tools["call_tool"]("action_delete", {"action_id": "abc-123"}))
+    method, path, params, body = captured_calls[-1]
+    assert (method, path) == ("DELETE", "/api/actions/abc-123")
+    assert params is None and body is None
+
+
+def test_call_tool_routes_action_trigger_body(monkeypatch, api_call, captured_calls):
+    """trigger sends incident_id in the JSON body, not the query string."""
+    tools = _wire(monkeypatch, api_call, connected=[])
+    asyncio.run(tools["call_tool"]("action_trigger", {
+        "action_id": "abc-123", "incident_id": "inc-9", "trigger_label": "mcp",
+    }))
+    method, path, params, body = captured_calls[-1]
+    assert (method, path) == ("POST", "/api/actions/abc-123/trigger")
+    assert body == {"incident_id": "inc-9", "trigger_label": "mcp"}
+    assert params is None
+
+
 def test_no_terraform_or_kubectl_entries():
     """Defense-in-depth — even if allowlist gets edited, banned ops stay out."""
     for entry in registry.DISPATCH_ALLOWLIST:

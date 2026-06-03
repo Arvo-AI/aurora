@@ -757,6 +757,63 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         path="/api/metrics/agent-execution",
         enabling_skills=(),
     ),
+    # ----- Actions (Aurora-internal automations, /api/actions) -----
+    # NOTE: the reads (list_actions, get_action, list_action_runs) are promoted
+    # to first-class Tier-1 tools (see tools_always_on.py) — exposed there, not
+    # here, to avoid double-exposure. Only the WRITES live in dispatch.
+    DispatchEntry(
+        name="action_create",
+        description=(
+            "Create a new action (write). trigger_type one of manual/on_schedule/"
+            "on_incident; on_schedule needs trigger_config.interval_seconds >= 300."
+        ),
+        category="actions",
+        method="POST",
+        path="/api/actions",
+        enabling_skills=(),
+        body_keys=("name", "description", "instructions", "trigger_type", "trigger_config", "mode"),
+    ),
+    DispatchEntry(
+        name="action_update",
+        description="Update an action's fields (write). Send only the fields to change.",
+        category="actions",
+        method="PUT",
+        path="/api/actions/{action_id}",
+        enabling_skills=(),
+        path_args=("action_id",),
+        body_keys=("name", "description", "instructions", "trigger_type", "trigger_config", "mode", "enabled"),
+    ),
+    DispatchEntry(
+        name="action_delete",
+        description="Delete a user-created action (write). System actions cannot be deleted.",
+        category="actions",
+        method="DELETE",
+        path="/api/actions/{action_id}",
+        enabling_skills=(),
+        path_args=("action_id",),
+    ),
+    DispatchEntry(
+        name="action_restore_default",
+        description="Restore a system action's instructions to the built-in default (write).",
+        category="actions",
+        method="POST",
+        path="/api/actions/{action_id}/restore-default",
+        enabling_skills=(),
+        path_args=("action_id",),
+    ),
+    DispatchEntry(
+        name="action_trigger",
+        description=(
+            "Run an action now (write — executes the automation). Optional body: "
+            "incident_id (required for on_incident actions), trigger_label."
+        ),
+        category="actions",
+        method="POST",
+        path="/api/actions/{action_id}/trigger",
+        enabling_skills=(),
+        path_args=("action_id",),
+        body_keys=("incident_id", "trigger_label"),
+    ),
     # ----- CI/CD deployments (Jenkins / CloudBees / Spinnaker) -----
     DispatchEntry(
         name="jenkins_list_deployments",

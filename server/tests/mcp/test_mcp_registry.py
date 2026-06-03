@@ -137,6 +137,41 @@ def test_new_connector_entries_present_and_gated():
         assert entry.method == "GET", name
 
 
+def test_action_write_entries_present_and_always_on():
+    """The 5 /api/actions WRITES are in the allowlist, Aurora-native (no
+    enabling skills → always visible). The reads are promoted to Tier-1."""
+    by_name = {e.name: e for e in registry.DISPATCH_ALLOWLIST}
+    expected = {
+        "action_create": ("POST", "/api/actions"),
+        "action_update": ("PUT", "/api/actions/{action_id}"),
+        "action_delete": ("DELETE", "/api/actions/{action_id}"),
+        "action_restore_default": ("POST", "/api/actions/{action_id}/restore-default"),
+        "action_trigger": ("POST", "/api/actions/{action_id}/trigger"),
+    }
+    for name, (method, path) in expected.items():
+        assert name in by_name, f"{name} missing from allowlist"
+        entry = by_name[name]
+        assert (entry.method, entry.path) == (method, path), name
+        assert entry.enabling_skills == (), name  # always-on
+        assert entry.category == "actions", name
+    # write bodies route to the JSON body, not the query string
+    assert "instructions" in by_name["action_create"].body_keys
+    assert "enabled" in by_name["action_update"].body_keys
+    assert "incident_id" in by_name["action_trigger"].body_keys
+
+
+def test_action_reads_promoted_not_in_allowlist():
+    """The action reads are first-class Tier-1 tools, not dispatch entries."""
+    names = {e.name for e in registry.DISPATCH_ALLOWLIST}
+    for read in ("actions_list", "action_get", "action_list_runs"):
+        assert read not in names, f"{read} should be promoted, not in allowlist"
+    fake = FakeMCP()
+    api_call, _ = make_captured_api_call()
+    register_tier1_tools(fake, api_call)
+    for tool in ("list_actions", "get_action", "list_action_runs"):
+        assert tool in fake.tools, tool
+
+
 def test_new_connector_entries_gated_in_search(monkeypatch):
     """Gated entries are only callable_now once their skill is connected."""
     monkeypatch.setattr(

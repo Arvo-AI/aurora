@@ -133,11 +133,11 @@ def _do_search_tools(
             "hint": (
                 "Aurora exposes many more tools than the few shown upfront — "
                 "logs, metrics, deployments (Jenkins/CloudBees/Spinnaker), "
-                "Jira, GitHub, Sentry, Grafana, postmortems, and DORA metrics "
-                "(MTTR/MTTD/CFR). Search here before assuming a capability is "
-                "missing or defaulting to chat_with_aurora. call_tool requires a "
-                "tool whose `callable_now` is true; connect the integration in "
-                "Aurora to enable the rest."
+                "Jira, GitHub, Sentry, Grafana, postmortems, actions/automations, "
+                "and DORA metrics (MTTR/MTTD/CFR). Search here before assuming a "
+                "capability is missing or defaulting to chat_with_aurora. "
+                "call_tool requires a tool whose `callable_now` is true; connect "
+                "the integration in Aurora to enable the rest."
             ),
         },
         tool_name="search_tools",
@@ -209,9 +209,9 @@ def register_dispatch_tools(
         Call this BEFORE assuming a capability is missing or defaulting to
         chat_with_aurora. Searchable families include logs, metrics,
         deployments (Jenkins/CloudBees/Spinnaker), Jira, GitHub, Sentry, Grafana,
-        Bitbucket, Notion, Confluence/SharePoint runbooks, postmortems, and DORA
-        metrics (MTTR/MTTD/CFR/incident frequency). Then invoke a result with
-        call_tool.
+        Bitbucket, Notion, Confluence/SharePoint runbooks, postmortems,
+        actions/automations, and DORA metrics (MTTR/MTTD/CFR/incident frequency).
+        Then invoke a result with call_tool.
 
         Args:
           query: free-text search over tool name and description, e.g.

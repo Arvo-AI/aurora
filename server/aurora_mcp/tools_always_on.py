@@ -209,6 +209,32 @@ async def _do_incident_list_alerts(api_call: ApiCall, incident_id: str) -> Dict[
     )
 
 
+async def _do_list_actions(api_call: ApiCall) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", "/api/actions"),
+        tool_name="list_actions",
+    )
+
+
+async def _do_get_action(api_call: ApiCall, action_id: str) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", f"/api/actions/{action_id}"),
+        tool_name="get_action",
+    )
+
+
+async def _do_list_action_runs(
+    api_call: ApiCall, action_id: str, limit: int, offset: int,
+) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call(
+            "GET", f"/api/actions/{action_id}/runs",
+            params={"limit": limit, "offset": offset},
+        ),
+        tool_name="list_action_runs",
+    )
+
+
 def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     """Register Tier-1 tools on a FastMCP instance.
 
@@ -403,3 +429,38 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         severity, and correlation score. Use this to answer "what alerts fired
         for incident X". Direct read; no chat needed."""
         return await _do_incident_list_alerts(api_call, incident_id)
+
+    # The next three are Aurora "Actions" (automations) reads, promoted from the
+    # dispatch allowlist to first-class tools so "list my actions" maps here
+    # directly. The action WRITES (create/update/delete/restore/trigger) stay in
+    # DISPATCH_ALLOWLIST (registry.py) — do NOT re-add these reads there.
+    @mcp.tool()
+    async def list_actions() -> Dict[str, Any]:
+        """List this org's Aurora actions (automations): name, trigger type,
+        mode, enabled, run count, and last-run status. Use this when the user
+        asks to see their actions or automations. Direct read; no chat needed.
+        (Aurora "Actions" are saved automations — not the agent's own tools.)"""
+        return await _do_list_actions(api_call)
+
+    @mcp.tool()
+    async def get_action(action_id: str) -> Dict[str, Any]:
+        """Get one Aurora action's full config plus its 20 most recent runs.
+
+        Args:
+          action_id: the action UUID (from list_actions).
+        """
+        return await _do_get_action(api_call, action_id)
+
+    @mcp.tool()
+    async def list_action_runs(
+        action_id: str, limit: int = 50, offset: int = 0,
+    ) -> Dict[str, Any]:
+        """List an Aurora action's run history: status, timing, linked incident/
+        chat session, and any error. Use this to check whether an automation ran
+        and how it went.
+
+        Args:
+          action_id: the action UUID (from list_actions).
+          limit: max runs (1-200, default 50). offset: paging offset.
+        """
+        return await _do_list_action_runs(api_call, action_id, limit, offset)
