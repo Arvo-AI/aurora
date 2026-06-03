@@ -3,14 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
-  Check, ChevronDown, ChevronLeft, ExternalLink, Eye, EyeOff,
-  Loader2, MonitorCog, Network, ShieldCheck, KeyRound,
+  ChevronLeft, ChevronRight, Copy, Eye, EyeOff,
+  Loader2,
 } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
 import { cloudbeesService } from "@/lib/services/ci-provider";
@@ -18,6 +15,8 @@ import type { CIProviderStatus } from "@/lib/services/ci-provider";
 import { apiRequest } from "@/lib/services/api-client";
 
 type ConnectionMode = "single-controller" | "operations-center" | "personal-access-token";
+
+type View = "picker" | "form";
 
 interface DiscoveredController {
   name: string;
@@ -39,6 +38,7 @@ export default function CloudBeesAuthPage() {
   const router = useRouter();
   const { toast } = useToast();
 
+  const [view, setView] = useState<View>("picker");
   const [mode, setMode] = useState<ConnectionMode>("single-controller");
   const [loading, setLoading] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(true);
@@ -57,7 +57,6 @@ export default function CloudBeesAuthPage() {
   const [showOcToken, setShowOcToken] = useState(false);
   const [rolloutToken, setRolloutToken] = useState("");
   const [showRolloutToken, setShowRolloutToken] = useState(false);
-  const [showFeatureManagement, setShowFeatureManagement] = useState(false);
   const [controllers, setControllers] = useState<DiscoveredController[]>([]);
 
   // Personal Access Token fields
@@ -312,134 +311,198 @@ export default function CloudBeesAuthPage() {
     }
   };
 
+  const selectMode = (m: ConnectionMode) => {
+    setMode(m);
+    setView("form");
+    setUrlError("");
+  };
+
   const isConnected = Boolean(status?.connected);
 
   if (checkingStatus && !status) {
     return (
-      <div className="container mx-auto py-16 px-4 max-w-3xl flex flex-col items-center justify-center gap-3">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Checking connection status...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
+        <Loader2 className="h-6 w-6 animate-spin text-[#555]" />
+        <p className="text-[13px] text-[#555]">Checking connection...</p>
       </div>
     );
   }
 
-  return (
-    <div className="container mx-auto py-8 px-4 max-w-3xl">
-      <button
-        onClick={() => router.push("/connectors")}
-        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
-      >
-        <ChevronLeft className="h-4 w-4" />
-        Back to Connectors
-      </button>
+  if (isConnected) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-16">
+        <p className="text-[11px] uppercase tracking-[0.15em] text-[#555] mb-8">Connect Integration</p>
 
-      <div className="flex items-center gap-4 mb-8">
-        <div className="p-2 rounded-xl shadow-sm border overflow-hidden">
-          <img src="/cloudbees.svg" alt="CloudBees" className="h-9 w-9 object-contain rounded-md" />
+        <div className="slide-in">
+          <div className="flex items-baseline gap-3 mb-1">
+            <h1 className="text-[32px] font-bold tracking-tight">CloudBees</h1>
+            <span className="text-[15px] text-green-500">Connected</span>
+            <button
+              onClick={handleDisconnect}
+              disabled={loading}
+              className="text-[13px] text-[#666] hover:text-white transition-colors ml-auto"
+            >
+              {loading ? "Disconnecting..." : "Disconnect"}
+            </button>
+          </div>
+
+          <div className="mt-10 space-y-4">
+            <div>
+              <p className="text-[13px] text-[#999] mb-1">URL</p>
+              <p className="text-[15px]">{status?.baseUrl}</p>
+            </div>
+            {status?.username && (
+              <div>
+                <p className="text-[13px] text-[#999] mb-1">User</p>
+                <p className="text-[15px]">{status.username}</p>
+              </div>
+            )}
+            {status?.server?.version && (
+              <div>
+                <p className="text-[13px] text-[#999] mb-1">Version</p>
+                <p className="text-[15px]">v{status.server.version}</p>
+              </div>
+            )}
+          </div>
+
+          {controllers.length > 0 && (
+            <div className="mt-10">
+              <p className="text-[11px] uppercase tracking-[0.15em] text-[#555] mb-4">Controllers</p>
+              <div className="space-y-1">
+                {controllers.map((ctrl) => (
+                  <div key={ctrl.url} className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/[0.02]">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[14px] truncate">{ctrl.name}</p>
+                      <p className="text-[12px] text-[#555] truncate">{ctrl.url}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${ctrl.status === "online" ? "bg-green-500" : "bg-[#555]"}`} />
+                      <span className="text-[12px] text-[#777]">{ctrl.status}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {status?.baseUrl && (
+            <div className="mt-10">
+              <p className="text-[11px] uppercase tracking-[0.15em] text-[#555] mb-4">Deployment Webhook</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-[13px] text-[#777] bg-white/[0.02] px-4 py-3 rounded-xl truncate">
+                  {`${window.location.origin}/api/webhooks/cloudbees`}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/cloudbees`);
+                    toast({ title: "Copied", description: "Webhook URL copied to clipboard" });
+                  }}
+                  className="p-3 rounded-xl hover:bg-white/[0.04] transition-colors"
+                >
+                  <Copy className="h-4 w-4 text-[#777]" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">CloudBees CI</h1>
-          <p className="text-muted-foreground text-sm">Read-only access to jobs, builds, pipelines, and agents</p>
-        </div>
-        {isConnected && (
-          <Badge className="ml-auto bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800 hover:bg-green-100">
-            <Check className="h-3 w-3 mr-1" />
-            Connected
-          </Badge>
-        )}
       </div>
+    );
+  }
 
-      {isConnected ? (
-        <ConnectedSection
-          status={status}
-          controllers={controllers}
-          loading={loading}
-          onDisconnect={handleDisconnect}
-        />
+  // Disconnected — show picker or form
+  return (
+    <div className="max-w-md mx-auto px-4 py-16">
+      <p className="text-[11px] uppercase tracking-[0.15em] text-[#555] mb-8">Connect Integration</p>
+
+      {view === "picker" ? (
+        <div className="slide-in">
+          <h1 className="text-[32px] font-bold tracking-tight mb-3">CloudBees</h1>
+          <p className="text-[15px] text-[#777] mb-10">
+            Connect your CloudBees CI environment to enable build monitoring, deployment correlation, and incident investigation.
+          </p>
+
+          <div className="divide-y divide-white/[0.04]">
+            <button
+              type="button"
+              onClick={() => selectMode("operations-center")}
+              className="group w-full flex items-center justify-between py-4 text-left"
+            >
+              <div>
+                <p className="text-[15px] font-medium">Operations Center</p>
+                <p className="text-[13px] text-[#777] mt-0.5">All your controllers, one connection</p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-[#555] group-hover:translate-x-1 transition-transform" />
+            </button>
+            <button
+              type="button"
+              onClick={() => selectMode("single-controller")}
+              className="group w-full flex items-center justify-between py-4 text-left"
+            >
+              <div>
+                <p className="text-[15px] font-medium">Single controller</p>
+                <p className="text-[13px] text-[#777] mt-0.5">Direct connection to one instance</p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-[#555] group-hover:translate-x-1 transition-transform" />
+            </button>
+            <button
+              type="button"
+              onClick={() => selectMode("personal-access-token")}
+              className="group w-full flex items-center justify-between py-4 text-left"
+            >
+              <div>
+                <p className="text-[15px] font-medium">Access token</p>
+                <p className="text-[13px] text-[#777] mt-0.5">Platform-level PAT</p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-[#555] group-hover:translate-x-1 transition-transform" />
+            </button>
+          </div>
+
+          <p className="text-[11px] text-[#444] mt-8">
+            Operations Center is recommended for most teams — it discovers all managed controllers automatically.
+          </p>
+        </div>
       ) : (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">How would you like to connect?</CardTitle>
-              <CardDescription>
-                Choose the connection method that matches your CloudBees setup
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <ModeCard
-                selected={mode === "single-controller"}
-                onClick={() => setMode("single-controller")}
-                icon={<MonitorCog className="h-5 w-5 text-violet-600" />}
-                title="Single Controller"
-                description="Connect directly to one Jenkins/CloudBees CI controller"
-              />
-              <ModeCard
-                selected={mode === "operations-center"}
-                onClick={() => setMode("operations-center")}
-                icon={<Network className="h-5 w-5 text-violet-600" />}
-                title="Operations Center"
-                description="Connect to your CloudBees Operations Center to manage all controllers from one place"
-              />
-              <ModeCard
-                selected={mode === "personal-access-token"}
-                onClick={() => setMode("personal-access-token")}
-                icon={<KeyRound className="h-5 w-5 text-violet-600" />}
-                title="Personal Access Token"
-                description="Use a CloudBees Platform PAT (if your org uses platform-level authentication)"
-              />
-            </CardContent>
-          </Card>
+        <div className="slide-in">
+          <button
+            type="button"
+            onClick={() => { setView("picker"); setUrlError(""); }}
+            className="flex items-center gap-1 text-[13px] text-[#777] hover:text-white transition-colors mb-8"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Back
+          </button>
 
-          {urlError && (
-            <p className="text-sm text-red-500 px-1">{urlError}</p>
+          {mode === "operations-center" && (
+            <OperationsCenterForm
+              ocUrl={ocUrl} setOcUrl={setOcUrl}
+              ocUsername={ocUsername} setOcUsername={setOcUsername}
+              ocApiToken={ocApiToken} setOcApiToken={setOcApiToken}
+              showOcToken={showOcToken} setShowOcToken={setShowOcToken}
+              rolloutToken={rolloutToken} setRolloutToken={setRolloutToken}
+              showRolloutToken={showRolloutToken} setShowRolloutToken={setShowRolloutToken}
+              loading={loading} onSubmit={handleOCConnect}
+              urlError={urlError}
+            />
           )}
 
           {mode === "single-controller" && (
             <SingleControllerForm
-              baseUrl={baseUrl}
-              setBaseUrl={setBaseUrl}
-              username={username}
-              setUsername={setUsername}
-              apiToken={apiToken}
-              setApiToken={setApiToken}
-              showToken={showToken}
-              setShowToken={setShowToken}
-              loading={loading}
-              onSubmit={handleSingleControllerConnect}
-            />
-          )}
-
-          {mode === "operations-center" && (
-            <OperationsCenterForm
-              ocUrl={ocUrl}
-              setOcUrl={setOcUrl}
-              ocUsername={ocUsername}
-              setOcUsername={setOcUsername}
-              ocApiToken={ocApiToken}
-              setOcApiToken={setOcApiToken}
-              showOcToken={showOcToken}
-              setShowOcToken={setShowOcToken}
-              rolloutToken={rolloutToken}
-              setRolloutToken={setRolloutToken}
-              showRolloutToken={showRolloutToken}
-              setShowRolloutToken={setShowRolloutToken}
-              showFeatureManagement={showFeatureManagement}
-              setShowFeatureManagement={setShowFeatureManagement}
-              loading={loading}
-              onSubmit={handleOCConnect}
+              baseUrl={baseUrl} setBaseUrl={setBaseUrl}
+              username={username} setUsername={setUsername}
+              apiToken={apiToken} setApiToken={setApiToken}
+              showToken={showToken} setShowToken={setShowToken}
+              loading={loading} onSubmit={handleSingleControllerConnect}
+              urlError={urlError}
             />
           )}
 
           {mode === "personal-access-token" && (
             <PATForm
-              platformUrl={platformUrl}
-              setPlatformUrl={setPlatformUrl}
-              pat={pat}
-              setPat={setPat}
-              showPat={showPat}
-              setShowPat={setShowPat}
-              loading={loading}
-              onSubmit={handlePATConnect}
+              platformUrl={platformUrl} setPlatformUrl={setPlatformUrl}
+              pat={pat} setPat={setPat}
+              showPat={showPat} setShowPat={setShowPat}
+              loading={loading} onSubmit={handlePATConnect}
+              urlError={urlError}
             />
           )}
         </div>
@@ -448,50 +511,9 @@ export default function CloudBeesAuthPage() {
   );
 }
 
-function ModeCard({
-  selected,
-  onClick,
-  icon,
-  title,
-  description,
-}: {
-  selected: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-        selected
-          ? "border-violet-600 bg-violet-50/50 dark:bg-violet-950/20 dark:border-violet-500"
-          : "border-border hover:border-muted-foreground/30 hover:bg-muted/30"
-      }`}
-    >
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 shrink-0">{icon}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-sm">{title}</span>
-            {selected && (
-              <div className="h-4 w-4 rounded-full bg-violet-600 flex items-center justify-center">
-                <Check className="h-2.5 w-2.5 text-white" />
-              </div>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-        </div>
-      </div>
-    </button>
-  );
-}
-
 function SingleControllerForm({
   baseUrl, setBaseUrl, username, setUsername, apiToken, setApiToken,
-  showToken, setShowToken, loading, onSubmit,
+  showToken, setShowToken, loading, onSubmit, urlError,
 }: {
   baseUrl: string; setBaseUrl: (v: string) => void;
   username: string; setUsername: (v: string) => void;
@@ -499,59 +521,87 @@ function SingleControllerForm({
   showToken: boolean; setShowToken: (v: boolean) => void;
   loading: boolean;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  urlError: string;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Connect to Controller</CardTitle>
-        <CardDescription>
-          Enter your CloudBees CI controller URL and API credentials
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="space-y-5">
-          <div className="grid gap-1.5">
-            <Label htmlFor="sc-url" className="text-sm font-medium">Controller URL</Label>
-            <Input id="sc-url" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://cloudbees.example.com" required disabled={loading} className="h-10" />
-            <p className="text-xs text-muted-foreground">Full URL to your CloudBees CI controller, without a trailing slash</p>
+    <div>
+      <h2 className="text-[24px] font-bold tracking-tight mb-2">Single controller</h2>
+      <p className="text-[15px] text-[#777] mb-10">Connect directly to your CloudBees CI instance.</p>
+
+      {urlError && <p className="text-[13px] text-red-500 mb-4">{urlError}</p>}
+
+      <form onSubmit={onSubmit} className="space-y-6">
+        <div>
+          <label htmlFor="sc-url" className="block text-[13px] text-[#999] mb-2">Controller URL</label>
+          <input
+            id="sc-url"
+            type="text"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://cloudbees.example.com"
+            required
+            disabled={loading}
+            className="w-full h-11 px-4 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+          />
+        </div>
+        <div>
+          <label htmlFor="sc-username" className="block text-[13px] text-[#999] mb-2">Username</label>
+          <input
+            id="sc-username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="your-cloudbees-username"
+            required
+            disabled={loading}
+            className="w-full h-11 px-4 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+          />
+        </div>
+        <div>
+          <label htmlFor="sc-token" className="block text-[13px] text-[#999] mb-2">API Token</label>
+          <div className="relative">
+            <input
+              id="sc-token"
+              type={showToken ? "text" : "password"}
+              value={apiToken}
+              onChange={(e) => setApiToken(e.target.value)}
+              placeholder="11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              required
+              disabled={loading}
+              className="w-full h-11 px-4 pr-11 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={() => setShowToken(!showToken)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition-colors"
+              aria-label={showToken ? "Hide token" : "Show token"}
+            >
+              {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="sc-username" className="text-sm font-medium">Username</Label>
-            <Input id="sc-username" value={username} onChange={(e) => setUsername(e.target.value)}
-              placeholder="your-cloudbees-username" required disabled={loading} className="h-10" />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="sc-token" className="text-sm font-medium">API Token</Label>
-            <div className="relative">
-              <Input id="sc-token" type={showToken ? "text" : "password"} value={apiToken}
-                onChange={(e) => setApiToken(e.target.value)} placeholder="11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                required disabled={loading} className="h-10 pr-10" />
-              <button type="button" onClick={() => setShowToken(!showToken)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                aria-label={showToken ? "Hide token" : "Show token"}>
-                {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Generate a token: Click your username &rarr; Security &rarr; API Token &rarr; Add new Token
-            </p>
-          </div>
-          <SecurityNote />
-          <Button type="submit" disabled={loading || !baseUrl || !username || !apiToken} className="w-full h-10">
-            {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Controller"}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+          <p className="text-[11px] text-[#444] mt-2">Your profile &rarr; Security &rarr; API Token &rarr; Generate</p>
+        </div>
+
+        <div className="pt-4">
+          <button
+            type="submit"
+            disabled={loading || !baseUrl || !username || !apiToken}
+            className="w-full h-11 rounded-xl bg-white text-black font-medium text-[15px] hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? "Connecting..." : "Connect"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
 function OperationsCenterForm({
   ocUrl, setOcUrl, ocUsername, setOcUsername, ocApiToken, setOcApiToken,
   showOcToken, setShowOcToken, rolloutToken, setRolloutToken,
-  showRolloutToken, setShowRolloutToken, showFeatureManagement, setShowFeatureManagement,
-  loading, onSubmit,
+  showRolloutToken, setShowRolloutToken,
+  loading, onSubmit, urlError,
 }: {
   ocUrl: string; setOcUrl: (v: string) => void;
   ocUsername: string; setOcUsername: (v: string) => void;
@@ -559,228 +609,180 @@ function OperationsCenterForm({
   showOcToken: boolean; setShowOcToken: (v: boolean) => void;
   rolloutToken: string; setRolloutToken: (v: string) => void;
   showRolloutToken: boolean; setShowRolloutToken: (v: boolean) => void;
-  showFeatureManagement: boolean; setShowFeatureManagement: (v: boolean) => void;
   loading: boolean;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  urlError: string;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Connect to Operations Center</CardTitle>
-        <CardDescription>
-          Connect to your CloudBees Operations Center to discover and manage all controllers
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="space-y-5">
-          <div className="grid gap-1.5">
-            <Label htmlFor="oc-url" className="text-sm font-medium">Operations Center URL</Label>
-            <Input id="oc-url" value={ocUrl} onChange={(e) => setOcUrl(e.target.value)}
-              placeholder="https://cjoc.company.com" required disabled={loading} className="h-10" />
-            <p className="text-xs text-muted-foreground">Full URL to your CloudBees Operations Center</p>
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="oc-username" className="text-sm font-medium">Username</Label>
-            <Input id="oc-username" value={ocUsername} onChange={(e) => setOcUsername(e.target.value)}
-              placeholder="your-cloudbees-username" required disabled={loading} className="h-10" />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="oc-token" className="text-sm font-medium">API Token</Label>
-            <div className="relative">
-              <Input id="oc-token" type={showOcToken ? "text" : "password"} value={ocApiToken}
-                onChange={(e) => setOcApiToken(e.target.value)} placeholder="11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                required disabled={loading} className="h-10 pr-10" />
-              <button type="button" onClick={() => setShowOcToken(!showOcToken)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                aria-label={showOcToken ? "Hide token" : "Show token"}>
-                {showOcToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Generate a token in your Operations Center: Click your username &rarr; Security &rarr; API Token &rarr; Add new Token
-            </p>
-          </div>
+    <div>
+      <h2 className="text-[24px] font-bold tracking-tight mb-2">Operations Center</h2>
+      <p className="text-[15px] text-[#777] mb-10">We'll discover your managed controllers automatically.</p>
 
-          {/* Feature Management (collapsible) */}
-          <div className="border rounded-lg overflow-hidden">
+      {urlError && <p className="text-[13px] text-red-500 mb-4">{urlError}</p>}
+
+      <form onSubmit={onSubmit} className="space-y-6">
+        <div>
+          <label htmlFor="oc-url" className="block text-[13px] text-[#999] mb-2">Operations Center URL</label>
+          <input
+            id="oc-url"
+            type="text"
+            value={ocUrl}
+            onChange={(e) => setOcUrl(e.target.value)}
+            placeholder="https://cjoc.company.com"
+            required
+            disabled={loading}
+            className="w-full h-11 px-4 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+          />
+        </div>
+        <div>
+          <label htmlFor="oc-username" className="block text-[13px] text-[#999] mb-2">Username</label>
+          <input
+            id="oc-username"
+            type="text"
+            value={ocUsername}
+            onChange={(e) => setOcUsername(e.target.value)}
+            placeholder="your-cloudbees-username"
+            required
+            disabled={loading}
+            className="w-full h-11 px-4 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+          />
+        </div>
+        <div>
+          <label htmlFor="oc-token" className="block text-[13px] text-[#999] mb-2">API Token</label>
+          <div className="relative">
+            <input
+              id="oc-token"
+              type={showOcToken ? "text" : "password"}
+              value={ocApiToken}
+              onChange={(e) => setOcApiToken(e.target.value)}
+              placeholder="11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              required
+              disabled={loading}
+              className="w-full h-11 px-4 pr-11 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+            />
             <button
               type="button"
-              onClick={() => setShowFeatureManagement(!showFeatureManagement)}
-              className="w-full text-left p-3 flex items-center justify-between hover:bg-muted/50 transition-colors"
+              onClick={() => setShowOcToken(!showOcToken)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition-colors"
+              aria-label={showOcToken ? "Hide token" : "Show token"}
             >
-              <span className="text-sm font-medium text-muted-foreground">Feature Management (optional)</span>
-              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showFeatureManagement ? "rotate-180" : ""}`} />
+              {showOcToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
-            {showFeatureManagement && (
-              <div className="px-3 pb-3 border-t pt-3 space-y-1.5">
-                <Label htmlFor="rollout-token" className="text-sm font-medium">Rollout API Token</Label>
-                <div className="relative">
-                  <Input id="rollout-token" type={showRolloutToken ? "text" : "password"} value={rolloutToken}
-                    onChange={(e) => setRolloutToken(e.target.value)} placeholder="Bearer token from Feature Management settings"
-                    disabled={loading} className="h-10 pr-10" />
-                  <button type="button" onClick={() => setShowRolloutToken(!showRolloutToken)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label={showRolloutToken ? "Hide token" : "Show token"}>
-                    {showRolloutToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Optional &mdash; enables feature flag change correlation during incident investigation
-                </p>
-              </div>
-            )}
           </div>
+          <p className="text-[11px] text-[#444] mt-2">Your profile &rarr; Security &rarr; API Token &rarr; Generate</p>
+        </div>
 
-          <SecurityNote />
-          <Button type="submit" disabled={loading || !ocUrl || !ocUsername || !ocApiToken} className="w-full h-10">
-            {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect Operations Center"}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+        <details className="mt-10">
+          <summary className="text-[13px] text-[#777] cursor-pointer hover:text-[#999] transition-colors">
+            Feature flag correlation (optional)
+          </summary>
+          <div className="mt-4">
+            <label htmlFor="rollout-token" className="block text-[13px] text-[#999] mb-2">Rollout API Token</label>
+            <div className="relative">
+              <input
+                id="rollout-token"
+                type={showRolloutToken ? "text" : "password"}
+                value={rolloutToken}
+                onChange={(e) => setRolloutToken(e.target.value)}
+                placeholder="Bearer token from Feature Management"
+                disabled={loading}
+                className="w-full h-11 px-4 pr-11 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={() => setShowRolloutToken(!showRolloutToken)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition-colors"
+                aria-label={showRolloutToken ? "Hide token" : "Show token"}
+              >
+                {showRolloutToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="text-[11px] text-[#444] mt-2">Enables feature flag change correlation during incident investigation</p>
+          </div>
+        </details>
+
+        <div className="pt-4">
+          <button
+            type="submit"
+            disabled={loading || !ocUrl || !ocUsername || !ocApiToken}
+            className="w-full h-11 rounded-xl bg-white text-black font-medium text-[15px] hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? "Connecting..." : "Connect"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
 function PATForm({
-  platformUrl, setPlatformUrl, pat, setPat, showPat, setShowPat, loading, onSubmit,
+  platformUrl, setPlatformUrl, pat, setPat, showPat, setShowPat, loading, onSubmit, urlError,
 }: {
   platformUrl: string; setPlatformUrl: (v: string) => void;
   pat: string; setPat: (v: string) => void;
   showPat: boolean; setShowPat: (v: boolean) => void;
   loading: boolean;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  urlError: string;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Connect with Personal Access Token</CardTitle>
-        <CardDescription>
-          Use a CloudBees Platform PAT for organizations using platform-level authentication
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="space-y-5">
-          <div className="grid gap-1.5">
-            <Label htmlFor="pat-url" className="text-sm font-medium">Platform URL</Label>
-            <Input id="pat-url" value={platformUrl} onChange={(e) => setPlatformUrl(e.target.value)}
-              placeholder="https://your-org.cloudbees.io" required disabled={loading} className="h-10" />
-            <p className="text-xs text-muted-foreground">Your CloudBees Platform URL</p>
+    <div>
+      <h2 className="text-[24px] font-bold tracking-tight mb-2">Access token</h2>
+      <p className="text-[15px] text-[#777] mb-10">Connect with a CloudBees Platform personal access token.</p>
+
+      {urlError && <p className="text-[13px] text-red-500 mb-4">{urlError}</p>}
+
+      <form onSubmit={onSubmit} className="space-y-6">
+        <div>
+          <label htmlFor="pat-url" className="block text-[13px] text-[#999] mb-2">Platform URL</label>
+          <input
+            id="pat-url"
+            type="text"
+            value={platformUrl}
+            onChange={(e) => setPlatformUrl(e.target.value)}
+            placeholder="https://your-org.cloudbees.io"
+            required
+            disabled={loading}
+            className="w-full h-11 px-4 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+          />
+        </div>
+        <div>
+          <label htmlFor="pat-token" className="block text-[13px] text-[#999] mb-2">Personal Access Token</label>
+          <div className="relative">
+            <input
+              id="pat-token"
+              type={showPat ? "text" : "password"}
+              value={pat}
+              onChange={(e) => setPat(e.target.value)}
+              placeholder="cbp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              required
+              disabled={loading}
+              className="w-full h-11 px-4 pr-11 rounded-xl border border-white/[0.06] bg-transparent text-[15px] placeholder:text-[#444] focus:outline-none focus:border-white/[0.12] transition-colors disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPat(!showPat)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition-colors"
+              aria-label={showPat ? "Hide token" : "Show token"}
+            >
+              {showPat ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pat-token" className="text-sm font-medium">Personal Access Token</Label>
-            <div className="relative">
-              <Input id="pat-token" type={showPat ? "text" : "password"} value={pat}
-                onChange={(e) => setPat(e.target.value)} placeholder="cbp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                required disabled={loading} className="h-10 pr-10" />
-              <button type="button" onClick={() => setShowPat(!showPat)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                aria-label={showPat ? "Hide token" : "Show token"}>
-                {showPat ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Generate a PAT: Click your profile &rarr; User profile &rarr; Personal access tokens &rarr; Create token
-            </p>
-          </div>
-          <SecurityNote />
-          <Button type="submit" disabled={loading || !platformUrl || !pat} className="w-full h-10">
-            {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>) : "Connect with PAT"}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
+          <p className="text-[11px] text-[#444] mt-2">Profile &rarr; Personal access tokens &rarr; Create</p>
+        </div>
 
-function SecurityNote() {
-  return (
-    <div className="flex items-start gap-2.5 p-3 rounded-lg bg-muted/50 text-xs">
-      <ShieldCheck className="h-4 w-4 text-green-600 dark:text-green-500 shrink-0 mt-0.5" />
-      <div className="space-y-1">
-        <p className="font-medium">Secure &amp; Read-Only</p>
-        <p className="text-muted-foreground">
-          Your credentials are encrypted and stored in Vault. Aurora only reads job and build data &mdash; it cannot trigger builds or modify configuration.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function ConnectedSection({
-  status,
-  controllers,
-  loading,
-  onDisconnect,
-}: {
-  status: CIProviderStatus | null;
-  controllers: DiscoveredController[];
-  loading: boolean;
-  onDisconnect: () => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="pt-6 space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate">{status?.baseUrl}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {status?.username}
-                {status?.server?.version ? ` · v${status.server.version}` : ""}
-                {status?.server?.mode ? ` · ${status.server.mode.charAt(0).toUpperCase()}${status.server.mode.slice(1).toLowerCase()}` : ""}
-              </p>
-            </div>
-            {status?.baseUrl && (
-              <a href={status.baseUrl} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0">
-                Open Dashboard
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {controllers.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <Network className="h-5 w-5 text-violet-600" />
-              <CardTitle className="text-lg">Discovered Controllers</CardTitle>
-            </div>
-            <CardDescription>
-              {controllers.length} controller{controllers.length !== 1 ? "s" : ""} found via Operations Center
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {controllers.map((ctrl) => (
-                <div key={ctrl.url} className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{ctrl.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{ctrl.url}</p>
-                  </div>
-                  <Badge
-                    variant={ctrl.status === "online" ? "default" : "secondary"}
-                    className={ctrl.status === "online" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800" : ""}
-                  >
-                    {ctrl.status}
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="flex items-center justify-between px-1">
-        <p className="text-xs text-muted-foreground">Remove stored credentials and disconnect</p>
-        <Button variant="ghost" size="sm" onClick={onDisconnect} disabled={loading}
-          className="text-red-500 hover:text-red-600 hover:bg-red-500/10 dark:text-red-400 dark:hover:text-red-300 h-8 text-xs">
-          {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
-          {loading ? "Disconnecting..." : "Disconnect"}
-        </Button>
-      </div>
+        <div className="pt-4">
+          <button
+            type="submit"
+            disabled={loading || !platformUrl || !pat}
+            className="w-full h-11 rounded-xl bg-white text-black font-medium text-[15px] hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? "Connecting..." : "Connect"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
