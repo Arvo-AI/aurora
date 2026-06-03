@@ -226,6 +226,10 @@ async def _do_get_action(api_call: ApiCall, action_id: str) -> Dict[str, Any]:
 async def _do_list_action_runs(
     api_call: ApiCall, action_id: str, limit: int, offset: int,
 ) -> Dict[str, Any]:
+    # Enforce the documented contract here rather than relying on the backend's
+    # own clamp, so the tool's stated bounds (1-200, offset >= 0) actually hold.
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
     return truncate_payload(
         await api_call(
             "GET", f"/api/actions/{action_id}/runs",

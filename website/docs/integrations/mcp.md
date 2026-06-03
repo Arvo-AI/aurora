@@ -19,7 +19,7 @@ The surface is **hybrid**: a small set of always-visible tools handles the 80% c
 | `incident_findings` | What each RCA sub-agent investigated: role, `tools_used`, citations, follow-ups |
 | `incident_finding_detail` | One sub-agent's full finding + per-step `tool_call_history` (the exact tools/steps the RCA ran) |
 | `incident_list_alerts` | The incident's correlated alerts: source, title, service, severity, correlation score |
-| `get_infrastructure_context` | System topology: environments, services, dependencies, CI/CD, monitoring. Read this first to understand the system |
+| `get_infrastructure_context` | System topology: environments, services, dependencies, CI/CD, and monitoring — a snapshot of how the system fits together |
 | `list_services` | Services in the dependency graph (filters: `resource_type`, `provider`) |
 | `service_impact` | Blast radius — downstream services that depend on a given service |
 | `list_actions` | List the org's Aurora actions (automations): trigger, mode, run count, last-run status |
@@ -30,19 +30,18 @@ The surface is **hybrid**: a small set of always-visible tools handles the 80% c
 | `regenerate_rca` | Re-run RCA for an existing incident |
 | `knowledge_base_search` | Semantic search across Aurora's ingested docs |
 | `search_runbooks` | Unified runbook search across the knowledge base, Confluence, SharePoint |
-| `chat_with_aurora` | **Escalation path, not the default.** Aurora's autonomous agent over your connected systems — investigates (multi-source RCA) *and acts* (provisions/changes infra via Terraform/kubectl/cloud CLIs, applies code fixes, remediates). Runs the full agent workflow (slower) — use a direct tool above for factual lookups. |
+| `chat_with_aurora` | Aurora's autonomous agent over your connected systems — investigates (multi-source RCA) *and acts* (provisions/changes infra via Terraform/kubectl/cloud CLIs, applies code fixes, remediates). Runs the full agent workflow, so it's slower than the direct read tools above. |
 | `search_tools` | Discover additional tools available behind the long-tail dispatch |
 | `call_tool` | Invoke a tool returned by `search_tools` |
 
-#### When to use `chat_with_aurora` vs a direct tool
+#### Two kinds of tools: fast reads vs. the agent
 
-Reach for a **direct tool** for any factual lookup — listing or fetching incidents (incl. the most recent via `list_incidents(limit=1)`), alerts, topology, service impact, RCA findings, metrics, or a postmortem. These are single proxied reads and return in roughly a second. `search_tools` finds direct tools that aren't in the upfront list (metrics, postmortems, deployments, logs, …).
+The MCP surface has two complementary parts, and your AI assistant picks between them automatically — there's nothing to configure:
 
-Reserve **`chat_with_aurora`** for work that needs Aurora's autonomous agent over **your connected systems** — either multi-source investigation/RCA *or taking action*: provisioning and changing infrastructure (Terraform/IaC, kubectl, cloud CLIs), applying code fixes, and remediating (e.g. *"why did checkout-svc page at 3am — dig into it"*, *"set up auto-scaling for my cluster"*, *"create a GKE cluster"*). It runs the full background agent workflow and is meaningfully slower, so it's the escalation path, not the default.
+- **Direct tools** are fast, single-purpose reads (incidents, alerts, topology, service impact, RCA findings, metrics, postmortems, your actions). They return in about a second, so most everyday questions — *"what was my last incident?"*, *"what depends on payments-svc?"* — resolve through these.
+- **`chat_with_aurora`** is Aurora's full autonomous agent running against your connected systems. It handles open-ended investigations and RCA, and can also take action — provisioning or changing infrastructure (Terraform/IaC, kubectl, cloud CLIs), applying code fixes, and remediating. It runs the full agent workflow, so it's slower and is meant for work that genuinely needs it, e.g. *"why did checkout-svc page at 3am?"* or *"set up auto-scaling for my cluster"*.
 
-It is **not** a Q&A about the Aurora product itself — questions like *"how does Aurora work?"*, *"what does this feature do?"*, or *"where's that setting?"* should be answered from the assistant's own knowledge (or these docs), not by calling `chat_with_aurora`, which only investigates your operational data via connectors.
-
-> **Steering across clients:** the routing rubric lives in each tool's **description**, which every MCP client loads upfront. The server `instructions` string additionally reinforces it on clients that honor it (Claude Code, Codex); other clients (Cursor, Windsurf, VS Code Copilot) rely on the descriptions alone.
+The guidance for choosing between them is built into the tool descriptions, so this works across MCP clients (Cursor, Claude Desktop/Code, Codex, Windsurf, …) without any per-client tuning. Note that `chat_with_aurora` works against your *connected* data and infrastructure — it isn't a help desk for the Aurora product itself.
 
 ### Tier 2 — Connector-gated
 
@@ -251,4 +250,4 @@ Once connected, your AI assistant can interact with Aurora:
    The open-ended case: Aurora's agent runs the full RCA and replies with citations.
 ```
 
-For factual lookups, prefer a **direct tool** — it's a single proxied read and returns in roughly a second, versus the tens of seconds `chat_with_aurora` takes to run the full agent workflow. `chat_with_aurora` runs Aurora's own agent server-side with its full system prompts and skill loader (so behavior matches the Aurora UI); reserve it for open-ended, multi-source investigation and synthesis.
+These map to the same capabilities you see in the Aurora UI: quick questions resolve through the fast direct tools (about a second), while `chat_with_aurora` runs Aurora's full agent server-side — the same system prompts and skill loader as the in-app chat — for investigations and actions that genuinely need it (which is why those take longer).

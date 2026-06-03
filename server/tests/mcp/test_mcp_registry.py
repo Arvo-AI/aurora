@@ -212,6 +212,20 @@ def test_service_impact_url_encodes_name():
     assert path == "/api/graph/services/payments%2Fv2%20svc/impact"
 
 
+def test_list_action_runs_clamps_limit_and_offset():
+    """The tool enforces its documented bounds (limit 1-200, offset >= 0) so the
+    docstring contract holds regardless of the backend's own clamp."""
+    import asyncio
+
+    fake = FakeMCP()
+    api_call, captured = make_captured_api_call()
+    register_tier1_tools(fake, api_call)
+    asyncio.run(fake.tools["list_action_runs"](action_id="a1", limit=999999, offset=-5))
+    _, path, params, _ = captured[-1]
+    assert path == "/api/actions/a1/runs"
+    assert params == {"limit": 200, "offset": 0}
+
+
 def test_list_services_passes_filter_params():
     import asyncio
 
