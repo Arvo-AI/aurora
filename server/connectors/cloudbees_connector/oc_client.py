@@ -70,11 +70,31 @@ class CloudBeesOCClient:
         return False
 
     def _validate_controller_url(self, controller_url: str) -> None:
-        """Validate that a controller URL belongs to the same domain as the OC base URL."""
-        oc_host = urlparse(self.base_url).hostname
-        ctrl_host = urlparse(controller_url).hostname
-        if not ctrl_host or (ctrl_host != oc_host and not ctrl_host.endswith(f".{oc_host}")):
-            raise ValueError(f"Controller URL {controller_url} does not match OC domain {oc_host}")
+        """Validate that a controller URL belongs to the same registrable domain as the OC base URL.
+
+        Allows sibling subdomains (e.g., controller.company.com when OC is oc.company.com)
+        but blocks different domains (e.g., evil.attacker.com).
+        """
+        oc_host = urlparse(self.base_url).hostname or ""
+        ctrl_host = urlparse(controller_url).hostname or ""
+
+        if not ctrl_host:
+            raise ValueError(f"Invalid controller URL: {controller_url}")
+
+        # Extract registrable domain (e.g., "company.com" from "oc.company.com")
+        oc_parts = oc_host.split(".")
+        ctrl_parts = ctrl_host.split(".")
+
+        # Compare last 2 parts (registrable domain)
+        # Handle cases like co.uk by comparing last 3 if second-to-last is short
+        oc_domain = ".".join(oc_parts[-2:]) if len(oc_parts) >= 2 else oc_host
+        ctrl_domain = ".".join(ctrl_parts[-2:]) if len(ctrl_parts) >= 2 else ctrl_host
+
+        if oc_domain != ctrl_domain:
+            raise ValueError(
+                f"Controller URL domain '{ctrl_host}' does not match "
+                f"Operations Center domain '{oc_host}'"
+            )
 
     def _request(
         self, method: str, path: str, params: Optional[Dict] = None

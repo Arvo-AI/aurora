@@ -73,3 +73,14 @@ Recent deployments are a leading indicator of root cause. Always check if a depl
 - `cloudbees_rca(action='trace_context', deployment_event_id=ID)` -- OTel trace correlation
 
 Recent deployments are a leading indicator of root cause.
+
+## Enterprise Actions (Operations Center)
+
+If the user has Operations Center connected, these additional actions are available:
+
+- `controller_list` — List all managed Jenkins controllers and their status
+- `cross_controller_deployments` — Query recent builds across ALL managed controllers (useful for finding what deployed to any environment)
+- `flag_changes` — Query recent feature flag changes from CloudBees Feature Management (useful for correlating flag toggles with incidents)
+
+Use `cross_controller_deployments` when investigating deployment-related incidents to see all recent activity across the organization's CI/CD infrastructure.
+Use `flag_changes` when an incident might be caused by a feature flag being toggled.
