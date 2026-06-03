@@ -753,7 +753,7 @@ def get_policy_templates() -> List[dict]:
                 {"priority": 140, "pattern": r"^tailscale\s+(status|device\s+(list|get)|dns|acl\s+(get|show)|routes|settings|auth-key\s+list)\b",
                  "description": "Tailscale read-only operations"},
                 # Fly.io
-                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machine\s+(list|status|restart|stop|start)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+(show|count)|platform|ssh|proxy|config\s+show|secrets\s+list|deploy|services)\b",
+                {"priority": 139, "pattern": r"^(fly|flyctl)\s+(apps\s+list|status|machine\s+(list|status|restart|stop|start)|logs|checks|releases|certs\s+list|ips\s+list|volumes?\s+list|scale\s+(show|count)|platform|ssh|proxy|config\s+show|secrets\s+list|services)\b",
                  "description": "Fly.io standard operations"},
                 # SSH access
                 {"priority": 135, "pattern": r"^(ssh|scp|sftp)\s",

@@ -4,6 +4,14 @@ import { isOvhEnabled } from '@/lib/feature-flags';
 
 const API_BASE_URL = process.env.BACKEND_URL
 
+function getValidProviders(): string[] {
+  const providers = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees', 'newrelic', 'cloudflare', 'flyio'];
+  if (isOvhEnabled()) {
+    providers.push('ovh');
+  }
+  return providers;
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/provider-preferences
 // Gets the user's cloud provider preferences from database
@@ -50,11 +58,7 @@ export async function GET() {
     }
 
     // Ensure it's an array of valid providers
-    const validProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees', 'newrelic', 'cloudflare', 'flyio'];
-    if (isOvhEnabled()) {
-      validProviders.push('ovh');
-    }
-    providers = providers.filter(p => validProviders.includes(p));
+    providers = providers.filter(p => getValidProviders().includes(p));
 
     return NextResponse.json({ 
       providers,
@@ -93,10 +97,7 @@ export async function POST(request: NextRequest) {
     const { providers, action = 'set', provider } = body;
 
     // Validate input
-    const validProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees', 'newrelic', 'cloudflare', 'flyio'];
-    if (isOvhEnabled()) {
-      validProviders.push('ovh');
-    }
+    const validProviders = getValidProviders();
 
     if (action === 'set') {
       if (!Array.isArray(providers)) {
@@ -181,10 +182,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Also track unselected providers for smart auto-select
-    const allProviders = ['gcp', 'azure', 'aws', 'scaleway', 'tailscale', 'grafana', 'datadog', 'cloudbees', 'newrelic', 'cloudflare', 'flyio'];
-    if (isOvhEnabled()) {
-      allProviders.push('ovh');
-    }
+    const allProviders = getValidProviders();
     if (action === 'remove' || (action === 'set' && providers.length < allProviders.length)) {
       const unselectedProviders = allProviders.filter(p => !finalProviders.includes(p));
       

@@ -1408,8 +1408,7 @@ Security & Compliance
             if gate.code == "POLICY_DENIED" and "No matching allow rule" in error_msg:
                 error_msg += (
                     f". To allow {prefix or provider} commands, go to Settings > Security > "
-                    "Command Policies and re-apply the 'Observability Only' or "
-                    "'Standard Operations' template, or manually add an allow rule."
+                    "Command Policies and re-apply a template or manually add an allow rule."
                 )
             return json.dumps({
                 "success": False,
