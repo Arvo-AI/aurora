@@ -12,7 +12,7 @@ import logging
 from typing import Optional
 
 from pydantic import BaseModel, Field
-from utils.auth.token_management import get_token_data
+from utils.secrets.secret_ref_utils import get_user_token_data
 from connectors.flyio_connector.api_client import FlyioClient
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def is_flyio_connected(user_id: str) -> bool:
     """Check if Fly.io is connected for a user."""
     try:
-        token_data = get_token_data(user_id, "flyio")
+        token_data = get_user_token_data(user_id, "flyio")
         return bool(token_data and "api_token" in token_data)
     except Exception:
         return False
@@ -35,7 +35,7 @@ class FlyioMetricsQueryArgs(BaseModel):
 
 def query_flyio_metrics(query: str, time: Optional[str] = None, user_id: str = None, **kwargs) -> str:
     """Query Fly.io Prometheus metrics endpoint."""
-    token_data = get_token_data(user_id, "flyio")
+    token_data = get_user_token_data(user_id, "flyio")
     if not token_data:
         return json.dumps({"error": "Fly.io not connected. Please connect your Fly.io account first."})
 
@@ -45,9 +45,13 @@ def query_flyio_metrics(query: str, time: Optional[str] = None, user_id: str = N
     if not api_token or not org_slug:
         return json.dumps({"error": "Incomplete Fly.io credentials"})
 
-    client = FlyioClient(api_token, org_slug)
+    try:
+        client = FlyioClient(api_token, org_slug)
+        result = client.query_prometheus(query, time_param=time)
+    except Exception:
+        logger.exception("Fly.io Prometheus query failed for: %s", query)
+        return json.dumps({"error": "Prometheus query failed", "query": query})
 
-    result = client.query_prometheus(query, time_param=time)
     if result is None:
         return json.dumps({"error": f"Prometheus query failed for: {query}"})
 
