@@ -246,6 +246,7 @@ def connect_platform(user_id):
     oc_url = (data.get("oc_url") or "").strip().rstrip("/")
     username = (data.get("username") or "").strip()
     api_token = data.get("api_token")
+    auth_mode = data.get("auth_mode", "").strip().lower()
     fm_api_token = data.get("fm_api_token")
     fm_app_id = data.get("fm_app_id")
 
@@ -253,17 +254,23 @@ def connect_platform(user_id):
         return jsonify({"error": "Operations Center URL is required"}), 400
     if not oc_url.startswith("http://") and not oc_url.startswith("https://"):
         return jsonify({"error": "Operations Center URL must start with http:// or https://"}), 400
-    if not username:
-        return jsonify({"error": "Username is required"}), 400
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "API token is required"}), 400
 
-    logger.info("[CLOUDBEES] Connecting platform for user %s (OC: %s)", user_id, oc_url)
+    # PAT mode: username is not required; use Bearer token auth
+    is_pat_mode = auth_mode == "pat" or (not username and api_token)
+    if not is_pat_mode and not username:
+        return jsonify({"error": "Username is required"}), 400
+
+    logger.info("[CLOUDBEES] Connecting platform for user %s (OC: %s, mode: %s)", user_id, oc_url, "pat" if is_pat_mode else "basic")
 
     # Validate OC connection
     from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
 
-    oc_client = CloudBeesOCClient(base_url=oc_url, username=username, api_token=api_token)
+    if is_pat_mode:
+        oc_client = CloudBeesOCClient(base_url=oc_url, username="", api_token=api_token, auth_mode="bearer")
+    else:
+        oc_client = CloudBeesOCClient(base_url=oc_url, username=username, api_token=api_token)
     success, server_data, error = oc_client.get_server_info()
     if not success:
         logger.warning("[CLOUDBEES] OC validation failed for user %s: %s", user_id, error)
@@ -274,6 +281,7 @@ def connect_platform(user_id):
         "base_url": oc_url,
         "username": username,
         "api_token": api_token,
+        "auth_mode": "bearer" if is_pat_mode else "basic",
     }
     try:
         store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
@@ -281,6 +289,15 @@ def connect_platform(user_id):
     except Exception:
         logger.exception("[CLOUDBEES] Failed to store OC credentials for user %s", user_id)
         return jsonify({"error": "Failed to store Operations Center credentials"}), 500
+
+    # Discover controllers
+    discovered_controllers = []
+    try:
+        ctrl_success, ctrl_list, ctrl_error = oc_client.discover_controllers()
+        if ctrl_success:
+            discovered_controllers = ctrl_list
+    except Exception:
+        logger.exception("[CLOUDBEES] Failed to discover controllers for user %s", user_id)
 
     # Optionally validate and store FM credentials
     fm_status = {"connected": False}
@@ -305,6 +322,7 @@ def connect_platform(user_id):
 
     return jsonify({
         "success": True,
+        "controllers": discovered_controllers,
         "operations_center": {"connected": True, "url": oc_url, "username": username},
         "feature_management": fm_status,
     })
@@ -360,8 +378,9 @@ def list_controllers(user_id):
 
     oc_client = CloudBeesOCClient(
         base_url=oc_creds["base_url"],
-        username=oc_creds["username"],
+        username=oc_creds.get("username", ""),
         api_token=oc_creds["api_token"],
+        auth_mode=oc_creds.get("auth_mode", "basic"),
     )
     success, controllers, error = oc_client.discover_controllers()
     if not success:

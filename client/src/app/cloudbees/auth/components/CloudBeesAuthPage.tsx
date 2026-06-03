@@ -65,6 +65,9 @@ export default function CloudBeesAuthPage() {
   const [pat, setPat] = useState("");
   const [showPat, setShowPat] = useState(false);
 
+  // Validation
+  const [urlError, setUrlError] = useState("");
+
   const loadStatus = async () => {
     setCheckingStatus(true);
     try {
@@ -84,6 +87,16 @@ export default function CloudBeesAuthPage() {
         localStorage.setItem(CACHE_KEY, JSON.stringify(result));
         if (result.connected) {
           localStorage.setItem(CONNECTED_KEY, "true");
+          // Fetch controllers from OC if platform is connected
+          try {
+            const ctrlResp = await apiRequest<{ controllers?: DiscoveredController[] }>("/api/cloudbees/controllers", {
+              method: "GET",
+              cache: "no-store",
+            });
+            if (ctrlResp?.controllers) {
+              setControllers(ctrlResp.controllers);
+            }
+          } catch { /* OC may not be connected — ignore */ }
         } else {
           localStorage.removeItem(CONNECTED_KEY);
         }
@@ -99,6 +112,11 @@ export default function CloudBeesAuthPage() {
 
   const handleSingleControllerConnect = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!validateUrl(baseUrl)) {
+      setUrlError("URL must start with http:// or https://");
+      return;
+    }
+    setUrlError("");
     setLoading(true);
     try {
       const connectResult = await cloudbeesService.connect({ baseUrl, username, apiToken });
@@ -128,18 +146,26 @@ export default function CloudBeesAuthPage() {
     }
   };
 
+  const validateUrl = (url: string): boolean => {
+    return url.startsWith("http://") || url.startsWith("https://");
+  };
+
   const handleOCConnect = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!validateUrl(ocUrl)) {
+      setUrlError("URL must start with http:// or https://");
+      return;
+    }
+    setUrlError("");
     setLoading(true);
     try {
       const payload: Record<string, string> = {
-        baseUrl: ocUrl,
+        oc_url: ocUrl,
         username: ocUsername,
-        apiToken: ocApiToken,
-        mode: "operations-center",
+        api_token: ocApiToken,
       };
       if (rolloutToken) {
-        payload.rolloutToken = rolloutToken;
+        payload.fm_api_token = rolloutToken;
       }
 
       const result = await apiRequest<PlatformConnectResponse>("/api/cloudbees/connect-platform", {
@@ -170,10 +196,18 @@ export default function CloudBeesAuthPage() {
         });
       } catch { /* best-effort */ }
 
-      toast({
-        title: "Operations Center Connected",
-        description: `Connected to ${ocUrl}${result?.controllers ? ` — ${result.controllers.length} controller(s) discovered` : ""}`,
-      });
+      if (result?.controllers && result.controllers.length === 0) {
+        toast({
+          title: "Operations Center Connected",
+          description: "Connected successfully, but no managed controllers were found. Check that your account has permission to view controllers in Operations Center.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Operations Center Connected",
+          description: `Connected to ${ocUrl}${result?.controllers ? ` — ${result.controllers.length} controller(s) discovered` : ""}`,
+        });
+      }
     } catch (err: unknown) {
       console.error("CloudBees OC connection failed", err);
       toast({ title: "Connection Failed", description: getUserFriendlyError(err), variant: "destructive" });
@@ -186,14 +220,19 @@ export default function CloudBeesAuthPage() {
 
   const handlePATConnect = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!validateUrl(platformUrl)) {
+      setUrlError("URL must start with http:// or https://");
+      return;
+    }
+    setUrlError("");
     setLoading(true);
     try {
       const result = await apiRequest<PlatformConnectResponse>("/api/cloudbees/connect-platform", {
         method: "POST",
         body: JSON.stringify({
-          baseUrl: platformUrl,
-          personalAccessToken: pat,
-          mode: "personal-access-token",
+          oc_url: platformUrl,
+          api_token: pat,
+          auth_mode: "pat",
         }),
         cache: "no-store",
       });
@@ -239,9 +278,18 @@ export default function CloudBeesAuthPage() {
         throw new Error(text || "Failed to disconnect CloudBees");
       }
 
+      // Also disconnect platform credentials (OC + FM)
+      try {
+        await fetch("/api/cloudbees/disconnect-platform", { method: "POST", credentials: "include" });
+      } catch { /* best-effort */ }
+
       setStatus({ connected: false });
       setBaseUrl("");
       setUsername("");
+      setOcUrl("");
+      setOcUsername("");
+      setPlatformUrl("");
+      setRolloutToken("");
       setControllers([]);
       localStorage.removeItem(CACHE_KEY);
       localStorage.removeItem(CONNECTED_KEY);
@@ -341,6 +389,10 @@ export default function CloudBeesAuthPage() {
               />
             </CardContent>
           </Card>
+
+          {urlError && (
+            <p className="text-sm text-red-500 px-1">{urlError}</p>
+          )}
 
           {mode === "single-controller" && (
             <SingleControllerForm

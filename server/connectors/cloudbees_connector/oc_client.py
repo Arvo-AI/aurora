@@ -25,23 +25,36 @@ DEFAULT_TIMEOUT = 15.0
 class CloudBeesOCClient:
     """Client for CloudBees Operations Center (CJOC)."""
 
-    def __init__(self, base_url: str, username: str, api_token: str):
+    def __init__(self, base_url: str, username: str, api_token: str, auth_mode: str = "basic"):
         self.base_url = base_url.rstrip("/")
         parsed = urlparse(self.base_url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(f"Invalid URL scheme: {parsed.scheme!r}. Only http and https are allowed.")
         self.username = username
         self.api_token = api_token
+        self.auth_mode = auth_mode if auth_mode in ("basic", "bearer") else "basic"
+        # Auto-detect bearer mode: if username is empty but token is present, use bearer
+        if not self.username and self.api_token:
+            self.auth_mode = "bearer"
         self.timeout = DEFAULT_TIMEOUT
         self._http_client: Optional[httpx.Client] = None
 
     def _get_http_client(self) -> httpx.Client:
         if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.Client(
-                auth=(self.username, self.api_token),
-                timeout=httpx.Timeout(self.timeout),
-                headers={"Accept": "application/json"},
-            )
+            if self.auth_mode == "bearer":
+                self._http_client = httpx.Client(
+                    timeout=httpx.Timeout(self.timeout),
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {self.api_token}",
+                    },
+                )
+            else:
+                self._http_client = httpx.Client(
+                    auth=(self.username, self.api_token),
+                    timeout=httpx.Timeout(self.timeout),
+                    headers={"Accept": "application/json"},
+                )
         return self._http_client
 
     def close(self):

@@ -1514,7 +1514,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'test_results' (Core API: test report with failure details), "
                     "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
                     "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
-                    "'trace_context' (extract OTel W3C Trace Context; params: deployment_event_id or job_path+build_number). "
+                    "'flag_changes' (Feature Management flag changes; params: app_id), "
+                    "'cross_controller_deployments' (query builds across all OC-managed controllers), "
+                    "'controller_list' (list discovered controllers from Operations Center). "
                     "Required params vary by action: job_path+build_number for Core/wfapi, "
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
