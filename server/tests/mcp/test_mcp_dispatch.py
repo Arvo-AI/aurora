@@ -59,6 +59,24 @@ def test_search_tools_marks_not_connected_entries(monkeypatch, api_call):
     assert all(t["callable_now"] is False for t in jira_entries)
 
 
+def test_search_tools_surfaces_visible_entries_past_old_window(monkeypatch, api_call):
+    """Visible (callable) entries must be surfaced before non-visible ones even
+    when many non-visible entries rank higher than the requested limit.
+
+    Regression: the old code truncated to limit*2 BEFORE the visibility
+    reorder, so a callable entry ranking just outside that window could be
+    dropped in favour of non-visible ones. With nothing connected, a broad
+    query that matches many gated entries plus a few always-on ones must still
+    return the always-on (callable) ones first under a small limit.
+    """
+    tools = _wire(monkeypatch, api_call, connected=[])  # nothing connected
+    result = asyncio.run(tools["search_tools"](query="list", limit=2))
+    rows = result["tools"]
+    assert rows, "broad query should return matches"
+    # The only callable entries (no enabling_skills) must be ranked first.
+    assert all(t["callable_now"] for t in rows), [t["name"] for t in rows]
+
+
 def test_call_tool_rejects_unallowlisted(monkeypatch, api_call):
     tools = _wire(monkeypatch, api_call, connected=["jira"])
     result = asyncio.run(tools["call_tool"]("delete_all_the_things", {}))

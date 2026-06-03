@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from .registry import (
+    DISPATCH_ALLOWLIST,
     _get_cached_connector_status,
     dispatch_entry_visible,
     find_dispatch_entry,
@@ -108,13 +109,16 @@ def _do_search_tools(
         limit = 10
     limit = max(1, min(limit, _MAX_SEARCH_LIMIT))
 
-    # Single pass: pull all matches (no visibility filter), tag each with
-    # callable_now in one walk. Visible entries appear first so the LLM
-    # sees them; non-visible ones are kept for discoverability ("here's
-    # what exists, connect to use it").
+    # Pull the FULL ranked match set (no visibility filter, no premature
+    # truncation), tag each with callable_now, then reorder visible-first and
+    # only THEN apply the final limit. Truncating before the visibility
+    # reorder could drop a callable entry that ranked just outside the window
+    # in favour of non-visible ones. The allowlist is small so fetching all
+    # matches is cheap. Non-visible entries are kept for discoverability
+    # ("here's what exists, connect to use it").
     all_matches = search_dispatch_entries(
         query=query, category=category, connector=connector,
-        user_id=None, limit=limit * 2,
+        user_id=None, limit=len(DISPATCH_ALLOWLIST),
     )
     annotated = [(e, dispatch_entry_visible(e, user_id)) for e in all_matches]
     ordered = (
