@@ -32,6 +32,7 @@ _DEFAULT_POLICIES = [
     # --- viewer permissions (read-only) ---
     ("viewer", "*", "incidents", "read"),
     ("viewer", "*", "postmortems", "read"),
+    ("viewer", "*", "artifacts", "read"),
     ("viewer", "*", "dashboards", "read"),
     ("viewer", "*", "connectors", "read"),
     ("viewer", "*", "chat", "read"),
@@ -50,6 +51,7 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "connectors", "write"),
     ("editor", "*", "incidents", "write"),
     ("editor", "*", "postmortems", "write"),
+    ("editor", "*", "artifacts", "write"),
     ("editor", "*", "knowledge_base", "write"),
     ("editor", "*", "ssh_keys", "write"),
     ("editor", "*", "vms", "write"),
