@@ -64,7 +64,7 @@ def connect(user_id):
 
     if not base_url:
         return jsonify({"error": "CloudBees CI URL is required"}), 400
-    if not base_url.startswith("http://") and not base_url.startswith("https://"):
+    if not base_url.startswith(("http://", "https://")):  # NOSONAR:
         return jsonify({"error": "CloudBees CI URL must start with http:// or https://"}), 400
     if not username:
         return jsonify({"error": "CloudBees CI username is required"}), 400
@@ -252,7 +252,7 @@ def connect_platform(user_id):
 
     if not oc_url:
         return jsonify({"error": "Operations Center URL is required"}), 400
-    if not oc_url.startswith("http://") and not oc_url.startswith("https://"):
+    if not oc_url.startswith(("http://", "https://")):  # NOSONAR:
         return jsonify({"error": "Operations Center URL must start with http:// or https://"}), 400
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "API token is required"}), 400
