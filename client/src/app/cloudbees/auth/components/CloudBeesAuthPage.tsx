@@ -794,9 +794,18 @@ export default function CloudBeesAuthPage() {
 
             <div>
               <label className="block text-[13px] text-[#999] mb-2">Jenkinsfile snippet</label>
-              <pre className="text-[13px] text-[#999] bg-white/[0.02] border border-white/[0.06] p-5 rounded-xl overflow-x-auto whitespace-pre leading-relaxed">
-                {jenkinsfileSnippet}
-              </pre>
+              <div className="relative">
+                <button
+                  onClick={() => { navigator.clipboard.writeText(jenkinsfileSnippet); toast({ title: "Copied", description: "Jenkinsfile snippet copied to clipboard" }); }}
+                  className="absolute top-3 right-3 p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-[#666] hover:text-white transition-all"
+                  title="Copy snippet"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+                <pre className="text-[13px] text-[#999] bg-white/[0.02] border border-white/[0.06] p-5 rounded-xl overflow-x-auto whitespace-pre leading-relaxed">
+                  {jenkinsfileSnippet}
+                </pre>
+              </div>
             </div>
           </div>
 
@@ -927,7 +936,16 @@ export default function CloudBeesAuthPage() {
               {webhookInfo.jenkinsfileBasic && (
                 <details>
                   <summary className="text-[12px] text-[#666] cursor-pointer hover:text-[#999] transition-colors">View Jenkinsfile snippet</summary>
-                  <pre className="mt-3 p-4 rounded-xl bg-white/[0.02] border border-white/[0.04] text-[11px] text-[#888] font-mono overflow-x-auto whitespace-pre">{webhookInfo.jenkinsfileBasic}</pre>
+                  <div className="relative mt-3">
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(webhookInfo.jenkinsfileBasic); toast({ title: "Copied", description: "Jenkinsfile snippet copied to clipboard" }); }}
+                      className="absolute top-3 right-3 p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-[#666] hover:text-white transition-all"
+                      title="Copy snippet"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                    <pre className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.04] text-[11px] text-[#888] font-mono overflow-x-auto whitespace-pre">{webhookInfo.jenkinsfileBasic}</pre>
+                  </div>
                 </details>
               )}
             </div>
