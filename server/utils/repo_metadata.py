@@ -91,6 +91,29 @@ def _fetch_gitlab_listing(base_url: str, token: str, project_path: str) -> str:
     return "\n".join(f"{'dir' if i.get('type') == 'tree' else 'file'}: {i.get('name')}" for i in items)
 
 
+def _fetch_bitbucket_readme(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
+    from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+    client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
+    for filename in ("README.md", "README.rst", "README.txt", "README"):
+        result = client.get_file_contents(workspace, repo_slug, filename)
+        if isinstance(result, dict) and result.get("error"):
+            continue
+        if isinstance(result, str):
+            return result[:4000]
+    return ""
+
+
+def _fetch_bitbucket_listing(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
+    from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+    client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
+    result = client.get_directory_tree(workspace, repo_slug, "")
+    if isinstance(result, dict) and result.get("error"):
+        return "(could not list files)"
+    if isinstance(result, list):
+        return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in result[:100])
+    return "(could not list files)"
+
+
 # ---------------------------------------------------------------------------
 # Shared logic
 # ---------------------------------------------------------------------------
@@ -132,6 +155,19 @@ def _fetch_repo_context(provider: str, creds: dict, repo_full_name: str) -> tupl
         token = creds["access_token"]
         base_url = creds.get("base_url", "https://gitlab.com").rstrip("/")
         return _fetch_gitlab_readme(base_url, token, repo_full_name), _fetch_gitlab_listing(base_url, token, repo_full_name)
+
+    elif provider == "bitbucket":
+        token = creds["access_token"]
+        auth_type = creds.get("auth_type", "oauth")
+        email = creds.get("email")
+        parts = repo_full_name.split("/")
+        if len(parts) != 2:
+            return "", "(invalid repo format)"
+        workspace, repo_slug = parts
+        return (
+            _fetch_bitbucket_readme(token, auth_type, workspace, repo_slug, email),
+            _fetch_bitbucket_listing(token, auth_type, workspace, repo_slug, email),
+        )
 
     return "", "(unsupported provider)"
 

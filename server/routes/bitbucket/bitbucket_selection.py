@@ -21,10 +21,18 @@ def _sync_selected_repos(user_id: str, workspace: str, selected_repos: list):
     from utils.auth.stateless_auth import set_rls_context
 
     org_id = resolve_org(user_id)
+    newly_added = []
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketSelection:sync]")
+
+                # Get existing repos to detect new additions
+                cur.execute(
+                    "SELECT repo_full_name FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket'",
+                    (user_id,),
+                )
+                existing = {row[0] for row in cur.fetchall()}
 
                 incoming = set()
                 for repo in selected_repos:
@@ -40,12 +48,14 @@ def _sync_selected_repos(user_id: str, workspace: str, selected_repos: list):
                     cur.execute(
                         """INSERT INTO connected_repos
                                (user_id, org_id, provider, repo_full_name, default_branch, metadata_status)
-                           VALUES (%s, %s, 'bitbucket', %s, %s, 'ready')
+                           VALUES (%s, %s, 'bitbucket', %s, %s, 'pending')
                            ON CONFLICT (user_id, provider, repo_full_name) DO UPDATE SET
                                default_branch = COALESCE(EXCLUDED.default_branch, connected_repos.default_branch),
                                updated_at = NOW()""",
                         (user_id, org_id, full_name, default_branch),
                     )
+                    if full_name not in existing:
+                        newly_added.append(full_name)
 
                 # Remove deselected repos
                 if incoming:
@@ -62,7 +72,16 @@ def _sync_selected_repos(user_id: str, workspace: str, selected_repos: list):
                     )
 
                 conn.commit()
-        logger.info(f"Synced {len(incoming)} Bitbucket repos for user {user_id}")
+
+        # Kick off metadata generation for newly added repos
+        for repo_name in newly_added:
+            try:
+                from utils.repo_metadata import generate_repo_metadata
+                generate_repo_metadata.delay(user_id, "bitbucket", repo_name)
+            except Exception as e:
+                logger.warning(f"Failed to enqueue metadata gen for {repo_name}: {e}")
+
+        logger.info(f"Synced {len(incoming)} Bitbucket repos for user {user_id} ({len(newly_added)} new)")
     except Exception as e:
         logger.warning(f"Failed to sync selected repos: {e}")
 
