@@ -85,6 +85,7 @@ class CloudBeesFMClient:
                     response = client.request(method=method, url=url, params=params)
                 except httpx.HTTPError:
                     return False, None, "Rate limit exceeded. Please try again later."
+                self._last_request_time = time.monotonic()
                 if response.status_code == 429:
                     return False, None, "Rate limit exceeded. Please try again later."
             if response.status_code >= 400:

@@ -7,7 +7,6 @@ Uses Jenkins API format (HTTP Basic Auth with username + api_token).
 """
 
 import logging
-import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -73,7 +72,12 @@ class CloudBeesOCClient:
         """Validate that a controller URL belongs to the same registrable domain as the OC base URL.
 
         Allows sibling subdomains (e.g., controller.company.com when OC is oc.company.com)
-        but blocks different domains (e.g., evil.attacker.com).
+        but blocks different domains (e.g., evil-company.com).
+
+        Uses suffix matching: the controller hostname must end with '.<oc_base_domain>'
+        or be exactly equal to the OC hostname.  The base domain is derived by taking
+        the last N parts of the OC hostname where N >= 2, with N = 3 when the
+        second-to-last label is short (likely a ccTLD like co.uk, com.au, etc.).
         """
         oc_host = urlparse(self.base_url).hostname or ""
         ctrl_host = urlparse(controller_url).hostname or ""
@@ -81,16 +85,23 @@ class CloudBeesOCClient:
         if not ctrl_host:
             raise ValueError(f"Invalid controller URL: {controller_url}")
 
-        # Extract registrable domain (e.g., "company.com" from "oc.company.com")
+        # Exact match is always allowed
+        if ctrl_host == oc_host:
+            return
+
+        # Extract registrable domain from the OC host.
+        # Use 3 parts when the second-to-last label is <= 3 chars (e.g., co.uk, com.au)
         oc_parts = oc_host.split(".")
-        ctrl_parts = ctrl_host.split(".")
+        if len(oc_parts) >= 3 and len(oc_parts[-2]) <= 3:
+            oc_base_domain = ".".join(oc_parts[-3:])
+        elif len(oc_parts) >= 2:
+            oc_base_domain = ".".join(oc_parts[-2:])
+        else:
+            oc_base_domain = oc_host
 
-        # Compare last 2 parts (registrable domain)
-        # Handle cases like co.uk by comparing last 3 if second-to-last is short
-        oc_domain = ".".join(oc_parts[-2:]) if len(oc_parts) >= 2 else oc_host
-        ctrl_domain = ".".join(ctrl_parts[-2:]) if len(ctrl_parts) >= 2 else ctrl_host
-
-        if oc_domain != ctrl_domain:
+        # The controller must end with the base domain as a proper suffix
+        # (preceded by a dot) to prevent prefix-based bypasses like evil-company.com
+        if not (ctrl_host == oc_base_domain or ctrl_host.endswith("." + oc_base_domain)):
             raise ValueError(
                 f"Controller URL domain '{ctrl_host}' does not match "
                 f"Operations Center domain '{oc_host}'"
@@ -211,14 +222,18 @@ class CloudBeesOCClient:
         """Query recent builds across all discovered controllers.
 
         Caps at MAX_CONTROLLERS controllers and MAX_BUILDS_PER_CONTROLLER builds each
-        to avoid timeout.
+        to avoid timeout.  Only returns builds within the specified time window.
         """
+        import time as _time
+
         success, controllers, error = self.discover_controllers()
         if not success:
             return False, [], error
 
         if not controllers:
             return True, [], None
+
+        cutoff_ms = int((_time.time() - time_window_hours * 3600) * 1000)
 
         all_builds: List[Dict] = []
         errors: List[str] = []
@@ -248,9 +263,12 @@ class CloudBeesOCClient:
                     ok, builds, err = client.list_builds(job_name, limit=MAX_BUILDS_PER_CONTROLLER)
                     if ok and builds:
                         for build in builds:
+                            # Filter by time window
+                            if build.get("timestamp", 0) < cutoff_ms:
+                                continue
                             build["_controller"] = controller["name"]
                             build["_job"] = job_name
-                        all_builds.extend(builds)
+                            all_builds.append(build)
 
             except Exception as e:
                 logger.warning(

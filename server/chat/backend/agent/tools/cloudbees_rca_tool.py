@@ -144,15 +144,13 @@ def cloudbees_rca(
             return json.dumps({
                 "error": "Feature Management is not connected. Connect it in Connectors → CloudBees to enable flag change queries."
             })
-        try:
+        with fm_client:
             success, changes, error = fm_client.get_recent_flag_changes(
                 app_id, since_hours=time_window_hours
             )
             if not success:
                 return json.dumps({"error": error or "Failed to query Feature Management."})
             return json.dumps({"flag_changes": changes, "count": len(changes), "time_window_hours": time_window_hours})
-        finally:
-            fm_client.close()
 
     elif action == "cross_controller_deployments":
         oc_client = _get_oc_client_for_user(user_id)
@@ -160,15 +158,13 @@ def cloudbees_rca(
             return json.dumps({
                 "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
             })
-        try:
+        with oc_client:
             success, builds, error = oc_client.query_recent_builds_across_controllers(
                 service=service, time_window_hours=time_window_hours
             )
             if not success:
                 return json.dumps({"error": error or "Failed to query Operations Center."})
             return json.dumps({"builds": builds, "count": len(builds), "time_window_hours": time_window_hours, "warnings": error})
-        finally:
-            oc_client.close()
 
     elif action == "controller_list":
         oc_client = _get_oc_client_for_user(user_id)
@@ -176,13 +172,11 @@ def cloudbees_rca(
             return json.dumps({
                 "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
             })
-        try:
+        with oc_client:
             success, controllers, error = oc_client.discover_controllers()
             if not success:
                 return json.dumps({"error": error or "Failed to discover controllers."})
             return json.dumps({"controllers": controllers, "count": len(controllers)})
-        finally:
-            oc_client.close()
 
     # --- Existing single-controller actions ---
     elif action == "recent_deployments":

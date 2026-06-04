@@ -108,17 +108,11 @@ export function useGitHubStatus(userId: string | null) {
         checkStatus();
       }
     };
-    const handleVisibility = () => {
-      // Disabled aggressive re-checks — causes OOM in dev (issue #471)
-    };
     window.addEventListener('providerStateChanged', handleProviderChange);
     window.addEventListener('message', handleAuthMessage);
-    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       window.removeEventListener('providerStateChanged', handleProviderChange);
       window.removeEventListener('message', handleAuthMessage);
-      window.removeEventListener('focus', checkStatus);
-      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [userId, checkStatus]);
 

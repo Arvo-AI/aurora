@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
 import {
   ChevronRight, Copy, Eye, EyeOff,
@@ -34,7 +33,6 @@ const CACHE_KEY = "cloudbees_connection_status";
 const CONNECTED_KEY = "isCloudBeesConnected";
 
 export default function CloudBeesAuthPage() {
-  const router = useRouter();
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>(1);
@@ -107,7 +105,7 @@ export default function CloudBeesAuthPage() {
 
           // Fetch dashboard data
           fetch("/api/cloudbees/status?full=true").then(r => r.json()).then(d => {
-            if (d?.status?.summary) setSummary(d.status.summary);
+            if (d?.summary) setSummary(d.summary);
           }).catch(() => {});
           fetch("/api/cloudbees/webhook-url").then(r => r.json()).then(setWebhookInfo).catch(() => {});
           fetch("/api/cloudbees/deployments").then(r => r.json()).then(d => setDeployments(d.deployments || [])).catch(() => {});
@@ -333,11 +331,14 @@ export default function CloudBeesAuthPage() {
   const handleRcaToggle = async (checked: boolean) => {
     setRcaLoading(true);
     try {
-      await fetch("/api/cloudbees/rca-settings", {
+      const response = await fetch("/api/cloudbees/rca-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rcaEnabled: checked }),
       });
+      if (!response.ok) {
+        throw new Error("Failed to update RCA settings");
+      }
       setRcaEnabled(checked);
       toast({ title: checked ? "RCA Enabled" : "RCA Disabled", description: checked ? "Auto-trigger RCA on failures is now active" : "Auto-trigger RCA has been turned off" });
     } catch (err) {

@@ -76,7 +76,7 @@ def connect(user_id):
     client = JenkinsClient(base_url=base_url, username=username, api_token=api_token)
     success, server_data, error = client.get_server_info()
     if not success:
-        logger.warning("[CLOUDBEES] Credential validation failed for user %s", user_id)
+        logger.warning("[CLOUDBEES] Credential validation failed for user %s: %s (server_data=%s)", user_id, error, server_data)
         safe_errors = {
             "Invalid credentials. Check your username and API token.",
             "Forbidden. Insufficient permissions.",
@@ -271,33 +271,44 @@ def connect_platform(user_id):
         oc_client = CloudBeesOCClient(base_url=oc_url, username="", api_token=api_token, auth_mode="bearer")
     else:
         oc_client = CloudBeesOCClient(base_url=oc_url, username=username, api_token=api_token)
-    success, server_data, error = oc_client.get_server_info()
-    if not success:
-        logger.warning("[CLOUDBEES] OC validation failed for user %s: %s", user_id, error)
-        return jsonify({"error": error or "Failed to validate Operations Center credentials"}), 400
-
-    # Store OC credentials
-    oc_payload = {
-        "base_url": oc_url,
-        "username": username,
-        "api_token": api_token,
-        "auth_mode": "bearer" if is_pat_mode else "basic",
-    }
     try:
-        store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
-        logger.info("[CLOUDBEES] Stored OC credentials for user %s", user_id)
-    except Exception:
-        logger.exception("[CLOUDBEES] Failed to store OC credentials for user %s", user_id)
-        return jsonify({"error": "Failed to store Operations Center credentials"}), 500
+        success, server_data, error = oc_client.get_server_info()
+        if not success:
+            logger.warning("[CLOUDBEES] OC validation failed for user %s: %s", user_id, error)
+            safe_oc_errors = {
+                "Invalid credentials. Check your username and API token.",
+                "Forbidden. Insufficient permissions.",
+                "Resource not found.",
+                "Connection timeout. Verify the Operations Center URL is reachable.",
+                "Cannot connect to Operations Center. Verify the URL and network access.",
+            }
+            msg = error if error in safe_oc_errors else "Failed to validate Operations Center credentials"
+            return jsonify({"error": msg}), 400
 
-    # Discover controllers
-    discovered_controllers = []
-    try:
-        ctrl_success, ctrl_list, ctrl_error = oc_client.discover_controllers()
-        if ctrl_success:
-            discovered_controllers = ctrl_list
-    except Exception:
-        logger.exception("[CLOUDBEES] Failed to discover controllers for user %s", user_id)
+        # Store OC credentials
+        oc_payload = {
+            "base_url": oc_url,
+            "username": username,
+            "api_token": api_token,
+            "auth_mode": "bearer" if is_pat_mode else "basic",
+        }
+        try:
+            store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
+            logger.info("[CLOUDBEES] Stored OC credentials for user %s", user_id)
+        except Exception:
+            logger.exception("[CLOUDBEES] Failed to store OC credentials for user %s", user_id)
+            return jsonify({"error": "Failed to store Operations Center credentials"}), 500
+
+        # Discover controllers
+        discovered_controllers = []
+        try:
+            ctrl_success, ctrl_list, ctrl_error = oc_client.discover_controllers()
+            if ctrl_success:
+                discovered_controllers = ctrl_list
+        except Exception:
+            logger.exception("[CLOUDBEES] Failed to discover controllers for user %s", user_id)
+    finally:
+        oc_client.close()
 
     # Optionally validate and store FM credentials
     fm_status = {"connected": False}
@@ -376,17 +387,17 @@ def list_controllers(user_id):
 
     from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
 
-    oc_client = CloudBeesOCClient(
+    with CloudBeesOCClient(
         base_url=oc_creds["base_url"],
         username=oc_creds.get("username", ""),
         api_token=oc_creds["api_token"],
         auth_mode=oc_creds.get("auth_mode", "basic"),
-    )
-    success, controllers, error = oc_client.discover_controllers()
-    if not success:
-        return jsonify({"connected": True, "controllers": [], "error": error}), 502
+    ) as oc_client:
+        success, controllers, error = oc_client.discover_controllers()
+        if not success:
+            return jsonify({"connected": True, "controllers": [], "error": "Failed to discover controllers from Operations Center"}), 502
 
-    return jsonify({"connected": True, "controllers": controllers, "count": len(controllers)})
+        return jsonify({"connected": True, "controllers": controllers, "count": len(controllers)})
 
 
 @cloudbees_bp.route("/disconnect-platform", methods=["POST", "DELETE"])
