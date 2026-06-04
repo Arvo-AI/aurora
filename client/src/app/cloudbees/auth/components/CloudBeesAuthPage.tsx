@@ -410,8 +410,8 @@ export default function CloudBeesAuthPage() {
     <div className="max-w-2xl mx-auto px-6 py-12">
       {/* Header with logo */}
       <div className="flex items-center gap-3 mb-8">
-        <img src="/cloudbees.svg" alt="CloudBees" className="h-7 w-7" />
-        <span className="text-[15px] font-semibold text-white">CloudBees</span>
+        <img src="/cloudbees.svg" alt="CloudBees" className="h-8 w-8" />
+        <span className="text-[18px] font-semibold text-white">CloudBees</span>
       </div>
 
       {/* Progress bar */}
