@@ -234,12 +234,10 @@ def bitbucket_callback():
 @require_permission("connectors", "read")
 def bitbucket_status(user_id):
     """Check Bitbucket connection status for a user."""
-    oauth_configured = bool(os.getenv("BB_OAUTH_CLIENT_ID") and os.getenv("BB_OAUTH_CLIENT_SECRET"))
-
     try:
         bb_creds = get_credentials_from_db(user_id, "bitbucket")
         if not bb_creds or not bb_creds.get("access_token"):
-            return jsonify({"connected": False, "oauth_available": oauth_configured})
+            return jsonify({"connected": False})
 
         auth_type = bb_creds.get("auth_type", "oauth")
 
@@ -269,11 +267,10 @@ def bitbucket_status(user_id):
         user_data = client.get_current_user()
 
         if not user_data or user_data.get("error"):
-            return jsonify({"connected": False, "oauth_available": oauth_configured, "error": "Invalid or expired token"})
+            return jsonify({"connected": False, "error": "Invalid or expired token"})
 
         return jsonify({
             "connected": True,
-            "oauth_available": oauth_configured,
             "username": user_data.get("username"),
             "display_name": user_data.get("display_name"),
             "auth_type": auth_type,
@@ -281,7 +278,7 @@ def bitbucket_status(user_id):
 
     except Exception as e:
         logger.error(f"Error checking Bitbucket status: {e}", exc_info=True)
-        return jsonify({"connected": False, "oauth_available": oauth_configured, "error": "Failed to check Bitbucket status"}), 500
+        return jsonify({"connected": False, "error": "Failed to check Bitbucket status"}), 500
 
 
 @bitbucket_bp.route("/disconnect", methods=["POST"])

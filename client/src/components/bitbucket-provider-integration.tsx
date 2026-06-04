@@ -9,6 +9,7 @@ import { Loader2, Check, LogOut, RefreshCw } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import BitbucketWorkspaceBrowser from '@/components/bitbucket-workspace-browser';
+import { isBitbucketOAuthEnabled } from '@/lib/feature-flags';
 
 // Re-export service so existing imports from this path keep working
 export { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
@@ -35,6 +36,7 @@ export default function BitbucketProviderIntegration() {
   const [authType, setAuthType] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const oauthAvailable = isBitbucketOAuthEnabled();
 
   // API token form
   const [email, setEmail] = useState('');
@@ -161,13 +163,53 @@ export default function BitbucketProviderIntegration() {
     );
   }
 
+  const apiTokenForm = (
+    <>
+      <p className="text-sm text-muted-foreground">
+        Connect using a Bitbucket API token. Go to{' '}
+        <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="underline">
+          Atlassian API tokens
+        </a>
+        , click &quot;Create API token with scopes&quot;, and grant these scopes:
+      </p>
+      <div className="text-xs bg-muted rounded-md p-2.5 space-y-0.5 font-mono">
+        {REQUIRED_API_TOKEN_SCOPES.map((scope) => (
+          <div key={scope}>{scope}</div>
+        ))}
+      </div>
+      <Input
+        type="email"
+        placeholder="Bitbucket email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <Input
+        type="password"
+        placeholder="API token"
+        value={apiToken}
+        onChange={(e) => setApiToken(e.target.value)}
+      />
+      <Button onClick={handleApiTokenLogin} disabled={isLoading || !userId || !email || !apiToken} className="w-full">
+        {isLoading ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Connecting...
+          </>
+        ) : (
+          "Connect"
+        )}
+      </Button>
+    </>
+  );
+
   return (
     <div className="space-y-4">
       {!isAuthenticated ? (
-        <Tabs defaultValue="oauth" className="w-full">
+        oauthAvailable ? (
+        <Tabs defaultValue="api-token" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="oauth">OAuth</TabsTrigger>
             <TabsTrigger value="api-token">API Token</TabsTrigger>
+            <TabsTrigger value="oauth">OAuth</TabsTrigger>
           </TabsList>
           <TabsContent value="oauth" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
@@ -198,42 +240,12 @@ export default function BitbucketProviderIntegration() {
             </Button>
           </TabsContent>
           <TabsContent value="api-token" className="space-y-3 mt-3">
-            <p className="text-sm text-muted-foreground">
-              Connect using a Bitbucket API token. Click{' '}
-              <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="underline">
-                &quot;Create API token with scopes&quot;
-              </a>{' '}
-              and grant these scopes:
-            </p>
-            <div className="text-xs bg-muted rounded-md p-2.5 space-y-0.5 font-mono">
-              {REQUIRED_API_TOKEN_SCOPES.map((scope) => (
-                <div key={scope}>{scope}</div>
-              ))}
-            </div>
-            <Input
-              type="email"
-              placeholder="Bitbucket email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <Input
-              type="password"
-              placeholder="API token"
-              value={apiToken}
-              onChange={(e) => setApiToken(e.target.value)}
-            />
-            <Button onClick={handleApiTokenLogin} disabled={isLoading || !userId || !email || !apiToken} className="w-full">
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Connecting...
-                </>
-              ) : (
-                "Connect"
-              )}
-            </Button>
+            {apiTokenForm}
           </TabsContent>
         </Tabs>
+        ) : (
+          <div className="space-y-3">{apiTokenForm}</div>
+        )
       ) : (
         <div className="flex items-center justify-between p-3 border border-border rounded-lg">
           <div className="flex items-center gap-3">

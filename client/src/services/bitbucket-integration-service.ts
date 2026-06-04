@@ -24,7 +24,6 @@ export interface StatusResponse {
   display_name?: string;
   username?: string;
   auth_type?: string;
-  oauth_available?: boolean;
 }
 
 interface WorkspacesResponse {
