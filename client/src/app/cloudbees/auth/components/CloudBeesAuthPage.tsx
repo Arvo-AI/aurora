@@ -7,6 +7,7 @@ import {
   ChevronRight, Copy, Eye, EyeOff,
   Loader2, Check,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { getUserFriendlyError } from "@/lib/utils";
 import { cloudbeesService } from "@/lib/services/ci-provider";
 import type { CIProviderStatus } from "@/lib/services/ci-provider";
@@ -63,6 +64,14 @@ export default function CloudBeesAuthPage() {
   const [pat, setPat] = useState("");
   const [showPat, setShowPat] = useState(false);
 
+  // Dashboard state (connected view)
+  const [summary, setSummary] = useState<any>(null);
+  const [webhookInfo, setWebhookInfo] = useState<any>(null);
+  const [deployments, setDeployments] = useState<any[]>([]);
+  const [rcaEnabled, setRcaEnabled] = useState(true);
+  const [rcaLoading, setRcaLoading] = useState(false);
+  const [webhookCopied, setWebhookCopied] = useState(false);
+
   // Validation
   const [urlError, setUrlError] = useState("");
 
@@ -95,6 +104,14 @@ export default function CloudBeesAuthPage() {
               setControllers(ctrlResp.controllers);
             }
           } catch { /* OC may not be connected — ignore */ }
+
+          // Fetch dashboard data
+          fetch("/api/cloudbees/status?full=true").then(r => r.json()).then(d => {
+            if (d?.status?.summary) setSummary(d.status.summary);
+          }).catch(() => {});
+          fetch("/api/cloudbees/webhook-url").then(r => r.json()).then(setWebhookInfo).catch(() => {});
+          fetch("/api/cloudbees/deployments").then(r => r.json()).then(d => setDeployments(d.deployments || [])).catch(() => {});
+          fetch("/api/cloudbees/rca-settings").then(r => r.json()).then(d => setRcaEnabled(d.rcaEnabled ?? true)).catch(() => {});
         } else {
           localStorage.removeItem(CONNECTED_KEY);
         }
@@ -311,6 +328,44 @@ export default function CloudBeesAuthPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRcaToggle = async (checked: boolean) => {
+    setRcaLoading(true);
+    try {
+      await fetch("/api/cloudbees/rca-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rcaEnabled: checked }),
+      });
+      setRcaEnabled(checked);
+      toast({ title: checked ? "RCA Enabled" : "RCA Disabled", description: checked ? "Auto-trigger RCA on failures is now active" : "Auto-trigger RCA has been turned off" });
+    } catch (err) {
+      toast({ title: "Failed to update", description: getUserFriendlyError(err), variant: "destructive" });
+    } finally {
+      setRcaLoading(false);
+    }
+  };
+
+  const copyDashboardWebhookUrl = () => {
+    if (!webhookInfo?.webhookUrl) return;
+    navigator.clipboard.writeText(webhookInfo.webhookUrl);
+    setWebhookCopied(true);
+    toast({ title: "Copied", description: "Webhook URL copied to clipboard" });
+    setTimeout(() => setWebhookCopied(false), 2000);
+  };
+
+  const timeAgo = (dateStr: string): string => {
+    const now = new Date();
+    const date = new Date(dateStr);
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
   };
 
   const copyWebhookUrl = () => {
@@ -779,7 +834,7 @@ export default function CloudBeesAuthPage() {
             </button>
           </div>
 
-          <div className="mt-10 space-y-4">
+          <div className="mt-6 space-y-4">
             <div>
               <p className="text-[13px] text-[#999] mb-1">URL</p>
               <p className="text-[15px]">{status?.baseUrl}</p>
@@ -798,9 +853,108 @@ export default function CloudBeesAuthPage() {
             )}
           </div>
 
+          {/* Stats grid */}
+          {summary && (
+            <div className="grid grid-cols-4 gap-4 mt-8 mb-8">
+              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                <p className="text-[24px] font-bold">{summary.jobCount ?? "—"}</p>
+                <p className="text-[11px] text-[#666] mt-1">Jobs</p>
+              </div>
+              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                <p className="text-[24px] font-bold">{summary.nodesOnline ?? "—"}<span className="text-[14px] text-[#555] font-normal">/{(summary.nodesOnline ?? 0) + (summary.nodesOffline ?? 0)}</span></p>
+                <p className="text-[11px] text-[#666] mt-1">Nodes online</p>
+              </div>
+              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                <p className="text-[24px] font-bold">{summary.busyExecutors ?? "—"}<span className="text-[14px] text-[#555] font-normal">/{summary.totalExecutors ?? 0}</span></p>
+                <p className="text-[11px] text-[#666] mt-1">Executors busy</p>
+              </div>
+              <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                <p className="text-[24px] font-bold">{summary.queueSize ?? "—"}</p>
+                <p className="text-[11px] text-[#666] mt-1">Queue</p>
+              </div>
+            </div>
+          )}
+
+          {/* Job health bar */}
+          {summary?.jobHealth && (() => {
+            const health = summary.jobHealth;
+            const total = (health.healthy || 0) + (health.unstable || 0) + (health.failing || 0) + (health.disabled || 0) + (health.other || 0);
+            if (total === 0) return null;
+            return (
+              <div className="mb-8">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-3">Job Health</p>
+                <div className="h-2 rounded-full overflow-hidden bg-white/[0.04] flex">
+                  {health.healthy > 0 && <div className="bg-emerald-400" style={{ width: `${(health.healthy / total) * 100}%` }} />}
+                  {health.unstable > 0 && <div className="bg-yellow-400" style={{ width: `${(health.unstable / total) * 100}%` }} />}
+                  {health.failing > 0 && <div className="bg-red-400" style={{ width: `${(health.failing / total) * 100}%` }} />}
+                  {health.disabled > 0 && <div className="bg-[#555]" style={{ width: `${(health.disabled / total) * 100}%` }} />}
+                  {health.other > 0 && <div className="bg-[#444]" style={{ width: `${(health.other / total) * 100}%` }} />}
+                </div>
+                <div className="flex gap-4 mt-2 text-[11px] text-[#666]">
+                  {health.healthy > 0 && <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-400" />{health.healthy} healthy</span>}
+                  {health.unstable > 0 && <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-yellow-400" />{health.unstable} unstable</span>}
+                  {health.failing > 0 && <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400" />{health.failing} failing</span>}
+                  {health.disabled > 0 && <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#555]" />{health.disabled} disabled</span>}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* RCA toggle */}
+          <div className="flex items-center justify-between py-4 border-t border-white/[0.04]">
+            <div>
+              <p className="text-[14px] text-white">Auto-trigger RCA on failures</p>
+              <p className="text-[12px] text-[#666]">Automatically investigate when a build fails</p>
+            </div>
+            <Switch checked={rcaEnabled} onCheckedChange={handleRcaToggle} disabled={rcaLoading} />
+          </div>
+
+          {/* Webhook section */}
+          {webhookInfo && (
+            <div className="mt-8 pt-6 border-t border-white/[0.04]">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">Deployment Webhook</p>
+              <div className="flex gap-2 mb-4">
+                <code className="flex-1 px-4 py-3 rounded-xl bg-white/[0.02] border border-white/[0.04] text-[12px] text-[#888] font-mono truncate">{webhookInfo.webhookUrl}</code>
+                <button
+                  type="button"
+                  onClick={copyDashboardWebhookUrl}
+                  className="px-3 py-3 rounded-xl border border-white/[0.06] hover:bg-white/[0.04] transition-colors"
+                >
+                  {webhookCopied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4 text-[#777]" />}
+                </button>
+              </div>
+              {webhookInfo.jenkinsfileBasic && (
+                <details>
+                  <summary className="text-[12px] text-[#666] cursor-pointer hover:text-[#999] transition-colors">View Jenkinsfile snippet</summary>
+                  <pre className="mt-3 p-4 rounded-xl bg-white/[0.02] border border-white/[0.04] text-[11px] text-[#888] font-mono overflow-x-auto whitespace-pre">{webhookInfo.jenkinsfileBasic}</pre>
+                </details>
+              )}
+            </div>
+          )}
+
+          {/* Recent deployments */}
+          {deployments.length > 0 && (
+            <div className="mt-8 pt-6 border-t border-white/[0.04]">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">Recent Deployments</p>
+              <div className="space-y-2">
+                {deployments.slice(0, 5).map((d, i) => (
+                  <div key={i} className="flex items-center justify-between py-2.5 px-4 rounded-xl bg-white/[0.02]">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${d.result === "SUCCESS" ? "bg-emerald-400" : d.result === "FAILURE" ? "bg-red-400" : "bg-[#666]"}`} />
+                      <span className="text-[13px]">{d.service}</span>
+                      {d.environment && <span className="text-[11px] text-[#555]">{d.environment}</span>}
+                    </div>
+                    <span className="text-[11px] text-[#555]">#{d.build_number} · {timeAgo(d.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Managed controllers (OC mode) */}
           {controllers.length > 0 && (
-            <div className="mt-10">
-              <p className="text-[11px] uppercase tracking-[0.15em] text-[#555] mb-4">Managed Controllers</p>
+            <div className="mt-8 pt-6 border-t border-white/[0.04]">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">Managed Controllers</p>
               <div className="space-y-1">
                 {controllers.map((ctrl) => (
                   <div key={ctrl.url} className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/[0.02]">
@@ -817,16 +971,6 @@ export default function CloudBeesAuthPage() {
               </div>
             </div>
           )}
-
-          {/* What happens next */}
-          <div className="mt-10 rounded-xl bg-white/[0.02] border border-white/[0.04] p-5">
-            <p className="text-[13px] text-[#999] mb-3">What happens next</p>
-            <ul className="text-[13px] text-[#777] space-y-1.5 list-disc list-inside">
-              <li>Aurora will index recent builds and deployments from your connected instance</li>
-              <li>When an incident is created, Aurora correlates recent deployments to find likely causes</li>
-              <li>Build failures and rollbacks are surfaced in incident timelines automatically</li>
-            </ul>
-          </div>
         </div>
       )}
 
