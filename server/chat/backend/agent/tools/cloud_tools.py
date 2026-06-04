@@ -1371,6 +1371,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except ImportError:
         logger.warning("Postmortem tools not available — import failed")
 
+    # Artifacts: persistent markdown documents Aurora maintains across runs.
+    # Unconditional (no connector gating) so any agent surface — chat, scheduled
+    # Actions, background RCA, MCP — can list/read/write them. Steering lives
+    # entirely in the tool descriptions below; never in a system prompt.
+    try:
+        from .artifact_tool import list_artifacts, read_artifact, write_artifact
+        tool_functions.append((list_artifacts, "list_artifacts"))
+        tool_functions.append((read_artifact, "read_artifact"))
+        tool_functions.append((write_artifact, "write_artifact"))
+    except ImportError:
+        logger.warning("Artifact tools not available — import failed")
+
     # Process Aurora native tools
     for func, name in tool_functions:
         # For github_rca, inject the authoritative incident timestamp before any
@@ -1587,6 +1599,52 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "structured markdown (Summary, Timeline, Root Cause, Impact, etc.)."
                 ),
                 args_schema=SavePostmortemArgs,
+            )
+        elif name == 'list_artifacts':
+            from .artifact_tool import ListArtifactsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all persistent documents (artifacts) maintained for this workspace, "
+                    "with titles, versions, and last-updated times. Call this to discover what "
+                    "documents already exist before deciding whether to read, update, or create "
+                    "one — especially when instructions reference maintaining/updating a document "
+                    "but don't say it's new. Metadata only, not content."
+                ),
+                args_schema=ListArtifactsArgs,
+            )
+        elif name == 'read_artifact':
+            from .artifact_tool import ReadArtifactArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Read the full current markdown of one artifact by exact title. Call after "
+                    "list_artifacts to get a document's current state — e.g. to see what you "
+                    "reported last run before producing an update, or to respect a user's edits. "
+                    "Returns content, version, and last-updated time, or that it doesn't exist."
+                ),
+                args_schema=ReadArtifactArgs,
+            )
+        elif name == 'write_artifact':
+            from .artifact_tool import WriteArtifactArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Create or update a persistent markdown document by title. If the title "
+                    "exists, its content is replaced and a new version recorded; otherwise it's "
+                    "created. Use when instructions ask you to maintain/update/record findings in "
+                    "a document that persists across runs (a living findings list, cost report, "
+                    "runbook) — not for one-off chat answers. ALWAYS read the existing artifact "
+                    "first and reconcile rather than regenerate: keep items the user edited or "
+                    "added, remove findings that are now resolved or no longer reproduce, do not "
+                    "re-add anything the user deleted, and avoid duplicates. If the existing doc "
+                    "was last edited by the user, treat their version as authoritative and change "
+                    "it minimally."
+                ),
+                args_schema=WriteArtifactArgs,
             )
         elif name == 'list_slack_channels':
             from .slack_tool import ListSlackChannelsArgs
