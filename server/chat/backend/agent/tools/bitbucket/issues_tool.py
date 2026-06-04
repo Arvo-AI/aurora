@@ -67,7 +67,7 @@ def bitbucket_issues(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo, _ = resolve_workspace_repo(user_id, workspace, repo_slug)
 
     try:
         if action == "list_issues":

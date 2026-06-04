@@ -84,7 +84,7 @@ def bitbucket_pull_requests(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source_desc = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo, default_branch = resolve_workspace_repo(user_id, workspace, repo_slug)
 
     try:
         if action == "list_prs":
@@ -120,7 +120,11 @@ def bitbucket_pull_requests(
             if not source_branch:
                 return build_error_response("source_branch is required")
             if not dest_branch:
-                dest_branch = saved_branch or "main"
+                if not default_branch:
+                    return build_error_response(
+                        "dest_branch is required (could not determine default branch for this repo)"
+                    )
+                dest_branch = default_branch
             if source_branch == dest_branch:
                 return build_error_response(f"source_branch and dest_branch are the same ('{source_branch}')")
             result = client.create_pull_request(

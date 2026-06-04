@@ -59,9 +59,9 @@ def bitbucket_branches(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo, default_branch = resolve_workspace_repo(user_id, workspace, repo_slug)
     if not branch:
-        branch = saved_branch
+        branch = default_branch
 
     try:
         if action == "list_branches":

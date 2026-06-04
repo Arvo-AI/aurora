@@ -81,15 +81,13 @@ def resolve_workspace_repo(
     user_id: str,
     workspace: Optional[str] = None,
     repo_slug: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str], Optional[str], str]:
-    """Resolve workspace, repo, and branch from explicit params or stored selection.
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve workspace, repo, and default branch from explicit params or stored selection.
 
     Priority: 1. Explicit params  2. Saved selection from DB
 
-    Returns:
-        (workspace, repo_slug, branch, source_description)
+    Branch is read from the stored repository object's mainbranch, falling back to 'main'.
     """
-    source = "explicit"
     branch = None
 
     if not workspace or not repo_slug:
@@ -103,12 +101,15 @@ def resolve_workspace_repo(
             if not repo_slug:
                 repo_slug = _extract_field(selection.get("repository"), "slug")
 
-            branch = _extract_field(selection.get("branch"), "name")
-            source = "saved selection"
+            repo_data = selection.get("repository")
+            if isinstance(repo_data, dict):
+                mainbranch = repo_data.get("mainbranch")
+                if isinstance(mainbranch, dict):
+                    branch = mainbranch.get("name")
         except Exception as e:
             logger.warning(f"Failed to load Bitbucket workspace selection: {e}")
 
-    return workspace, repo_slug, branch, source
+    return workspace, repo_slug, branch
 
 
 def require_repo(ws: Optional[str], repo: Optional[str]) -> Optional[str]:
