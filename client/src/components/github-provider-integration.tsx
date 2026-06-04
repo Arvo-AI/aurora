@@ -316,8 +316,22 @@ export default function GitHubProviderIntegration() {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
-    // Polling disabled — causes frontend OOM in dev mode (see issue #471)
-    return;
+    const hasPending = repos.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
+    if (!hasPending || !userId) return;
+    pollingRef.current = setInterval(async () => {
+      try {
+        const response = await fetch('/api/proxy/github/repo-selections');
+        if (!response.ok) return; // transient; keep polling
+        const data = await response.json();
+        const updated: ConnectedRepo[] = data.repositories || [];
+        setSavedRepos(updated);
+        const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
+        if (!stillPending && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch { /* keep polling; transient failure */ }
+    }, 3000);
   }, [userId]);
 
   const loadSavedRepos = useCallback(async () => {
