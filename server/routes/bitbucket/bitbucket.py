@@ -52,6 +52,23 @@ def bitbucket_login(user_id):
                             "error": f"Missing required scopes: {missing}. "
                                      "Please create a new API token that includes these scopes.",
                         }), 400
+
+                    status_code = user_data.get("status") if user_data else None
+                    if status_code == 401:
+                        return jsonify({
+                            "error": "Authentication failed. Double-check your email address "
+                                     "matches the one on your Atlassian account, and that the "
+                                     "API token is correct (not an app password)."
+                        }), 400
+                    if status_code == 403:
+                        return jsonify({
+                            "error": "Token authenticated but lacks permissions. "
+                                     "This usually means you created a classic API token "
+                                     "(which has no scopes at all) instead of a scoped token. "
+                                     "Go to https://id.atlassian.com/manage-profile/security/api-tokens "
+                                     "and click 'Create API token with scopes' — not the plain "
+                        }), 400
+
                     return jsonify({"error": "Invalid Bitbucket credentials. Check your email and API token."}), 400
 
                 username = user_data.get("username")
@@ -87,9 +104,8 @@ def bitbucket_login(user_id):
             if not client_id or not client_secret:
                 logger.error("Bitbucket OAuth client ID or secret not configured")
                 return jsonify({
-                    "error": "Bitbucket OAuth is not configured",
-                    "error_code": "BITBUCKET_NOT_CONFIGURED",
-                    "message": "Bitbucket OAuth environment variables (BB_OAUTH_CLIENT_ID and BB_OAUTH_CLIENT_SECRET) are not configured.",
+                    "error": "Bitbucket OAuth is not available. Use an API token instead.",
+                    "error_code": "OAUTH_NOT_CONFIGURED",
                 }), 400
 
             from connectors.bitbucket_connector.oauth_utils import get_auth_url
@@ -218,10 +234,12 @@ def bitbucket_callback():
 @require_permission("connectors", "read")
 def bitbucket_status(user_id):
     """Check Bitbucket connection status for a user."""
+    oauth_configured = bool(os.getenv("BB_OAUTH_CLIENT_ID") and os.getenv("BB_OAUTH_CLIENT_SECRET"))
+
     try:
         bb_creds = get_credentials_from_db(user_id, "bitbucket")
         if not bb_creds or not bb_creds.get("access_token"):
-            return jsonify({"connected": False})
+            return jsonify({"connected": False, "oauth_available": oauth_configured})
 
         auth_type = bb_creds.get("auth_type", "oauth")
 
@@ -251,10 +269,11 @@ def bitbucket_status(user_id):
         user_data = client.get_current_user()
 
         if not user_data or user_data.get("error"):
-            return jsonify({"connected": False, "error": "Invalid or expired token"})
+            return jsonify({"connected": False, "oauth_available": oauth_configured, "error": "Invalid or expired token"})
 
         return jsonify({
             "connected": True,
+            "oauth_available": oauth_configured,
             "username": user_data.get("username"),
             "display_name": user_data.get("display_name"),
             "auth_type": auth_type,
@@ -262,7 +281,7 @@ def bitbucket_status(user_id):
 
     except Exception as e:
         logger.error(f"Error checking Bitbucket status: {e}", exc_info=True)
-        return jsonify({"connected": False, "error": "Failed to check Bitbucket status"}), 500
+        return jsonify({"connected": False, "oauth_available": oauth_configured, "error": "Failed to check Bitbucket status"}), 500
 
 
 @bitbucket_bp.route("/disconnect", methods=["POST"])

@@ -6,3 +6,4 @@ from .branches_tool import bitbucket_branches, BitbucketBranchesArgs  # noqa: F4
 from .prs_tool import bitbucket_pull_requests, BitbucketPullRequestsArgs  # noqa: F401
 from .issues_tool import bitbucket_issues, BitbucketIssuesArgs  # noqa: F401
 from .pipelines_tool import bitbucket_pipelines, BitbucketPipelinesArgs  # noqa: F401
+from .apply_fix_tool import bitbucket_apply_fix  # noqa: F401

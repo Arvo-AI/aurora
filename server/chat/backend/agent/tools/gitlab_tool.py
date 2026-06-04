@@ -362,8 +362,8 @@ def _action_apply_fix(
                           s.original_content, s.suggested_content, s.user_edited_content,
                           s.repository, s.command, s.pr_url, s.created_branch
                    FROM incident_suggestions s JOIN incidents i ON s.incident_id = i.id
-                   WHERE s.id = %s AND i.user_id = %s AND s.type = 'fix'""",
-                (suggestion_id, user_id),
+                   WHERE s.id = %s AND s.type = 'fix'""",
+                (suggestion_id,),
             )
             row = cursor.fetchone()
             if row:

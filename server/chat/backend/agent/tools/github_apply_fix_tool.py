@@ -52,9 +52,9 @@ def _get_fix_suggestion(suggestion_id: int, user_id: str) -> Optional[dict]:
                        s.pr_url, s.created_branch
                 FROM incident_suggestions s
                 JOIN incidents i ON s.incident_id = i.id
-                WHERE s.id = %s AND i.user_id = %s AND s.type = 'fix'
+                WHERE s.id = %s AND s.type = 'fix'
                 """,
-                (suggestion_id, user_id)
+                (suggestion_id,)
             )
             row = cursor.fetchone()
             if row:

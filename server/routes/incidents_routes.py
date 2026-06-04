@@ -1644,6 +1644,14 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
                 target_branch=target_branch,
                 user_id=user_id,
             )
+        elif provider == "bitbucket":
+            from chat.backend.agent.tools.bitbucket.apply_fix_tool import bitbucket_apply_fix
+            result_json = bitbucket_apply_fix(
+                suggestion_id=suggestion_id_int,
+                use_edited_content=use_edited_content,
+                target_branch=target_branch,
+                user_id=user_id,
+            )
         else:
             return jsonify({"error": f"Unsupported VCS provider: {provider}"}), 400
         result = json.loads(result_json)

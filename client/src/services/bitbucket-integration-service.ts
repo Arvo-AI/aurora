@@ -24,6 +24,7 @@ export interface StatusResponse {
   display_name?: string;
   username?: string;
   auth_type?: string;
+  oauth_available?: boolean;
 }
 
 interface WorkspacesResponse {
@@ -161,7 +162,7 @@ export class BitbucketIntegrationService {
     return this.request<WorkspaceSelectionResponse>('/workspace-selection', { errorMessage: null });
   }
 
-  static async saveWorkspaceSelection(data: { workspace: string; repository: Repo; branch: string }): Promise<{ message: string }> {
+  static async saveWorkspaceSelection(data: { workspace: string; repository: Repo; branch?: string }): Promise<{ message: string }> {
     return this.request(
       '/workspace-selection',
       { method: 'POST', body: data, errorMessage: 'Failed to save workspace selection' }
