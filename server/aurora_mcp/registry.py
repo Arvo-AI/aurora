@@ -171,6 +171,9 @@ class DispatchEntry:
     body_keys: Tuple[str, ...] = ()
     # Args that must be substituted into the path (e.g. {issue_key}).
     path_args: Tuple[str, ...] = ()
+    # Query-string args to advertise in the tool schema so the LLM knows to
+    # pass them (forwarding already routes any non-body/non-path arg to query).
+    query_keys: Tuple[str, ...] = ()
 
 
 # Each entry maps a stable MCP-side name to an existing Aurora REST endpoint.
@@ -523,6 +526,33 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         enabling_skills=("notion",),
         path_args=("incident_id",),
         body_keys=("databaseId", "titleProperty", "propertyMapping", "actionItemsDatabaseId"),
+    ),
+    # ----- Artifacts (Aurora-internal — no prefix; /api/artifacts) -----
+    DispatchEntry(
+        name="artifact_list",
+        description="List persistent markdown artifacts for this workspace.",
+        category="docs",
+        method="GET",
+        path="/api/artifacts",
+        enabling_skills=(),
+    ),
+    DispatchEntry(
+        name="artifact_read",
+        description="Read one artifact's full content by exact title (pass the `title` arg).",
+        category="docs",
+        method="GET",
+        path="/api/artifacts",
+        enabling_skills=(),
+        query_keys=("title",),
+    ),
+    DispatchEntry(
+        name="artifact_write",
+        description="Create or update a persistent markdown artifact by title.",
+        category="docs",
+        method="POST",
+        path="/api/artifacts",
+        enabling_skills=(),
+        body_keys=("title", "content"),
     ),
     # ----- Incidents — Aurora-internal reads and lifecycle writes -----
     DispatchEntry(

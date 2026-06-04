@@ -44,6 +44,8 @@ def _arg_schema(entry) -> List[Dict[str, Any]]:
         out.append({"name": a, "in": "path", "required": True})
     for a in entry.body_keys:
         out.append({"name": a, "in": "body", "required": False})
+    for a in getattr(entry, "query_keys", ()):
+        out.append({"name": a, "in": "query", "required": False})
     return out
 
 
