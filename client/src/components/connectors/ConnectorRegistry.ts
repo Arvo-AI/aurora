@@ -1,5 +1,5 @@
 import { Github, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled } from "@/lib/feature-flags";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -415,16 +415,18 @@ class ConnectorRegistry {
       storageKey: "isJenkinsConnected",
     });
 
-    this.register({
-      id: "cloudbees",
-      name: "CloudBees CI",
-      description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
-      iconPath: "/cloudbees.svg",
-      iconBgColor: "bg-muted",
-      category: "CI/CD",
-      path: "/cloudbees/auth",
-      storageKey: "isCloudBeesConnected",
-    });
+    if (isCloudBeesEnabled()) {
+      this.register({
+        id: "cloudbees",
+        name: "CloudBees CI",
+        description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
+        iconPath: "/cloudbees.svg",
+        iconBgColor: "bg-muted",
+        category: "CI/CD",
+        path: "/cloudbees/auth",
+        storageKey: "isCloudBeesConnected",
+      });
+    }
 
     if (isSpinnakerEnabled()) {
       this.register({
