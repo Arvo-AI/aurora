@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useSession, signIn } from "next-auth/react"
+import { AuroraShader } from "../components/AuroraShader"
 
 export default function ChangePasswordPage() {
   const { data: session } = useSession()
@@ -64,18 +65,26 @@ export default function ChangePasswordPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-black py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8 bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl">
+    <div className="relative min-h-screen bg-[#0a0a0a] flex items-center justify-center px-4 overflow-hidden">
+      {/* Animated shader background */}
+      <AuroraShader />
+
+      {/* Dark overlay gradients */}
+      <div className="absolute inset-0 bg-gradient-to-b from-[#0a0a0a]/60 via-transparent to-[#0a0a0a]/80" />
+      <div className="absolute inset-0 bg-[#0a0a0a]/40" />
+
+      {/* Card */}
+      <div className="relative z-10 max-w-md w-full space-y-8 bg-white/[0.04] border border-white/[0.08] backdrop-blur-xl p-8 rounded-2xl">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-white">
+          <h2 className="text-center text-3xl font-bold text-white">
             Set your password
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-300">
+          <p className="mt-2 text-center text-sm text-[#888]">
             Your account was created by an admin. Please choose a new password to continue.
           </p>
         </div>
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          <div className="rounded-md shadow-sm space-y-3">
+        <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
+          <div className="space-y-3">
             <div>
               <label htmlFor="current-password" className="sr-only">
                 Current password
@@ -88,7 +97,7 @@ export default function ChangePasswordPage() {
                 required
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-white rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm bg-white dark:bg-gray-800"
+                className="block w-full px-3 py-2.5 bg-white/[0.03] border border-white/[0.12] text-white placeholder:text-[#555] rounded-lg focus:outline-none focus:ring-1 focus:ring-white/20 focus:border-white/20 sm:text-sm transition-colors"
                 placeholder="Current password (given by admin)"
                 disabled={isLoading}
               />
@@ -105,7 +114,7 @@ export default function ChangePasswordPage() {
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-white rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm bg-white dark:bg-gray-800"
+                className="block w-full px-3 py-2.5 bg-white/[0.03] border border-white/[0.12] text-white placeholder:text-[#555] rounded-lg focus:outline-none focus:ring-1 focus:ring-white/20 focus:border-white/20 sm:text-sm transition-colors"
                 placeholder="New password (min 8 characters)"
                 disabled={isLoading}
               />
@@ -122,7 +131,7 @@ export default function ChangePasswordPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-700 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-white rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm bg-white dark:bg-gray-800"
+                className="block w-full px-3 py-2.5 bg-white/[0.03] border border-white/[0.12] text-white placeholder:text-[#555] rounded-lg focus:outline-none focus:ring-1 focus:ring-white/20 focus:border-white/20 sm:text-sm transition-colors"
                 placeholder="Confirm new password"
                 disabled={isLoading}
               />
@@ -130,8 +139,8 @@ export default function ChangePasswordPage() {
           </div>
 
           {error && (
-            <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-4">
-              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4">
+              <p className="text-sm text-red-300">{error}</p>
             </div>
           )}
 
@@ -139,7 +148,7 @@ export default function ChangePasswordPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex justify-center py-2.5 px-4 bg-white text-black font-medium rounded-lg hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
             >
               {isLoading ? "Updating..." : "Set new password"}
             </button>
