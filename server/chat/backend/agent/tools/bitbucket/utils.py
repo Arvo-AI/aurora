@@ -9,17 +9,6 @@ logger = logging.getLogger(__name__)
 DIFF_TRUNCATE_LIMIT = 50_000
 
 
-def _extract_field(value, field: str, default=None):
-    """Extract a field from a value that may be a dict or a plain string.
-
-    Handles the common Bitbucket pattern where stored selections can be
-    either a dict (``{"slug": "foo", ...}``) or a plain string (``"foo"``).
-    """
-    if isinstance(value, dict):
-        return value.get(field, default)
-    return value if value is not None else default
-
-
 def get_bb_client_for_user(user_id: str):
     """Get a BitbucketAPIClient with auto-refreshed OAuth tokens.
 
@@ -79,35 +68,26 @@ def is_bitbucket_connected(user_id: str) -> bool:
 
 def resolve_workspace_repo(
     user_id: str,
-    workspace: Optional[str] = None,
-    repo_slug: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """Resolve workspace, repo, and default branch from explicit params or stored selection.
-
-    Priority: 1. Explicit params  2. Saved selection from DB
-
-    Branch is read from the stored repository object's mainbranch, falling back to 'main'.
-    """
+    workspace: str,
+    repo_slug: str,
+) -> tuple[str, str, Optional[str]]:
+    """Return (workspace, repo_slug, default_branch) — looking up cached branch metadata."""
     branch = None
+    try:
+        from utils.auth.stateless_auth import get_credentials_from_db
+        selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
 
-    if not workspace or not repo_slug:
-        try:
-            from utils.auth.stateless_auth import get_credentials_from_db
-            selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
-
-            if not workspace:
-                workspace = _extract_field(selection.get("workspace"), "slug")
-
-            if not repo_slug:
-                repo_slug = _extract_field(selection.get("repository"), "slug")
-
-            repo_data = selection.get("repository")
-            if isinstance(repo_data, dict):
-                mainbranch = repo_data.get("mainbranch")
-                if isinstance(mainbranch, dict):
-                    branch = mainbranch.get("name")
-        except Exception as e:
-            logger.warning(f"Failed to load Bitbucket workspace selection: {e}")
+        repositories = selection.get("repositories") or []
+        repo_data = next(
+            (r for r in repositories if isinstance(r, dict) and r.get("slug") == repo_slug),
+            None,
+        )
+        if repo_data:
+            mainbranch = repo_data.get("mainbranch")
+            if mainbranch:
+                branch = mainbranch.get("name")
+    except Exception as e:
+        logger.warning(f"Failed to load Bitbucket workspace selection: {e}")
 
     return workspace, repo_slug, branch
 
