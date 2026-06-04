@@ -1067,7 +1067,8 @@ export default function GitHubProviderIntegration() {
                 const isEditing = editingMetadata[repo.repo_full_name] !== undefined;
                 const isReady = repo.metadata_status === 'ready';
                 const isPending = repo.metadata_status === 'pending' || repo.metadata_status === 'generating';
-                const isError = repo.metadata_status === 'error';
+                const isError = repo.metadata_status === 'error' || repo.metadata_status === 'limit_reached';
+                const isLimitReached = repo.metadata_status === 'limit_reached';
                 return (
                   <div key={repo.repo_full_name} className="p-2 rounded-md border border-border space-y-1">
                     <div className="flex items-center justify-between gap-2">
@@ -1130,7 +1131,7 @@ export default function GitHubProviderIntegration() {
                       </div>
                     )}
                     {isError && (
-                      <p className="text-xs text-red-500">Failed to generate description</p>
+                      <p className="text-xs text-red-500">{isLimitReached ? 'Usage limit reached — upgrade to continue.' : 'Failed to generate description'}</p>
                     )}
                     {isReady && isEditing && (
                       <div className="space-y-1">
