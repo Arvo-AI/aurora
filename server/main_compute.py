@@ -361,6 +361,10 @@ app.register_blueprint(gitlab_bp, url_prefix="/gitlab")
 from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)
 
+# --- Kubeconfig Upload Routes ---
+from routes.kubeconfig.kubeconfig_routes import kubeconfig_bp
+app.register_blueprint(kubeconfig_bp)
+
 # --- MCP API Token Routes ---
 from routes.mcp_token_routes import mcp_token_bp
 app.register_blueprint(mcp_token_bp)

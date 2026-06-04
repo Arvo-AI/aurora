@@ -52,10 +52,6 @@ async def _handle_kubectl_execute(headers, body, writer):
     """Handle internal kubectl execution endpoint."""
     internal_secret = os.getenv('INTERNAL_API_SECRET') or ''
     provided = headers.get('x-internal-secret') or ''
-    # Skip auth when the secret isn't configured (local dev convenience).
-    # Production safety is enforced at startup in main_chatbot.py — the
-    # container refuses to start without INTERNAL_API_SECRET when AURORA_ENV != "dev".
-    # When the secret IS set, compare in constant time to avoid leaking timing info.
     if internal_secret and not hmac.compare_digest(internal_secret, provided):
         await _send_json_response(writer, {"error": "Unauthorized"}, status="403 Forbidden")
         return
@@ -66,32 +62,119 @@ async def _handle_kubectl_execute(headers, body, writer):
     user_id, cluster_id, command = data['user_id'], data['cluster_id'], data['command']
     timeout = data.get('timeout', 60)
     
+    # Try WebSocket agent first (existing path)
     websocket = get_agent_websocket_by_cluster(user_id, cluster_id)
-    if not websocket:
-        await _send_json_response(writer, {'success': False, 'error': f"No active agent for cluster '{cluster_id}'"})
+    if websocket:
+        command_id = str(uuid.uuid4())
+        future = asyncio.Future()
+        register_command_response_handler(command_id, future)
+        try:
+            websocket = get_agent_websocket_by_cluster(user_id, cluster_id)
+            if not websocket:
+                await _send_json_response(writer, {'success': False, 'error': f"Agent disconnected for cluster '{cluster_id}'"})
+                return
+            await websocket.send(json.dumps({'type': 'kubectl_command', 'command_id': command_id, 'command': command, 'timeout': timeout}))
+            result = await asyncio.wait_for(future, timeout=timeout)
+            await _send_json_response(writer, result)
+        except asyncio.TimeoutError:
+            await _send_json_response(writer, {'success': False, 'error': 'No response from agent'})
+        except Exception as e:
+            logger.error(f"Error communicating with kubectl agent: {e}", exc_info=True)
+            await _send_json_response(writer, {'success': False, 'error': f'Agent communication error: {str(e)}'})
+        finally:
+            unregister_command_response_handler(command_id)
         return
     
-    command_id = str(uuid.uuid4())
-    future = asyncio.Future()
-    register_command_response_handler(command_id, future)
-    
-    try:
-        # Re-check websocket is still valid before sending
-        websocket = get_agent_websocket_by_cluster(user_id, cluster_id)
-        if not websocket:
-            await _send_json_response(writer, {'success': False, 'error': f"Agent disconnected for cluster '{cluster_id}'"})
-            return
-        
-        await websocket.send(json.dumps({'type': 'kubectl_command', 'command_id': command_id, 'command': command, 'timeout': timeout}))
-        result = await asyncio.wait_for(future, timeout=timeout)
+    # Fallback: try kubeconfig-based direct execution
+    kubeconfig_info = _get_kubeconfig_for_cluster(user_id, cluster_id)
+    if kubeconfig_info:
+        result = await _execute_kubectl_with_kubeconfig(
+            command, kubeconfig_info['yaml'], kubeconfig_info['context_name'], timeout
+        )
         await _send_json_response(writer, result)
-    except asyncio.TimeoutError:
-        await _send_json_response(writer, {'success': False, 'error': 'No response from agent'})
-    except Exception as e:
-        logger.error(f"Error communicating with kubectl agent: {e}", exc_info=True)
-        await _send_json_response(writer, {'success': False, 'error': f'Agent communication error: {str(e)}'})
+        return
+    
+    await _send_json_response(writer, {'success': False, 'error': f"No active agent or kubeconfig for cluster '{cluster_id}'"})
+
+
+def _get_kubeconfig_for_cluster(user_id: str, cluster_id: str):
+    """Look up kubeconfig YAML from Vault for a given cluster_id."""
+    from utils.db.db_utils import connect_to_db_as_admin
+    from utils.auth.token_management import get_token_data
+    from utils.auth.stateless_auth import resolve_org_id, set_rls_context
+
+    conn = connect_to_db_as_admin()
+    try:
+        cursor = conn.cursor()
+        org_id = resolve_org_id(user_id)
+        set_rls_context(cursor, conn, user_id, log_prefix="[KubeconfigExec]")
+        cursor.execute("""
+            SELECT vault_provider, context_name FROM kubeconfig_clusters
+            WHERE cluster_id = %s AND org_id = %s AND is_active = TRUE
+        """, (cluster_id, org_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        vault_provider, context_name = row
     finally:
-        unregister_command_response_handler(command_id)
+        cursor.close()
+        conn.close()
+
+    token_data = get_token_data(user_id, vault_provider, org_id=org_id)
+    if not token_data or 'kubeconfig_yaml' not in token_data:
+        return None
+    return {'yaml': token_data['kubeconfig_yaml'], 'context_name': context_name}
+
+
+async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, context_name: str, timeout: int) -> dict:
+    """Execute kubectl using a kubeconfig retrieved from Vault."""
+    import atexit
+    import tempfile
+
+    fd, kubeconfig_path = tempfile.mkstemp(prefix='aurora_kc_', suffix='.yaml')
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, kubeconfig_yaml.encode())
+        os.close(fd)
+    except Exception:
+        os.close(fd)
+        os.unlink(kubeconfig_path)
+        raise
+
+    atexit.register(lambda p=kubeconfig_path: os.unlink(p) if os.path.exists(p) else None)
+
+    try:
+        exec_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": "/tmp",
+            "KUBECONFIG": kubeconfig_path,
+        }
+        cmd_parts = ["kubectl", f"--context={context_name}"] + command.split()
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd_parts,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=exec_env,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {'success': False, 'error': f'Command timed out after {timeout}s', 'return_code': 124}
+
+        return {
+            'success': proc.returncode == 0,
+            'output': stdout.decode(errors='replace'),
+            'error': stderr.decode(errors='replace') if proc.returncode != 0 else None,
+            'return_code': proc.returncode,
+        }
+    finally:
+        try:
+            os.unlink(kubeconfig_path)
+        except OSError:
+            pass
 
 
 async def _send_response(writer, response_str):

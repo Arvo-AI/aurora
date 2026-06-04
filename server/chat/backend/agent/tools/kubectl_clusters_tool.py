@@ -30,17 +30,22 @@ def get_connected_clusters(**kwargs) -> str:
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[KubectlClusters:list]")
-                cur.execute(
-                    """SELECT c.cluster_id, t.cluster_name, c.connected_at,
-                              c.last_heartbeat, c.agent_version, c.k8s_context,
-                              t.notes
-                       FROM active_kubectl_connections c
-                       JOIN kubectl_agent_tokens t ON c.token = t.token
-                       WHERE (t.user_id = %s OR t.org_id = %s)
-                         AND c.status = 'active'
-                       ORDER BY t.cluster_name""",
-                    (user_id, org_id),
-                )
+                cur.execute("""
+                    SELECT c.cluster_id, t.cluster_name, c.connected_at, c.last_heartbeat,
+                           c.agent_version, c.k8s_context, t.notes, 'agent' AS source
+                    FROM active_kubectl_connections c
+                    JOIN kubectl_agent_tokens t ON c.token = t.token
+                    WHERE (t.user_id = %s OR t.org_id = %s) AND c.status = 'active'
+
+                    UNION ALL
+
+                    SELECT cluster_id, cluster_name, created_at, updated_at,
+                           NULL, context_name, NULL, 'kubeconfig' AS source
+                    FROM kubeconfig_clusters
+                    WHERE org_id = %s AND is_active = TRUE
+
+                    ORDER BY 2
+                """, (user_id, org_id, org_id))
                 rows = cur.fetchall()
 
         if not rows:
@@ -59,6 +64,7 @@ def get_connected_clusters(**kwargs) -> str:
                 "agent_version": r[4],
                 "k8s_context": r[5],
                 "notes": r[6],
+                "source": r[7],
             })
 
         return json.dumps({"clusters": clusters})
