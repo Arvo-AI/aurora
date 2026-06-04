@@ -355,10 +355,11 @@ export default function CloudBeesAuthPage() {
     setTimeout(() => setWebhookCopied(false), 2000);
   };
 
-  const timeAgo = (dateStr: string): string => {
-    const now = new Date();
+  const timeAgo = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return "";
     const date = new Date(dateStr);
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    if (isNaN(date.getTime())) return "";
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
     if (seconds < 60) return "just now";
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `${minutes}m ago`;
@@ -845,10 +846,10 @@ export default function CloudBeesAuthPage() {
                 <p className="text-[15px]">{status.username}</p>
               </div>
             )}
-            {status?.server?.version && (
+            {status?.server?.version && status.server.version !== "unknown" && (
               <div>
                 <p className="text-[13px] text-[#999] mb-1">Version</p>
-                <p className="text-[15px]">v{status.server.version}</p>
+                <p className="text-[15px]">{status.server.version}</p>
               </div>
             )}
           </div>
