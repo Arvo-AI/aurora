@@ -382,6 +382,16 @@ def add_member(user_id):
     if role not in VALID_ROLES:
         return jsonify({"error": "Invalid role"}), 400
 
+    # Hook: check if org can add more members (seat limit enforcement)
+    from utils.hooks import get_hook
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
+            member_count = cur.fetchone()[0]
+    hook_allowed, hook_message = get_hook("before_add_member")(org_id, member_count)
+    if not hook_allowed:
+        return jsonify({"error": hook_message or "Seat limit reached for your plan. Upgrade to add more members."}), 403
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -688,6 +698,18 @@ def _create_invitation(org_id: str, user_id: str):
 
     if role not in VALID_ROLES:
         return jsonify({"error": "Invalid role"}), 400
+
+    # Hook: check if org can add more members (seat limit enforcement)
+    from utils.hooks import get_hook
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
+            member_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM org_invitations WHERE org_id = %s AND status = 'pending'", (org_id,))
+            pending_count = cur.fetchone()[0]
+    hook_allowed, hook_message = get_hook("before_add_member")(org_id, member_count + pending_count)
+    if not hook_allowed:
+        return jsonify({"error": hook_message or "Seat limit reached for your plan. Upgrade to add more members."}), 403
 
     try:
         with db_pool.get_admin_connection() as conn:
