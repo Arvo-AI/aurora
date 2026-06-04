@@ -978,6 +978,25 @@ from .mcp_tools import (
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
 
+
+_NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
+
+
+def _is_background_rca(state_context, is_background: bool) -> bool:
+    """True when the session is a background RCA investigating a real incident.
+
+    Used to gate tools like github_fix that only make sense during incident
+    investigation (where the user will see the incident card afterwards).
+    """
+    if not state_context or not is_background:
+        return False
+    incident_id = getattr(state_context, 'incident_id', None)
+    if not incident_id:
+        return False
+    rca_source = ((getattr(state_context, 'rca_context', None) or {}).get('source', '') or '').lower()
+    return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
+
+
 def get_cloud_tools():
     """Get all cloud management tools including both Aurora native tools and REAL MCP tools."""
     # Import required classes at function start to avoid scope issues
@@ -1009,10 +1028,11 @@ def get_cloud_tools():
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
+    is_rca_context = _is_background_rca(state_context, is_background)
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}"
     
     current_time = time.time()
     if (
@@ -1323,8 +1343,13 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
         tool_functions.append((github_rca, "github_rca"))
-        tool_functions.append((github_fix, "github_fix"))
-        logging.info(f"Added GitHub tools for user {user_id}")
+        # github_fix saves suggestions for user review in the incident card UI.
+        # Only include during background RCA (real incident investigation) where
+        # the user will see the incident card. Exclude from actions (autonomous,
+        # should use MCP create_pull_request), prediscovery, and interactive chat.
+        if is_rca_context:
+            tool_functions.append((github_fix, "github_fix"))
+        logging.info(f"Added GitHub tools for user {user_id} (github_fix={'included' if is_rca_context else 'excluded (not RCA)'})")
 
     if _safe_connected(is_tailscale_connected, "Tailscale"):
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
