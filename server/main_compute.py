@@ -513,6 +513,9 @@ app.register_blueprint(actions_bp, url_prefix="/api/actions")
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
 
+from routes.artifact_routes import artifact_bp
+app.register_blueprint(artifact_bp)
+
 # --- SRE Metrics Routes ---
 from routes.metrics_routes import metrics_bp
 app.register_blueprint(metrics_bp)
