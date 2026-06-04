@@ -35,6 +35,7 @@ export default function BitbucketProviderIntegration() {
   const [displayName, setDisplayName] = useState<string>('');
   const [authType, setAuthType] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const { toast } = useToast();
   const oauthAvailable = isBitbucketOAuthEnabled();
 
@@ -124,6 +125,7 @@ export default function BitbucketProviderIntegration() {
       return;
     }
     setIsLoading(true);
+    setLoginError(null);
     try {
       await BitbucketIntegrationService.connectWithApiToken(email, apiToken);
       toast({ title: "Connected", description: "Bitbucket connected with API token" });
@@ -133,7 +135,7 @@ export default function BitbucketProviderIntegration() {
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (error: any) {
       console.error('API token login error:', error);
-      toast({ title: "Connection Failed", description: error.message || "Failed to connect with API token", variant: "destructive" });
+      setLoginError(error.message || "Failed to connect with API token");
     } finally {
       setIsLoading(false);
     }
@@ -199,6 +201,9 @@ export default function BitbucketProviderIntegration() {
           "Connect"
         )}
       </Button>
+      {loginError && (
+        <p className="text-sm text-destructive">{loginError}</p>
+      )}
     </>
   );
 

@@ -45,7 +45,10 @@ def bitbucket_login(user_id):
                 # Validate credentials by fetching user profile
                 user_data = client.get_current_user()
                 if not user_data or user_data.get("error"):
-                    logger.error("Bitbucket API token validation failed")
+                    status_code = user_data.get("status") if user_data else None
+                    error_msg = user_data.get("message", "") if user_data else ""
+                    logger.error(f"Bitbucket API token validation failed: status={status_code} message={error_msg}")
+
                     if user_data and user_data.get("missing_scopes"):
                         missing = ", ".join(user_data["missing_scopes"])
                         return jsonify({
@@ -53,20 +56,12 @@ def bitbucket_login(user_id):
                                      "Please create a new API token that includes these scopes.",
                         }), 400
 
-                    status_code = user_data.get("status") if user_data else None
-                    if status_code == 401:
+                    if status_code in (401, 403):
                         return jsonify({
-                            "error": "Authentication failed. Double-check your email address "
-                                     "matches the one on your Atlassian account, and that the "
-                                     "API token is correct (not an app password)."
-                        }), 400
-                    if status_code == 403:
-                        return jsonify({
-                            "error": "Token authenticated but lacks permissions. "
-                                     "This usually means you created a classic API token "
-                                     "(which has no scopes at all) instead of a scoped token. "
-                                     "Go to https://id.atlassian.com/manage-profile/security/api-tokens "
-                                     "and click 'Create API token with scopes' — not the plain "
+                            "error": "Authentication failed. Either your email/token is incorrect, "
+                                     "or you are using a classic API token (which is not supported). "
+                                     "Make sure to use a scoped API token from: "
+                                     "https://id.atlassian.com/manage-profile/security/api-tokens"
                         }), 400
 
                     return jsonify({"error": "Invalid Bitbucket credentials. Check your email and API token."}), 400
