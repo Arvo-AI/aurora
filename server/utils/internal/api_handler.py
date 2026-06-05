@@ -131,7 +131,10 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
     import atexit
     import tempfile
 
-    fd, kubeconfig_path = tempfile.mkstemp(prefix='aurora_kc_', suffix='.yaml')
+    private_dir = os.path.join(tempfile.gettempdir(), 'aurora_kubeconfig')
+    os.makedirs(private_dir, mode=0o700, exist_ok=True)
+
+    fd, kubeconfig_path = tempfile.mkstemp(prefix='aurora_kc_', suffix='.yaml', dir=private_dir)
     try:
         os.fchmod(fd, 0o600)
         os.write(fd, kubeconfig_yaml.encode())
@@ -146,7 +149,7 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
     try:
         exec_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": "/tmp",
+            "HOME": private_dir,
             "KUBECONFIG": kubeconfig_path,
         }
         cmd_parts = ["kubectl", f"--context={context_name}"] + command.split()
