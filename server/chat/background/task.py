@@ -1451,13 +1451,39 @@ async def _execute_background_chat(
         llm_context = _ensure_llm_context_history(session_id, user_id)
         tool_calls = _extract_tool_calls_for_viz(session_id, user_id, llm_context)
         logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
-        
+
+        # Mark action run as success INSIDE the async function. asyncio.run() may
+        # never return to the caller (worker process exits during event loop teardown
+        # due to MCP subprocess cleanup), so this must happen before we return.
+        guardrail_blocked = getattr(state, "guardrail_blocked", False)
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                if guardrail_blocked:
+                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
+                    update_action_run_status(
+                        run_id=trigger_metadata['run_id'], status='error',
+                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                    )
+                else:
+                    update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+        # Dispatch after_rca actions before returning (same reason as above).
+        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+            try:
+                from services.actions.executor import dispatch_on_incident_actions
+                dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
+
         return {
             "session_id": session_id,
             "status": "completed",
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
-            "guardrail_blocked": getattr(state, "guardrail_blocked", False),
+            "guardrail_blocked": guardrail_blocked,
         }
         
     except Exception as e:
