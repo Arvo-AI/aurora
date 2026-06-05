@@ -849,6 +849,15 @@ def join_org(user_id):
                         conn.commit()
                     return jsonify({"error": "You are already a member of this organization"}), 409
 
+                from utils.hooks import get_hook
+                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (new_org_id,))
+                _cnt = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM org_invitations WHERE org_id = %s AND status = 'pending'", (new_org_id,))
+                _cnt += cursor.fetchone()[0]
+                allowed, msg = get_hook("before_add_member")(new_org_id, _cnt)
+                if not allowed:
+                    return jsonify({"error": msg or "Seat limit reached"}), 403
+
                 set_rls_context(cursor, conn, user_id, log_prefix="[OrgJoin]")
                 _transfer_user_to_org(cursor, user_id, old_org_id, new_org_id, new_role)
 

@@ -155,6 +155,16 @@ def create_user(user_id):
             if len(password) < 8:
                 return jsonify({"error": "Password must be at least 8 characters"}), 400
 
+            from utils.hooks import get_hook
+            cur.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
+            _cnt = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM org_invitations WHERE org_id = %s AND status = 'pending'", (org_id,))
+            _cnt += cur.fetchone()[0]
+            allowed, msg = get_hook("before_add_member")(org_id, _cnt)
+            if not allowed:
+                conn.close()
+                return jsonify({"error": msg or "Seat limit reached"}), 403
+
             password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
             try:
