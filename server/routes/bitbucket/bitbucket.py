@@ -275,8 +275,8 @@ def bitbucket_disconnect(user_id):
         # Also clean up legacy vault entry if it exists
         try:
             delete_user_secret(user_id, "bitbucket_workspace_selection")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Legacy Bitbucket workspace selection cleanup skipped: {e}")
 
         # Clear connected repos
         try:
