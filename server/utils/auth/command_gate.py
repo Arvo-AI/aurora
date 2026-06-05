@@ -174,18 +174,25 @@ def _maybe_refresh_permitted_tools(state) -> None:
     try:
         from utils.cache.redis_client import get_redis_client
         rc = get_redis_client()
-        if not rc:
-            return
         org_id = getattr(state, "org_id", None)
         if not org_id:
             return
+
         version_key = f"tool_perms_version:{org_id}"
-        current_version = rc.get(version_key)
-        if not current_version:
+        current_version = rc.get(version_key) if rc else None
+
+        if current_version:
+            cached_version = getattr(state, "_perms_version", None)
+            if cached_version == current_version:
+                return
+
+        # No Redis version means permissions were never seeded via the UI.
+        # Still load from DB (may have been seeded manually), and if empty,
+        # fall back to TOOL_REGISTRY defaults so background actions work
+        # without requiring a Security Settings visit.
+        if getattr(state, "permitted_tools", None) is not None and not current_version:
             return
-        cached_version = getattr(state, "_perms_version", None)
-        if cached_version == current_version:
-            return
+
         from utils.db.connection_pool import db_pool
         from utils.auth.stateless_auth import set_rls_context
         user_id = getattr(state, "user_id", None)
@@ -198,8 +205,14 @@ def _maybe_refresh_permitted_tools(state) -> None:
                     "SELECT tool_key FROM org_tool_permissions WHERE org_id = %s AND enabled = true",
                     (org_id,),
                 )
-                state.permitted_tools = {row[0] for row in cur.fetchall()}
-        state._perms_version = current_version
+                rows = cur.fetchall()
+                if rows:
+                    state.permitted_tools = {row[0] for row in rows}
+                else:
+                    from utils.auth.tool_registry import get_default_enabled_tools
+                    state.permitted_tools = get_default_enabled_tools()
+        if current_version:
+            state._perms_version = current_version
     except Exception as e:
         logger.debug("Could not refresh tool permissions: %s", e)
         state.permitted_tools = None
