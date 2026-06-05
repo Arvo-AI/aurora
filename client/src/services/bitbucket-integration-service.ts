@@ -48,9 +48,8 @@ interface IssuesResponse {
 
 export interface WorkspaceSelectionResponse {
   workspace?: string;
-  repository?: string | { slug: string; name: string };
-  repositories?: (string | { slug: string; name: string })[];
-  branch?: string | { name: string };
+  workspaces?: string[];
+  repositories?: (string | { slug: string; name: string; workspace?: string })[];
 }
 
 // ----- Service -----

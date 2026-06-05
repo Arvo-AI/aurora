@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .utils import (
     get_bb_client_for_user,
-    resolve_workspace_repo,
+    get_default_branch,
     require_repo,
     forward_if_error,
     build_error_response,
@@ -69,9 +69,8 @@ def bitbucket_repos(
         "delete_file", "get_directory_tree",
     )
     if repo_scoped and ws and repo:
-        _, _, default_branch = resolve_workspace_repo(user_id, ws, repo)
         if not branch:
-            branch = default_branch
+            branch = get_default_branch(user_id, ws, repo)
 
     try:
         if action == "list_workspaces":

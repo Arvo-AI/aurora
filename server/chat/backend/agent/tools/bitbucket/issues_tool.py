@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 from .utils import (
     get_bb_client_for_user,
-    resolve_workspace_repo,
     require_repo,
     forward_if_error,
     build_error_response,
@@ -67,7 +66,7 @@ def bitbucket_issues(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, _ = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo = workspace, repo_slug
 
     try:
         if action == "list_issues":

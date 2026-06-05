@@ -23,8 +23,8 @@ export default function BitbucketWorkspaceBrowser() {
   const [isSaving, setIsSaving] = useState(false);
 
   const isRestoringSelectionRef = useRef(false);
-  const [savedWorkspace, setSavedWorkspace] = useState<string>('');
-  const [savedRepoSlugs, setSavedRepoSlugs] = useState<Set<string>>(new Set());
+  // Map of workspace → set of saved slugs (supports multi-workspace)
+  const [savedReposByWorkspace, setSavedReposByWorkspace] = useState<Map<string, Set<string>>>(new Map());
 
   useEffect(() => {
     fetchWorkspaces();
@@ -54,14 +54,17 @@ export default function BitbucketWorkspaceBrowser() {
 
   const fetchRepos = async (workspace: string) => {
     setIsLoadingRepos(true);
-    setCheckedRepos(new Set());
     try {
       const data = await BitbucketIntegrationService.getRepos(workspace);
       const repoList = Array.isArray(data) ? data : data?.repositories || [];
       setRepos(repoList);
+      // Restore checked state from saved selections for this workspace
+      const saved = savedReposByWorkspace.get(workspace);
+      setCheckedRepos(saved ? new Set(saved) : new Set());
     } catch (error) {
       console.error('Error fetching repos:', error);
       setRepos([]);
+      setCheckedRepos(new Set());
     } finally {
       setIsLoadingRepos(false);
     }
@@ -82,30 +85,34 @@ export default function BitbucketWorkspaceBrowser() {
   const loadStoredSelection = async () => {
     try {
       const data = await BitbucketIntegrationService.loadWorkspaceSelection();
-      if (!data?.workspace) return;
+      if (!data?.repositories || !Array.isArray(data.repositories) || data.repositories.length === 0) return;
 
-      isRestoringSelectionRef.current = true;
-      setSelectedWorkspace(data.workspace);
-
-      const repoData = await BitbucketIntegrationService.getRepos(data.workspace);
-      const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
-      setRepos(repoList);
-
-      if (data.repositories && Array.isArray(data.repositories)) {
-        const slugs = new Set(data.repositories.map((r: string | { slug: string }) =>
-          typeof r === 'string' ? r : r.slug
-        ));
-        setCheckedRepos(slugs);
-        setSavedWorkspace(data.workspace);
-        setSavedRepoSlugs(slugs);
-      } else if (data.repository) {
-        const slug = typeof data.repository === 'string' ? data.repository : data.repository.slug;
-        setCheckedRepos(new Set([slug]));
-        setSavedWorkspace(data.workspace);
-        setSavedRepoSlugs(new Set([slug]));
+      // Build the saved map from all returned repos (each has a workspace field)
+      const byWorkspace = new Map<string, Set<string>>();
+      for (const r of data.repositories) {
+        if (typeof r === 'string') continue;
+        const ws = (r as { workspace?: string }).workspace || data.workspace || '';
+        const slug = (r as { slug: string }).slug;
+        if (!ws || !slug) continue;
+        if (!byWorkspace.has(ws)) byWorkspace.set(ws, new Set());
+        byWorkspace.get(ws)!.add(slug);
       }
+      setSavedReposByWorkspace(byWorkspace);
 
-      isRestoringSelectionRef.current = false;
+      // Set the active workspace to the first one with saved repos
+      const firstWorkspace = data.workspace || byWorkspace.keys().next().value;
+      if (firstWorkspace) {
+        isRestoringSelectionRef.current = true;
+        setSelectedWorkspace(firstWorkspace);
+
+        const repoData = await BitbucketIntegrationService.getRepos(firstWorkspace);
+        const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
+        setRepos(repoList);
+
+        const saved = byWorkspace.get(firstWorkspace);
+        setCheckedRepos(saved ? new Set(saved) : new Set());
+        isRestoringSelectionRef.current = false;
+      }
     } catch (error) {
       console.error('Error loading stored selection:', error);
       isRestoringSelectionRef.current = false;
@@ -124,13 +131,17 @@ export default function BitbucketWorkspaceBrowser() {
         workspace: selectedWorkspace,
         repositories: selectedRepoObjects,
       });
-      setSavedWorkspace(selectedWorkspace);
-      setSavedRepoSlugs(new Set(checkedRepos));
+      setSavedReposByWorkspace(prev => {
+        const next = new Map(prev);
+        next.set(selectedWorkspace, new Set(checkedRepos));
+        return next;
+      });
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Saved", description: `${checkedRepos.size} repo${checkedRepos.size > 1 ? 's' : ''} connected` });
-    } catch (error: any) {
-      console.error('Error saving selection:', error);
-      toast({ title: "Error", description: error.message || "Failed to save selection", variant: "destructive" });
+    } catch (error: unknown) {
+      const err = error as Error;
+      console.error('Error saving selection:', err);
+      toast({ title: "Error", description: err.message || "Failed to save selection", variant: "destructive" });
     } finally {
       setIsSaving(false);
     }
@@ -140,22 +151,24 @@ export default function BitbucketWorkspaceBrowser() {
     try {
       await BitbucketIntegrationService.clearWorkspaceSelection();
       setSelectedWorkspace('');
-      setSavedWorkspace('');
       setCheckedRepos(new Set());
       setRepos([]);
-      setSavedRepoSlugs(new Set());
+      setSavedReposByWorkspace(new Map());
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Cleared", description: "Bitbucket repos disconnected" });
-    } catch (error: any) {
-      console.error('Error clearing selection:', error);
-      toast({ title: "Error", description: error.message || "Failed to clear", variant: "destructive" });
+    } catch (error: unknown) {
+      const err = error as Error;
+      console.error('Error clearing selection:', err);
+      toast({ title: "Error", description: err.message || "Failed to clear", variant: "destructive" });
     }
   };
 
-  const selectionChanged = selectedWorkspace &&
-    (selectedWorkspace !== savedWorkspace ||
-     checkedRepos.size !== savedRepoSlugs.size ||
-     [...checkedRepos].some(s => !savedRepoSlugs.has(s)));
+  const totalSavedRepos = Array.from(savedReposByWorkspace.values()).reduce((sum, set) => sum + set.size, 0);
+  const currentWorkspaceSaved = savedReposByWorkspace.get(selectedWorkspace);
+  const selectionChanged = selectedWorkspace && (
+    checkedRepos.size !== (currentWorkspaceSaved?.size ?? 0) ||
+    [...checkedRepos].some(s => !currentWorkspaceSaved?.has(s))
+  );
 
   return (
     <div className="space-y-3">
@@ -174,7 +187,14 @@ export default function BitbucketWorkspaceBrowser() {
             <SelectContent>
               {workspaces.map((ws) => (
                 <SelectItem key={ws.slug} value={ws.slug}>
-                  {ws.name || ws.slug}
+                  <span className="flex items-center gap-2">
+                    {ws.name || ws.slug}
+                    {savedReposByWorkspace.has(ws.slug) && (
+                      <Badge variant="secondary" className="text-xs ml-1">
+                        {savedReposByWorkspace.get(ws.slug)!.size} saved
+                      </Badge>
+                    )}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -219,7 +239,7 @@ export default function BitbucketWorkspaceBrowser() {
                       </span>
                     )}
                   </div>
-                  {selectedWorkspace === savedWorkspace && savedRepoSlugs.has(repo.slug) && (
+                  {currentWorkspaceSaved?.has(repo.slug) && (
                     <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                   )}
                 </label>
@@ -241,7 +261,7 @@ export default function BitbucketWorkspaceBrowser() {
             {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
             Save
           </Button>
-          {savedRepoSlugs.size > 0 && (
+          {totalSavedRepos > 0 && (
             <Button size="sm" variant="outline" onClick={handleClear}>
               Clear All
             </Button>

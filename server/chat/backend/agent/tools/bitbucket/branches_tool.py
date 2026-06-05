@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from .utils import (
     DIFF_TRUNCATE_LIMIT,
     get_bb_client_for_user,
-    resolve_workspace_repo,
+    get_default_branch,
     require_repo,
     forward_if_error,
     truncate_text,
@@ -59,9 +59,10 @@ def bitbucket_branches(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, default_branch = resolve_workspace_repo(user_id, workspace, repo_slug)
     if not branch:
-        branch = default_branch
+        branch = get_default_branch(user_id, workspace, repo_slug)
+
+    ws, repo = workspace, repo_slug
 
     try:
         if action == "list_branches":

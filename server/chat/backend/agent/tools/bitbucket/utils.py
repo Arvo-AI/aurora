@@ -4,6 +4,14 @@ import json
 import logging
 from typing import Optional
 
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context, get_credentials_from_db
+from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
+from utils.auth.token_management import store_tokens_in_db
+from utils.secrets.secret_ref_utils import get_token_owner_id
+from utils.auth.command_gate import gate_action
+
 logger = logging.getLogger(__name__)
 
 DIFF_TRUNCATE_LIMIT = 50_000
@@ -16,9 +24,6 @@ def get_bb_client_for_user(user_id: str):
         BitbucketAPIClient instance, or None if not connected.
     """
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        from connectors.bitbucket_connector.api_client import BitbucketAPIClient
-
         bb_creds = get_credentials_from_db(user_id, "bitbucket")
         if not bb_creds:
             return None
@@ -30,8 +35,6 @@ def get_bb_client_for_user(user_id: str):
 
         # Refresh OAuth tokens if needed
         if auth_type == "oauth":
-            from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
-
             old_access_token = access_token
             bb_creds = refresh_token_if_needed(bb_creds)
             access_token = bb_creds.get("access_token", access_token)
@@ -39,8 +42,6 @@ def get_bb_client_for_user(user_id: str):
             # Persist refreshed token if changed
             if access_token != old_access_token:
                 try:
-                    from utils.auth.token_management import store_tokens_in_db
-                    from utils.secrets.secret_ref_utils import get_token_owner_id
                     owner_id = get_token_owner_id(user_id, "bitbucket")
                     store_tokens_in_db(owner_id, bb_creds, "bitbucket")
                     logger.info("Persisted refreshed Bitbucket token")
@@ -58,7 +59,6 @@ def get_bb_client_for_user(user_id: str):
 def is_bitbucket_connected(user_id: str) -> bool:
     """Check if Bitbucket credentials exist for a user."""
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
         creds = get_credentials_from_db(user_id, "bitbucket")
         return bool(creds and creds.get("access_token"))
     except Exception as e:
@@ -66,30 +66,23 @@ def is_bitbucket_connected(user_id: str) -> bool:
         return False
 
 
-def resolve_workspace_repo(
-    user_id: str,
-    workspace: str,
-    repo_slug: str,
-) -> tuple[str, str, Optional[str]]:
-    """Return (workspace, repo_slug, default_branch) — looking up cached branch metadata."""
-    branch = None
+def get_default_branch(user_id: str, workspace: str, repo_slug: str) -> Optional[str]:
+    """Look up the default branch for a connected Bitbucket repo."""
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
-        selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
-
-        repositories = selection.get("repositories") or []
-        repo_data = next(
-            (r for r in repositories if isinstance(r, dict) and r.get("slug") == repo_slug),
-            None,
-        )
-        if repo_data:
-            mainbranch = repo_data.get("mainbranch")
-            if mainbranch:
-                branch = mainbranch.get("name")
+        full_name = f"{workspace}/{repo_slug}"
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketTools:branch]")
+                cur.execute(
+                    "SELECT default_branch FROM connected_repos WHERE provider = 'bitbucket' AND repo_full_name = %s LIMIT 1",
+                    (full_name,),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    return row[0]
     except Exception as e:
-        logger.warning(f"Failed to load Bitbucket workspace selection: {e}")
-
-    return workspace, repo_slug, branch
+        logger.warning(f"Failed to look up default branch for {workspace}/{repo_slug}: {e}")
+    return None
 
 
 def require_repo(ws: Optional[str], repo: Optional[str]) -> Optional[str]:
@@ -141,8 +134,6 @@ def confirm_or_cancel(user_id: str, message: str, tool_name: str) -> Optional[st
     Bitbucket confirmations share the same UI/WS/taint plumbing as the
     shell-command gate.
     """
-    from utils.auth.command_gate import gate_action
-
     if gate_action(user_id=user_id, tool_name=tool_name, summary=message).allowed:
         return None
     return build_cancelled_response()
