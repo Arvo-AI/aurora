@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import resolve_org_id, set_rls_context
-from utils.auth.token_management import get_token_data, store_tokens_in_db
+from utils.auth.token_management import store_tokens_in_db
 from utils.db.connection_pool import db_pool
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.web.limiter_ext import limiter
@@ -31,8 +31,8 @@ def _validate_kubeconfig(content: str) -> tuple:
     """Parse and validate a kubeconfig YAML. Returns (parsed_dict, error_string)."""
     try:
         parsed = yaml.safe_load(content)
-    except yaml.YAMLError as e:
-        return None, f"Invalid YAML: {e}"
+    except yaml.YAMLError:
+        return None, "Invalid YAML format"
 
     if not isinstance(parsed, dict):
         return None, "Kubeconfig must be a YAML mapping"
