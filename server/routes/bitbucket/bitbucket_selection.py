@@ -82,8 +82,9 @@ def _sync_selected_repos(user_id: str, workspace: str, selected_repos: list):
                 logger.warning(f"Failed to enqueue metadata gen for {repo_name}: {e}")
 
         logger.info(f"Synced {len(incoming)} Bitbucket repos for user {user_id} ({len(newly_added)} new)")
-    except Exception as e:
-        logger.warning(f"Failed to sync selected repos: {e}")
+    except Exception:
+        logger.exception("Failed to sync selected repos for user %s", user_id)
+        raise
 
 
 @bitbucket_selection_bp.route("/workspace-selection", methods=["GET"])
@@ -134,8 +135,11 @@ def save_workspace_selection(user_id):
 
         store_tokens_in_db(user_id, selection_data, "bitbucket_workspace_selection")
 
-        # Sync only selected repos into connected_repos (validated via API)
-        _sync_selected_repos(user_id, workspace, repositories)
+        # Sync only selected repos into connected_repos
+        try:
+            _sync_selected_repos(user_id, workspace, repositories)
+        except Exception:
+            return jsonify({"error": "Selection saved but repo sync failed. Try again."}), 500
 
         logger.info(f"Saved Bitbucket workspace selection for user {user_id}: {workspace} / {len(repositories)} repos")
 

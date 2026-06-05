@@ -36,8 +36,8 @@ class BitbucketPullRequestsArgs(BaseModel):
         "get_pr_diff",
         "get_pr_activity",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     pr_id: Optional[int] = Field(None, description="Pull request ID (required for single-PR operations).")
     title: Optional[str] = Field(None, description="PR title (for create_pr, update_pr).")
     source_branch: Optional[str] = Field(None, description="Source branch (for create_pr).")

@@ -27,8 +27,8 @@ class BitbucketIssuesArgs(BaseModel):
         "list_issue_comments",
         "add_issue_comment",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     issue_id: Optional[int] = Field(None, description="Issue ID (required for single-issue operations).")
     title: Optional[str] = Field(None, description="Issue title (for create_issue, update_issue).")
     content: Optional[str] = Field(None, description="Issue body or comment content.")

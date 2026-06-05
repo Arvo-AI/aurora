@@ -31,8 +31,8 @@ class BitbucketBranchesArgs(BaseModel):
         "get_diff",
         "compare",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     branch: Optional[str] = Field(None, description="Branch name (for list_commits, create_branch target lookup).")
     name: Optional[str] = Field(None, description="New branch name (for create_branch).")
     target_hash: Optional[str] = Field(None, description="Target commit hash to branch from (for create_branch).")

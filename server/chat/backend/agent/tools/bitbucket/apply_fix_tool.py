@@ -35,6 +35,55 @@ def _parse_repository(repo_string: str) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def _resolve_base_branch(client, workspace: str, repo_slug: str, target_branch: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Determine the base branch. Returns (branch_name, error_message)."""
+    if target_branch:
+        return target_branch, None
+
+    repo_info = client.get_repository(workspace, repo_slug)
+    if isinstance(repo_info, dict) and not repo_info.get("error"):
+        branch = repo_info.get("mainbranch", {}).get("name")
+        if branch:
+            return branch, None
+
+    return None, (
+        f"Could not determine default branch for {workspace}/{repo_slug}. "
+        "Try re-saving your Bitbucket workspace selection."
+    )
+
+
+def _resolve_base_hash(client, workspace: str, repo_slug: str, base_branch: str) -> tuple[Optional[str], Optional[str]]:
+    """Get the commit hash for a branch. Returns (hash, error_message)."""
+    branches = client.get_branches(workspace, repo_slug)
+    if isinstance(branches, dict) and branches.get("error"):
+        return None, f"Failed to list branches: {branches.get('message')}"
+
+    if isinstance(branches, list):
+        for b in branches:
+            if isinstance(b, dict) and b.get("name") == base_branch:
+                return b.get("target", {}).get("hash"), None
+
+    return None, f"Could not find base branch '{base_branch}' in {workspace}/{repo_slug}"
+
+
+def _create_branch_and_commit(client, workspace: str, repo_slug: str, branch_name: str,
+                              base_hash: str, file_path: str, content: str, commit_message: str) -> Optional[str]:
+    """Create branch and push the fix. Returns error string or None on success."""
+    logger.info(f"{_LOG_PREFIX} Creating branch {branch_name}")
+    result = client.create_branch(workspace, repo_slug, branch_name, base_hash)
+    if err := forward_if_error(result):
+        return f"Failed to create branch: {result.get('message', err)}"
+
+    logger.info(f"{_LOG_PREFIX} Pushing fix to {file_path} on branch {branch_name}")
+    result = client.create_or_update_file(
+        workspace, repo_slug, file_path, content, commit_message, branch_name
+    )
+    if err := forward_if_error(result):
+        return f"Failed to push fix: {result.get('message', err)}"
+
+    return None
+
+
 def bitbucket_apply_fix(
     suggestion_id: int,
     use_edited_content: bool = True,
@@ -86,23 +135,12 @@ def bitbucket_apply_fix(
             f"Cannot determine Bitbucket workspace/repo for repository: {repo_string}"
         )
 
-    # Determine the base branch
-    if target_branch:
-        base_branch = target_branch
-    else:
-        base_branch = None
-        repo_info = client.get_repository(workspace, repo_slug)
-        if isinstance(repo_info, dict) and not repo_info.get("error"):
-            base_branch = repo_info.get("mainbranch", {}).get("name")
+    base_branch, err = _resolve_base_branch(client, workspace, repo_slug, target_branch)
+    if err:
+        return build_error_response(err)
 
-        if not base_branch:
-            return build_error_response(
-                f"Could not determine default branch for {workspace}/{repo_slug}. "
-                "Try re-saving your Bitbucket workspace selection."
-            )
-
-    file_path = suggestion.get("file_path", "")
-    if not file_path or not file_path.strip():
+    file_path = suggestion.get("file_path", "").strip()
+    if not file_path:
         return build_error_response(
             f"Missing file path for suggestion {suggestion_id} ({suggestion.get('title', 'untitled')})"
         )
@@ -110,39 +148,17 @@ def bitbucket_apply_fix(
     commit_message = suggestion.get("commit_message") or f"fix: {suggestion.get('title', 'Aurora fix')}"
     branch_name = generate_branch_name(suggestion.get("incident_id", ""))
 
-    # Step 1: Resolve the base branch to a commit hash for branch creation
-    logger.info(f"{_LOG_PREFIX} Creating branch {branch_name} from {base_branch}")
-    branches = client.get_branches(workspace, repo_slug)
-    if isinstance(branches, dict) and branches.get("error"):
-        return build_error_response(f"Failed to list branches: {branches.get('message')}")
-
-    base_hash = None
-    if isinstance(branches, list):
-        for b in branches:
-            if isinstance(b, dict) and b.get("name") == base_branch:
-                base_hash = b.get("target", {}).get("hash")
-                break
-
+    base_hash, err = _resolve_base_hash(client, workspace, repo_slug, base_branch)
+    if err:
+        return build_error_response(err)
     if not base_hash:
-        return build_error_response(
-            f"Could not find base branch '{base_branch}' in {workspace}/{repo_slug}"
-        )
+        return build_error_response(f"No commit hash found for branch '{base_branch}'")
 
-    # Step 2: Create the fix branch
-    result = client.create_branch(workspace, repo_slug, branch_name, base_hash)
-    if err := forward_if_error(result):
-        return build_error_response(f"Failed to create branch: {result.get('message', err)}")
-
-    # Step 3: Commit the file to the new branch
-    logger.info(f"{_LOG_PREFIX} Pushing fix to {file_path} on branch {branch_name}")
-    result = client.create_or_update_file(
-        workspace, repo_slug, file_path, content, commit_message, branch_name
+    err = _create_branch_and_commit(
+        client, workspace, repo_slug, branch_name, base_hash, file_path, content, commit_message
     )
-    if err := forward_if_error(result):
-        return build_error_response(
-            f"Failed to push fix: {result.get('message', err)}",
-            branch_created=branch_name,
-        )
+    if err:
+        return build_error_response(err, branch_created=branch_name)
 
     # Step 4: Create the pull request
     pr_title = suggestion.get("title", "Aurora Fix")
@@ -157,9 +173,9 @@ def bitbucket_apply_fix(
         description=pr_body,
         close_source=True,
     )
-    if err := forward_if_error(result):
+    if forward_err := forward_if_error(result):
         return build_error_response(
-            f"Failed to create PR: {result.get('message', err)}",
+            f"Failed to create PR: {result.get('message', forward_err)}",
             branch_created=branch_name,
             commit_pushed=True,
         )
@@ -172,9 +188,7 @@ def bitbucket_apply_fix(
     # Step 5: Update the suggestion row
     db_ok = update_suggestion_with_pr(suggestion_id, pr_url, pr_id, branch_name)
     if not db_ok:
-        logger.error(
-            f"{_LOG_PREFIX} PR created but DB update failed for suggestion {suggestion_id}, PR: {pr_url}"
-        )
+        logger.error(f"{_LOG_PREFIX} PR created but DB update failed for suggestion {suggestion_id}, PR: {pr_url}")
 
     logger.info(f"{_LOG_PREFIX} PR created: {pr_url}")
 

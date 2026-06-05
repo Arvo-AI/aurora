@@ -59,9 +59,8 @@ def bitbucket_login(user_id):
                     if status_code in (401, 403):
                         return jsonify({
                             "error": "Authentication failed. Either your email/token is incorrect, "
-                                     "or you are using a classic API token (which is not supported). "
-                                     "Make sure to use a scoped API token from: "
-                                     "https://id.atlassian.com/manage-profile/security/api-tokens"
+                                     "or you are using a classic API token (not supported). "
+                                     "Create a scoped token at id.atlassian.com/manage-profile/security/api-tokens"
                         }), 400
 
                     return jsonify({"error": "Invalid Bitbucket credentials. Check your email and API token."}), 400

@@ -39,8 +39,8 @@ class BitbucketPipelinesArgs(BaseModel):
         "get_step_log",
         "get_pipeline_step",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     pipeline_uuid: Optional[str] = Field(None, description="Pipeline UUID (required for single-pipeline operations).")
     step_uuid: Optional[str] = Field(None, description="Step UUID (for get_step_log, get_pipeline_step).")
     target_branch: Optional[str] = Field(None, description="Branch to run pipeline on (for trigger_pipeline).")
@@ -77,7 +77,7 @@ def bitbucket_pipelines(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, _ = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo, default_branch = resolve_workspace_repo(user_id, workspace, repo_slug)
 
     try:
         if action == "list_pipelines":
@@ -105,7 +105,7 @@ def bitbucket_pipelines(
         if action == "trigger_pipeline":
             if err := require_repo(ws, repo):
                 return build_error_response(err)
-            branch = target_branch or saved_branch
+            branch = target_branch or default_branch
             if not branch:
                 return build_error_response("target_branch is required")
             if cancelled := confirm_or_cancel(user_id,

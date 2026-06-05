@@ -31,8 +31,8 @@ class BitbucketReposArgs(BaseModel):
         "list_workspaces",
         "get_workspace",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: Optional[str] = Field(None, description="Workspace slug (required for repo-scoped actions).")
+    repo_slug: Optional[str] = Field(None, description="Repository slug (required for repo-scoped actions).")
     path: Optional[str] = Field(None, description="File or directory path (for file/directory operations).")
     content: Optional[str] = Field(None, description="File content (for create_or_update_file).")
     message: Optional[str] = Field(None, description="Commit message (for create_or_update_file, delete_file).")
@@ -61,9 +61,17 @@ def bitbucket_repos(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, default_branch = resolve_workspace_repo(user_id, workspace, repo_slug)
-    if not branch:
-        branch = default_branch
+    ws, repo = workspace, repo_slug
+    default_branch = None
+
+    repo_scoped = action in (
+        "get_repo", "get_file_contents", "create_or_update_file",
+        "delete_file", "get_directory_tree",
+    )
+    if repo_scoped and ws and repo:
+        _, _, default_branch = resolve_workspace_repo(user_id, ws, repo)
+        if not branch:
+            branch = default_branch
 
     try:
         if action == "list_workspaces":

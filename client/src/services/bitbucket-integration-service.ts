@@ -76,7 +76,12 @@ export class BitbucketIntegrationService {
       let message = errorText;
       try {
         const json = JSON.parse(errorText);
-        message = json.message || json.error || errorText;
+        let err = json.error || json.message || errorText;
+        // Proxy wraps JSON responses as { error: "<raw json>" } — unwrap if needed
+        if (typeof err === 'string' && err.startsWith('{')) {
+          try { err = JSON.parse(err).error || err; } catch {}
+        }
+        message = err;
       } catch {
         // plain text error, use as-is
       }

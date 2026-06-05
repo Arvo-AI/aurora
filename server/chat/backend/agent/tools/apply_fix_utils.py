@@ -51,8 +51,8 @@ def get_fix_suggestion(suggestion_id: int, user_id: str) -> Optional[dict]:
                     "pr_url": row[11],
                     "created_branch": row[12],
                 }
-    except Exception as e:
-        logger.error(f"Failed to fetch fix suggestion {suggestion_id}: {e}")
+    except Exception:
+        logger.exception("Failed to fetch fix suggestion %s", suggestion_id)
     return None
 
 
@@ -85,6 +85,6 @@ def update_suggestion_with_pr(
             )
             conn.commit()
             return True
-    except Exception as e:
-        logger.error(f"Failed to update suggestion {suggestion_id} with PR info: {e}")
+    except Exception:
+        logger.exception("Failed to update suggestion %s with PR info", suggestion_id)
         return False

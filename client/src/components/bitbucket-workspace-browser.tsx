@@ -23,6 +23,7 @@ export default function BitbucketWorkspaceBrowser() {
   const [isSaving, setIsSaving] = useState(false);
 
   const isRestoringSelectionRef = useRef(false);
+  const [savedWorkspace, setSavedWorkspace] = useState<string>('');
   const [savedRepoSlugs, setSavedRepoSlugs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -95,10 +96,12 @@ export default function BitbucketWorkspaceBrowser() {
           typeof r === 'string' ? r : r.slug
         ));
         setCheckedRepos(slugs);
+        setSavedWorkspace(data.workspace);
         setSavedRepoSlugs(slugs);
       } else if (data.repository) {
         const slug = typeof data.repository === 'string' ? data.repository : data.repository.slug;
         setCheckedRepos(new Set([slug]));
+        setSavedWorkspace(data.workspace);
         setSavedRepoSlugs(new Set([slug]));
       }
 
@@ -121,6 +124,7 @@ export default function BitbucketWorkspaceBrowser() {
         workspace: selectedWorkspace,
         repositories: selectedRepoObjects,
       });
+      setSavedWorkspace(selectedWorkspace);
       setSavedRepoSlugs(new Set(checkedRepos));
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Saved", description: `${checkedRepos.size} repo${checkedRepos.size > 1 ? 's' : ''} connected` });
@@ -136,6 +140,7 @@ export default function BitbucketWorkspaceBrowser() {
     try {
       await BitbucketIntegrationService.clearWorkspaceSelection();
       setSelectedWorkspace('');
+      setSavedWorkspace('');
       setCheckedRepos(new Set());
       setRepos([]);
       setSavedRepoSlugs(new Set());
@@ -148,7 +153,8 @@ export default function BitbucketWorkspaceBrowser() {
   };
 
   const selectionChanged = selectedWorkspace &&
-    (checkedRepos.size !== savedRepoSlugs.size ||
+    (selectedWorkspace !== savedWorkspace ||
+     checkedRepos.size !== savedRepoSlugs.size ||
      [...checkedRepos].some(s => !savedRepoSlugs.has(s)));
 
   return (
@@ -213,7 +219,7 @@ export default function BitbucketWorkspaceBrowser() {
                       </span>
                     )}
                   </div>
-                  {savedRepoSlugs.has(repo.slug) && (
+                  {selectedWorkspace === savedWorkspace && savedRepoSlugs.has(repo.slug) && (
                     <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                   )}
                 </label>
