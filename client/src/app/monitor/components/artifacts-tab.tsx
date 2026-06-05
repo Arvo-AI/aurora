@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  BookOpen, Plus, ArrowLeft, Save, X, Trash2, History, Eye, Edit2, RotateCcw, Loader2,
+  BookOpen, Plus, ArrowLeft, Save, X, Trash2, History, Eye, Edit2, RotateCcw, Loader2, ChevronRight,
 } from 'lucide-react';
-import { useQuery, jsonFetcher } from '@/lib/query';
+import { useQuery, jsonFetcher, queryClient } from '@/lib/query';
 import { postmortemMarkdownComponents } from '@/lib/markdown-components';
 import { formatTimeAgo } from '@/lib/utils/time-format';
 import { ChartPanel, EmptyState } from './charts';
@@ -15,6 +15,7 @@ import {
   type ArtifactSummary,
   type ArtifactData,
   type ArtifactVersion,
+  type ArtifactVersionDetail,
   type ArtifactEditor,
 } from '@/lib/services/artifacts';
 
@@ -32,6 +33,16 @@ function EditorBadge({ who }: { who: ArtifactEditor }) {
     >
       {isUser ? 'You' : 'Agent'}
     </span>
+  );
+}
+
+function ArtifactMarkdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-invert prose-sm max-w-none">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={postmortemMarkdownComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -245,40 +256,51 @@ function ArtifactDetail({ id, onBack, onDeleted }: {
   onBack: () => void;
   onDeleted: () => void;
 }) {
-  const [artifact, setArtifact] = useState<ArtifactData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<DetailMode>('view');
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
 
-  const [versions, setVersions] = useState<ArtifactVersion[]>([]);
-  const [currentVersionId, setCurrentVersionId] = useState<string | null>(null);
-  const [loadingVersions, setLoadingVersions] = useState(false);
+  const versionsKey = `artifact-versions:${id}`;
+  const fetchVersions = () => artifactsService.getVersions(id);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const data = await artifactsService.getArtifact(id);
-    setArtifact(data);
-    if (data) setEditContent(data.content);
-    setLoading(false);
-  }, [id]);
+  // Cached artifact body — re-opening the same artifact is served from cache.
+  const { data: artifact = null, isLoading: loading, mutate: reloadArtifact } = useQuery<ArtifactData | null>(
+    `artifact:${id}`,
+    () => artifactsService.getArtifact(id),
+    { staleTime: 30_000, revalidateOnFocus: false },
+  );
 
-  useEffect(() => { load(); }, [load]);
+  // Version list — only fetched on the History tab, then cached across visits.
+  const { data: versionsData, isLoading: loadingVersions } = useQuery<{
+    versions: ArtifactVersion[];
+    currentVersionId: string | null;
+  }>(
+    mode === 'history' ? versionsKey : null,
+    fetchVersions,
+    { staleTime: 30_000, revalidateOnFocus: false },
+  );
+  const versions = versionsData?.versions ?? [];
+  const currentVersionId = versionsData?.currentVersionId ?? null;
 
-  const loadVersions = useCallback(async () => {
-    setLoadingVersions(true);
-    const { versions: list, currentVersionId: cvId } = await artifactsService.getVersions(id);
-    setVersions(list);
-    setCurrentVersionId(cvId);
-    setLoadingVersions(false);
-  }, [id]);
+  // Expanded version body — fetched on expand, then cached per version so
+  // re-expanding is instant.
+  const { data: expandedVersion, isLoading: loadingVersionContent } = useQuery<ArtifactVersionDetail | null>(
+    expandedVersionId ? `artifact-version:${id}:${expandedVersionId}` : null,
+    () => artifactsService.getVersion(id, expandedVersionId!),
+    { staleTime: 60_000, revalidateOnFocus: false },
+  );
 
+  // Seed the edit buffer from the loaded content. The functional update also
+  // seeds when the artifact resolves *after* the user already switched to Edit
+  // (otherwise the editor stays blank), while never clobbering an in-progress edit.
   useEffect(() => {
-    if (mode === 'history') loadVersions();
-  }, [mode, loadVersions]);
+    if (!artifact) return;
+    setEditContent((prev) => (mode === 'edit' && prev !== '' ? prev : artifact.content));
+  }, [artifact, mode]);
 
   const handleSave = async () => {
     if (!editContent.trim()) return;
@@ -287,7 +309,9 @@ function ArtifactDetail({ id, onBack, onDeleted }: {
     const result = await artifactsService.updateArtifact(id, editContent);
     setSaving(false);
     if (result.success) {
-      await load();
+      await reloadArtifact();
+      // A save creates a new version — drop the stale version-list cache.
+      queryClient.invalidate(versionsKey, fetchVersions, { staleTime: 30_000 }).catch(() => {});
       setMode('view');
     } else {
       setError(result.error || 'Failed to save');
@@ -310,11 +334,15 @@ function ArtifactDetail({ id, onBack, onDeleted }: {
   const handleRestore = async (versionId: string) => {
     const result = await artifactsService.restoreVersion(id, versionId);
     if (result.success) {
-      await load();
-      await loadVersions();
+      await reloadArtifact();
+      await queryClient.invalidate(versionsKey, fetchVersions, { staleTime: 30_000 });
     } else {
       setError(result.error || 'Failed to restore version');
     }
+  };
+
+  const toggleVersion = (versionId: string) => {
+    setExpandedVersionId((prev) => (prev === versionId ? null : versionId));
   };
 
   const segBtn = (m: DetailMode, label: string, Icon: typeof Eye) => (
@@ -383,11 +411,7 @@ function ArtifactDetail({ id, onBack, onDeleted }: {
       )}
 
       {artifact && mode === 'view' && (
-        <div className="prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={postmortemMarkdownComponents}>
-            {artifact.content}
-          </ReactMarkdown>
-        </div>
+        <ArtifactMarkdown content={artifact.content} />
       )}
 
       {artifact && mode === 'edit' && (
@@ -428,41 +452,68 @@ function ArtifactDetail({ id, onBack, onDeleted }: {
             <p className="text-xs text-zinc-500 py-4">No version history available.</p>
           ) : (
             <div className="space-y-1 max-h-[28rem] overflow-y-auto">
-              {versions.map((v) => (
-                <div
-                  key={v.id}
-                  className="flex items-center justify-between py-2 px-3 rounded-md bg-zinc-800/40 border border-zinc-800 hover:border-zinc-700 transition-colors"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-zinc-700/60 text-[10px] font-mono text-zinc-300">
-                      v{v.versionNumber}
-                    </span>
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-zinc-700/40 text-[10px] text-zinc-400 capitalize">
-                      {v.source}
-                    </span>
-                    <span className="text-[10px] text-zinc-500">
-                      {v.createdAt
-                        ? new Date(v.createdAt).toLocaleString(undefined, {
-                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                          })
-                        : '—'}
-                    </span>
+              {versions.map((v) => {
+                const isExpanded = expandedVersionId === v.id;
+                return (
+                  <div
+                    key={v.id}
+                    className="rounded-md bg-zinc-800/40 border border-zinc-800 hover:border-zinc-700 transition-colors overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between py-2 px-3 gap-2">
+                      <button
+                        onClick={() => toggleVersion(v.id)}
+                        aria-expanded={isExpanded}
+                        className="flex items-center gap-2.5 min-w-0 flex-1 text-left"
+                      >
+                        <ChevronRight
+                          className={`h-3.5 w-3.5 text-zinc-500 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                        />
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-zinc-700/60 text-[10px] font-mono text-zinc-300">
+                          v{v.versionNumber}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-zinc-700/40 text-[10px] text-zinc-400 capitalize">
+                          {v.source}
+                        </span>
+                        <span className="text-[10px] text-zinc-500">
+                          {v.createdAt
+                            ? new Date(v.createdAt).toLocaleString(undefined, {
+                                month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                              })
+                            : '—'}
+                        </span>
+                      </button>
+                      {v.id === currentVersionId ? (
+                        <span className="inline-flex items-center px-2 py-1 rounded-md text-[11px] text-green-400 bg-green-500/10 border border-green-500/20 shrink-0">
+                          Current
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleRestore(v.id)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 transition-colors shrink-0"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Restore
+                        </button>
+                      )}
+                    </div>
+                    {isExpanded && (
+                      <div className="border-t border-zinc-800 px-4 py-3">
+                        {loadingVersionContent ? (
+                          <div className="flex items-center justify-center py-4 text-zinc-500">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          </div>
+                        ) : expandedVersion == null ? (
+                          <p className="text-xs text-zinc-500">Couldn&apos;t load this version&apos;s content.</p>
+                        ) : expandedVersion.content.trim() === '' ? (
+                          <p className="text-xs text-zinc-500 italic">This version is empty.</p>
+                        ) : (
+                          <ArtifactMarkdown content={expandedVersion.content} />
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {v.id === currentVersionId ? (
-                    <span className="inline-flex items-center px-2 py-1 rounded-md text-[11px] text-green-400 bg-green-500/10 border border-green-500/20">
-                      Current
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => handleRestore(v.id)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 transition-colors"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                      Restore
-                    </button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
