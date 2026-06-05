@@ -71,7 +71,7 @@ function VersionContent({ loading, version }: Readonly<{
 // ---------------------------------------------------------------------------
 
 export default function ArtifactsTab() {
-  const { data, isLoading, mutate } = useQuery<{ artifacts: ArtifactSummary[] }>(
+  const { data, isLoading, mutate, error } = useQuery<{ artifacts: ArtifactSummary[] }>(
     '/api/artifacts', jsonFetcher, { staleTime: 15_000 },
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -81,6 +81,10 @@ export default function ArtifactsTab() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const artifacts = data?.artifacts ?? [];
+  // Only trust an empty list once the query has actually succeeded — otherwise a
+  // failed fetch would read as "no artifacts" and let the create flow's
+  // title-collision guard pass with an empty existingTitles set.
+  const loadFailed = !!error && !data;
 
   const handleDelete = useCallback(async (id: string) => {
     setDeletingId(id);
@@ -112,6 +116,20 @@ export default function ArtifactsTab() {
         onBack={() => { setSelectedId(null); mutate(); }}
         onDeleted={() => { setSelectedId(null); mutate(); }}
       />
+    );
+  }
+
+  // No data + an error: show an explicit failure (and withhold the create flow,
+  // whose overwrite guard would be unsafe without the real title list).
+  if (loadFailed) {
+    return (
+      <ChartPanel title="Artifacts" subtitle="Living documents Aurora maintains across runs">
+        <EmptyState
+          icon={BookOpen}
+          message="Couldn't load artifacts"
+          hint="Something went wrong fetching your artifacts. Refresh to try again."
+        />
+      </ChartPanel>
     );
   }
 
@@ -288,7 +306,7 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
   const fetchVersions = () => artifactsService.getVersions(id);
 
   // Cached artifact body — re-opening the same artifact is served from cache.
-  const { data: artifact = null, isLoading: loading, mutate: reloadArtifact } = useQuery<ArtifactData | null>(
+  const { data: artifact = null, isLoading: loading, mutate: reloadArtifact, error: artifactError } = useQuery<ArtifactData | null>(
     `artifact:${id}`,
     () => artifactsService.getArtifact(id),
     { staleTime: 30_000, revalidateOnFocus: false },
@@ -298,6 +316,7 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
   const { data: versionsData, isLoading: loadingVersions } = useQuery<{
     versions: ArtifactVersion[];
     currentVersionId: string | null;
+    error?: string;
   }>(
     mode === 'history' ? versionsKey : null,
     fetchVersions,
@@ -305,6 +324,7 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
   );
   const versions = versionsData?.versions ?? [];
   const currentVersionId = versionsData?.currentVersionId ?? null;
+  const versionsError = versionsData?.error;
 
   // Expanded version body — fetched on expand, then cached per version so
   // re-expanding is instant.
@@ -427,7 +447,7 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
       {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
 
       {!loading && !artifact && (
-        <EmptyState icon={BookOpen} message="Artifact not found" />
+        <EmptyState icon={BookOpen} message={artifactError ? "Couldn't load artifact" : 'Artifact not found'} />
       )}
 
       {artifact && mode === 'view' && (
@@ -469,7 +489,9 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
               <Loader2 className="h-4 w-4 animate-spin" />
             </div>
           ) : versions.length === 0 ? (
-            <p className="text-xs text-zinc-500 py-4">No version history available.</p>
+            <p className="text-xs text-zinc-500 py-4">
+              {versionsError ? "Couldn't load version history." : 'No version history available.'}
+            </p>
           ) : (
             <div className="space-y-1 max-h-[28rem] overflow-y-auto">
               {versions.map((v) => {

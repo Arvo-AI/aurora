@@ -23,9 +23,14 @@ def create_version(
     """Insert a new version row for an artifact and return its number.
 
     The next version number is computed inline via a subquery (MAX+1) at insert
-    time, matching the postmortem versioning pattern. When set_current=True
-    (default), also advances the artifact's current_version_id pointer.
+    time. The artifact row is locked FOR UPDATE first so concurrent writers to
+    the same artifact serialize here and can't both read the same MAX and
+    collide on version_number. When set_current=True (default), also advances
+    the artifact's current_version_id pointer.
     """
+    # Serialize concurrent version allocation for this artifact (see docstring).
+    cursor.execute("SELECT id FROM artifacts WHERE id = %s FOR UPDATE", (artifact_id,))
+
     cursor.execute(
         """INSERT INTO artifact_versions
            (artifact_id, org_id, user_id, content, version_number, source, generation_session_id)

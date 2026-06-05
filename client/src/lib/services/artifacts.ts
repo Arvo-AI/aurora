@@ -25,7 +25,6 @@ export interface ArtifactVersion {
   id: string;
   versionNumber: number;
   source: string;
-  userId: string;
   createdAt: string | null;
   generationSessionId: string | null;
 }
@@ -54,9 +53,10 @@ export const artifactsService = {
       const data = await apiGet<{ artifact: ArtifactData }>(`/api/artifacts/${id}`);
       return data.artifact ?? null;
     } catch (error) {
+      // 404 means "doesn't exist" (a valid empty state); surface everything else
+      // so the UI can show a real error instead of a misleading "not found".
       if ((error as ApiError).status === 404) return null;
-      console.error('Error fetching artifact:', error);
-      return null;
+      throw error;
     }
   },
 
@@ -112,8 +112,9 @@ export const artifactsService = {
       );
       return data.version ?? null;
     } catch (error) {
-      console.error('Error fetching artifact version:', error);
-      return null;
+      // 404 = version gone; surface other errors so the panel shows a failure.
+      if ((error as ApiError).status === 404) return null;
+      throw error;
     }
   },
 

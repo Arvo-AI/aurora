@@ -128,7 +128,7 @@ def list_or_get_artifacts(user_id):
                     return jsonify({"artifact": _serialize_artifact(row, include_content=True)})
 
                 cursor.execute(
-                    """SELECT a.id, a.title, a.content, a.last_edited_by,
+                    """SELECT a.id, a.title, NULL, a.last_edited_by,
                               a.created_at, a.updated_at, COALESCE(v.version_number, 0)
                        FROM artifacts a
                        LEFT JOIN artifact_versions v ON a.current_version_id = v.id
@@ -261,7 +261,7 @@ def delete_artifact(user_id, artifact_id, *, org_id, conn, cursor, **kwargs):
 @with_artifact
 def list_artifact_versions(user_id, artifact_id, *, org_id, conn, cursor, **kwargs):
     cursor.execute(
-        """SELECT v.id, v.version_number, v.source, v.user_id, v.created_at,
+        """SELECT v.id, v.version_number, v.source, v.created_at,
                   v.generation_session_id, a.current_version_id
            FROM artifact_versions v
            JOIN artifacts a ON v.artifact_id = a.id
@@ -271,15 +271,14 @@ def list_artifact_versions(user_id, artifact_id, *, org_id, conn, cursor, **kwar
     )
     rows = cursor.fetchall()
 
-    current_version_id = str(rows[0][6]) if rows and rows[0][6] else None
+    current_version_id = str(rows[0][5]) if rows and rows[0][5] else None
     versions = [
         {
             "id": str(row[0]),
             "versionNumber": row[1],
             "source": row[2],
-            "userId": row[3],
-            "createdAt": _format_timestamp(row[4]),
-            "generationSessionId": str(row[5]) if row[5] else None,
+            "createdAt": _format_timestamp(row[3]),
+            "generationSessionId": str(row[4]) if row[4] else None,
         }
         for row in rows
     ]
@@ -294,7 +293,7 @@ def get_artifact_version(user_id, artifact_id, version_id, *, org_id, conn, curs
         return jsonify({"error": "Invalid version ID"}), 400
 
     cursor.execute(
-        """SELECT v.id, v.version_number, v.source, v.user_id, v.content, v.created_at
+        """SELECT v.id, v.version_number, v.source, v.content, v.created_at
            FROM artifact_versions v
            JOIN artifacts a ON v.artifact_id = a.id
            WHERE v.id = %s AND a.id = %s AND a.org_id = %s""",
@@ -309,9 +308,8 @@ def get_artifact_version(user_id, artifact_id, version_id, *, org_id, conn, curs
             "id": str(row[0]),
             "versionNumber": row[1],
             "source": row[2],
-            "userId": row[3],
-            "content": row[4],
-            "createdAt": _format_timestamp(row[5]),
+            "content": row[3],
+            "createdAt": _format_timestamp(row[4]),
         }
     })
 
