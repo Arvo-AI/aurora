@@ -23,7 +23,7 @@ def _make_cluster_id(org_id: str, context_name: str) -> str:
     return f"kubeconfig-{digest}"
 
 
-def _make_vault_provider(org_id: str, filename: str) -> str:
+def _make_vault_key(org_id: str, filename: str) -> str:
     digest = hashlib.sha256(f"{org_id}:{filename}".encode()).hexdigest()[:12]
     return f"kubeconfig_{digest}"
 
@@ -93,7 +93,7 @@ def _process_kubeconfig_entry(entry, user_id, org_id, registered, errors):
         errors.append({"filename": filename, "error": "No valid contexts found"})
         return
 
-    vault_provider = _make_vault_provider(org_id, filename)
+    vault_provider = _make_vault_key(org_id, filename)
     try:
         store_tokens_in_db(user_id, {"kubeconfig_yaml": content}, vault_provider, org_id=org_id)
     except Exception:

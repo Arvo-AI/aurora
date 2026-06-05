@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import shlex
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,6 @@ def _get_kubeconfig_for_cluster(user_id: str, cluster_id: str):
 
 async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, context_name: str, timeout_seconds: int) -> dict:
     """Execute kubectl using a kubeconfig retrieved from Vault."""
-    import atexit
     import tempfile
 
     private_dir = os.path.join(tempfile.gettempdir(), 'aurora_kubeconfig')
@@ -144,15 +144,13 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
         os.unlink(kubeconfig_path)
         raise
 
-    atexit.register(lambda p=kubeconfig_path: os.unlink(p) if os.path.exists(p) else None)
-
     try:
         exec_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": private_dir,
             "KUBECONFIG": kubeconfig_path,
         }
-        cmd_parts = ["kubectl", f"--context={context_name}"] + command.split()
+        cmd_parts = ["kubectl", f"--context={context_name}"] + shlex.split(command)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd_parts,

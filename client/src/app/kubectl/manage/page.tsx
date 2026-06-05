@@ -30,7 +30,7 @@ interface KubeconfigCluster {
   updated_at: string;
 }
 
-type MergedCluster = {
+type ConnectedCluster = {
   cluster_id: string;
   cluster_name: string;
   source: 'agent' | 'kubeconfig';
@@ -49,7 +49,7 @@ export default function ManageKubectlClustersPage() {
   const [deleteCommand, setDeleteCommand] = useState<string | null>(null);
   const [showCommandDialog, setShowCommandDialog] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [clusterToDelete, setClusterToDelete] = useState<MergedCluster | null>(null);
+  const [clusterToDelete, setClusterToDelete] = useState<ConnectedCluster | null>(null);
   const [commandCopied, setCommandCopied] = useState(false);
 
   const { data: agentData, isLoading: agentLoading, mutate: reloadAgents } = useQuery<{ connections: AgentConnection[] }>(
@@ -66,7 +66,7 @@ export default function ManageKubectlClustersPage() {
 
   const loading = agentLoading || kcLoading;
 
-  const clusters: MergedCluster[] = [
+  const clusters: ConnectedCluster[] = [
     ...(agentData?.connections ?? []).map(c => ({
       cluster_id: c.cluster_id,
       cluster_name: c.cluster_name,
@@ -89,7 +89,7 @@ export default function ManageKubectlClustersPage() {
 
   const reload = () => { reloadAgents(); reloadKubeconfigs(); };
 
-  const handleDisconnect = (cluster: MergedCluster) => {
+  const handleDisconnect = (cluster: ConnectedCluster) => {
     setClusterToDelete(cluster);
     setShowDeleteConfirm(true);
   };

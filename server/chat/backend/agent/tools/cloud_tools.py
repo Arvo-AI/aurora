@@ -23,7 +23,7 @@ from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
-from .kubectl_clusters_tool import get_connected_clusters, GetConnectedClustersArgs
+from .list_clusters_tool import get_connected_clusters, GetConnectedClustersArgs
 from utils.auth.github_auth_router import is_github_connected
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs, is_jenkins_connected
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs, is_cloudbees_connected
