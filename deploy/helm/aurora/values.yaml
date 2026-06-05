@@ -166,6 +166,7 @@ config:
   # Changing them only requires a pod restart, not an image rebuild.
   NEXT_PUBLIC_BACKEND_URL: ""    # Example: https://api.aurora.example.com
   NEXT_PUBLIC_WEBSOCKET_URL: ""  # Example: wss://ws.aurora.example.com
+  NEXT_PUBLIC_DEFAULT_LLM_MODEL: ""
   FRONTEND_URL: ""               # Example: https://aurora.example.com
   
   # --- Internal Service URLs ---
@@ -190,8 +191,12 @@ config:
   AWS_SM_SECRET_ACCESS_KEY: ""  # Falls back to default boto3 chain if both are empty
   
   # --- LLM Configuration ---
-  LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
+  LLM_PROVIDER_MODE: "openrouter"  # Provider: openrouter, openai, anthropic, google, vertex, ollama, bedrock
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
+  BEDROCK_REGION: "us-east-1"
+  BEDROCK_ENDPOINT_URL: ""
+  BEDROCK_CREDENTIALS_PROFILE: ""
+  BEDROCK_MODEL_PROVIDER: ""
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
@@ -371,9 +376,11 @@ secrets:
 
     # --- Optional: AWS Connector ---
     # IAM identity for cross-account STS AssumeRole into user AWS accounts.
+    # Also used by Bedrock LLMs when configured with static AWS credentials.
     # Not related to AWS_SM_* credentials used for the secrets backend.
     AWS_ACCESS_KEY_ID: ""
     AWS_SECRET_ACCESS_KEY: ""
+    AWS_SESSION_TOKEN: ""
     
     # --- Optional: Email/SMTP ---
     SMTP_HOST: ""                # e.g., smtp.gmail.com
@@ -398,12 +405,13 @@ secrets:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-llm and all pods will reference
     # this secret directly. It must contain at least one of: OPENROUTER_API_KEY,
-    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY.
+    # OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, AWS_BEARER_TOKEN_BEDROCK.
     # existingSecret: ""
     OPENROUTER_API_KEY: ""       # Get from: https://openrouter.ai/keys
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
+    AWS_BEARER_TOKEN_BEDROCK: "" # Optional Bedrock API key auth
 
 # ------------------------------------------------------------------------------
 # Security contexts

@@ -75,6 +75,11 @@ class LLMUsageTracker:
         "vertex/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
         "vertex/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
         "vertex/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
+        # Amazon Bedrock (static fallback for common Claude model IDs)
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
+        "bedrock/anthropic.claude-3-haiku-20240307-v1:0": {"input": 0.00025, "output": 0.00125, "cached_input": 0.000025},
         # Ollama (local, free)
         "ollama/llama3.1": {"input": 0.0, "output": 0.0},
         "ollama/qwen2.5": {"input": 0.0, "output": 0.0},

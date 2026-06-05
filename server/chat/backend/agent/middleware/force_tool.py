@@ -15,6 +15,7 @@ from langchain.agents.middleware.types import ModelRequest
 # is identical.
 _PROVIDER_SIGNATURES: list[tuple[str, str, str, str]] = [
     ("langchain_anthropic", "chatanthropic", "anthropic", "anthropic"),
+    ("langchain_aws", "chatbedrockconverse", "bedrock", "bedrock"),
     ("langchain_google_vertexai", "chatvertexai", "vertexai", "vertex"),
     ("langchain_google", "chatgooglegenerativeai", "google", "google"),
     ("langchain_openai", "chatopenai", "openai", "openai"),
@@ -74,7 +75,7 @@ class ForceToolChoice(AgentMiddleware):
             or ""
         ).lower()
 
-        if provider == "anthropic":
+        if provider in {"anthropic", "bedrock"}:
             return {"type": "tool", "name": self._tool_name}
         if provider in {"google", "vertex"}:
             return self._tool_name

@@ -15,6 +15,7 @@ Aurora requires an LLM provider for its AI-powered investigation and Root Cause 
 | **Anthropic** | Direct | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) |
 | **Google AI** | Direct | `GOOGLE_AI_API_KEY` | [ai.google.dev](https://ai.google.dev/) |
 | **Vertex AI** | Direct | `VERTEX_AI_PROJECT` + credentials | [console.cloud.google.com](https://console.cloud.google.com/) |
+| **Amazon Bedrock** | Direct | `BEDROCK_REGION` + AWS credentials | [console.aws.amazon.com/bedrock](https://console.aws.amazon.com/bedrock/) |
 | **Ollama** | Direct | `OLLAMA_BASE_URL` | [ollama.com](https://ollama.com/) (free, local) |
 
 Only **one** provider is required.
@@ -43,7 +44,7 @@ LLM_PROVIDER_MODE=direct
 In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-2.5-flash` routes to Google AI).
 
 :::note
-Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
+Vertex AI, Amazon Bedrock, and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
 :::
 
 ## Supported Models
@@ -76,6 +77,9 @@ Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MO
 | | `vertex/gemini-2.5-pro` | Strong for complex tasks |
 | | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
 | | `vertex/gemini-2.5-flash-lite` | Cheapest Vertex option |
+| **Amazon Bedrock** | `bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0` | Claude via Bedrock Converse API |
+| | `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Cross-region inference profile example |
+| | `bedrock/arn:aws:bedrock:...` | Provisioned/custom model ARN; set `BEDROCK_MODEL_PROVIDER` |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
@@ -148,6 +152,39 @@ LLM_PROVIDER_MODE=direct
 The project ID is automatically extracted from the service account JSON if `VERTEX_AI_PROJECT` is not set.
 :::
 
+### Amazon Bedrock
+
+For organizations using AWS Bedrock. Aurora uses Bedrock's Converse API through the native AWS SDK credential chain.
+
+**Requirements:**
+- Bedrock model access enabled in the target AWS account and region
+- An IAM role/profile, AWS access key pair, or Bedrock API key with Bedrock runtime permissions
+
+**Setup:**
+
+```bash
+BEDROCK_REGION=us-east-1
+LLM_PROVIDER_MODE=direct
+
+# Use a Bedrock model ID or provisioned/custom model ARN.
+MAIN_MODEL=bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+NEXT_PUBLIC_DEFAULT_LLM_MODEL=bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+```
+
+**Authentication options:**
+1. **IAM role / pod identity / instance profile**: Set `BEDROCK_REGION`; no static key env vars are required.
+2. **AWS profile**: Set `BEDROCK_CREDENTIALS_PROFILE`.
+3. **Static AWS credentials**: Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN`.
+4. **Bedrock API key**: Set `AWS_BEARER_TOKEN_BEDROCK`.
+
+**Optional endpoint override:**
+
+```bash
+BEDROCK_ENDPOINT_URL=https://bedrock-runtime.us-east-1.amazonaws.com
+```
+
+For custom or provisioned model ARNs, set `BEDROCK_MODEL_PROVIDER` (for example, `anthropic`) so the Converse client can format provider-specific requests.
+
 ### Ollama (Local Models)
 
 Run models locally on your own hardware with [Ollama](https://ollama.com/). No API key needed.
@@ -208,6 +245,9 @@ RCA_MODEL=google/gemini-2.5-flash
 
 # Vertex AI
 RCA_MODEL=vertex/gemini-2.5-flash
+
+# Amazon Bedrock
+RCA_MODEL=bedrock/anthropic.claude-3-haiku-20240307-v1:0
 
 # Ollama (local)
 RCA_MODEL=ollama/llama3.1
@@ -286,6 +326,13 @@ The safety judge model can be any provider supported above. A fast, cheap, **non
 - Verify `VERTEX_AI_PROJECT` is set
 - Check that `VERTEX_AI_SERVICE_ACCOUNT_JSON` contains valid JSON
 - Ensure the service account has the `Vertex AI User` role
+
+### Amazon Bedrock: "Provider not available"
+
+- Verify `BEDROCK_REGION` or `AWS_DEFAULT_REGION` is set
+- Check that static credentials include both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+- Ensure the AWS identity has `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`
+- Confirm the selected Bedrock model is enabled in that AWS region
 
 ### Ollama: "Provider not available"
 

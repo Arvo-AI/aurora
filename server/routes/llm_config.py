@@ -16,7 +16,15 @@ from utils.auth.rbac_decorators import require_permission
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama"]
+PROVIDER_NAMES = [
+    "openrouter",
+    "openai",
+    "anthropic",
+    "google",
+    "vertex",
+    "ollama",
+    "bedrock",
+]
 
 llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
 
@@ -138,7 +146,7 @@ def test_provider(user_id):
             return jsonify(
                 {
                     "success": False,
-                    "error": f"Provider '{provider_name}' is not configured (missing API key)",
+                    "error": f"Provider '{provider_name}' is not configured",
                 }
             ), 400
 

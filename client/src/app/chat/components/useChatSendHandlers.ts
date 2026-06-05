@@ -4,6 +4,7 @@ import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState, st
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from "@/lib/services/providerPreferences";
 import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
+import { getEnv } from "@/lib/env";
 import { Message } from "../types";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
@@ -43,6 +44,7 @@ interface ChatSendHandlerResult {
 }
 
 const normalizeMode = (mode?: string | null) => (mode || "agent").toLowerCase();
+const defaultChatModel = () => getEnv('NEXT_PUBLIC_DEFAULT_LLM_MODEL') || "openai/gpt-5.5";
 
 const arraysEqual = (a: string[], b: string[]) => {
   if (a.length !== b.length) return false;
@@ -71,7 +73,7 @@ export function useChatSendHandlers({
   const { toast } = useToast();
   const { providerIds, isProviderConnected } = useConnectedAccounts();
 
-  const [selectedModel, setSelectedModel] = useState("openai/gpt-5.5");
+  const [selectedModel, setSelectedModel] = useState(defaultChatModel);
   const [selectedMode, setSelectedMode] = useState("agent");
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [isSending, setIsSending] = useState(false);

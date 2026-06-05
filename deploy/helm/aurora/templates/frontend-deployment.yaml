@@ -45,7 +45,7 @@ spec:
               value: "production"
             # --- From configmap ---
             {{- $configMapName := (include "aurora.fullname" .) }}
-            {{- $frontendKeys := list "AURORA_ENV" "FRONTEND_URL" "BACKEND_URL" "NEXT_PUBLIC_BACKEND_URL" "NEXT_PUBLIC_WEBSOCKET_URL" "PUBLIC_API_URL" "PUBLIC_WS_URL" }}
+            {{- $frontendKeys := list "AURORA_ENV" "FRONTEND_URL" "BACKEND_URL" "NEXT_PUBLIC_BACKEND_URL" "NEXT_PUBLIC_WEBSOCKET_URL" "NEXT_PUBLIC_DEFAULT_LLM_MODEL" "PUBLIC_API_URL" "PUBLIC_WS_URL" }}
             {{- range $key := $frontendKeys }}
             - name: {{ $key }}
               valueFrom:

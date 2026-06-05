@@ -18,6 +18,7 @@ Environment Variables:
 - OPENAI_API_KEY: Direct OpenAI API key
 - ANTHROPIC_API_KEY: Direct Anthropic API key
 - GOOGLE_AI_API_KEY: Google AI Studio API key
+- BEDROCK_REGION/AWS_DEFAULT_REGION: Amazon Bedrock region
 """
 
 import logging
@@ -33,6 +34,7 @@ from .anthropic_provider import AnthropicProvider
 from .google_provider import GoogleProvider
 from .vertex_provider import VertexAIProvider
 from .ollama_provider import OllamaProvider
+from .bedrock_provider import BedrockProvider
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ class ProviderRegistry:
         self._providers["google"] = GoogleProvider()
         self._providers["vertex"] = VertexAIProvider()
         self._providers["ollama"] = OllamaProvider()
+        self._providers["bedrock"] = BedrockProvider()
 
         logger.info("Initialized provider registry")
 
@@ -141,6 +144,7 @@ class ProviderRegistry:
             "google": "GOOGLE_AI_API_KEY",
             "vertex": "VERTEX_AI_PROJECT",
             "ollama": "OLLAMA_BASE_URL",
+            "bedrock": "BEDROCK_REGION or AWS_DEFAULT_REGION plus AWS credentials",
         }
         hint = env_var_hints.get(
             detected_provider, f"{detected_provider.upper()}_API_KEY"
@@ -249,6 +253,7 @@ __all__ = [
     "GoogleProvider",
     "VertexAIProvider",
     "OllamaProvider",
+    "BedrockProvider",
     "ProviderRegistry",
     "get_registry",
     "create_chat_model",

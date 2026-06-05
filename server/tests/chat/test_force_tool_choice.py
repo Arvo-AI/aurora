@@ -65,6 +65,7 @@ def _model(class_name: str, module: str, **attrs):
         ("openrouter", {"type": "function", "function": {"name": "trigger_rca"}}),
         ("openai", {"type": "function", "function": {"name": "trigger_rca"}}),
         ("anthropic", {"type": "tool", "name": "trigger_rca"}),
+        ("bedrock", {"type": "tool", "name": "trigger_rca"}),
         ("google", "trigger_rca"),
         ("vertex", "trigger_rca"),
         (None, {"type": "function", "function": {"name": "trigger_rca"}}),
@@ -105,6 +106,18 @@ def test_infers_google_shape_through_wrapped_model(force_tool_module):
     force_tool_module.ForceToolChoice("trigger_rca")._patch(request)
 
     assert request.tool_choice == "trigger_rca"
+
+
+def test_infers_bedrock_shape_from_chat_bedrock_converse(force_tool_module):
+    model = _model(
+        "ChatBedrockConverse",
+        "langchain_aws.chat_models.bedrock_converse",
+    )
+    request = _request(model=model)
+
+    force_tool_module.ForceToolChoice("trigger_rca")._patch(request)
+
+    assert request.tool_choice == {"type": "tool", "name": "trigger_rca"}
 
 
 def test_forces_only_first_model_call(force_tool_module):

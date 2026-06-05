@@ -84,6 +84,19 @@ const modelOptions: ModelOption[] = [
   },
 ];
 
+const customModelOption = (modelId: string): ModelOption => {
+  const modelName = modelId.includes('/') ? modelId.split('/', 2)[1] : modelId;
+  return {
+    id: modelId,
+    name: modelName,
+    displayName: modelId,
+    provider: 'Custom',
+    tier: 'pro',
+    contextLength: 'Custom',
+    hasReasoning: false,
+  };
+};
+
 export default function ModelSelector({ 
   selectedModel, 
   onModelChange, 
@@ -111,7 +124,7 @@ export default function ModelSelector({
     setIsOpen(false);
   };
 
-  const selectedModelData = modelOptions.find(model => model.id === selectedModel) || modelOptions[0];
+  const selectedModelData = modelOptions.find(model => model.id === selectedModel) || customModelOption(selectedModel);
 
   return (
     <TooltipProvider>
