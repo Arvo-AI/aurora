@@ -80,7 +80,7 @@ export default function ManageKubectlClustersPage() {
       cluster_id: c.cluster_id,
       cluster_name: c.cluster_name,
       source: 'kubeconfig' as const,
-      status: 'ready',
+      status: 'active',
       connected_at: c.created_at,
       context_name: c.context_name,
       server_url: c.server_url,
@@ -206,7 +206,7 @@ export default function ManageKubectlClustersPage() {
                             ? (cluster.status === 'active' ? 'border-green-700 text-green-400' : 'border-red-700 text-red-400')
                             : 'border-blue-700 text-blue-400'
                         }>
-                          {cluster.source === 'agent' ? (cluster.status === 'active' ? 'Active' : 'Stale') : 'Ready'}
+                          {cluster.source === 'agent' ? (cluster.status === 'active' ? 'Active' : 'Stale') : 'Uploaded'}
                         </Badge>
                         <Badge variant="secondary" className="text-[10px] bg-zinc-800 text-zinc-400">
                           {cluster.source === 'agent' ? 'Agent' : 'Kubeconfig'}
