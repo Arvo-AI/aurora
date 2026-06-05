@@ -36,6 +36,30 @@ interface PendingFile {
   content: string;
 }
 
+function CommandRow({ label, command, copyKey, copied, onCopy }: {
+  label: string; command: string; copyKey: string;
+  copied: string | null; onCopy: (cmd: string, key: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label className="text-sm text-zinc-300">{label}</Label>
+      <div className="relative">
+        <pre className="overflow-auto rounded-lg bg-zinc-900 border border-zinc-800 p-2 pr-12 text-xs leading-relaxed font-mono text-zinc-100">
+          {command}
+        </pre>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onCopy(command, copyKey)}
+          className={`absolute right-1 text-zinc-400 hover:text-zinc-100 hover:bg-transparent ${command.includes('\n') ? 'top-1' : 'top-1/2 -translate-y-1/2'}`}
+        >
+          {copied === copyKey ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function KubectlAuthPage() {
   const { toast } = useToast();
   const router = useRouter();
@@ -61,7 +85,7 @@ export default function KubectlAuthPage() {
         if (data.connected) {
           setAgentStatus('connected');
           localStorage.setItem(KUBECTL_AGENT.STORAGE_KEY, 'true');
-          window.dispatchEvent(new CustomEvent('providerStateChanged'));
+          globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
         }
       } catch (error) {
         console.error('Error checking kubectl status:', error);
@@ -105,32 +129,27 @@ export default function KubectlAuthPage() {
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    const fileList = Array.from(files);
     setUploadError(null);
 
-    fileList.forEach(file => {
+    for (const file of Array.from(files)) {
       if (file.size > 500 * 1024) {
         setUploadError(`${file.name} exceeds 500KB limit`);
-        return;
+        continue;
       }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const content = reader.result as string;
-        const lines = content.split('\n');
-        const hasApiVersion = lines.some(l => l.startsWith('apiVersion:'));
-        const hasClusters = lines.some(l => l.startsWith('clusters:'));
-        const hasContexts = lines.some(l => l.startsWith('contexts:'));
-        if (!hasApiVersion || !hasClusters || !hasContexts) {
-          setUploadError(`${file.name} does not appear to be a valid kubeconfig file`);
-          return;
-        }
-        setPendingFiles(prev => [...prev.filter(f => f.filename !== file.name), { filename: file.name, content }]);
-      };
-      reader.readAsText(file);
-    });
+      const content = await file.text();
+      const lines = content.split('\n');
+      const hasApiVersion = lines.some(l => l.startsWith('apiVersion:'));
+      const hasClusters = lines.some(l => l.startsWith('clusters:'));
+      const hasContexts = lines.some(l => l.startsWith('contexts:'));
+      if (!hasApiVersion || !hasClusters || !hasContexts) {
+        setUploadError(`${file.name} does not appear to be a valid kubeconfig file`);
+        continue;
+      }
+      setPendingFiles(prev => [...prev.filter(f => f.filename !== file.name), { filename: file.name, content }]);
+    }
   };
 
   const removePendingFile = (filename: string) => {
@@ -156,7 +175,7 @@ export default function KubectlAuthPage() {
       const errors = data.errors || [];
       if (registered.length > 0) {
         localStorage.setItem(KUBECTL_AGENT.STORAGE_KEY, 'true');
-        window.dispatchEvent(new CustomEvent('providerStateChanged'));
+        globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
         toast({ title: "Kubeconfigs uploaded", description: `${registered.length} cluster(s) registered successfully` });
         setPendingFiles([]);
       }
@@ -173,24 +192,6 @@ export default function KubectlAuthPage() {
     }
   };
 
-  const CommandRow = ({ label, command, copyKey }: { label: string; command: string; copyKey: string }) => (
-    <div className="space-y-2">
-      <Label className="text-sm text-zinc-300">{label}</Label>
-      <div className="relative">
-        <pre className="overflow-auto rounded-lg bg-zinc-900 border border-zinc-800 p-2 pr-12 text-xs leading-relaxed font-mono text-zinc-100">
-          {command}
-        </pre>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => copyCommand(command, copyKey)}
-          className={`absolute right-1 text-zinc-400 hover:text-zinc-100 hover:bg-transparent ${command.includes('\n') ? 'top-1' : 'top-1/2 -translate-y-1/2'}`}
-        >
-          {copied === copyKey ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-        </Button>
-      </div>
-    </div>
-  );
 
   return (
     <ConnectorAuthGuard connectorName="Kubectl">
@@ -316,8 +317,8 @@ export default function KubectlAuthPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <CommandRow label="Check current context" command="kubectl config current-context" copyKey="context-check" />
-                  <CommandRow label="Switch context (if needed)" command="kubectl config use-context <context-name>" copyKey="context-switch" />
+                  <CommandRow label="Check current context" command="kubectl config current-context" copyKey="context-check" copied={copied} onCopy={copyCommand} />
+                  <CommandRow label="Switch context (if needed)" command="kubectl config use-context <context-name>" copyKey="context-switch" copied={copied} onCopy={copyCommand} />
                 </CardContent>
               </Card>
 
@@ -337,7 +338,7 @@ export default function KubectlAuthPage() {
                       </AlertDescription>
                     </Alert>
                   )}
-                  <CommandRow label="Install with Helm" command={getHelmInstallCommand(generatedToken || "<YOUR_TOKEN>")} copyKey="helm" />
+                  <CommandRow label="Install with Helm" command={getHelmInstallCommand(generatedToken || "<YOUR_TOKEN>")} copyKey="helm" copied={copied} onCopy={copyCommand} />
                 </CardContent>
               </Card>
 

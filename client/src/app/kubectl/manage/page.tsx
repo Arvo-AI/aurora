@@ -183,30 +183,35 @@ export default function ManageKubectlClustersPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
+            {loading && (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
               </div>
-            ) : clusters.length === 0 ? (
+            )}
+            {!loading && clusters.length === 0 && (
               <div className="text-center py-12">
                 <p className="text-zinc-400 mb-4">No connected clusters found</p>
                 <Button variant="default" onClick={() => router.push('/kubectl/auth')} className="bg-white text-black hover:bg-zinc-200">
                   Connect a Cluster
                 </Button>
               </div>
-            ) : (
+            )}
+            {!loading && clusters.length > 0 && (
               <div className="space-y-3">
-                {clusters.map((cluster) => (
+                {clusters.map((cluster) => {
+                  const badgeClass = cluster.source === 'agent'
+                    ? (cluster.status === 'active' ? 'border-green-700 text-green-400' : 'border-red-700 text-red-400')
+                    : 'border-blue-700 text-blue-400';
+                  const badgeLabel = cluster.source === 'agent'
+                    ? (cluster.status === 'active' ? 'Active' : 'Stale')
+                    : 'Uploaded';
+                  return (
                   <div key={cluster.cluster_id} className="flex items-center justify-between p-4 bg-zinc-900 border border-zinc-800 rounded-lg">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3 mb-2">
                         <h3 className="text-white font-medium truncate">{cluster.cluster_name}</h3>
-                        <Badge variant="outline" className={
-                          cluster.source === 'agent'
-                            ? (cluster.status === 'active' ? 'border-green-700 text-green-400' : 'border-red-700 text-red-400')
-                            : 'border-blue-700 text-blue-400'
-                        }>
-                          {cluster.source === 'agent' ? (cluster.status === 'active' ? 'Active' : 'Stale') : 'Uploaded'}
+                        <Badge variant="outline" className={badgeClass}>
+                          {badgeLabel}
                         </Badge>
                         <Badge variant="secondary" className="text-[10px] bg-zinc-800 text-zinc-400">
                           {cluster.source === 'agent' ? 'Agent' : 'Kubeconfig'}
@@ -250,7 +255,8 @@ export default function ManageKubectlClustersPage() {
                       </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>

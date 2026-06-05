@@ -161,8 +161,9 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
             env=exec_env,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+            async with asyncio.timeout(timeout):
+                stdout, stderr = await proc.communicate()
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             return {'success': False, 'error': f'Command timed out after {timeout}s', 'return_code': 124}
