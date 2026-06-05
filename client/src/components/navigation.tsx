@@ -1,7 +1,6 @@
 "use client"
 
 import Link from "next/link"
-import Image from "next/image"
 import { usePathname, useRouter } from "next/navigation"
 import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -113,21 +112,15 @@ export default function Navigation({
       )}>
         <div className="p-3 flex items-center justify-between border-b border-border/30">
           <div className="flex items-center gap-2">
-            <Image 
+            <img 
               src="/arvologotransparent-modified.png" 
               alt="Arvo Logo" 
-              width={40}
-              height={40}
               className="w-10 h-10 block dark:hidden"
-              priority
             />
-            <Image 
+            <img 
               src="/arvologotransparent.png" 
               alt="Arvo Logo" 
-              width={40}
-              height={40}
               className="w-10 h-10 hidden dark:block"
-              priority
             />
             <div className="flex flex-col items-start">
               <h1 className="text-lg font-bold text-foreground">Aurora</h1>
