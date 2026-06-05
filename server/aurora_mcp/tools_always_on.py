@@ -3,8 +3,7 @@
 These tools are registered for every user regardless of which connectors
 are wired up. Descriptions are written so a good external LLM reaches for a
 direct read (incidents, infrastructure context, service graph, RCA findings)
-for factual lookups, and escalates to `chat_with_aurora` only for open-ended,
-multi-source investigation/synthesis.
+for factual lookups, and uses `trigger_rca` when a new investigation is needed.
 """
 
 from __future__ import annotations
@@ -15,22 +14,12 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote
 
 from .response import truncate_payload
-from .chat_bridge import chat_with_aurora as _chat_with_aurora
 
 logger = logging.getLogger(__name__)
 
 ApiCall = Callable[..., Awaitable[Dict[str, Any]]]
 
-# Per-call timeouts (seconds). Defaults that diverge from the shared httpx
-# client default live here so they can be tuned in one place.
-_ASK_POLL_TIMEOUT = 15.0
 _RCA_TRIGGER_TIMEOUT = 60.0
-
-# Terminal states mirror chat_bridge._TERMINAL_*. Use an explicit allowlist so
-# unknown/new statuses (e.g. "active") don't get treated as terminal by a
-# denylist check.
-_TERMINAL_OK = frozenset({"complete", "completed"})
-_TERMINAL_ERR = frozenset({"error", "cancelled", "failed"})
 
 
 def _slim_incident(incident: Any) -> Any:
@@ -65,42 +54,6 @@ async def _do_get_incident(api_call: ApiCall, incident_id: str) -> Dict[str, Any
         )
     return truncate_payload(_slim_incident(raw), tool_name="get_incident")
 
-
-async def _do_ask_incident(api_call: ApiCall, incident_id: str, question: str) -> Dict[str, Any]:
-    result = await api_call(
-        "POST",
-        f"/api/incidents/{incident_id}/chat",
-        body={"question": question, "mode": "ask"},
-    )
-    session_id = result.get("session_id") if isinstance(result, dict) else None
-    if not session_id:
-        return truncate_payload(result, tool_name="ask_incident")
-
-    for _ in range(20):
-        await asyncio.sleep(2)
-        async with asyncio.timeout(_ASK_POLL_TIMEOUT):
-            session = await api_call("GET", f"/chat_api/sessions/{session_id}")
-        status = session.get("status")
-        if status in _TERMINAL_OK or status in _TERMINAL_ERR:
-            return truncate_payload(session, tool_name="ask_incident")
-
-    return {
-        "status": "still_processing",
-        "session_id": session_id,
-        "message": (
-            "Response not ready after 40s. Re-call with chat_with_aurora "
-            f"(session_id={session_id}) or read the session directly."
-        ),
-    }
-
-
-async def _do_regenerate_rca(api_call: ApiCall, incident_id: str) -> Dict[str, Any]:
-    async with asyncio.timeout(_RCA_TRIGGER_TIMEOUT):
-        result = await api_call(
-            "POST",
-            f"/api/incidents/{incident_id}/postmortem/regenerate",
-        )
-    return truncate_payload(result, tool_name="regenerate_rca")
 
 
 async def _do_trigger_rca(
@@ -247,53 +200,6 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     """
 
     @mcp.tool()
-    async def chat_with_aurora(
-        message: str = "",
-        session_id: Optional[str] = None,
-        mode: str = "chat",
-        poll_only: bool = False,
-    ) -> Dict[str, Any]:
-        """Aurora's autonomous cloud-ops agent for YOUR connected systems. It both
-        INVESTIGATES (multi-source RCA across your incidents and connected
-        observability — logs, metrics, traces, alerts) and ACTS (provisions/changes
-        infrastructure via Terraform/IaC, kubectl, and cloud CLIs; applies code
-        fixes; runs remediations), using Aurora's knowledge of your connected
-        integrations. Use it for work needing planning + multi-step action or
-        cross-source synthesis — e.g. "why did checkout-svc page at 3am — dig into
-        it", "set up auto-scaling for my cluster", "create a GKE cluster". It runs
-        the full agent workflow (slower than a direct read), so use it only when the
-        task needs the agent, not as a default.
-
-        Do NOT use it for:
-        • Simple lookups now covered by direct tools: incidents (latest =
-          list_incidents(limit=1)), alerts, topology, metrics, RCA findings, a
-          postmortem, or your actions (list_actions) — use those, faster/cheaper.
-        • Questions about the Aurora product itself (how the app works, its
-          features, UI, settings) — answer from your own knowledge.
-
-        SESSION THREADING — READ FIRST:
-        Chats are session-scoped; every call returns a `session_id`. On ANY
-        follow-up in the same conversation (clarifications, "what about X?",
-        polling) you MUST pass that `session_id` back. Omit it only to start an
-        unrelated topic — a fresh session loses all prior context and citations.
-
-        Args:
-          message: User question. Ignored when poll_only=True.
-          session_id: from the previous result; REQUIRED on every follow-up turn,
-            omit only to start a new, unrelated chat.
-          mode: "chat" (default) or "rca" for the deeper RCA pipeline.
-          poll_only: keep polling a running session (requires session_id).
-
-        Returns: dict with `session_id` (always — keep for the next call), `status`,
-          and either `response` + `citations`, `partial` + `hint`, or `error`.
-        """
-        result = await _chat_with_aurora(
-            api_call, message=message, session_id=session_id,
-            mode=mode, poll_only=poll_only,
-        )
-        return truncate_payload(result, tool_name="chat_with_aurora")
-
-    @mcp.tool()
     async def list_incidents(status: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
         """List Aurora incidents. Optionally filter by status
         (investigating/analyzed/merged/resolved)."""
@@ -310,28 +216,6 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         return await _do_get_incident(api_call, incident_id)
 
     @mcp.tool()
-    async def ask_incident(incident_id: str, question: str) -> Dict[str, Any]:
-        """Ask Aurora a genuine free-text follow-up about a specific incident
-        (runs an incident-scoped investigation — slower than a direct read).
-
-        Before calling, for a factual lookup use the direct tool: `get_incident`
-        for the summary/citations, `incident_findings` /
-        `incident_finding_detail` for which tools/steps the RCA used, and
-        `incident_list_alerts` for the correlated alerts. Use this only for
-        open-ended questions those reads can't answer. For broader, cross-incident
-        investigations use `chat_with_aurora`."""
-        return await _do_ask_incident(api_call, incident_id, question)
-
-    @mcp.tool()
-    async def regenerate_rca(incident_id: str) -> Dict[str, Any]:
-        """Re-run RCA for an EXISTING incident. Re-investigates and rewrites
-        the postmortem with refreshed citations. Use this when an incident
-        already exists (e.g. surfaced via list_incidents) and you want a
-        fresh pass. To start an RCA from a free-text description with no
-        existing incident, use `trigger_rca` instead."""
-        return await _do_regenerate_rca(api_call, incident_id)
-
-    @mcp.tool()
     async def trigger_rca(
         issue_description: str,
         title: str = "",
@@ -345,8 +229,7 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         `incident_id` and a `rca_session_id` to track progress.
 
         Use this when the user describes an issue and there is no existing
-        Aurora incident for it yet. If an incident already exists, prefer
-        `regenerate_rca(incident_id)` instead.
+        Aurora incident for it yet.
 
         Args:
           issue_description: REQUIRED. What the user is seeing — symptoms,
@@ -413,9 +296,8 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     async def incident_findings(incident_id: str) -> Dict[str, Any]:
         """List what each RCA sub-agent investigated for an incident: role,
         tools_used, citations, and follow-ups. Use this to answer "what did the
-        RCA look at / which steps did it run" without spending an ask_incident
-        chat call. For one agent's full step-by-step trace, follow up with
-        `incident_finding_detail`."""
+        RCA look at / which steps did it run". For one agent's full step-by-step
+        trace, follow up with `incident_finding_detail`."""
         return await _do_incident_findings(api_call, incident_id)
 
     @mcp.tool()

@@ -203,7 +203,7 @@ def _get_http_client() -> httpx.AsyncClient:
     """Lazily build a long-lived httpx client with keepalive pooling.
 
     Reusing the client across requests preserves the TCP/TLS connection to
-    aurora-server, which matters in tight poll loops like chat_with_aurora.
+    aurora-server, which matters in tight poll loops.
     """
     global _http_client
     if _http_client is None or _http_client.is_closed:
@@ -287,14 +287,11 @@ mcp = FastMCP(
         "(incident_findings/incident_finding_detail), incident alerts "
         "(incident_list_alerts). For metrics (MTTR/DORA), postmortems, runbooks, "
         "deployments, logs, or anything not shown upfront, call `search_tools` to "
-        "find the direct tool before assuming it's missing. Reserve "
-        "`chat_with_aurora` for work that needs Aurora's autonomous agent over the "
-        "user's connected systems — multi-source investigation/RCA OR taking action "
-        "(provisioning or changing infra via Terraform/kubectl/cloud CLIs, applying "
-        "code fixes, remediating). It runs the full agent workflow and is slower, so "
-        "it's the escalation path, not the default. It is NOT for questions about "
-        "the Aurora product itself (how the app works, its features, UI, settings) — "
-        "answer those from your own knowledge. Invoke discovered tools via call_tool."
+        "find the direct tool before assuming it's missing. Use `trigger_rca` to "
+        "start a new investigation from a problem description. It is NOT for "
+        "questions about the Aurora product itself (how the app works, its "
+        "features, UI, settings) — answer those from your own knowledge. "
+        "Invoke discovered tools via call_tool."
     ),
     host="0.0.0.0",  # Bind all interfaces; auth is enforced via Bearer token
     stateless_http=True,

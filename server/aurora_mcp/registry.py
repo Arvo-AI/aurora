@@ -87,9 +87,7 @@ TIER2_TOOLS: Tuple[GatedToolSpec, ...] = (
         description=(
             "Query logs from any connected log source. Currently backed by "
             "Datadog (/datadog/logs/search) and Splunk (/splunk/search). Use "
-            "this for a direct log read. Reach for `chat_with_aurora` only when "
-            "the question is open-ended and needs Aurora to correlate logs with "
-            "other sources."
+            "this for a direct log read."
         ),
         enabling_skills=("datadog", "splunk"),
         category="logs",
@@ -98,8 +96,7 @@ TIER2_TOOLS: Tuple[GatedToolSpec, ...] = (
         name="query_metrics",
         description=(
             "Query metrics directly. Currently backed by Datadog "
-            "(/datadog/metrics/query). Use this for a direct metric read; reach "
-            "for `chat_with_aurora` only for open-ended, multi-source analysis."
+            "(/datadog/metrics/query). Use this for a direct metric read."
         ),
         enabling_skills=("datadog",),
         category="metrics",
