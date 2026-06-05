@@ -62,7 +62,6 @@ def bitbucket_repos(
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
     ws, repo = workspace, repo_slug
-    default_branch = None
 
     repo_scoped = action in (
         "get_repo", "get_file_contents", "create_or_update_file",
