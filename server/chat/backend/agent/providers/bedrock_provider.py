@@ -71,8 +71,6 @@ class BedrockProvider(BaseLLMProvider):
             "model": native_model,
             "temperature": temperature,
             "region_name": self.region,
-            "max_retries": 3,
-            "timeout": 120,
         }
 
         if self.endpoint_url:
