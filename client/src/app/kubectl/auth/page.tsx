@@ -36,10 +36,10 @@ interface PendingFile {
   content: string;
 }
 
-function CommandRow({ label, command, copyKey, copied, onCopy }: {
+function CommandRow({ label, command, copyKey, copied, onCopy }: Readonly<{
   label: string; command: string; copyKey: string;
   copied: string | null; onCopy: (cmd: string, key: string) => void;
-}) {
+}>) {
   return (
     <div className="space-y-2">
       <Label className="text-sm text-zinc-300">{label}</Label>

@@ -126,7 +126,7 @@ def _get_kubeconfig_for_cluster(user_id: str, cluster_id: str):
     return {'yaml': token_data['kubeconfig_yaml'], 'context_name': context_name}
 
 
-async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, context_name: str, timeout: int) -> dict:
+async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, context_name: str, timeout_seconds: int) -> dict:
     """Execute kubectl using a kubeconfig retrieved from Vault."""
     import atexit
     import tempfile
@@ -161,12 +161,12 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
             env=exec_env,
         )
         try:
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(timeout_seconds):
                 stdout, stderr = await proc.communicate()
         except TimeoutError:
             proc.kill()
             await proc.wait()
-            return {'success': False, 'error': f'Command timed out after {timeout}s', 'return_code': 124}
+            return {'success': False, 'error': f'Command timed out after {timeout_seconds}s', 'return_code': 124}
 
         return {
             'success': proc.returncode == 0,

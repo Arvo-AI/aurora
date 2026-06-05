@@ -199,12 +199,12 @@ export default function ManageKubectlClustersPage() {
             {!loading && clusters.length > 0 && (
               <div className="space-y-3">
                 {clusters.map((cluster) => {
-                  const badgeClass = cluster.source === 'agent'
-                    ? (cluster.status === 'active' ? 'border-green-700 text-green-400' : 'border-red-700 text-red-400')
-                    : 'border-blue-700 text-blue-400';
-                  const badgeLabel = cluster.source === 'agent'
-                    ? (cluster.status === 'active' ? 'Active' : 'Stale')
-                    : 'Uploaded';
+                  let badgeClass = 'border-blue-700 text-blue-400';
+                  let badgeLabel = 'Uploaded';
+                  if (cluster.source === 'agent') {
+                    badgeClass = cluster.status === 'active' ? 'border-green-700 text-green-400' : 'border-red-700 text-red-400';
+                    badgeLabel = cluster.status === 'active' ? 'Active' : 'Stale';
+                  }
                   return (
                   <div key={cluster.cluster_id} className="flex items-center justify-between p-4 bg-zinc-900 border border-zinc-800 rounded-lg">
                     <div className="flex-1 min-w-0">
