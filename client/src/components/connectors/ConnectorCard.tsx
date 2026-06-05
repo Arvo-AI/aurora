@@ -45,16 +45,13 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
   
-  const hasOverride = connectedOverride !== undefined;
-
   // GitHub/Bitbucket two-tier status (authenticated vs fully connected)
-  // Only instantiate when this card IS the github/bitbucket card AND
-  // no batch override was provided (i.e., on individual manage pages).
+  // Always instantiate for these connectors to show the correct yellow/green state.
   const githubStatus = useGitHubStatus(
-    !hasOverride && connector.id === "github" ? userId : null
+    connector.id === "github" ? userId : null
   );
   const bitbucketStatus = useBitbucketStatus(
-    !hasOverride && connector.id === "bitbucket" ? userId : null
+    connector.id === "bitbucket" ? userId : null
   );
 
   const {
@@ -252,7 +249,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     // source of truth. Never fall through to the generic isConnected path
     // for these connectors — that would flash "Connected" while the
     // dedicated hook is still loading.
-    const devToolStatus = hasOverride ? null :
+    const devToolStatus =
       connector.id === "github" ? githubStatus :
       connector.id === "bitbucket" ? bitbucketStatus :
       null;

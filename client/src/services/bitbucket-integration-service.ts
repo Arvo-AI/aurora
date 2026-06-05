@@ -49,7 +49,15 @@ interface IssuesResponse {
 export interface WorkspaceSelectionResponse {
   workspace?: string;
   workspaces?: string[];
-  repositories?: (string | { slug: string; name: string; workspace?: string })[];
+  repositories?: (string | {
+    slug: string;
+    name: string;
+    full_name?: string;
+    workspace?: string;
+    default_branch?: string | null;
+    metadata_summary?: string | null;
+    metadata_status?: string | null;
+  })[];
 }
 
 // ----- Service -----
@@ -177,6 +185,20 @@ export class BitbucketIntegrationService {
     await this.request(
       '/workspace-selection',
       { method: 'DELETE', errorMessage: 'Failed to clear workspace selection' }
+    );
+  }
+
+  static async generateRepoMetadata(repoFullName: string): Promise<void> {
+    await this.request(
+      '/repo-metadata/generate',
+      { method: 'POST', body: { repo_full_name: repoFullName }, errorMessage: 'Failed to trigger metadata generation' }
+    );
+  }
+
+  static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
+    await this.request(
+      `/repo-metadata/${encodeURIComponent(repoFullName)}`,
+      { method: 'PUT', body: { metadata_summary: summary }, errorMessage: 'Failed to update metadata' }
     );
   }
 }

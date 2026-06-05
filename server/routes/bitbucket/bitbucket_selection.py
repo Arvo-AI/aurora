@@ -180,3 +180,61 @@ def clear_workspace_selection(user_id):
     except Exception as e:
         logger.error(f"Error clearing workspace selection: {e}", exc_info=True)
         return jsonify({"error": "Failed to clear workspace selection"}), 500
+
+
+@bitbucket_selection_bp.route("/repo-metadata/generate", methods=["POST"])
+@require_permission("connectors", "write")
+def trigger_metadata_generation(user_id):
+    """Trigger LLM metadata generation for a specific Bitbucket repo. (Only for the regenerate button in the workspace browser)"""
+    try:
+        data = request.get_json()
+        repo_full_name = data.get("repo_full_name") if data else None
+        if not repo_full_name:
+            return jsonify({"error": "repo_full_name is required"}), 400
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketMetadata:generate]")
+                cur.execute(
+                    """UPDATE connected_repos SET metadata_status = 'generating', updated_at = NOW()
+                       WHERE provider = 'bitbucket' AND repo_full_name = %s AND user_id = %s""",
+                    (repo_full_name, user_id),
+                )
+                conn.commit()
+
+        from utils.repo_metadata import generate_repo_metadata
+        try:
+            generate_repo_metadata.delay(user_id, "bitbucket", repo_full_name)
+        except Exception as e:
+            logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
+            return jsonify({"error": "Failed to start metadata generation"}), 500
+        return jsonify({"message": "Metadata generation started"})
+    except Exception as e:
+        logger.error(f"Error triggering metadata generation: {e}", exc_info=True)
+        return jsonify({"error": "Failed to trigger metadata generation"}), 500
+
+
+@bitbucket_selection_bp.route("/repo-metadata/<path:repo_full_name>", methods=["PUT"])
+@require_permission("connectors", "write")
+def update_repo_metadata(user_id, repo_full_name):
+    """Update the metadata summary for a specific Bitbucket repo (human edit)."""
+    try:
+        data = request.get_json()
+        summary = data.get("metadata_summary") if data else None
+        if summary is None:
+            return jsonify({"error": "metadata_summary is required"}), 400
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BitbucketMetadata:update]")
+                cur.execute(
+                    """UPDATE connected_repos
+                       SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
+                       WHERE provider = 'bitbucket' AND repo_full_name = %s AND user_id = %s""",
+                    (summary, repo_full_name, user_id),
+                )
+                conn.commit()
+        return jsonify({"message": "Metadata updated"})
+    except Exception as e:
+        logger.error(f"Error updating repo metadata: {e}", exc_info=True)
+        return jsonify({"error": "Failed to update metadata"}), 500
