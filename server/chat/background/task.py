@@ -1460,6 +1460,7 @@ async def _execute_background_chat(
             try:
                 from services.actions.executor import update_action_run_status
                 if guardrail_blocked:
+                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
                     update_action_run_status(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message='Action blocked by safety guardrails',
