@@ -72,7 +72,9 @@ export default function BitbucketWorkspaceBrowser() {
           clearInterval(pollingRef.current);
           pollingRef.current = null;
         }
-      } catch { /* keep polling */ }
+      } catch (err) {
+        console.warn('[BitbucketWorkspaceBrowser] Metadata polling failed:', err);
+      }
     }, 3000);
   }, []);
 

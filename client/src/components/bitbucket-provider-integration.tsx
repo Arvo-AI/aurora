@@ -29,7 +29,6 @@ const REQUIRED_API_TOKEN_SCOPES = [
 ] as const;
 
 export default function BitbucketProviderIntegration() {
-  const [userId, setUserId] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
   const [displayName, setDisplayName] = useState<string>('');
@@ -43,32 +42,11 @@ export default function BitbucketProviderIntegration() {
   const [email, setEmail] = useState('');
   const [apiToken, setApiToken] = useState('');
 
-  // Fetch user ID on mount
   useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const response = await fetch('/api/getUserId');
-        if (response.ok) {
-          const data = await response.json();
-          setUserId(data.userId);
-        }
-      } catch (error) {
-        console.error('Error fetching user ID:', error);
-      }
-    };
-    fetchUserId();
+    checkStatus();
   }, []);
 
-  // Check connection status
-  useEffect(() => {
-    if (userId) {
-      checkStatus();
-    }
-  }, [userId]);
-
   const checkStatus = async () => {
-    if (!userId) return;
-    setIsCheckingStatus(true);
     try {
       const data = await BitbucketIntegrationService.checkStatus();
       setIsAuthenticated(data.connected || false);
@@ -83,10 +61,6 @@ export default function BitbucketProviderIntegration() {
   };
 
   const handleOAuthLogin = async () => {
-    if (!userId) {
-      toast({ title: "Error", description: "User ID is required", variant: "destructive" });
-      return;
-    }
     setIsLoading(true);
     try {
       const oauthUrl = await BitbucketIntegrationService.initiateOAuth();
@@ -116,10 +90,6 @@ export default function BitbucketProviderIntegration() {
   };
 
   const handleApiTokenLogin = async () => {
-    if (!userId) {
-      toast({ title: "Error", description: "User ID is required", variant: "destructive" });
-      return;
-    }
     if (!email || !apiToken) {
       toast({ title: "Error", description: "Email and API token are required", variant: "destructive" });
       return;
@@ -142,7 +112,6 @@ export default function BitbucketProviderIntegration() {
   };
 
   const handleDisconnect = async () => {
-    if (!userId) return;
     try {
       await BitbucketIntegrationService.disconnect();
       setIsAuthenticated(false);
@@ -191,7 +160,7 @@ export default function BitbucketProviderIntegration() {
         value={apiToken}
         onChange={(e) => setApiToken(e.target.value)}
       />
-      <Button onClick={handleApiTokenLogin} disabled={isLoading || !userId || !email || !apiToken} className="w-full">
+      <Button onClick={handleApiTokenLogin} disabled={isLoading || !email || !apiToken} className="w-full">
         {isLoading ? (
           <>
             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -233,7 +202,7 @@ export default function BitbucketProviderIntegration() {
               <div>Issues: <span className="font-medium">Write</span></div>
               <div>Pipelines: <span className="font-medium">Write</span></div>
             </div>
-            <Button onClick={handleOAuthLogin} disabled={isLoading || !userId} className="w-full">
+            <Button onClick={handleOAuthLogin} disabled={isLoading} className="w-full">
               {isLoading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -290,7 +259,7 @@ export default function BitbucketProviderIntegration() {
         </div>
       )}
 
-      {isAuthenticated && userId && (
+      {isAuthenticated && (
         <BitbucketWorkspaceBrowser />
       )}
     </div>

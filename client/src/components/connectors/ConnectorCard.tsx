@@ -24,6 +24,31 @@ import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dial
 
 let pendingGitHubDialog = false;
 
+function TwoTierBadge({ isAuthenticated, isConnected }: { isAuthenticated: boolean; isConnected: boolean }) {
+  if (!isAuthenticated) return null;
+  return isConnected ? (
+    <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
+      <Check className="h-4 w-4" />
+      <span className="text-xs font-medium">Connected</span>
+    </div>
+  ) : (
+    <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
+      <AlertCircle className="h-4 w-4" />
+      <span className="text-xs font-medium">Available</span>
+    </div>
+  );
+}
+
+function GitHubStatusBadge() {
+  const { isAuthenticated, isConnected } = useGitHubStatus();
+  return <TwoTierBadge isAuthenticated={isAuthenticated} isConnected={isConnected} />;
+}
+
+function BitbucketStatusBadge() {
+  const { isAuthenticated, isConnected } = useBitbucketStatus();
+  return <TwoTierBadge isAuthenticated={isAuthenticated} isConnected={isConnected} />;
+}
+
 interface ConnectorCardProps {
   connector: ConnectorConfig;
   connectedOverride?: boolean;
@@ -44,15 +69,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const [showNotionDialog, setShowNotionDialog] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
-  
-  // GitHub/Bitbucket two-tier status (authenticated vs fully connected)
-  // Always instantiate for these connectors to show the correct yellow/green state.
-  const githubStatus = useGitHubStatus(
-    connector.id === "github" ? userId : null
-  );
-  const bitbucketStatus = useBitbucketStatus(
-    connector.id === "bitbucket" ? userId : null
-  );
 
   const {
     isConnected,
@@ -65,11 +81,11 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   } = useConnectorStatus(connector, userId, connectedOverride);
 
   useEffect(() => {
-    if (pendingGitHubDialog && (githubStatus.isAuthenticated || isConnected)) {
+    if (pendingGitHubDialog && isConnected) {
       pendingGitHubDialog = false;
       setShowGitHubDialog(true);
     }
-  }, [githubStatus.isAuthenticated, isConnected]);
+  }, [isConnected]);
 
   // Graph discovery status (only active for supported cloud providers)
   const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);
@@ -245,28 +261,11 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
-    // GitHub and Bitbucket use dedicated two-tier status hooks as the sole
-    // source of truth. Never fall through to the generic isConnected path
-    // for these connectors — that would flash "Connected" while the
-    // dedicated hook is still loading.
-    const devToolStatus =
-      connector.id === "github" ? githubStatus :
-      connector.id === "bitbucket" ? bitbucketStatus :
-      null;
-
-    if (devToolStatus) {
-      if (!devToolStatus.isAuthenticated) return null;
-      return devToolStatus.isConnected ? (
-        <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
-          <Check className="h-4 w-4" />
-          <span className="text-xs font-medium">Connected</span>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
-          <AlertCircle className="h-4 w-4" />
-          <span className="text-xs font-medium">Available</span>
-        </div>
-      );
+    if (connector.id === "github") {
+      return <GitHubStatusBadge />;
+    }
+    if (connector.id === "bitbucket") {
+      return <BitbucketStatusBadge />;
     }
 
     if (connector.id === "onprem" && isCheckingConnection) {
@@ -517,13 +516,13 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
           setShowGitHubDialog(open);
           if (!open) {
             checkGitHubStatus();
-            githubStatus.refresh();
+            window.dispatchEvent(new Event('providerStateChanged'));
           }
         }}
         onBitbucketDialogChange={(open) => {
           setShowBitbucketDialog(open);
           if (!open) {
-            bitbucketStatus.refresh();
+            window.dispatchEvent(new Event('providerStateChanged'));
           }
         }}
         onGcpDialogChange={setShowGcpDialog}

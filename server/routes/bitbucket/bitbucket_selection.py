@@ -206,11 +206,11 @@ def trigger_metadata_generation(user_id):
         try:
             generate_repo_metadata.delay(user_id, "bitbucket", repo_full_name)
         except Exception as e:
-            logger.error(f"Failed to enqueue metadata gen for {repo_full_name}: {e}")
+            logger.exception(f"Failed to enqueue metadata gen for {repo_full_name}")
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:
-        logger.error(f"Error triggering metadata generation: {e}", exc_info=True)
+        logger.exception(f"Error triggering metadata generation for user={user_id}")
         return jsonify({"error": "Failed to trigger metadata generation"}), 500
 
 
@@ -236,5 +236,5 @@ def update_repo_metadata(user_id, repo_full_name):
                 conn.commit()
         return jsonify({"message": "Metadata updated"})
     except Exception as e:
-        logger.error(f"Error updating repo metadata: {e}", exc_info=True)
+        logger.exception(f"Error updating repo metadata for {repo_full_name}")
         return jsonify({"error": "Failed to update metadata"}), 500

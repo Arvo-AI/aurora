@@ -213,8 +213,7 @@ function getAuthCallbackOrigins(): Set<string> {
 }
 
 export default function GitHubProviderIntegration() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const githubStatus = useGitHubStatus(userId);
+  const githubStatus = useGitHubStatus();
   const [isInstallingApp, setIsInstallingApp] = useState(false);
   const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
   const { toast } = useToast();
@@ -263,20 +262,12 @@ export default function GitHubProviderIntegration() {
   });
 
   useEffect(() => {
-    fetch('/api/getUserId').then(r => r.ok ? r.json() : null).then(d => {
-      if (d?.userId) setUserId(d.userId);
-    }).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!userId) return;
     GitHubIntegrationService.getAuthConfig()
       .then(setAuthConfig)
       .catch(() => { /* keep app-only default */ });
-  }, [userId]);
+  }, []);
 
   const fetchAllRepos = useCallback(async () => {
-    if (!userId) return;
     setIsLoadingRepos(true);
     try {
       const data = await GitHubIntegrationService.fetchRepositories();
@@ -284,10 +275,9 @@ export default function GitHubProviderIntegration() {
       setAllRepos(repos);
     } catch { setAllRepos([]); }
     finally { setIsLoadingRepos(false); setHasLoadedRepos(true); }
-  }, [userId]);
+  }, []);
 
   const fetchInstallations = useCallback(async () => {
-    if (!userId) return;
     setIsLoadingInstallations(true);
     try {
       const data = await GitHubAppService.listInstallations();
@@ -309,7 +299,7 @@ export default function GitHubProviderIntegration() {
       }
     } catch { setInstallations([]); }
     finally { setIsLoadingInstallations(false); }
-  }, [userId, authConfig.app_enabled]);
+  }, [authConfig.app_enabled]);
 
   const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
     if (pollingRef.current) {
@@ -317,7 +307,7 @@ export default function GitHubProviderIntegration() {
       pollingRef.current = null;
     }
     const hasPending = repos.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
-    if (!hasPending || !userId) return;
+    if (!hasPending) return;
     pollingRef.current = setInterval(async () => {
       try {
         const response = await fetch('/api/proxy/github/repo-selections');
@@ -332,10 +322,9 @@ export default function GitHubProviderIntegration() {
         }
       } catch { /* keep polling; transient failure */ }
     }, 3000);
-  }, [userId]);
+  }, []);
 
   const loadSavedRepos = useCallback(async () => {
-    if (!userId) return;
     try {
       const repos = await GitHubIntegrationService.fetchRepoSelections();
       setSavedRepos(repos);
@@ -343,7 +332,7 @@ export default function GitHubProviderIntegration() {
       startMetadataPolling(repos);
     } catch { setSavedRepos([]); }
     finally { setSavedReposLoaded(true); }
-  }, [userId, startMetadataPolling]);
+  }, [startMetadataPolling]);
 
   useEffect(() => {
     if (installations.length > 0) {
@@ -390,12 +379,11 @@ export default function GitHubProviderIntegration() {
 
   // Load saved repos when authenticated (fast DB query only)
   useEffect(() => {
-    if (!githubStatus.isAuthenticated || !userId) return;
+    if (!githubStatus.isAuthenticated) return;
     loadSavedRepos();
-  }, [githubStatus.isAuthenticated, userId, loadSavedRepos]);
+  }, [githubStatus.isAuthenticated, loadSavedRepos]);
 
   useEffect(() => {
-    if (!userId) return;
     fetchInstallations();
     const handler = () => fetchInstallations();
     const onMessage = (event: MessageEvent) => {
@@ -416,17 +404,16 @@ export default function GitHubProviderIntegration() {
       window.removeEventListener('focus', handler);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [userId, fetchInstallations]);
+  }, [fetchInstallations]);
 
   // Lazy-load full repo list only when user expands the picker
   useEffect(() => {
-    if (expanded && githubStatus.isAuthenticated && userId && !hasLoadedRepos && !isLoadingRepos) {
+    if (expanded && githubStatus.isAuthenticated && !hasLoadedRepos && !isLoadingRepos) {
       fetchAllRepos();
     }
-  }, [expanded, githubStatus.isAuthenticated, userId, hasLoadedRepos, isLoadingRepos, fetchAllRepos]);
+  }, [expanded, githubStatus.isAuthenticated, hasLoadedRepos, isLoadingRepos, fetchAllRepos]);
 
   const handleSaveSelections = async () => {
-    if (!userId) return;
     setIsSaving(true);
     try {
       const selected = allRepos.filter(r => checkedRepos.has(r.full_name));
@@ -446,7 +433,6 @@ export default function GitHubProviderIntegration() {
   };
 
   const handleAppInstall = async () => {
-    if (!userId) return;
     setIsInstallingApp(true);
     try {
       const installUrl = await GitHubAppService.getInstallUrl();
@@ -535,7 +521,6 @@ export default function GitHubProviderIntegration() {
   };
 
   const handleMetadataSave = async (repoFullName: string) => {
-    if (!userId) return;
     const summary = editingMetadata[repoFullName];
     if (summary === undefined) return;
     try {
@@ -555,7 +540,6 @@ export default function GitHubProviderIntegration() {
   };
 
   const handleRegenerate = async (repoFullName: string) => {
-    if (!userId) return;
     try {
       await GitHubIntegrationService.generateRepoMetadata(repoFullName);
       const updated = savedRepos.map(r =>
@@ -591,7 +575,6 @@ export default function GitHubProviderIntegration() {
   };
 
   const handleOAuthLogin = async () => {
-    if (!userId) return;
     setIsConnectingOAuth(true);
     try {
       const oauthUrl = await GitHubIntegrationService.initiateOAuth();
@@ -668,7 +651,6 @@ export default function GitHubProviderIntegration() {
   };
 
   const handleDisconnect = async (alsoUninstall: boolean) => {
-    if (!userId) return;
     const hadAppInstall = installations.length > 0;
     const primaryInstall = installations[0];
     setIsDisconnecting(true);
@@ -733,7 +715,6 @@ export default function GitHubProviderIntegration() {
   };
 
   const handleUnlinkInstallation = async (installationId: number) => {
-    if (!userId) return;
     try {
       await GitHubAppService.unlinkInstallation(installationId);
       if (installations.length <= 1) {
@@ -752,7 +733,7 @@ export default function GitHubProviderIntegration() {
     }
   };
 
-  if (!userId || githubStatus.hasReposConnected === null) {
+  if (githubStatus.hasReposConnected === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 border border-border rounded-lg">
         <Loader2 className="w-4 h-4 animate-spin" />Checking GitHub connection...
@@ -952,7 +933,7 @@ export default function GitHubProviderIntegration() {
             {authConfig.app_enabled && (
               <Button
                 onClick={handleAppInstall}
-                disabled={isInstallingApp || isConnectingOAuth || !userId}
+                disabled={isInstallingApp || isConnectingOAuth}
                 size="sm"
                 data-testid="github-install-app-cta"
               >
@@ -963,7 +944,7 @@ export default function GitHubProviderIntegration() {
             {authConfig.oauth_enabled && (
               <Button
                 onClick={handleOAuthLogin}
-                disabled={isInstallingApp || isConnectingOAuth || !userId}
+                disabled={isInstallingApp || isConnectingOAuth}
                 size="sm"
                 variant={authConfig.app_enabled ? 'outline' : 'default'}
                 data-testid="github-oauth-cta"

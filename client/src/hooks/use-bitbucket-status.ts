@@ -20,17 +20,12 @@ const DISCONNECTED_STATUS: BitbucketStatus = {
  * - isAuthenticated: credentials exist
  * - isConnected: credentials exist AND workspace + at least one repo selected
  */
-export function useBitbucketStatus(userId: string | null) {
+export function useBitbucketStatus() {
   const [status, setStatus] = useState<BitbucketStatus>(DISCONNECTED_STATUS);
   const inFlightRef = useRef(false);
   const pendingRef = useRef(false);
 
   const checkStatus = useCallback(async () => {
-    if (!userId) {
-      setStatus(DISCONNECTED_STATUS);
-      return;
-    }
-
     if (inFlightRef.current) {
       pendingRef.current = true;
       return;
@@ -40,11 +35,14 @@ export function useBitbucketStatus(userId: string | null) {
     do {
       pendingRef.current = false;
       try {
-        const credentials = await BitbucketIntegrationService.checkStatus();
+        const [credentials, selection] = await Promise.all([
+          BitbucketIntegrationService.checkStatus(),
+          BitbucketIntegrationService.loadWorkspaceSelection().catch(() => null),
+        ]);
+
         if (!credentials.connected) {
           setStatus({ ...DISCONNECTED_STATUS, hasWorkspaceSelected: false });
         } else {
-          const selection = await BitbucketIntegrationService.loadWorkspaceSelection();
           const hasWorkspaceSelected = Boolean(
             selection?.workspace && Array.isArray(selection?.repositories) && selection.repositories.length > 0
           );
@@ -64,14 +62,11 @@ export function useBitbucketStatus(userId: string | null) {
     } while (pendingRef.current);
 
     inFlightRef.current = false;
-  }, [userId]);
+  }, []);
+
+  useEffect(() => { checkStatus(); }, [checkStatus]);
 
   useEffect(() => {
-    checkStatus();
-  }, [checkStatus]);
-
-  useEffect(() => {
-    if (!userId) return;
     const handler = () => { checkStatus(); };
     window.addEventListener('providerStateChanged', handler);
     window.addEventListener('focus', handler);
@@ -79,7 +74,7 @@ export function useBitbucketStatus(userId: string | null) {
       window.removeEventListener('providerStateChanged', handler);
       window.removeEventListener('focus', handler);
     };
-  }, [userId, checkStatus]);
+  }, [checkStatus]);
 
   return {
     ...status,
