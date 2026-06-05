@@ -16,6 +16,7 @@ Aurora requires an LLM provider for its AI-powered investigation and Root Cause 
 | **Google AI** | Direct | `GOOGLE_AI_API_KEY` | [ai.google.dev](https://ai.google.dev/) |
 | **Vertex AI** | Direct | `VERTEX_AI_PROJECT` + credentials | [console.cloud.google.com](https://console.cloud.google.com/) |
 | **Ollama** | Direct | `OLLAMA_BASE_URL` | [ollama.com](https://ollama.com/) (free, local) |
+| **AWS Bedrock** | Direct | `BEDROCK_BASE_URL` (gateway) or `BEDROCK_REGION` (native) | [aws.amazon.com/bedrock](https://aws.amazon.com/bedrock/) |
 
 Only **one** provider is required.
 
@@ -43,7 +44,7 @@ LLM_PROVIDER_MODE=direct
 In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-2.5-flash` routes to Google AI).
 
 :::note
-Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
+Vertex AI, Ollama, and AWS Bedrock always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
 :::
 
 ## Supported Models
@@ -79,6 +80,9 @@ Vertex AI and Ollama always use their native SDKs regardless of `LLM_PROVIDER_MO
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
+| **AWS Bedrock** | `bedrock/us.anthropic.claude-sonnet-4-5-v1:0` | Native mode: a Bedrock **inference-profile** id (region-prefixed `us.`/`eu.`/`apac.`) |
+| | `bedrock/us.anthropic.claude-haiku-4-5-v1:0` | Faster, cheaper Claude on Bedrock |
+| | Gateway: the model name your gateway expects | Gateway mode passes the suffix through to your OpenAI-compatible endpoint |
 
 Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`, `RCA_ORCHESTRATOR_MODEL`, `RCA_SUBAGENT_MODEL`) or select chat models in the UI.
 
@@ -178,6 +182,54 @@ Run models locally on your own hardware with [Ollama](https://ollama.com/). No A
 | `qwen2.5:32b` | 32B | Good balance of quality and speed |
 | `llama3.2` | 3B | Fast, but limited tool calling |
 
+### AWS Bedrock
+
+Use [AWS Bedrock](https://aws.amazon.com/bedrock/) for Claude (and other Bedrock models) either through an OpenAI-compatible gateway or directly via the AWS SDK. Aurora picks the mode automatically: if `BEDROCK_BASE_URL` is set it uses **gateway mode**, otherwise it uses **native mode**.
+
+Like Vertex AI and Ollama, Bedrock is configured by an admin via environment variables and does not appear in the in-app model picker. Set `LLM_PROVIDER_MODE=direct` so Aurora routes `bedrock/...` models to the Bedrock provider.
+
+#### Gateway mode (OpenAI-compatible endpoint)
+
+For an endpoint that exposes an OpenAI-compatible API (`POST .../v1/chat/completions`) in front of Bedrock — for example an [AWS Bedrock Access Gateway](https://github.com/aws-samples/bedrock-access-gateway) running inside your VPC. No AWS credentials are needed in Aurora; the gateway (and your network boundary) handles auth.
+
+```bash
+# OpenAI-compatible base URL (Aurora appends /chat/completions)
+BEDROCK_BASE_URL=https://bedrock-gateway.internal.example.com/v1
+
+# Optional — only if your gateway requires a key. Often unset (the VPC boundary handles auth).
+BEDROCK_API_KEY=
+
+LLM_PROVIDER_MODE=direct
+MAIN_MODEL=bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0   # the model name your gateway expects
+```
+
+#### Native mode (AWS SDK)
+
+For talking to AWS Bedrock directly. Requires a region plus AWS credentials (or an IAM role). On-demand Claude models on Bedrock require an **inference-profile id** (region-prefixed, e.g. `us.anthropic.claude-sonnet-4-5-v1:0`), not the bare model id.
+
+```bash
+# Required: AWS region (falls back to AWS_REGION / AWS_DEFAULT_REGION)
+BEDROCK_REGION=us-east-1
+
+# Credentials — omit these to use an IAM role or the default AWS credential chain.
+# BEDROCK_* takes precedence over the standard AWS_* variables.
+BEDROCK_ACCESS_KEY_ID=AKIA...
+BEDROCK_SECRET_ACCESS_KEY=...
+# Or use a named profile instead of explicit keys:
+# BEDROCK_PROFILE=my-bedrock-profile
+
+LLM_PROVIDER_MODE=direct
+MAIN_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-v1:0   # an inference-profile id
+```
+
+**Requirements (native mode):**
+- A Bedrock-enabled AWS account with access to the chosen model granted in the Bedrock console.
+- An identity (IAM user/role) with `bedrock:InvokeModel` / `bedrock:InvokeModelWithResponseStream` permissions.
+
+:::tip
+The customer/gateway case and the native AWS case use the **same** `bedrock` provider — to switch, set or unset `BEDROCK_BASE_URL`. No code changes needed.
+:::
+
 ## RCA Model Configuration
 
 Aurora ships two RCA paths and the env vars differ between them:
@@ -211,6 +263,9 @@ RCA_MODEL=vertex/gemini-2.5-flash
 
 # Ollama (local)
 RCA_MODEL=ollama/llama3.1
+
+# AWS Bedrock (native — inference-profile id)
+RCA_MODEL=bedrock/us.anthropic.claude-haiku-4-5-v1:0
 ```
 
 When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
@@ -292,3 +347,18 @@ The safety judge model can be any provider supported above. A fast, cheap, **non
 - Verify Ollama is running: `curl http://localhost:11434/api/tags`
 - Check that the model is pulled: `ollama list`
 - Ensure `OLLAMA_BASE_URL` is correct (use `host.docker.internal` in Docker)
+
+### Bedrock: "on-demand throughput isn't supported"
+
+- Native mode requires an **inference-profile id**, not the bare model id. Use a region-prefixed id such as `bedrock/us.anthropic.claude-sonnet-4-5-v1:0` (`us.`/`eu.`/`apac.`).
+
+### Bedrock: "Unable to locate credentials" / "NoRegionError"
+
+- Native mode needs a region — set `BEDROCK_REGION` (or `AWS_REGION` / `AWS_DEFAULT_REGION`).
+- Provide credentials via `BEDROCK_ACCESS_KEY_ID` + `BEDROCK_SECRET_ACCESS_KEY`, a `BEDROCK_PROFILE`, or an IAM role / the default AWS credential chain.
+- Confirm the identity has `bedrock:InvokeModel` permissions and that model access is granted in the Bedrock console.
+
+### Bedrock: "AccessDeniedException" calling the gateway
+
+- In gateway mode, set `BEDROCK_BASE_URL` to the OpenAI **base** path (ending in `/v1`); Aurora appends `/chat/completions`.
+- If your gateway requires a key, set `BEDROCK_API_KEY`. If it doesn't, leave it unset.

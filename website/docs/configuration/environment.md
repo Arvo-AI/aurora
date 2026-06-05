@@ -276,6 +276,34 @@ VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
+### AWS Bedrock
+
+One `bedrock` provider with two modes, auto-selected: set `BEDROCK_BASE_URL` for **gateway mode** (OpenAI-compatible endpoint in front of Bedrock), or leave it unset for **native mode** (AWS SDK). `BEDROCK_*` variables take precedence over the standard `AWS_*` ones. Set `LLM_PROVIDER_MODE=direct` and point `MAIN_MODEL` (etc.) at a `bedrock/<id>` model.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BEDROCK_BASE_URL` | - | Gateway mode: OpenAI-compatible base URL (e.g. `.../v1`). When set, Aurora uses gateway mode. |
+| `BEDROCK_API_KEY` | `not-needed` | Gateway mode only. Optional — many VPC gateways need no key. |
+| `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. |
+| `BEDROCK_ACCESS_KEY_ID` | _(AWS_ACCESS_KEY_ID)_ | Native mode access key. Omit to use an IAM role / default credential chain. |
+| `BEDROCK_SECRET_ACCESS_KEY` | _(AWS_SECRET_ACCESS_KEY)_ | Native mode secret key. |
+| `BEDROCK_PROFILE` | - | Native mode named AWS profile (alternative to explicit keys). |
+
+```bash
+# Gateway mode (OpenAI-compatible endpoint, e.g. a Bedrock Access Gateway in your VPC)
+BEDROCK_BASE_URL=https://bedrock-gateway.internal.example.com/v1
+BEDROCK_API_KEY=                       # optional
+LLM_PROVIDER_MODE=direct
+MAIN_MODEL=bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+
+# Native mode (AWS SDK) — leave BEDROCK_BASE_URL unset
+BEDROCK_REGION=us-east-1
+BEDROCK_ACCESS_KEY_ID=AKIA...          # or use BEDROCK_PROFILE / an IAM role
+BEDROCK_SECRET_ACCESS_KEY=...
+LLM_PROVIDER_MODE=direct
+MAIN_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-v1:0   # inference-profile id
+```
+
 ### Web Search
 
 | Variable | Default | Description |
