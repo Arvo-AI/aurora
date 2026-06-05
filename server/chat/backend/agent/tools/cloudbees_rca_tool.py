@@ -44,7 +44,6 @@ class CloudBeesRCAArgs(BaseModel):
     node_id: Optional[str] = Field(default=None, description="Node/stage ID for stage-level log or steps")
     service: Optional[str] = Field(default=None, description="Service name filter for recent_deployments")
     time_window_hours: Optional[int] = Field(default=24, description="Lookback window in hours for recent_deployments")
-    deployment_event_id: Optional[int] = Field(default=None, description="Deployment event ID for trace_context lookup")
     app_id: Optional[str] = Field(default=None, description="Feature Management application ID for flag_changes")
 
 
@@ -119,7 +118,6 @@ def cloudbees_rca(
     node_id: Optional[str] = None,
     service: Optional[str] = None,
     time_window_hours: int = 24,
-    deployment_event_id: Optional[int] = None,
     app_id: Optional[str] = None,
     **kwargs,
 ) -> str:

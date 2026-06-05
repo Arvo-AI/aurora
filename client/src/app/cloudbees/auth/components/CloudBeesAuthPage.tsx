@@ -25,8 +25,7 @@ interface DiscoveredController {
 interface PlatformConnectResponse {
   success: boolean;
   controllers?: DiscoveredController[];
-  baseUrl?: string;
-  username?: string;
+  operations_center?: { username?: string };
 }
 
 const CACHE_KEY = "cloudbees_connection_status";
@@ -40,7 +39,6 @@ export default function CloudBeesAuthPage() {
   const [loading, setLoading] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [status, setStatus] = useState<CIProviderStatus | null>(null);
-  const [copied, setCopied] = useState(false);
 
   // Single Controller fields
   const [baseUrl, setBaseUrl] = useState("");
@@ -122,6 +120,12 @@ export default function CloudBeesAuthPage() {
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  useEffect(() => {
+    if (step === 3 && !webhookInfo) {
+      fetch("/api/cloudbees/webhook-url").then(r => r.json()).then(setWebhookInfo).catch(() => {});
+    }
+  }, [step, webhookInfo]);
 
   const validateUrl = (url: string): boolean => {
     return url.startsWith("http://") || url.startsWith("https://");
@@ -255,7 +259,7 @@ export default function CloudBeesAuthPage() {
       const newStatus: CIProviderStatus = {
         connected: true,
         baseUrl: platformUrl,
-        username: result?.username,
+        username: result?.operations_center?.username,
       };
       setStatus(newStatus);
       localStorage.setItem(CACHE_KEY, JSON.stringify(newStatus));
@@ -370,29 +374,6 @@ export default function CloudBeesAuthPage() {
     return `${days}d ago`;
   };
 
-  const copyWebhookUrl = () => {
-    const url = `${window.location.origin}/api/webhooks/cloudbees`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    toast({ title: "Copied", description: "Webhook URL copied to clipboard" });
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const webhookUrl = typeof window !== "undefined" ? `${window.location.origin}/api/webhooks/cloudbees` : "/api/webhooks/cloudbees";
-
-  const jenkinsfileSnippet = `post {
-  success {
-    httpRequest url: '${webhookUrl}',
-      httpMode: 'POST',
-      contentType: 'APPLICATION_JSON',
-      requestBody: """{
-        "job": "\${env.JOB_NAME}",
-        "build": "\${env.BUILD_NUMBER}",
-        "status": "SUCCESS",
-        "url": "\${env.BUILD_URL}"
-      }"""
-  }
-}`;
 
   // --- Progress bar ---
   const progressStep = step === "connected" ? 3 : step;
@@ -782,39 +763,47 @@ export default function CloudBeesAuthPage() {
             Add this webhook to your Jenkinsfile so Aurora is notified when deployments complete.
           </p>
 
-          <div className="space-y-6">
-            <div>
-              <label className="block text-[13px] text-[#999] mb-2">Webhook URL</label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 text-[13px] text-[#777] bg-white/[0.02] border border-white/[0.06] px-4 py-3.5 rounded-xl truncate">
-                  {webhookUrl}
-                </code>
-                <button
-                  type="button"
-                  onClick={copyWebhookUrl}
-                  className="p-3.5 rounded-xl border border-white/[0.06] hover:bg-white/[0.04] transition-colors"
-                >
-                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4 text-[#777]" />}
-                </button>
+          {webhookInfo ? (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-[13px] text-[#999] mb-2">Webhook URL</label>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-[13px] text-[#777] bg-white/[0.02] border border-white/[0.06] px-4 py-3.5 rounded-xl truncate">
+                    {webhookInfo.webhookUrl}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={copyDashboardWebhookUrl}
+                    className="p-3.5 rounded-xl border border-white/[0.06] hover:bg-white/[0.04] transition-colors"
+                  >
+                    {webhookCopied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4 text-[#777]" />}
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-[13px] text-[#999] mb-2">Jenkinsfile snippet</label>
-              <div className="relative">
-                <button
-                  onClick={() => { navigator.clipboard.writeText(jenkinsfileSnippet); toast({ title: "Copied", description: "Jenkinsfile snippet copied to clipboard" }); }}
-                  className="absolute top-3 right-3 p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-[#666] hover:text-white transition-all"
-                  title="Copy snippet"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
-                <pre className="text-[13px] text-[#999] bg-white/[0.02] border border-white/[0.06] p-5 rounded-xl overflow-x-auto whitespace-pre leading-relaxed">
-                  {jenkinsfileSnippet}
-                </pre>
-              </div>
+              {webhookInfo.jenkinsfileBasic && (
+                <div>
+                  <label className="block text-[13px] text-[#999] mb-2">Jenkinsfile snippet</label>
+                  <div className="relative">
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(webhookInfo.jenkinsfileBasic); toast({ title: "Copied", description: "Jenkinsfile snippet copied to clipboard" }); }}
+                      className="absolute top-3 right-3 p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-[#666] hover:text-white transition-all"
+                      title="Copy snippet"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                    <pre className="text-[13px] text-[#999] bg-white/[0.02] border border-white/[0.06] p-5 rounded-xl overflow-x-auto whitespace-pre leading-relaxed">
+                      {webhookInfo.jenkinsfileBasic}
+                    </pre>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-[#555]" />
+            </div>
+          )}
 
           <div className="flex items-center gap-3 mt-10">
             <button

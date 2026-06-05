@@ -177,8 +177,3 @@ class CloudBeesFMClient:
 
         return True, recent_changes, None
 
-    def get_flag_status(
-        self, app_id: str, flag_name: str
-    ) -> Tuple[bool, Optional[Dict], Optional[str]]:
-        """Get the current status of a specific feature flag."""
-        return self._request("GET", f"/applications/{quote(app_id, safe='')}/flags/{quote(flag_name, safe='')}")
