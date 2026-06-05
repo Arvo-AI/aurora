@@ -121,7 +121,7 @@ class ModelMapper:
         # Check if it's in OpenRouter format (provider/model)
         if "/" in model_name:
             provider_prefix = model_name.split("/")[0]
-            known_providers = {"openai", "anthropic", "google", "vertex", "ollama"}
+            known_providers = {"openai", "anthropic", "google", "vertex", "ollama", "bedrock"}
             if provider_prefix in known_providers:
                 return provider_prefix
             return "openrouter"

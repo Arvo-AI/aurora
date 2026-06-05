@@ -21,7 +21,7 @@ from typing import Optional
 
 # Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
 # because features like Gemini thinking only work with their native SDK.
-_DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
+_DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama", "bedrock"})
 
 
 def _extract_reasoning_from_delta(delta: dict) -> tuple:

@@ -1,0 +1,202 @@
+"""
+AWS Bedrock provider implementation.
+
+One provider, two modes, auto-selected from configuration:
+
+1. Gateway mode (OpenAI-compatible) — when ``BEDROCK_BASE_URL`` is set, Aurora
+   sends OpenAI-shaped requests (``POST .../v1/chat/completions``) to that URL via
+   ``ChatOpenAI``. This is the customer's case: a Bedrock endpoint inside their VPC
+   (ALB + Lambda) that exposes an OpenAI-compatible API, typically with no API key
+   (the VPC boundary handles auth). Reuses the same plumbing as OpenRouter.
+
+2. Native mode (AWS SDK) — when no base URL is set, Aurora talks to AWS Bedrock
+   directly via ``langchain_aws.ChatBedrockConverse`` using region + AWS
+   credentials (or an IAM role via boto3's default chain). On-demand Claude on
+   Bedrock requires an inference-profile id (e.g. ``us.anthropic.claude-...``),
+   not the bare model id.
+
+Configuration is environment-variable based, like Ollama and Vertex. Bedrock-
+specific ``BEDROCK_*`` vars take precedence over the standard ``AWS_*`` vars.
+"""
+
+import logging
+import os
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import ChatOpenAI
+
+from .base_provider import BaseLLMProvider
+
+logger = logging.getLogger(__name__)
+
+# Sampling params that some Bedrock models accept and newer ones reject outright.
+_BEDROCK_SAMPLING_FIELDS = ("temperature", "top_p", "top_k")
+
+_adaptive_converse_cls = None
+
+
+def _adaptive_bedrock_converse():
+    """Return a ``ChatBedrockConverse`` subclass that self-heals around unsupported
+    sampling params.
+
+    Some Bedrock models (e.g. Anthropic Opus 4.7+) drop ``temperature``/``top_p`` and
+    return a ``ValidationException`` if they are sent. Rather than hardcode a per-model
+    list (which would need updating for every future model), the subclass reacts to the
+    model's own error: on a rejection whose message names a sampling field, it strips
+    that field and retries once, then keeps it off for the life of the (cached) instance.
+    Both modes report the same provider, so detection is by the error, not the model id.
+
+    Imported lazily so gateway-only deployments don't need langchain-aws installed.
+    ``ImportError`` propagates to the caller (kept as a friendly RuntimeError there).
+    """
+    global _adaptive_converse_cls
+    if _adaptive_converse_cls is not None:
+        return _adaptive_converse_cls
+
+    from langchain_aws import ChatBedrockConverse
+
+    class _AdaptiveBedrockConverse(ChatBedrockConverse):
+        """ChatBedrockConverse that drops sampling params a model rejects, then remembers."""
+
+        def _strip_rejected_sampling(self, err) -> bool:
+            """If ``err`` names a sampling param, clear the ones that are set. Returns
+            True only when something was actually stripped (so the retry differs)."""
+            msg = str(err).lower()
+            if not any(field in msg for field in _BEDROCK_SAMPLING_FIELDS):
+                return False
+            stripped = False
+            for field in _BEDROCK_SAMPLING_FIELDS:
+                if getattr(self, field, None) is not None:
+                    setattr(self, field, None)
+                    stripped = True
+            if stripped:
+                logger.warning(
+                    "Bedrock model %s rejected a sampling parameter; retrying without it.",
+                    getattr(self, "model_id", "?"),
+                )
+            return stripped
+
+        def _generate(self, *args, **kwargs):
+            try:
+                return super()._generate(*args, **kwargs)
+            except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
+                if not self._strip_rejected_sampling(err):
+                    raise
+                return super()._generate(*args, **kwargs)
+
+        def _stream(self, *args, **kwargs):
+            try:
+                yield from super()._stream(*args, **kwargs)
+            except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
+                if not self._strip_rejected_sampling(err):
+                    raise
+                yield from super()._stream(*args, **kwargs)
+
+    _adaptive_converse_cls = _AdaptiveBedrockConverse
+    return _adaptive_converse_cls
+
+
+class BedrockProvider(BaseLLMProvider):
+    """AWS Bedrock provider with OpenAI-compatible gateway and native SDK modes."""
+
+    def __init__(self):
+        super().__init__()
+        # Gateway mode (OpenAI-compatible URL fronting Bedrock). Presence of this
+        # URL auto-selects gateway mode.
+        self.base_url = os.getenv("BEDROCK_BASE_URL")
+        # Gateway auth is typically unnecessary (VPC boundary handles it); ChatOpenAI
+        # still requires a non-empty key, so fall back to a placeholder.
+        self.api_key = os.getenv("BEDROCK_API_KEY") or "not-needed"
+
+        # Native mode (AWS SDK). BEDROCK_* takes precedence over standard AWS_*.
+        self.region = (
+            os.getenv("BEDROCK_REGION")
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
+        self.access_key = os.getenv("BEDROCK_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID")
+        self.secret_key = os.getenv("BEDROCK_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY")
+        self.session_token = os.getenv("BEDROCK_SESSION_TOKEN") or os.getenv("AWS_SESSION_TOKEN")
+        self.profile = os.getenv("BEDROCK_PROFILE")
+
+    def get_chat_model(
+        self, model: str, temperature: float = 0.4, **kwargs
+    ) -> BaseChatModel:
+        if not self.is_available():
+            raise RuntimeError(
+                "Bedrock provider is not available. Set BEDROCK_BASE_URL (gateway mode) "
+                "or BEDROCK_REGION/AWS_REGION (native mode)."
+            )
+
+        if not self.supports_model(model):
+            raise ValueError(f"Model {model} is not supported by Bedrock provider")
+
+        native_model = self.get_native_model_name(model)
+
+        # Gateway mode is auto-selected by the presence of BEDROCK_BASE_URL; otherwise
+        # native mode (AWS SDK). is_available() above guarantees one of the two is set.
+        if self.base_url:
+            logger.info(f"Creating Bedrock (gateway) chat model: {native_model} (base_url={self.base_url})")
+            config = {
+                "model": native_model,
+                "temperature": temperature,
+                "openai_api_base": self.base_url,
+                "openai_api_key": self.api_key,
+                "request_timeout": 120.0,
+                "max_retries": 3,
+                "stream_usage": True,
+            }
+            config.update(kwargs)
+            return ChatOpenAI(**config)
+
+        # Native mode — AWS SDK via langchain_aws. Imported lazily so gateway-only
+        # deployments don't require langchain-aws to be installed. The adaptive subclass
+        # auto-drops sampling params a model rejects (e.g. Opus 4.7+ remove temperature)
+        # without a hardcoded per-model list.
+        try:
+            converse_cls = _adaptive_bedrock_converse()
+        except ImportError as e:
+            raise RuntimeError(
+                "Bedrock native mode requires the 'langchain-aws' package. Install it "
+                "(pip install langchain-aws) or use gateway mode by setting BEDROCK_BASE_URL."
+            ) from e
+
+        # ChatBedrockConverse forbids extra fields (no `streaming` param). Streaming
+        # still works via .astream() in the agent path. Mirrors the Vertex provider.
+        kwargs.pop("streaming", None)
+
+        logger.info(f"Creating Bedrock (native) chat model: {native_model} (region={self.region})")
+        config = {
+            "model": native_model,
+            "temperature": temperature,
+            "region_name": self.region,
+        }
+        # Pass explicit credentials only if set; otherwise rely on boto3's default
+        # chain (env / shared config / IAM role).
+        if self.access_key and self.secret_key:
+            config["aws_access_key_id"] = self.access_key
+            config["aws_secret_access_key"] = self.secret_key
+            if self.session_token:
+                config["aws_session_token"] = self.session_token
+        if self.profile:
+            config["credentials_profile_name"] = self.profile
+
+        config.update(kwargs)
+        return converse_cls(**config)
+
+    def is_available(self) -> bool:
+        """Available when a gateway URL is set or a native region is resolvable."""
+        return bool(self.base_url) or bool(self.region)
+
+    def supports_model(self, model: str) -> bool:
+        if "/" in model:
+            return model.split("/")[0] == "bedrock"
+        return False
+
+    def get_native_model_name(self, model: str) -> str:
+        if "/" in model and model.split("/")[0] == "bedrock":
+            return model.split("/", 1)[1]
+        return model
+
+    def get_supported_models(self) -> list[str]:
+        return []

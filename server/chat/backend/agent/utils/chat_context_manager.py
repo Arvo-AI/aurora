@@ -47,6 +47,7 @@ class ChatContextManager:
         "google": 1000000,
         "vertex": 1000000,
         "ollama": 120000,
+        "bedrock": 180000,  # ≈ Claude-on-Bedrock 200K window − buffer
     }
 
     @classmethod

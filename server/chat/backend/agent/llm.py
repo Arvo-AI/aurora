@@ -14,6 +14,21 @@ from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
 logger = logging.getLogger(__name__)
 
 
+def _model_label(model) -> str:
+    """Best-effort display name / pricing key for a chat model instance.
+
+    ChatOpenAI exposes ``.model_name``; ChatBedrockConverse exposes ``.model_id``
+    (``.model`` is only an input alias). Fall back gracefully so native Bedrock
+    models don't ``AttributeError`` on logging or usage tracking.
+    """
+    return (
+        getattr(model, "model_name", None)
+        or getattr(model, "model_id", None)
+        or getattr(model, "model", None)
+        or str(model)
+    )
+
+
 class ModelConfig:
     """Centralized model configuration for all Aurora LLM usage.
     
@@ -203,7 +218,7 @@ class LLMManager:
                 model = self._get_or_create_model(selected_model)
             else:
                 logger.info(
-                    f"Using default vision model: {self.vision_llm.model_name}"
+                    f"Using default vision model: {_model_label(self.vision_llm)}"
                 )
                 model = self.vision_llm
         elif selected_model:
@@ -211,11 +226,12 @@ class LLMManager:
             logger.info(f"Using selected model: {selected_model}")
             model = self._get_or_create_model(selected_model)
         else:
-            logger.info(f"Using default main model: {self.main_llm.model_name}")
+            logger.info(f"Using default main model: {_model_label(self.main_llm)}")
             model = self.main_llm
 
         # Log the actual prompt being sent
-        logger.info(f"Sending prompt to {model.model_name}")
+        model_label = _model_label(model)
+        logger.info(f"Sending prompt to {model_label}")
 
         # Variables for tracking
         result = None
@@ -287,10 +303,10 @@ class LLMManager:
                                 )
 
                     if input_tokens == 0 and output_tokens == 0:
-                        logger.warning(f"No provider usage data for {model.model_name} - tokens will be 0")
+                        logger.warning(f"No provider usage data for {model_label} - tokens will be 0")
 
                     estimated_cost = LLMUsageTracker.calculate_cost(
-                        input_tokens, output_tokens, model.model_name,
+                        input_tokens, output_tokens, model_label,
                         provider_mode=self.provider_mode,
                         cached_input_tokens=cached_input_tokens,
                     )
@@ -299,14 +315,14 @@ class LLMManager:
                     from chat.backend.agent.utils.llm_usage_tracker import LLMUsage
 
                     actual_provider = (
-                        ModelMapper.detect_provider(model.model_name)
+                        ModelMapper.detect_provider(model_label)
                         or self.provider_mode
                     )
 
                     usage_record = LLMUsage(
                         user_id=user_id,
                         session_id=session_id,
-                        model_name=model.model_name,
+                        model_name=model_label,
                         api_provider=actual_provider,
                         request_type=actual_request_type,
                         input_tokens=input_tokens,
@@ -323,7 +339,7 @@ class LLMManager:
                     success = LLMUsageTracker.store_usage(usage_record)
                     if success:
                         logger.info(
-                            f"Tracked usage: {model.model_name} - {input_tokens}+{output_tokens} tokens - ${estimated_cost:.6f}"
+                            f"Tracked usage: {model_label} - {input_tokens}+{output_tokens} tokens - ${estimated_cost:.6f}"
                         )
                     else:
                         logger.warning("Failed to store usage data")
