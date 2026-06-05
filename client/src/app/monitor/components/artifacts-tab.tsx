@@ -23,7 +23,7 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function EditorBadge({ who }: { who: ArtifactEditor }) {
+function EditorBadge({ who }: Readonly<{ who: ArtifactEditor }>) {
   const isUser = who === 'user';
   return (
     <span
@@ -36,7 +36,7 @@ function EditorBadge({ who }: { who: ArtifactEditor }) {
   );
 }
 
-function ArtifactMarkdown({ content }: { content: string }) {
+function ArtifactMarkdown({ content }: Readonly<{ content: string }>) {
   return (
     <div className="prose prose-invert prose-sm max-w-none">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={postmortemMarkdownComponents}>
@@ -44,6 +44,26 @@ function ArtifactMarkdown({ content }: { content: string }) {
       </ReactMarkdown>
     </div>
   );
+}
+
+function VersionContent({ loading, version }: Readonly<{
+  loading: boolean;
+  version: ArtifactVersionDetail | null | undefined;
+}>) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-4 text-zinc-500">
+        <Loader2 className="h-4 w-4 animate-spin" />
+      </div>
+    );
+  }
+  if (version == null) {
+    return <p className="text-xs text-zinc-500">Couldn&apos;t load this version&apos;s content.</p>;
+  }
+  if (version.content.trim() === '') {
+    return <p className="text-xs text-zinc-500 italic">This version is empty.</p>;
+  }
+  return <ArtifactMarkdown content={version.content} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,11 +196,11 @@ export default function ArtifactsTab() {
 // Create view
 // ---------------------------------------------------------------------------
 
-function ArtifactCreate({ existingTitles, onBack, onCreated }: {
+function ArtifactCreate({ existingTitles, onBack, onCreated }: Readonly<{
   existingTitles: string[];
   onBack: () => void;
   onCreated: (id: string) => void;
-}) {
+}>) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -251,11 +271,11 @@ function ArtifactCreate({ existingTitles, onBack, onCreated }: {
 
 type DetailMode = 'view' | 'edit' | 'history';
 
-function ArtifactDetail({ id, onBack, onDeleted }: {
+function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
   id: string;
   onBack: () => void;
   onDeleted: () => void;
-}) {
+}>) {
   const [mode, setMode] = useState<DetailMode>('view');
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -498,17 +518,7 @@ function ArtifactDetail({ id, onBack, onDeleted }: {
                     </div>
                     {isExpanded && (
                       <div className="border-t border-zinc-800 px-4 py-3">
-                        {loadingVersionContent ? (
-                          <div className="flex items-center justify-center py-4 text-zinc-500">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          </div>
-                        ) : expandedVersion == null ? (
-                          <p className="text-xs text-zinc-500">Couldn&apos;t load this version&apos;s content.</p>
-                        ) : expandedVersion.content.trim() === '' ? (
-                          <p className="text-xs text-zinc-500 italic">This version is empty.</p>
-                        ) : (
-                          <ArtifactMarkdown content={expandedVersion.content} />
-                        )}
+                        <VersionContent loading={loadingVersionContent} version={expandedVersion} />
                       </div>
                     )}
                   </div>

@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 _MAX_CONTENT = 100000
 _MAX_TITLE = 500
 
+_NO_USER_CTX = json.dumps({"error": "No user context available."})
+_NO_ORG_CTX = json.dumps({"error": "No organization context available."})
+
 
 class ListArtifactsArgs(BaseModel):
     """No args -- lists every artifact in the caller's workspace."""
@@ -38,7 +41,7 @@ class WriteArtifactArgs(BaseModel):
 def list_artifacts(user_id: str | None = None, **kwargs) -> str:
     """List artifact metadata (title, version, last editor, updated time) for the org."""
     if not user_id:
-        return json.dumps({"error": "No user context available."})
+        return _NO_USER_CTX
 
     try:
         from utils.db.connection_pool import db_pool
@@ -48,7 +51,7 @@ def list_artifacts(user_id: str | None = None, **kwargs) -> str:
             with conn.cursor() as cursor:
                 org_id = set_rls_context(cursor, conn, user_id, log_prefix="[ArtifactTool:list]")
                 if not org_id:
-                    return json.dumps({"error": "No organization context available."})
+                    return _NO_ORG_CTX
 
                 cursor.execute(
                     """SELECT a.title, a.last_edited_by, a.updated_at,
@@ -80,7 +83,7 @@ def list_artifacts(user_id: str | None = None, **kwargs) -> str:
 def read_artifact(title: str, user_id: str | None = None, **kwargs) -> str:
     """Read one artifact's full markdown by exact title, or report it doesn't exist."""
     if not user_id:
-        return json.dumps({"error": "No user context available."})
+        return _NO_USER_CTX
 
     if not title or not title.strip():
         return json.dumps({"error": "title is required."})
@@ -95,7 +98,7 @@ def read_artifact(title: str, user_id: str | None = None, **kwargs) -> str:
             with conn.cursor() as cursor:
                 org_id = set_rls_context(cursor, conn, user_id, log_prefix="[ArtifactTool:read]")
                 if not org_id:
-                    return json.dumps({"error": "No organization context available."})
+                    return _NO_ORG_CTX
 
                 cursor.execute(
                     """SELECT a.content, a.last_edited_by, a.updated_at,
@@ -135,7 +138,7 @@ def write_artifact(
 ) -> str:
     """Create or update an artifact by title, recording a new version each time."""
     if not user_id:
-        return json.dumps({"error": "No user context available."})
+        return _NO_USER_CTX
 
     if not title or not title.strip():
         return json.dumps({"error": "title is required."})
@@ -158,7 +161,7 @@ def write_artifact(
             with conn.cursor() as cursor:
                 org_id = set_rls_context(cursor, conn, user_id, log_prefix="[ArtifactTool:write]")
                 if not org_id:
-                    return json.dumps({"error": "No organization context available."})
+                    return _NO_ORG_CTX
 
                 _artifact_id, version = upsert_artifact_by_title(
                     cursor, org_id, user_id, title.strip(), content,

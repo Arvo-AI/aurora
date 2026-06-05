@@ -22,6 +22,9 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Aurora-internal artifacts API base path, shared by the artifact_* dispatch entries.
+_ARTIFACTS_PATH = "/api/artifacts"
+
 
 # ---------------------------------------------------------------------------
 # Connector-status cache — populated via the Flask backend API by the MCP
@@ -533,7 +536,7 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         description="List persistent markdown artifacts for this workspace.",
         category="docs",
         method="GET",
-        path="/api/artifacts",
+        path=_ARTIFACTS_PATH,
         enabling_skills=(),
     ),
     DispatchEntry(
@@ -541,7 +544,7 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         description="Read one artifact's full content by exact title (pass the `title` arg).",
         category="docs",
         method="GET",
-        path="/api/artifacts",
+        path=_ARTIFACTS_PATH,
         enabling_skills=(),
         query_keys=("title",),
     ),
@@ -550,7 +553,7 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         description="Create or update a persistent markdown artifact by title.",
         category="docs",
         method="POST",
-        path="/api/artifacts",
+        path=_ARTIFACTS_PATH,
         enabling_skills=(),
         body_keys=("title", "content"),
     ),

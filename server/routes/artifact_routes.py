@@ -28,6 +28,7 @@ artifact_bp = Blueprint("artifact", __name__)
 _LOG_PREFIX = "[Artifact]"
 _MAX_CONTENT = 100000
 _MAX_TITLE = 500
+_ARTIFACT_NOT_FOUND = "Artifact not found"
 
 
 def _validate_uuid(value: str) -> bool:
@@ -87,14 +88,14 @@ def with_artifact(fn):
                         (artifact_id, org_id),
                     )
                     if not cursor.fetchone():
-                        return jsonify({"error": "Artifact not found"}), 404
+                        return jsonify({"error": _ARTIFACT_NOT_FOUND}), 404
 
                     return fn(
                         user_id, artifact_id, *args,
                         org_id=org_id, conn=conn, cursor=cursor, **kwargs,
                     )
-        except Exception as e:
-            logger.error("%s %s failed for artifact %s: %s", _LOG_PREFIX, fn.__name__, artifact_id, e)
+        except Exception:
+            logger.exception("%s %s failed for artifact %s", _LOG_PREFIX, fn.__name__, artifact_id)
             return jsonify({"error": f"Failed to {fn.__name__.replace('_', ' ')}"}), 500
 
     return wrapper
@@ -123,7 +124,7 @@ def list_or_get_artifacts(user_id):
                     )
                     row = cursor.fetchone()
                     if not row:
-                        return jsonify({"error": "Artifact not found"}), 404
+                        return jsonify({"error": _ARTIFACT_NOT_FOUND}), 404
                     return jsonify({"artifact": _serialize_artifact(row, include_content=True)})
 
                 cursor.execute(
@@ -140,8 +141,8 @@ def list_or_get_artifacts(user_id):
         artifacts = [_serialize_artifact(r, include_content=False) for r in rows]
         return jsonify({"artifacts": artifacts})
 
-    except Exception as e:
-        logger.error("%s Failed to list artifacts for user %s: %s", _LOG_PREFIX, user_id, e)
+    except Exception:
+        logger.exception("%s Failed to list artifacts for user %s", _LOG_PREFIX, user_id)
         return jsonify({"error": "Failed to fetch artifacts"}), 500
 
 
@@ -173,8 +174,8 @@ def create_artifact(user_id):
                     cursor, org_id, user_id, title, content, source="manual",
                 )
                 conn.commit()
-    except Exception as e:
-        logger.error("%s Failed to create artifact for user %s: %s", _LOG_PREFIX, user_id, e)
+    except Exception:
+        logger.exception("%s Failed to create artifact for user %s", _LOG_PREFIX, user_id)
         return jsonify({"error": "Failed to create artifact"}), 500
 
     record_audit_event(org_id, user_id, "create_artifact", "artifact", artifact_id,
@@ -196,7 +197,7 @@ def get_artifact(user_id, artifact_id, *, org_id, conn, cursor, **kwargs):
     )
     row = cursor.fetchone()
     if not row:
-        return jsonify({"error": "Artifact not found"}), 404
+        return jsonify({"error": _ARTIFACT_NOT_FOUND}), 404
     return jsonify({"artifact": _serialize_artifact(row, include_content=True)})
 
 
