@@ -46,6 +46,9 @@ def measure() -> Dict[str, Any]:
     all_tools = list(mcp._tool_manager._tools.values())  # noqa: SLF001
     tier1_names = {
         "list_incidents", "get_incident",
+        "incident_findings", "incident_finding_detail", "incident_list_alerts",
+        "get_infrastructure_context", "list_services", "service_impact",
+        "list_actions", "get_action", "list_action_runs",
         "trigger_rca", "knowledge_base_search", "search_runbooks",
         "search_tools", "call_tool",
     }
