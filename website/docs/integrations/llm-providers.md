@@ -22,7 +22,7 @@ Only **one** provider is required.
 
 ## Provider Modes
 
-Aurora supports two routing modes, controlled by `LLM_PROVIDER_MODE`:
+Aurora supports three routing modes, controlled by `LLM_PROVIDER_MODE`:
 
 ### OpenRouter Mode (default)
 
@@ -42,6 +42,20 @@ LLM_PROVIDER_MODE=direct
 ```
 
 In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-2.5-flash` routes to Google AI).
+
+### Provider Mode (route everything through one provider)
+
+Set `LLM_PROVIDER_MODE` to a **provider name** to route every model selection through that single provider, translating the chosen model to the provider's native id. This is how a deployment standardizes on one backend — for example a customer running entirely on AWS Bedrock:
+
+```bash
+LLM_PROVIDER_MODE=bedrock      # also accepts: vertex, anthropic, openai, google, ollama
+```
+
+Now a clean model pick like **Claude Opus 4.7** (`anthropic/claude-opus-4.7`) is routed through Bedrock automatically as `us.anthropic.claude-opus-4-7` — no `bedrock/` prefix or per-model setup needed, and the model picker stays clean (no provider shown in the UI). Models the chosen provider can't serve (e.g. Gemini or GPT under `bedrock`) gracefully fall back to their own native provider, so auxiliary calls keep working.
+
+:::note
+Symmetric with OpenRouter mode: where `openrouter` sends everything to OpenRouter, `bedrock` (or `vertex`, etc.) sends everything to that provider. Use this instead of pinning each `MAIN_MODEL`/`RCA_MODEL` to a provider-prefixed id.
+:::
 
 :::note
 Vertex AI, Ollama, and AWS Bedrock always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
@@ -186,7 +200,10 @@ Run models locally on your own hardware with [Ollama](https://ollama.com/). No A
 
 Use [AWS Bedrock](https://aws.amazon.com/bedrock/) for Claude (and other Bedrock models) either through an OpenAI-compatible gateway or directly via the AWS SDK. Aurora picks the mode automatically: if `BEDROCK_BASE_URL` is set it uses **gateway mode**, otherwise it uses **native mode**.
 
-Like Vertex AI and Ollama, Bedrock is configured by an admin via environment variables and does not appear in the in-app model picker. Set `LLM_PROVIDER_MODE=direct` so Aurora routes `bedrock/...` models to the Bedrock provider.
+Bedrock is configured by an admin via environment variables. There are two ways to route models to it:
+
+- **`LLM_PROVIDER_MODE=bedrock`** (recommended for native mode) — every model picked in the app (e.g. "Claude Opus 4.7") routes through Bedrock automatically, translated to the matching inference-profile id (region-aware). No `bedrock/` prefix and no per-model configuration needed; the picker shows clean model names.
+- **`LLM_PROVIDER_MODE=direct`** + explicit `bedrock/<id>` model ids (e.g. `MAIN_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-v1:0`) — pin specific Bedrock ids per model. Use this for **gateway mode**, where the model name is whatever your gateway expects.
 
 #### Gateway mode (OpenAI-compatible endpoint)
 
@@ -218,8 +235,13 @@ BEDROCK_SECRET_ACCESS_KEY=...
 # Or use a named profile instead of explicit keys:
 # BEDROCK_PROFILE=my-bedrock-profile
 
-LLM_PROVIDER_MODE=direct
-MAIN_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-v1:0   # an inference-profile id
+# Recommended: route every model pick through Bedrock with clean model names.
+LLM_PROVIDER_MODE=bedrock
+MAIN_MODEL=anthropic/claude-sonnet-4.6   # auto-translated to us.anthropic.claude-sonnet-4-6
+
+# Alternative: pin an explicit inference-profile id with direct mode.
+# LLM_PROVIDER_MODE=direct
+# MAIN_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-v1:0
 ```
 
 **Requirements (native mode):**
