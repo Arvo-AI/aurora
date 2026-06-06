@@ -26,7 +26,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
 from .base_provider import BaseLLMProvider
-from ._sampling_guard import strip_rejected_sampling
+from ._sampling_guard import make_adaptive_sampling_cls
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
@@ -54,54 +54,15 @@ def _geo_prefix_for(region: str) -> str:
     return "us"
 
 
-_adaptive_converse_cls = None
-
-
 def _adaptive_bedrock_converse():
-    """Return a ``ChatBedrockConverse`` subclass that self-heals around unsupported
-    sampling params.
-
-    Some Bedrock models (e.g. Anthropic Opus 4.7+) drop ``temperature``/``top_p`` and
-    return a ``ValidationException`` if they are sent. Rather than hardcode a per-model
-    list (which would need updating for every future model), the subclass reacts to the
-    model's own error: on a rejection whose message names a sampling field, it strips
-    that field and retries once, then keeps it off for the life of the (cached) instance.
-    Both modes report the same provider, so detection is by the error, not the model id.
-
-    Imported lazily so gateway-only deployments don't need langchain-aws installed.
-    ``ImportError`` propagates to the caller (kept as a friendly RuntimeError there).
-    """
-    global _adaptive_converse_cls
-    if _adaptive_converse_cls is not None:
-        return _adaptive_converse_cls
-
+    """Lazily import ``ChatBedrockConverse`` (so gateway-only deployments don't need
+    langchain-aws) and wrap it with the shared sampling self-heal. ``wrap_async=False``:
+    Converse's async path dispatches to the sync one via ``BaseChatModel``, so wrapping
+    async too would retry twice. ``ImportError`` propagates to the caller (kept as a
+    friendly RuntimeError there)."""
     from langchain_aws import ChatBedrockConverse
 
-    class _AdaptiveBedrockConverse(ChatBedrockConverse):
-        """ChatBedrockConverse that drops sampling params a model rejects, then remembers."""
-
-        def _generate(self, *args, **kwargs):
-            try:
-                return super()._generate(*args, **kwargs)
-            except Exception as err:  # noqa: BLE001
-                if not strip_rejected_sampling(self, err, logger):
-                    raise
-                return super()._generate(*args, **kwargs)
-
-        def _stream(self, *args, **kwargs):
-            yielded = False
-            try:
-                for chunk in super()._stream(*args, **kwargs):
-                    yielded = True
-                    yield chunk
-            except Exception as err:  # noqa: BLE001
-                # Only retry if nothing streamed yet, else a retry would double-emit.
-                if yielded or not strip_rejected_sampling(self, err, logger):
-                    raise
-                yield from super()._stream(*args, **kwargs)
-
-    _adaptive_converse_cls = _AdaptiveBedrockConverse
-    return _adaptive_converse_cls
+    return make_adaptive_sampling_cls(ChatBedrockConverse, wrap_async=False)
 
 
 class BedrockProvider(BaseLLMProvider):
@@ -155,7 +116,10 @@ class BedrockProvider(BaseLLMProvider):
                 "stream_usage": True,
             }
             config.update(kwargs)
-            return ChatOpenAI(**config)
+            # Self-heal sampling params in case the gateway forwards temperature/top_p to a
+            # model that rejects them (e.g. Opus 4.7+) instead of dropping them itself.
+            # ChatOpenAI has native async paths, so wrap them too (wrap_async default).
+            return make_adaptive_sampling_cls(ChatOpenAI)(**config)
 
         # Native mode — AWS SDK via langchain_aws. Imported lazily so gateway-only
         # deployments don't require langchain-aws to be installed. The adaptive subclass

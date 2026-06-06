@@ -12,81 +12,10 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .base_provider import BaseLLMProvider
-from ._sampling_guard import strip_rejected_sampling
+from ._sampling_guard import make_adaptive_sampling_cls
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
-
-_adaptive_anthropic_cls = None
-
-
-def _adaptive_chat_anthropic():
-    """Return a ``ChatAnthropic`` subclass that self-heals around unsupported sampling
-    params.
-
-    Anthropic removed ``temperature`` / ``top_p`` / ``top_k`` for Opus 4.7+ — the direct
-    API returns 400 ``"temperature is deprecated for this model"`` when they are sent
-    (Sonnet 4.6 and Opus 4.6 still accept them). Aurora hardcodes ``temperature=0.4`` and
-    langchain-anthropic forwards it unconditionally, so any Opus 4.7+ call via the direct
-    provider fails. Rather than hardcode a per-model list, the subclass reacts to the
-    model's own error: on a rejection naming a sampling field, it strips that field and
-    retries once, then keeps it off for the life of the (cached) instance.
-
-    Unlike Bedrock's Converse, ``ChatAnthropic`` defines its own async paths, so we wrap
-    both sync (``_generate`` / ``_stream``) and async (``_agenerate`` / ``_astream``).
-    The deprecation 400 is raised at request time before any tokens stream, so the retry
-    never double-emits.
-    """
-    global _adaptive_anthropic_cls
-    if _adaptive_anthropic_cls is not None:
-        return _adaptive_anthropic_cls
-
-    class _AdaptiveChatAnthropic(ChatAnthropic):
-        """ChatAnthropic that drops sampling params a model rejects, then remembers."""
-
-        def _generate(self, *args, **kwargs):
-            try:
-                return super()._generate(*args, **kwargs)
-            except Exception as err:  # noqa: BLE001
-                if not strip_rejected_sampling(self, err, logger):
-                    raise
-                return super()._generate(*args, **kwargs)
-
-        async def _agenerate(self, *args, **kwargs):
-            try:
-                return await super()._agenerate(*args, **kwargs)
-            except Exception as err:  # noqa: BLE001
-                if not strip_rejected_sampling(self, err, logger):
-                    raise
-                return await super()._agenerate(*args, **kwargs)
-
-        def _stream(self, *args, **kwargs):
-            yielded = False
-            try:
-                for chunk in super()._stream(*args, **kwargs):
-                    yielded = True
-                    yield chunk
-            except Exception as err:  # noqa: BLE001
-                # Only retry if nothing streamed yet, else a retry would double-emit.
-                if yielded or not strip_rejected_sampling(self, err, logger):
-                    raise
-                yield from super()._stream(*args, **kwargs)
-
-        async def _astream(self, *args, **kwargs):
-            yielded = False
-            try:
-                async for chunk in super()._astream(*args, **kwargs):
-                    yielded = True
-                    yield chunk
-            except Exception as err:  # noqa: BLE001
-                # Only retry if nothing streamed yet, else a retry would double-emit.
-                if yielded or not strip_rejected_sampling(self, err, logger):
-                    raise
-                async for chunk in super()._astream(*args, **kwargs):
-                    yield chunk
-
-    _adaptive_anthropic_cls = _AdaptiveChatAnthropic
-    return _adaptive_anthropic_cls
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -137,7 +66,10 @@ class AnthropicProvider(BaseLLMProvider):
         }
         config.update(kwargs)
 
-        return _adaptive_chat_anthropic()(**config)
+        # Opus 4.7+ rejects the hardcoded temperature; the adaptive subclass strips
+        # rejected sampling params and retries. ChatAnthropic has native async paths,
+        # so wrap them too (wrap_async default).
+        return make_adaptive_sampling_cls(ChatAnthropic)(**config)
 
     def is_available(self) -> bool:
         """Check if Anthropic API key is configured."""

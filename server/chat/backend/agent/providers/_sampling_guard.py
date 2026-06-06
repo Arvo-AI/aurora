@@ -9,10 +9,14 @@ call to such a model fails unless the param is dropped.
 
 Rather than hardcode a per-model list (which would need updating for every future
 model), we react to the model's own error: on a rejection whose message names a
-sampling field, drop the offending params and let the caller retry once. Used by the
-Anthropic (``ChatAnthropic``) and Bedrock (``ChatBedrockConverse``) providers via thin
-adaptive subclasses that wrap ``_generate`` / ``_stream`` (+ async variants).
+sampling field, drop the offending params and retry once. :func:`make_adaptive_sampling_cls`
+builds the thin adaptive subclass used by the Anthropic (``ChatAnthropic``), Bedrock-native
+(``ChatBedrockConverse``), and Bedrock-gateway (OpenAI-compatible ``ChatOpenAI``) clients.
 """
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Sampling params some models accept and newer ones reject outright.
 SAMPLING_FIELDS = ("temperature", "top_p", "top_k")
@@ -52,3 +56,73 @@ def strip_rejected_sampling(model, err, logger) -> bool:
             _model_label(model),
         )
     return stripped
+
+
+_adaptive_cache: dict = {}
+
+
+def make_adaptive_sampling_cls(base_cls, *, wrap_async: bool = True):
+    """Return (and cache) a subclass of ``base_cls`` that self-heals around rejected
+    sampling params, reusing :func:`strip_rejected_sampling`.
+
+    On an error naming a sampling field, the subclass strips it and retries once, then
+    keeps it off for the life of the instance. Wraps the sync paths (``_generate`` /
+    ``_stream``) always, and the async paths (``_agenerate`` / ``_astream``) when
+    ``wrap_async`` is True. Pass ``wrap_async=False`` for a client whose async path
+    dispatches to the sync one via ``BaseChatModel`` (e.g. ``ChatBedrockConverse``) —
+    wrapping async there would retry twice. The deprecation 400 is raised before any
+    tokens stream, and the streaming wrappers only retry when nothing has been yielded,
+    so a retry never double-emits.
+    """
+    cached = _adaptive_cache.get(base_cls)
+    if cached is not None:
+        return cached
+
+    class _Adaptive(base_cls):
+        """Drops sampling params a model rejects, then remembers (instance cached)."""
+
+        def _generate(self, *args, **kwargs):
+            try:
+                return super()._generate(*args, **kwargs)
+            except Exception as err:  # noqa: BLE001
+                if not strip_rejected_sampling(self, err, logger):
+                    raise
+                return super()._generate(*args, **kwargs)
+
+        def _stream(self, *args, **kwargs):
+            yielded = False
+            try:
+                for chunk in super()._stream(*args, **kwargs):
+                    yielded = True
+                    yield chunk
+            except Exception as err:  # noqa: BLE001
+                if yielded or not strip_rejected_sampling(self, err, logger):
+                    raise
+                yield from super()._stream(*args, **kwargs)
+
+        if wrap_async:
+
+            async def _agenerate(self, *args, **kwargs):
+                try:
+                    return await super()._agenerate(*args, **kwargs)
+                except Exception as err:  # noqa: BLE001
+                    if not strip_rejected_sampling(self, err, logger):
+                        raise
+                    return await super()._agenerate(*args, **kwargs)
+
+            async def _astream(self, *args, **kwargs):
+                yielded = False
+                try:
+                    async for chunk in super()._astream(*args, **kwargs):
+                        yielded = True
+                        yield chunk
+                except Exception as err:  # noqa: BLE001
+                    if yielded or not strip_rejected_sampling(self, err, logger):
+                        raise
+                    async for chunk in super()._astream(*args, **kwargs):
+                        yield chunk
+
+    _Adaptive.__name__ = f"_Adaptive{base_cls.__name__}"
+    _Adaptive.__qualname__ = _Adaptive.__name__
+    _adaptive_cache[base_cls] = _Adaptive
+    return _Adaptive
