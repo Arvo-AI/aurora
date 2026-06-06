@@ -97,7 +97,8 @@ autoscaling:
 # Celery worker pod settings
 # ------------------------------------------------------------------------------
 celeryWorker:
-  terminationGracePeriodSeconds: 1800
+  # Must exceed run_background_chat's time_limit (1800s) to avoid SIGKILL mid-task
+  terminationGracePeriodSeconds: 1860
 
 # ------------------------------------------------------------------------------
 # Replica counts per service
