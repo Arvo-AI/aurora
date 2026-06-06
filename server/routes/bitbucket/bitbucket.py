@@ -13,6 +13,14 @@ from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.db.connection_pool import db_pool
+
+_REQUIRED_SCOPES = {
+    "read:user:bitbucket", "read:workspace:bitbucket", "read:project:bitbucket",
+    "read:repository:bitbucket", "write:repository:bitbucket",
+    "read:pullrequest:bitbucket", "write:pullrequest:bitbucket",
+    "read:issue:bitbucket", "write:issue:bitbucket",
+    "read:pipeline:bitbucket", "write:pipeline:bitbucket",
+}
 from utils.auth.stateless_auth import set_rls_context
 from connectors.bitbucket_connector.api_client import BitbucketAPIClient
 from connectors.bitbucket_connector.oauth_utils import exchange_code_for_token, get_auth_url, validate_oauth_state, refresh_token_if_needed
@@ -72,6 +80,12 @@ def bitbucket_login(user_id):
                 username = user_data.get("username")
                 display_name = user_data.get("display_name")
 
+                # Validate token has all required scopes (read from same /user response)
+                granted = set(user_data.get("_granted_scopes", []))
+                missing = _REQUIRED_SCOPES - granted
+                if missing:
+                    logger.warning(f"Bitbucket token for {email} missing scopes: {missing}")
+
                 token_data = {
                     "access_token": api_token,
                     "auth_type": "api_token",
@@ -85,8 +99,10 @@ def bitbucket_login(user_id):
 
                 return jsonify({
                     "success": True,
-                    "message": f"Successfully connected to Bitbucket as {username}",
                     "username": username,
+                    "display_name": display_name,
+                    "auth_type": "api_token",
+                    **({"missing_scopes": sorted(missing)} if missing else {}),
                 })
 
             except Exception as e:
@@ -252,11 +268,16 @@ def bitbucket_status(user_id):
         if not user_data or user_data.get("error"):
             return jsonify({"connected": False, "error": "Invalid or expired token"})
 
+        # Check for missing scopes (piggybacks on the /user call we just made)
+        granted = set(user_data.get("_granted_scopes", []))
+        missing = _REQUIRED_SCOPES - granted if granted else set()
+
         return jsonify({
             "connected": True,
             "username": user_data.get("username"),
             "display_name": user_data.get("display_name"),
             "auth_type": auth_type,
+            **({"missing_scopes": sorted(missing)} if missing else {}),
         })
 
     except Exception as e:

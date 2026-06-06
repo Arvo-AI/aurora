@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, LogOut, RefreshCw } from 'lucide-react';
+import { Loader2, Check, LogOut, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import BitbucketWorkspaceBrowser from '@/components/bitbucket-workspace-browser';
@@ -33,6 +33,7 @@ export default function BitbucketProviderIntegration() {
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
   const [displayName, setDisplayName] = useState<string>('');
   const [authType, setAuthType] = useState<string>('');
+  const [missingScopes, setMissingScopes] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -52,6 +53,7 @@ export default function BitbucketProviderIntegration() {
       setIsAuthenticated(data.connected || false);
       setDisplayName(data.display_name || data.username || '');
       setAuthType(data.auth_type || '');
+      setMissingScopes(data.missing_scopes || []);
     } catch (error) {
       console.error('Error checking Bitbucket status:', error);
       setIsAuthenticated(false);
@@ -97,7 +99,8 @@ export default function BitbucketProviderIntegration() {
     setIsLoading(true);
     setLoginError(null);
     try {
-      await BitbucketIntegrationService.connectWithApiToken(email, apiToken);
+      const result = await BitbucketIntegrationService.connectWithApiToken(email, apiToken);
+      setMissingScopes(result.missing_scopes || []);
       toast({ title: "Connected", description: "Bitbucket connected with API token" });
       setEmail('');
       setApiToken('');
@@ -117,6 +120,7 @@ export default function BitbucketProviderIntegration() {
       setIsAuthenticated(false);
       setDisplayName('');
       setAuthType('');
+      setMissingScopes([]);
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Disconnected", description: "Bitbucket account disconnected successfully" });
     } catch (error: any) {
@@ -255,6 +259,27 @@ export default function BitbucketProviderIntegration() {
             >
               <LogOut className="h-4 w-4" />
             </Button>
+          </div>
+        </div>
+      )}
+
+      {isAuthenticated && missingScopes.length > 0 && (
+        <div className="flex gap-2 p-3 border border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-950 rounded-lg">
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 shrink-0 mt-0.5" />
+          <div className="text-xs">
+            <p className="font-medium text-yellow-800 dark:text-yellow-400">Limited permissions</p>
+            <p className="text-yellow-700 dark:text-yellow-500 mt-0.5">
+              Missing: {missingScopes.join(', ')}.{' '}
+              <a
+                href="https://id.atlassian.com/manage-profile/security/api-tokens"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-medium hover:text-yellow-900 dark:hover:text-yellow-300"
+              >
+                Recreate your token
+              </a>{' '}
+              with the required scopes to fix this.
+            </p>
           </div>
         </div>
       )}

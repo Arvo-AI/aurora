@@ -97,6 +97,7 @@ celery_app.conf.update(
         'routes.aws.cloudwatch_tasks',
         'tasks.github_webhook_tasks',
         'routes.github.github_repo_metadata',
+        'utils.repo_metadata',
         'services.actions.scheduler',
     ],
     # Periodic task schedule

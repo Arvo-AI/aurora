@@ -2017,35 +2017,81 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 bitbucket_pull_requests, BitbucketPullRequestsArgs,
                 bitbucket_issues, BitbucketIssuesArgs,
                 bitbucket_pipelines, BitbucketPipelinesArgs,
+                bitbucket_fix, BitbucketFixArgs,
             )
 
-            _bb_tools = [
-                (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
-                 "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                 "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                 "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
-                 "from saved selection if not specified."),
-                (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
-                 "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
-                 "delete_branch, list_commits, get_commit, get_diff, compare."),
-                (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
-                 "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
-                 "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
-                 "get_pr_diff, get_pr_activity."),
-                (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
-                 "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
-                 "update_issue, list_issue_comments, add_issue_comment."),
-                (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
-                 "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
-                 "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
-            ]
+            _is_rca_background = getattr(state_context, 'is_background', False) if state_context else False
+
+            if _is_rca_background:
+                _bb_tools = [
+                    (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                     "Query Bitbucket repositories and files (READ-ONLY during RCA). "
+                     "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. "
+                     "Do NOT use create_or_update_file — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                     "Query Bitbucket branches and commits (READ-ONLY during RCA). "
+                     "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
+                     "Do NOT create branches manually — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                     "Query Bitbucket pull requests (READ-ONLY during RCA). "
+                     "Actions: list_prs, get_pr, list_pr_comments, get_pr_diff, get_pr_activity. "
+                     "Do NOT create PRs manually — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                     "Query Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                     "list_pipeline_steps, get_step_log, get_pipeline_step."),
+                ]
+            else:
+                _bb_tools = [
+                    (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                     "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
+                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
+                     "from saved selection if not specified."),
+                    (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                     "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
+                     "delete_branch, list_commits, get_commit, get_diff, compare."),
+                    (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                     "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
+                     "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
+                     "get_pr_diff, get_pr_activity."),
+                    (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
+                     "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
+                     "update_issue, list_issue_comments, add_issue_comment."),
+                    (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                     "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                     "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
+                ]
             for _func, _name, _schema, _desc in _bb_tools:
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
                 tools.append(StructuredTool.from_function(
                     func=_final, name=_name, description=_desc, args_schema=_schema))
-            logging.info(f"Added {len(_bb_tools)} Bitbucket tools for user {user_id}")
+
+            # bitbucket_fix needs forced context (incident_id injection) like github_fix
+            _bb_fix_ctx = with_forced_context(bitbucket_fix)
+            _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
+            _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
+            tools.append(StructuredTool.from_function(
+                func=_bb_fix_final,
+                name="bitbucket_fix",
+                description=(
+                    "Suggest a code fix or create a new file for an identified issue during RCA. "
+                    "Use this when you identify a specific code change that would fix the root cause "
+                    "and the repository is on Bitbucket. "
+                    "The fix is stored for user review before being applied as a PR. "
+                    "Parameters: file_path (path in repo), "
+                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                    "set replace_all=true if you want every occurrence replaced; "
+                    "to CREATE a new file, use old_string='' with the full content in new_string), "
+                    "fix_description (what this fix does), root_cause_summary (why this change is needed). "
+                    "Optional: repo (workspace/repo_slug format), commit_message, branch."
+                ),
+                args_schema=BitbucketFixArgs,
+            ))
+            logging.info(f"Added {len(_bb_tools) + 1} Bitbucket tools for user {user_id} (rca_background={_is_rca_background})")
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
 

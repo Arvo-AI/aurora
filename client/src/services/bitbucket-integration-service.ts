@@ -24,6 +24,7 @@ export interface StatusResponse {
   display_name?: string;
   username?: string;
   auth_type?: string;
+  missing_scopes?: string[];
 }
 
 interface WorkspacesResponse {
@@ -119,7 +120,7 @@ export class BitbucketIntegrationService {
     return data.oauth_url;
   }
 
-  static async connectWithApiToken(email: string, apiToken: string): Promise<{ success: boolean; message: string }> {
+  static async connectWithApiToken(email: string, apiToken: string): Promise<{ success: boolean; message?: string; missing_scopes?: string[] }> {
     return this.request(
       '/login',
       { method: 'POST', body: { api_token: apiToken, email }, errorMessage: 'Failed to connect with API token' }

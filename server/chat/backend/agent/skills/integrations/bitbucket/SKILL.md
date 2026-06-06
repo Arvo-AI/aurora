@@ -13,12 +13,13 @@ tools:
   - bitbucket_pull_requests
   - bitbucket_issues
   - bitbucket_pipelines
-index: "Code repo -- manage Bitbucket repos, branches, PRs, issues, and CI/CD pipelines (5 tools, 41 actions)"
+  - bitbucket_fix
+index: "Code repo -- manage Bitbucket repos, branches, PRs, issues, CI/CD pipelines, and suggest code fixes (6 tools, 42 actions)"
 rca_priority: 2
-allowed-tools: bitbucket_repos, bitbucket_branches, bitbucket_pull_requests, bitbucket_issues, bitbucket_pipelines
+allowed-tools: bitbucket_repos, bitbucket_branches, bitbucket_pull_requests, bitbucket_issues, bitbucket_pipelines, bitbucket_fix
 metadata:
   author: aurora
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Bitbucket Integration
@@ -33,7 +34,7 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
 
 ## Instructions
 
-### Tools (5 tools, 41 actions)
+### Tools (6 tools, 42 actions)
 
 **bitbucket_repos** -- Repository, File & Code Operations:
 - `list_repos`, `get_repo`, `get_file_contents`, `create_or_update_file`, `delete_file`
@@ -53,6 +54,14 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
 - `list_pipelines`, `get_pipeline`, `trigger_pipeline`, `stop_pipeline`
 - `list_pipeline_steps`, `get_step_log`, `get_pipeline_step`
 
+**bitbucket_fix** -- Suggest Code Fixes During RCA:
+- Use when you identify a specific code change that would fix the root cause
+- Accepts anchored search-and-replace edits (old_string → new_string)
+- Fetches the current file, applies edits, and saves the suggestion for user review
+- The user can then review, edit, and create a PR from the Incidents UI
+- Parameters: `file_path`, `edits` (list of {old_string, new_string, replace_all}), `fix_description`, `root_cause_summary`
+- Optional: `repo` (workspace/repo_slug), `commit_message`, `branch`
+
 ### RCA Investigation Flow
 
 1. Check recent commits for changes that may correlate with the alert:
@@ -65,15 +74,21 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
    `bitbucket_pipelines(action='get_step_log', workspace='WS', repo_slug='REPO', pipeline_uuid='UUID', step_uuid='UUID')`
 5. Inspect diffs for suspicious commits:
    `bitbucket_branches(action='get_diff', workspace='WS', repo_slug='REPO', spec='COMMIT_SHA')`
+6. If a root cause code change is identified, propose a fix:
+   `bitbucket_fix(file_path='path/to/file', edits=[{old_string: '...', new_string: '...'}], fix_description='...', root_cause_summary='...')`
 
 ### Tool Usage Rules
 - When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo from context.
 - Workspace and `repo_slug` auto-resolve from saved selection if not passed explicitly.
+- **During background RCA**: tools are READ-ONLY. Do NOT manually create branches, commit files, or create PRs. Use `bitbucket_fix` to propose code changes — it saves suggestions for user review.
 - Destructive actions (delete branch, delete file, merge PR, decline PR, trigger/stop pipeline) require user confirmation and will prompt automatically.
 - Non-destructive operations (create branch, create PR, update PR, approve, comment, create issue) proceed without extra confirmation.
+- `bitbucket_fix` does NOT modify the repo directly — it saves the suggestion for user review. No confirmation needed.
 - If no repository is selected and user doesn't specify one, ask which repository they want to work with.
 
 ### Important Rules
 - Look for: config changes, k8s manifests, Terraform, dependency updates.
 - Check pipeline logs when builds fail near the incident time.
 - Cross-reference commit history with deployment timing.
+- When you identify the problematic code change, use `bitbucket_fix` to propose a revert or correction.
+- **NEVER** manually create a branch + commit file + create PR. Always use `bitbucket_fix` instead — the user will create the PR from the Incidents UI after reviewing your suggestion.

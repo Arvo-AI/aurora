@@ -106,11 +106,17 @@ def _fetch_bitbucket_readme(access_token: str, auth_type: str, workspace: str, r
 def _fetch_bitbucket_listing(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
     from connectors.bitbucket_connector.api_client import BitbucketAPIClient
     client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
-    result = client.get_directory_tree(workspace, repo_slug, "")
+    # Call without format=meta to get the actual file listing (paginated with "values")
+    result = client.get_directory_tree(workspace, repo_slug, "", list_files=True)
     if isinstance(result, dict) and result.get("error"):
+        logger.warning(f"Bitbucket directory listing error for {workspace}/{repo_slug}: {result.get('error')}")
         return "(could not list files)"
+    if isinstance(result, dict) and "values" in result:
+        items = result["values"]
+        return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in items[:100])
     if isinstance(result, list):
         return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in result[:100])
+    logger.warning(f"Bitbucket directory listing unexpected response for {workspace}/{repo_slug}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}")
     return "(could not list files)"
 
 
@@ -221,7 +227,8 @@ def generate_repo_metadata(self, user_id: str, provider: str, repo_full_name: st
 
         readme, file_list = _fetch_repo_context(provider, creds, repo_full_name)
 
-        if not readme and file_list == "(could not list files)":
+        # Both README and file listing failed — nothing to summarize
+        if not readme and (not file_list or file_list == "(could not list files)"):
             logger.warning(f"Could not fetch any content for {provider}:{repo_full_name}")
             _update_metadata(user_id, provider, repo_full_name, None, "error")
             return
