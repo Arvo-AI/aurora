@@ -38,16 +38,6 @@ export interface ArtifactVersionDetail extends ArtifactVersion {
 // ============================================================================
 
 export const artifactsService = {
-  async listArtifacts(): Promise<ArtifactSummary[]> {
-    try {
-      const data = await apiGet<{ artifacts: ArtifactSummary[] }>('/api/artifacts');
-      return data.artifacts ?? [];
-    } catch (error) {
-      console.error('Error fetching artifacts:', error);
-      return [];
-    }
-  },
-
   async getArtifact(id: string): Promise<ArtifactData | null> {
     try {
       const data = await apiGet<{ artifact: ArtifactData }>(`/api/artifacts/${id}`);
@@ -93,15 +83,17 @@ export const artifactsService = {
     }
   },
 
-  async getVersions(id: string): Promise<{ versions: ArtifactVersion[]; currentVersionId: string | null; error?: string }> {
+  async getVersions(id: string): Promise<{ versions: ArtifactVersion[]; currentVersionId: string | null }> {
     try {
       const data = await apiGet<{ versions: ArtifactVersion[]; currentVersionId: string | null }>(
         `/api/artifacts/${id}/versions`,
       );
       return { versions: data.versions ?? [], currentVersionId: data.currentVersionId ?? null };
     } catch (error) {
-      const apiErr = error as ApiError;
-      return { versions: [], currentVersionId: null, error: apiErr.message || 'Failed to load versions' };
+      // Match getArtifact/getVersion: 404 = empty (no versions), re-throw the
+      // rest so the caller's useQuery error field drives a consistent error state.
+      if ((error as ApiError).status === 404) return { versions: [], currentVersionId: null };
+      throw error;
     }
   },
 
@@ -118,12 +110,12 @@ export const artifactsService = {
     }
   },
 
-  async restoreVersion(id: string, versionId: string): Promise<{ success: boolean; content?: string; error?: string }> {
+  async restoreVersion(id: string, versionId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const data = await apiPost<{ success: boolean; content: string }>(
-        `/api/artifacts/${id}/versions/${versionId}/restore`,
-      );
-      return { success: true, content: data.content };
+      // The caller refetches the artifact after a restore, so the response body
+      // is unused — only success/failure matters here.
+      await apiPost(`/api/artifacts/${id}/versions/${versionId}/restore`);
+      return { success: true };
     } catch (error) {
       const apiErr = error as ApiError;
       return { success: false, error: apiErr.message || 'Failed to restore version' };

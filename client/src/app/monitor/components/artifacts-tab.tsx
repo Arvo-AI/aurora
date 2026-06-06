@@ -313,10 +313,9 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
   );
 
   // Version list — only fetched on the History tab, then cached across visits.
-  const { data: versionsData, isLoading: loadingVersions } = useQuery<{
+  const { data: versionsData, isLoading: loadingVersions, error: versionsError } = useQuery<{
     versions: ArtifactVersion[];
     currentVersionId: string | null;
-    error?: string;
   }>(
     mode === 'history' ? versionsKey : null,
     fetchVersions,
@@ -324,7 +323,6 @@ function ArtifactDetail({ id, onBack, onDeleted }: Readonly<{
   );
   const versions = versionsData?.versions ?? [];
   const currentVersionId = versionsData?.currentVersionId ?? null;
-  const versionsError = versionsData?.error;
 
   // Expanded version body — fetched on expand, then cached per version so
   // re-expanding is instant.
