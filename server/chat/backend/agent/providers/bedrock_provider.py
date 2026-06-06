@@ -208,17 +208,13 @@ class BedrockProvider(BaseLLMProvider):
         return prefix == "" and model.lower().startswith("claude")
 
     def get_native_model_name(self, model: str) -> str:
-        # Explicit bedrock id -> use the suffix as-is (already a full, region-qualified profile id).
+        # Explicit bedrock id -> use the suffix as-is.
         if "/" in model and model.split("/", 1)[0] == "bedrock":
             return model.split("/", 1)[1]
-        # Gateway mode: the gateway expects its own model names, not native Bedrock
-        # inference-profile ids, so don't apply the native translation (which would also
-        # default the geo prefix to "us" since gateway deployments set no region). The
-        # operator configures the exact name, typically via an explicit bedrock/<name> id.
-        if self.base_url:
-            return model
-        # Native mode: clean/canonical Anthropic id -> Bedrock inference-profile id.
-        anth = ModelMapper.get_native_name(model, "anthropic")  # e.g. "claude-opus-4-7" / "claude-opus-4.8"
+        # Clean Anthropic id -> Bedrock inference-profile id. Runs in both native and gateway
+        # mode: a Bedrock-fronting gateway still expects profile ids, not clean names. Geo
+        # prefix defaults to "us" (override with BEDROCK_REGION for eu/apac).
+        anth = ModelMapper.get_native_name(model, "anthropic")
         key = anth.replace(".", "-").lower()
         if key.startswith("claude"):
             base = _ANTHROPIC_TO_BEDROCK_BASE.get(key, f"anthropic.{key}")
