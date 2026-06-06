@@ -45,21 +45,13 @@ In direct mode, Aurora auto-detects the provider from the model name prefix (e.g
 
 ### Provider Mode (route everything through one provider)
 
-Set `LLM_PROVIDER_MODE` to a **provider name** to route every model selection through that single provider, translating the chosen model to the provider's native id. This is how a deployment standardizes on one backend — for example a customer running entirely on AWS Bedrock:
+Set `LLM_PROVIDER_MODE` to a **provider name** to send every model pick through that one backend — useful when a deployment standardizes on a single provider (e.g. a customer running entirely on AWS Bedrock):
 
 ```bash
 LLM_PROVIDER_MODE=bedrock      # also accepts: vertex, anthropic, openai, google, ollama
 ```
 
-Now a clean model pick like **Claude Opus 4.7** (`anthropic/claude-opus-4.7`) is routed through Bedrock automatically as `us.anthropic.claude-opus-4-7` — no `bedrock/` prefix or per-model setup needed, and the model picker stays clean (no provider shown in the UI). Models the chosen provider can't serve (e.g. Gemini or GPT under `bedrock`) gracefully fall back to their own native provider, so auxiliary calls keep working.
-
-:::note
-Symmetric with OpenRouter mode: where `openrouter` sends everything to OpenRouter, `bedrock` (or `vertex`, etc.) sends everything to that provider. Use this instead of pinning each `MAIN_MODEL`/`RCA_MODEL` to a provider-prefixed id.
-:::
-
-:::note
-Vertex AI, Ollama, and AWS Bedrock always use their native SDKs regardless of `LLM_PROVIDER_MODE`. OpenAI, Anthropic, and Google AI models can all be routed through OpenRouter.
-:::
+A clean pick like **Claude Opus 4.7** is then translated to that provider's native id automatically (`us.anthropic.claude-opus-4-7` on Bedrock) — no `bedrock/` prefix or per-model setup. Models the provider can't serve (e.g. Gemini under `bedrock`) fall back to their own provider. It's the same idea as `openrouter` mode, pointed at a single direct provider.
 
 ## Supported Models
 
@@ -240,10 +232,6 @@ BEDROCK_SECRET_ACCESS_KEY=...
 # Recommended: route every model pick through Bedrock with clean model names.
 LLM_PROVIDER_MODE=bedrock
 MAIN_MODEL=anthropic/claude-sonnet-4.6   # auto-translated to us.anthropic.claude-sonnet-4-6
-
-# Alternative: pin an explicit inference-profile id with direct mode.
-# LLM_PROVIDER_MODE=direct
-# MAIN_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-v1:0
 ```
 
 **Requirements (native mode):**
@@ -251,7 +239,7 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6   # auto-translated to us.anthropic.claud
 - An identity (IAM user/role) with `bedrock:InvokeModel` / `bedrock:InvokeModelWithResponseStream` permissions.
 
 :::tip
-The customer/gateway case and the native AWS case use the **same** `bedrock` provider — to switch, set or unset `BEDROCK_BASE_URL`. No code changes needed.
+Gateway and native are the **same** `bedrock` provider — set `BEDROCK_BASE_URL` for gateway mode, leave it unset for native. Each mode's recommended `LLM_PROVIDER_MODE` and model-id style is shown above.
 :::
 
 ## RCA Model Configuration
