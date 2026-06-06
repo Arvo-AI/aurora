@@ -304,6 +304,9 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
           status: Filter by incident status (optional).
           limit: Max incidents to return (1-100, default 20).
           offset: Paging offset (>= 0, default 0).
+
+        Returns {incidents: [...], total: N}. Use total to know when to
+        stop paging (e.g. offset + limit >= total means last page).
         """
         return await _do_list_incidents(api_call, status, limit, offset)
 
