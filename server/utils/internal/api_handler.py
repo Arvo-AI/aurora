@@ -95,8 +95,8 @@ async def _handle_kubectl_execute(headers, body, writer):
             )
             await _send_json_response(writer, result)
             return
-    except Exception as e:
-        logger.error("Kubeconfig fallback failed for cluster %s: %s", cluster_id, e, exc_info=True)
+    except Exception:
+        logger.exception("Kubeconfig fallback failed for cluster %s", cluster_id)
         await _send_json_response(writer, {'success': False, 'error': 'Kubeconfig execution failed'})
         return
     
