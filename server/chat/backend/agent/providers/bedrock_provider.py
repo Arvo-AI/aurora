@@ -26,11 +26,33 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
 from .base_provider import BaseLLMProvider
+from ._sampling_guard import strip_rejected_sampling
+from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
 
-# Sampling params that some Bedrock models accept and newer ones reject outright.
-_BEDROCK_SAMPLING_FIELDS = ("temperature", "top_p", "top_k")
+# Anthropic native model name (dashed) -> Bedrock inference-profile base (without the
+# region/geo prefix). Only models whose Bedrock id carries a version/date suffix that
+# can't be derived from the name are listed here; bare models (e.g. claude-opus-4-7)
+# derive `anthropic.<name>` automatically. The geo prefix (us./eu./apac.) is prepended
+# at runtime from the configured region, so this stays region-agnostic.
+_ANTHROPIC_TO_BEDROCK_BASE = {
+    "claude-opus-4-6": "anthropic.claude-opus-4-6-v1",
+    "claude-opus-4-5": "anthropic.claude-opus-4-5-20251101-v1:0",
+    "claude-sonnet-4-5": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-haiku-4-5": "anthropic.claude-haiku-4-5-20251001-v1:0",
+}
+
+
+def _geo_prefix_for(region: str) -> str:
+    """Bedrock cross-region inference-profile geo prefix derived from the AWS region."""
+    r = (region or "us-east-1").lower()
+    if r.startswith("eu"):
+        return "eu"
+    if r.startswith("ap"):
+        return "apac"
+    return "us"
+
 
 _adaptive_converse_cls = None
 
@@ -58,37 +80,23 @@ def _adaptive_bedrock_converse():
     class _AdaptiveBedrockConverse(ChatBedrockConverse):
         """ChatBedrockConverse that drops sampling params a model rejects, then remembers."""
 
-        def _strip_rejected_sampling(self, err) -> bool:
-            """If ``err`` names a sampling param, clear the ones that are set. Returns
-            True only when something was actually stripped (so the retry differs)."""
-            msg = str(err).lower()
-            if not any(field in msg for field in _BEDROCK_SAMPLING_FIELDS):
-                return False
-            stripped = False
-            for field in _BEDROCK_SAMPLING_FIELDS:
-                if getattr(self, field, None) is not None:
-                    setattr(self, field, None)
-                    stripped = True
-            if stripped:
-                logger.warning(
-                    "Bedrock model %s rejected a sampling parameter; retrying without it.",
-                    getattr(self, "model_id", "?"),
-                )
-            return stripped
-
         def _generate(self, *args, **kwargs):
             try:
                 return super()._generate(*args, **kwargs)
             except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
-                if not self._strip_rejected_sampling(err):
+                if not strip_rejected_sampling(self, err, logger):
                     raise
                 return super()._generate(*args, **kwargs)
 
         def _stream(self, *args, **kwargs):
+            yielded = False
             try:
-                yield from super()._stream(*args, **kwargs)
+                for chunk in super()._stream(*args, **kwargs):
+                    yielded = True
+                    yield chunk
             except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
-                if not self._strip_rejected_sampling(err):
+                # Only retry if nothing streamed yet, else a retry would double-emit.
+                if yielded or not strip_rejected_sampling(self, err, logger):
                     raise
                 yield from super()._stream(*args, **kwargs)
 
@@ -189,13 +197,33 @@ class BedrockProvider(BaseLLMProvider):
         return bool(self.base_url) or bool(self.region)
 
     def supports_model(self, model: str) -> bool:
-        if "/" in model:
-            return model.split("/")[0] == "bedrock"
-        return False
+        """Bedrock serves explicit ``bedrock/`` ids and Anthropic Claude models (so a
+        clean ``anthropic/claude-*`` pick routes here under LLM_PROVIDER_MODE=bedrock).
+        Anything else (OpenAI/Google/Gemini, or another prefix like ``openrouter/``)
+        falls back to its own provider — match by prefix, not a loose substring."""
+        prefix = model.split("/", 1)[0] if "/" in model else ""
+        if prefix in ("bedrock", "anthropic"):
+            return True
+        # Bare canonical Claude name with no provider prefix, e.g. "claude-sonnet-4-6".
+        return prefix == "" and model.lower().startswith("claude")
 
     def get_native_model_name(self, model: str) -> str:
-        if "/" in model and model.split("/")[0] == "bedrock":
+        # Explicit bedrock id -> use the suffix as-is (already a full, region-qualified profile id).
+        if "/" in model and model.split("/", 1)[0] == "bedrock":
             return model.split("/", 1)[1]
+        # Gateway mode: the gateway expects its own model names, not native Bedrock
+        # inference-profile ids, so don't apply the native translation (which would also
+        # default the geo prefix to "us" since gateway deployments set no region). The
+        # operator configures the exact name, typically via an explicit bedrock/<name> id.
+        if self.base_url:
+            return model
+        # Native mode: clean/canonical Anthropic id -> Bedrock inference-profile id.
+        anth = ModelMapper.get_native_name(model, "anthropic")  # e.g. "claude-opus-4-7" / "claude-opus-4.8"
+        key = anth.replace(".", "-").lower()
+        if key.startswith("claude"):
+            base = _ANTHROPIC_TO_BEDROCK_BASE.get(key, f"anthropic.{key}")
+            return f"{_geo_prefix_for(self.region)}.{base}"
+        # Not a recognized Anthropic model — pass through (Bedrock will surface a clear error).
         return model
 
     def get_supported_models(self) -> list[str]:
