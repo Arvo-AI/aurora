@@ -150,6 +150,7 @@ export default function KubectlAuthPage() {
       }
       setPendingFiles(prev => [...prev.filter(f => f.filename !== file.name), { filename: file.name, content }]);
     }
+    e.target.value = '';
   };
 
   const removePendingFile = (filename: string) => {

@@ -76,8 +76,14 @@ def _extract_contexts(parsed: dict) -> list:
 
 def _process_kubeconfig_entry(entry, user_id, org_id, registered, errors):
     """Process a single kubeconfig entry. Appends to registered/errors in place."""
+    if not isinstance(entry, dict):
+        errors.append({"filename": "unknown", "error": "Invalid entry format"})
+        return
     filename = entry.get("filename", "unknown.yaml")
     content = entry.get("content", "")
+    if not isinstance(content, str):
+        errors.append({"filename": filename, "error": "Content must be a string"})
+        return
 
     if len(content.encode()) > MAX_FILE_SIZE:
         errors.append({"filename": filename, "error": f"File exceeds {MAX_FILE_SIZE // 1024}KB limit"})

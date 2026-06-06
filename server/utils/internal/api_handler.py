@@ -87,12 +87,17 @@ async def _handle_kubectl_execute(headers, body, writer):
         return
     
     # Fallback: try kubeconfig-based direct execution
-    kubeconfig_info = _get_kubeconfig_for_cluster(user_id, cluster_id)
-    if kubeconfig_info:
-        result = await _execute_kubectl_with_kubeconfig(
-            command, kubeconfig_info['yaml'], kubeconfig_info['context_name'], timeout
-        )
-        await _send_json_response(writer, result)
+    try:
+        kubeconfig_info = _get_kubeconfig_for_cluster(user_id, cluster_id)
+        if kubeconfig_info:
+            result = await _execute_kubectl_with_kubeconfig(
+                command, kubeconfig_info['yaml'], kubeconfig_info['context_name'], timeout
+            )
+            await _send_json_response(writer, result)
+            return
+    except Exception as e:
+        logger.error("Kubeconfig fallback failed for cluster %s: %s", cluster_id, e, exc_info=True)
+        await _send_json_response(writer, {'success': False, 'error': 'Kubeconfig execution failed'})
         return
     
     await _send_json_response(writer, {'success': False, 'error': f"No active agent or kubeconfig for cluster '{cluster_id}'"})

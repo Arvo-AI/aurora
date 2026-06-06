@@ -1,7 +1,7 @@
 ---
 name: kubectl_onprem
 id: kubectl_onprem
-description: "On-prem Kubernetes cluster integration for running kubectl commands on connected clusters via Aurora agent relay"
+description: "On-prem Kubernetes cluster integration for running kubectl commands via Aurora agent relay or uploaded kubeconfig"
 category: infrastructure
 connection_check:
   method: is_connected_function
@@ -10,7 +10,7 @@ connection_check:
 tools:
   - get_connected_clusters
   - on_prem_kubectl
-index: "Infrastructure -- run kubectl on connected on-prem Kubernetes clusters"
+index: "Infrastructure -- run kubectl on connected Kubernetes clusters (agent or kubeconfig)"
 rca_priority: 8
 allowed-tools: get_connected_clusters, on_prem_kubectl
 metadata:
