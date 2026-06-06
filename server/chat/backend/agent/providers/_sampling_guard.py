@@ -74,7 +74,8 @@ def make_adaptive_sampling_cls(base_cls, *, wrap_async: bool = True):
     tokens stream, and the streaming wrappers only retry when nothing has been yielded,
     so a retry never double-emits.
     """
-    cached = _adaptive_cache.get(base_cls)
+    cache_key = (base_cls, wrap_async)
+    cached = _adaptive_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -124,5 +125,5 @@ def make_adaptive_sampling_cls(base_cls, *, wrap_async: bool = True):
 
     _Adaptive.__name__ = f"_Adaptive{base_cls.__name__}"
     _Adaptive.__qualname__ = _Adaptive.__name__
-    _adaptive_cache[base_cls] = _Adaptive
+    _adaptive_cache[cache_key] = _Adaptive
     return _Adaptive
