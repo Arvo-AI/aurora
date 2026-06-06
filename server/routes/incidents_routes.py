@@ -313,6 +313,12 @@ def get_incidents(user_id):
                 query += " LIMIT %s"
                 params.append(limit)
 
+                offset = request.args.get("offset", 0, type=int)
+                offset = max(0, offset)
+                if offset > 0:
+                    query += " OFFSET %s"
+                    params.append(offset)
+
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
 
