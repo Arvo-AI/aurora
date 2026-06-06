@@ -212,7 +212,12 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     )
 
     @mcp.tool()
-    async def chat_with_aurora(message: str = "", **kwargs) -> Dict[str, Any]:
+    async def chat_with_aurora(
+        message: str = "",
+        session_id: Optional[str] = None,
+        mode: str = "chat",
+        poll_only: bool = False,
+    ) -> Dict[str, Any]:
         """Deprecated. Use trigger_rca or direct read tools instead."""
         return {"error": "deprecated", "message": _DEPRECATION +
                 "Use trigger_rca to start investigations, or direct tools "
