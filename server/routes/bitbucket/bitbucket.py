@@ -84,7 +84,7 @@ def bitbucket_login(user_id):
                 granted = set(user_data.get("_granted_scopes", []))
                 missing = _REQUIRED_SCOPES - granted
                 if missing:
-                    logger.warning(f"Bitbucket token for {email} missing scopes: {missing}")
+                    logger.warning(f"Bitbucket token for {sanitize(email)} missing scopes: {missing}")
 
                 token_data = {
                     "access_token": api_token,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -21,8 +21,6 @@ import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
-
-let pendingGitHubDialog = false;
 
 function TwoTierBadge({ isAuthenticated, isConnected }: { isAuthenticated: boolean; isConnected: boolean }) {
   if (!isAuthenticated) return null;
@@ -79,13 +77,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     googleChatStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId, connectedOverride);
-
-  useEffect(() => {
-    if (pendingGitHubDialog && isConnected) {
-      pendingGitHubDialog = false;
-      setShowGitHubDialog(true);
-    }
-  }, [isConnected]);
 
   // Graph discovery status (only active for supported cloud providers)
   const { syncStatus } = useGraphDiscoveryStatus(connector.id, isConnected, userId);
