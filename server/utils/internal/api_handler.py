@@ -139,6 +139,7 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
     private_dir = os.path.join(tempfile.gettempdir(), 'aurora_kubeconfig')
     os.makedirs(private_dir, mode=0o700, exist_ok=True)
 
+    invocation_home = tempfile.mkdtemp(prefix='aurora_home_', dir=private_dir)
     fd, kubeconfig_path = tempfile.mkstemp(prefix='aurora_kc_', suffix='.yaml', dir=private_dir)
     try:
         os.fchmod(fd, 0o600)
@@ -152,7 +153,7 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
     try:
         exec_env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": private_dir,
+            "HOME": invocation_home,
             "KUBECONFIG": kubeconfig_path,
         }
         cmd_parts = ["kubectl", f"--context={context_name}"] + shlex.split(command)
@@ -180,6 +181,11 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
     finally:
         try:
             os.unlink(kubeconfig_path)
+        except OSError:
+            pass
+        try:
+            import shutil
+            shutil.rmtree(invocation_home, ignore_errors=True)
         except OSError:
             pass
 
