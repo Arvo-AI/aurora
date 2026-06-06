@@ -199,6 +199,38 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     it forwards user identity from the MCP bearer token.
     """
 
+    # ------------------------------------------------------------------
+    # Deprecated stubs — these tools have been removed but clients with a
+    # stale tool cache may still try to call them. Return an immediate
+    # error directing the LLM to the replacement and the user to refresh.
+    # Safe to delete once all clients have rotated (~ 1 release cycle).
+    # ------------------------------------------------------------------
+    _DEPRECATION = (
+        "This tool has been removed from Aurora's MCP surface. "
+        "The user should disconnect and reconnect their MCP client "
+        "(or restart their IDE) to refresh the tool list. "
+    )
+
+    @mcp.tool()
+    async def chat_with_aurora(message: str = "", **kwargs) -> Dict[str, Any]:
+        """Deprecated. Use trigger_rca or direct read tools instead."""
+        return {"error": "deprecated", "message": _DEPRECATION +
+                "Use trigger_rca to start investigations, or direct tools "
+                "(list_incidents, get_incident, incident_findings) for reads."}
+
+    @mcp.tool()
+    async def ask_incident(incident_id: str = "", question: str = "") -> Dict[str, Any]:
+        """Deprecated. Use get_incident or incident_findings instead."""
+        return {"error": "deprecated", "message": _DEPRECATION +
+                "Use get_incident, incident_findings, or incident_finding_detail "
+                "for incident data."}
+
+    @mcp.tool()
+    async def regenerate_rca(incident_id: str = "") -> Dict[str, Any]:
+        """Deprecated. Use trigger_rca instead."""
+        return {"error": "deprecated", "message": _DEPRECATION +
+                "Use trigger_rca to start a new investigation."}
+
     @mcp.tool()
     async def list_incidents(status: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
         """List Aurora incidents. Optionally filter by status
