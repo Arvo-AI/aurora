@@ -491,8 +491,8 @@ def delete_chat_session(user_id, session_id):
             conn.close() 
 
 # ---------------------------------------------------------------------------
-# Message-level routes — used by MCP's chat_with_aurora and any non-WebSocket
-# client. Dispatches the same Celery-driven agent the WebSocket handler uses.
+# Message-level routes — used by MCP and any non-WebSocket client.
+# Dispatches the same Celery-driven agent the WebSocket handler uses.
 # ---------------------------------------------------------------------------
 
 _MAX_MESSAGE_CHARS = 8000
@@ -609,7 +609,7 @@ def post_chat_message(user_id, session_id):
 def get_chat_messages(user_id, session_id):
     """Return messages after a given sequence number plus session status.
 
-    Used by MCP's chat_with_aurora to poll for the assistant's reply.
+    Used by MCP clients to poll for the assistant's reply.
     """
     org_id = get_org_id_from_request()
     try:

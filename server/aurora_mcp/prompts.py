@@ -15,8 +15,7 @@ def register_prompts(mcp) -> None:
             "incident_finding_detail for the tools/steps a specific agent ran\n"
             "3. incident_list_alerts to review the correlated alerts\n"
             "4. Search runbooks via search_runbooks\n"
-            "5. Only if open questions remain, use ask_incident or chat_with_aurora\n"
-            "6. Summarize root cause, impact, recommended actions"
+            "5. Summarize root cause, impact, recommended actions"
         )
 
     @mcp.prompt()

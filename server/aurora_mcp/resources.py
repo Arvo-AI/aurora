@@ -22,8 +22,8 @@ def _mcp_covered_skills() -> frozenset:
     """Connectors that have at least one MCP-callable tool (Tier 2 or 3).
 
     Used to flag connectors (e.g. AWS) that show as connected in /api/connectors/status
-    but have no surface in any MCP tier — so the LLM knows to fall back to
-    chat_with_aurora instead of asking for a non-existent tool.
+    but have no surface in any MCP tier — so the LLM knows to use `search_tools`
+    to discover available capabilities instead of asking for a non-existent tool.
     """
     from .registry import DISPATCH_ALLOWLIST, TIER2_TOOLS
     skills = set()
