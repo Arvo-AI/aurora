@@ -181,8 +181,8 @@ async def _execute_kubectl_with_kubeconfig(command: str, kubeconfig_yaml: str, c
     finally:
         try:
             os.unlink(kubeconfig_path)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug("Failed to remove temporary kubeconfig file %s: %s", kubeconfig_path, e)
         try:
             import shutil
             shutil.rmtree(invocation_home, ignore_errors=True)
