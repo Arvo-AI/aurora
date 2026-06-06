@@ -47,7 +47,7 @@ def _adaptive_chat_anthropic():
         def _generate(self, *args, **kwargs):
             try:
                 return super()._generate(*args, **kwargs)
-            except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
+            except Exception as err:  # noqa: BLE001
                 if not strip_rejected_sampling(self, err, logger):
                     raise
                 return super()._generate(*args, **kwargs)
@@ -55,7 +55,7 @@ def _adaptive_chat_anthropic():
         async def _agenerate(self, *args, **kwargs):
             try:
                 return await super()._agenerate(*args, **kwargs)
-            except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
+            except Exception as err:  # noqa: BLE001
                 if not strip_rejected_sampling(self, err, logger):
                     raise
                 return await super()._agenerate(*args, **kwargs)
@@ -66,7 +66,7 @@ def _adaptive_chat_anthropic():
                 for chunk in super()._stream(*args, **kwargs):
                     yielded = True
                     yield chunk
-            except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
+            except Exception as err:  # noqa: BLE001
                 # Only retry if nothing streamed yet, else a retry would double-emit.
                 if yielded or not strip_rejected_sampling(self, err, logger):
                     raise
@@ -78,7 +78,7 @@ def _adaptive_chat_anthropic():
                 async for chunk in super()._astream(*args, **kwargs):
                     yielded = True
                     yield chunk
-            except Exception as err:  # noqa: BLE001 - inspect message, re-raise if unrelated
+            except Exception as err:  # noqa: BLE001
                 # Only retry if nothing streamed yet, else a retry would double-emit.
                 if yielded or not strip_rejected_sampling(self, err, logger):
                     raise
