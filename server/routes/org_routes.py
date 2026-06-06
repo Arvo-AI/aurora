@@ -849,6 +849,7 @@ def join_org(user_id):
                         conn.commit()
                     return jsonify({"error": "You are already a member of this organization"}), 409
 
+                # Best-effort seat enforcement (not serialised — concurrent requests can overshoot by 1)
                 from utils.hooks import get_hook
                 cursor.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (new_org_id,))
                 _cnt = cursor.fetchone()[0]

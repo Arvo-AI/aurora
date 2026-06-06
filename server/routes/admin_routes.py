@@ -162,7 +162,6 @@ def create_user(user_id):
             _cnt += cur.fetchone()[0]
             allowed, msg = get_hook("before_add_member")(org_id, _cnt)
             if not allowed:
-                conn.close()
                 return jsonify({"error": msg or "Seat limit reached"}), 403
 
             password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
