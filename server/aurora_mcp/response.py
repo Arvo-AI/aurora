@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-def truncate_payload(payload: Any, *, tool_name: str = "mcp") -> Dict[str, Any]:
+def truncate_payload(payload: Any, **_kwargs: Any) -> Dict[str, Any]:
     """Guarantee a dict return shape for MCP tool responses.
 
     MCP tools are declared with a `Dict[str, Any]` return type. FastMCP
@@ -39,11 +39,10 @@ def paginate(
 
 
 def wrap_listing(
-    items: List[Any], *, cursor: Optional[str] = None, limit: int = 20, tool_name: str = "mcp"
+    items: List[Any], *, cursor: Optional[str] = None, limit: int = 20,
 ) -> Dict[str, Any]:
     """Standard envelope for list-returning tools: {items, next_cursor, total}."""
     page, next_cursor = paginate(items, cursor=cursor, limit=limit)
     return truncate_payload(
         {"items": page, "next_cursor": next_cursor, "total": len(items)},
-        tool_name=tool_name,
     )
