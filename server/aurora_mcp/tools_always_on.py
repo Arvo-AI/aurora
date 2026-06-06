@@ -298,8 +298,13 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
     @mcp.tool()
     async def list_incidents(status: Optional[str] = None, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
         """List Aurora incidents. Optionally filter by status
-        (investigating/analyzed/merged/resolved). Use offset to paginate
-        through results (max 100 per page)."""
+        (investigating/analyzed/merged/resolved).
+
+        Args:
+          status: Filter by incident status (optional).
+          limit: Max incidents to return (1-100, default 20).
+          offset: Paging offset (>= 0, default 0).
+        """
         return await _do_list_incidents(api_call, status, limit, offset)
 
     @mcp.tool()
