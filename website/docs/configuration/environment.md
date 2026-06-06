@@ -290,6 +290,7 @@ For native mode, set **`LLM_PROVIDER_MODE=bedrock`** to route clean model picks 
 | `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. |
 | `BEDROCK_ACCESS_KEY_ID` | _(AWS_ACCESS_KEY_ID)_ | Native mode access key. Omit to use an IAM role / default credential chain. |
 | `BEDROCK_SECRET_ACCESS_KEY` | _(AWS_SECRET_ACCESS_KEY)_ | Native mode secret key. |
+| `BEDROCK_SESSION_TOKEN` | _(AWS_SESSION_TOKEN)_ | Native mode session token, used alongside `BEDROCK_ACCESS_KEY_ID` / `BEDROCK_SECRET_ACCESS_KEY` for temporary / STS credentials. Omit for long-lived keys, a profile, or an IAM role. |
 | `BEDROCK_PROFILE` | - | Native mode named AWS profile (alternative to explicit keys). |
 
 ```bash
@@ -303,6 +304,7 @@ MAIN_MODEL=bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
 BEDROCK_REGION=us-east-1
 BEDROCK_ACCESS_KEY_ID=AKIA...          # or use BEDROCK_PROFILE / an IAM role
 BEDROCK_SECRET_ACCESS_KEY=...
+BEDROCK_SESSION_TOKEN=                  # omit unless using temporary / STS credentials
 LLM_PROVIDER_MODE=bedrock               # routes clean model picks through Bedrock
 MAIN_MODEL=anthropic/claude-sonnet-4.6  # auto-translated to us.anthropic.claude-sonnet-4-6
 ```
