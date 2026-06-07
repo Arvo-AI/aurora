@@ -853,7 +853,11 @@ def join_org(user_id):
                 from utils.hooks import get_hook
                 cursor.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (new_org_id,))
                 _cnt = cursor.fetchone()[0]
-                cursor.execute("SELECT COUNT(*) FROM org_invitations WHERE org_id = %s AND status = 'pending'", (new_org_id,))
+                cursor.execute(
+                    """SELECT COUNT(*) FROM org_invitations
+                       WHERE org_id = %s AND status = 'pending' AND id IS DISTINCT FROM %s""",
+                    (new_org_id, invitation_id),
+                )
                 _cnt += cursor.fetchone()[0]
                 allowed, msg = get_hook("before_add_member")(new_org_id, _cnt)
                 if not allowed:
