@@ -1640,9 +1640,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "runbook) — not for one-off chat answers. ALWAYS read the existing artifact "
                     "first and reconcile rather than regenerate: keep items the user edited or "
                     "added, remove findings that are now resolved or no longer reproduce, do not "
-                    "re-add anything the user deleted, and avoid duplicates. If the existing doc "
-                    "was last edited by the user, treat their version as authoritative and change "
-                    "it minimally."
+                    "re-add anything the user deleted, and avoid duplicates. Honor any "
+                    "user-maintained 'False positives', 'Suppressed', or 'Won't fix' section: "
+                    "preserve it verbatim and never re-report or re-add the items it lists, even "
+                    "if a fresh scan surfaces them again. If the existing doc was last edited by "
+                    "the user, treat their version as authoritative and change it minimally."
                 ),
                 args_schema=WriteArtifactArgs,
             )
