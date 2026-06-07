@@ -188,6 +188,21 @@ class ProviderRegistry:
             f"Configure {hint} or set LLM_PROVIDER_MODE=openrouter to use OpenRouter instead."
         )
 
+    def resolve_provider_name(self, model: str, mode: str = "direct") -> str:
+        """Return the *name* of the provider that :meth:`get_provider_for_model` selects.
+
+        Mirrors the routing exactly (forced provider-name mode, fallback, prefix), so
+        callers can label a model by the provider that actually serves it — not just its
+        id prefix. Needed because a clean ``anthropic/`` model under ``LLM_PROVIDER_MODE=
+        bedrock`` is served by Bedrock, and the forced tool_choice format must match the
+        serving client, not the prefix.
+        """
+        provider = self.get_provider_for_model(model, mode=mode)
+        for name, candidate in self._providers.items():
+            if candidate is provider:
+                return name
+        return ModelMapper.detect_provider(model) or ""
+
     def get_provider_info(self) -> List[Dict]:
         """
         Get information about all providers.
