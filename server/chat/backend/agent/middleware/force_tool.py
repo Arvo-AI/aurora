@@ -84,14 +84,15 @@ class ForceToolChoice(AgentMiddleware):
         if provider == "bedrock":
             # Gateway (ChatOpenAI) and native (ChatBedrockConverse) both report
             # provider="bedrock". Only the gateway — positively detected as ChatOpenAI
-            # — wants OpenAI-style. Default to the Anthropic-style shape Converse
-            # requires, since sending the wrong format to native Bedrock hard-errors.
+            # — wants OpenAI-style. Native Converse wants the Bedrock toolChoice shape
+            # {"tool": {"name": ...}}; its first key must be "tool" (not "type"), or
+            # ChatBedrockConverse rejects it as an unsupported tool_choice type.
             if self._infer_provider(getattr(request, "model", None)) == "openai":
                 return {
                     "type": "function",
                     "function": {"name": self._tool_name},
                 }
-            return {"type": "tool", "name": self._tool_name}
+            return {"tool": {"name": self._tool_name}}
         return {
             "type": "function",
             "function": {"name": self._tool_name},
