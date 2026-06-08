@@ -68,6 +68,30 @@ def get_default_enabled_tools() -> set:
     return {k for k, v in TOOL_REGISTRY.items() if v.get("default")}
 
 
+def seed_org_tool_permissions(org_id: str, user_id: str) -> int:
+    """Seed default tool permissions for org. Idempotent (DO NOTHING on conflict)."""
+    from datetime import datetime, timezone
+    from utils.db.connection_pool import db_pool
+    from utils.auth.stateless_auth import set_rls_context
+
+    defaults = get_default_enabled_tools()
+    now = datetime.now(timezone.utc)
+
+    with db_pool.get_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[seed_tool_perms]")
+            for tool_key in TOOL_REGISTRY:
+                enabled = tool_key in defaults
+                cur.execute(
+                    """INSERT INTO org_tool_permissions (org_id, tool_key, enabled, updated_by, updated_at)
+                       VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (org_id, tool_key) DO NOTHING""",
+                    (org_id, tool_key, enabled, user_id, now),
+                )
+            conn.commit()
+    return len(TOOL_REGISTRY)
+
+
 def get_tools_by_connector() -> dict:
     """Group registry entries by connector for UI rendering."""
     grouped: dict = {}
