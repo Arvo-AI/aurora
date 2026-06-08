@@ -363,7 +363,7 @@ def disconnect(user_id):
 # ------------------------------------------------------------------
 
 @jira_bp.route("/webhook/<user_id>", methods=["POST"])
-def jira_webhook(user_id: str):
+def webhook(user_id: str):
     """Receive a Jira webhook and trigger Aurora's RCA pipeline.
 
     Configure in Jira under Settings > System > Webhooks, or via
@@ -382,13 +382,13 @@ def jira_webhook(user_id: str):
 
     issue_type = (issue.get("fields", {}).get("issuetype") or {}).get("name", "").lower()
     if issue_type not in ("bug", "incident", "problem", "defect", "production issue"):
-        return jsonify({"status": "ignored", "reason": f"issue type '{issue_type}' not configured for RCA"}), 200
+        return jsonify({"status": "ignored", "reason": "issue type not configured for RCA"}), 200
 
     from routes.jira.tasks import process_jira_webhook
     process_jira_webhook.delay(payload=payload, user_id=user_id)
 
     issue_key = issue.get("key", "unknown")
-    logger.info("[JIRA][WEBHOOK] Accepted %s for %s (user=%s)", webhook_event, issue_key, user_id)
+    logger.info("[JIRA][WEBHOOK] Accepted event for issue (user=%s)", user_id)
     return jsonify({"status": "accepted", "issue": issue_key}), 202
 
 

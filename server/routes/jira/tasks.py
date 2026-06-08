@@ -6,6 +6,7 @@ Aurora's RCA pipeline — the same flow as Datadog/Grafana/PagerDuty alerts.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -87,8 +88,8 @@ def process_jira_webhook(
     fields = issue.get("fields", {})
     summary = fields.get("summary", "")
 
-    logger.info("[JIRA][WEBHOOK][USER:%s] event=%s issue=%s summary=%s",
-                user_id or "unknown", webhook_event, issue_key, summary[:100])
+    logger.info("[JIRA][WEBHOOK][USER:%s] Processing webhook event",
+                user_id or "unknown")
 
     try:
         if not user_id:
@@ -121,7 +122,7 @@ def process_jira_webhook(
                     try:
                         alert_fired_at = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
                     except (ValueError, TypeError):
-                        pass
+                        logger.debug("[JIRA] Could not parse created date: %s", created_str)
 
                 source_alert_id_str = issue_key
 
@@ -159,8 +160,8 @@ def process_jira_webhook(
                 except Exception as corr_exc:
                     logger.warning("[JIRA] Correlation check failed: %s", corr_exc)
 
-                # source_alert_id in incidents is an integer — hash the issue key
-                issue_id_int = abs(hash(f"{org_id}:{issue_key}")) % (2**31)
+                # source_alert_id in incidents is an integer — stable hash of issue key
+                issue_id_int = int(hashlib.sha256(f"{org_id}:{issue_key}".encode()).hexdigest()[:8], 16) % (2**31)
 
                 cursor.execute(
                     """
@@ -230,8 +231,8 @@ def process_jira_webhook(
                     except Exception as e:
                         try:
                             cursor.execute("ROLLBACK TO SAVEPOINT sp_jira_lifecycle")
-                        except Exception:
-                            pass
+                        except Exception as rb_exc:
+                            logger.debug("[JIRA] Savepoint rollback failed: %s", rb_exc)
                         logger.warning("[JIRA] Failed to record lifecycle event: %s", e)
 
                 if incident_id:
