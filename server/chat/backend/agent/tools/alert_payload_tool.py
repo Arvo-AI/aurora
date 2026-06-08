@@ -87,7 +87,6 @@ def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Option
         )
         meta_row = cursor.fetchone()
         if meta_row and meta_row[0]:
-            import json
             payload = meta_row[0] if isinstance(meta_row[0], dict) else json.loads(meta_row[0])
             return payload, None
         return None, f"Error: No alert data found for source type '{source_type}'."
