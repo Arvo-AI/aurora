@@ -84,6 +84,7 @@ celery_app.conf.update(
         'routes.newrelic.tasks',
         'routes.sentry.tasks',
         'routes.jenkins.tasks',
+        'routes.jira.tasks',
         'routes.spinnaker.tasks',
         'routes.incidentio.tasks',
         'utils.terminal.terminal_pod_cleanup',

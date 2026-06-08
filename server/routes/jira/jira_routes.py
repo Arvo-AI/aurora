@@ -356,3 +356,51 @@ def disconnect(user_id):
     except Exception as exc:
         logger.exception("[JIRA] Failed to disconnect provider")
         return jsonify({"error": "Failed to disconnect Jira"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /jira/webhook/<user_id> — Jira automation webhook receiver
+# ------------------------------------------------------------------
+
+@jira_bp.route("/webhook/<user_id>", methods=["POST"])
+def jira_webhook(user_id: str):
+    """Receive a Jira webhook and trigger Aurora's RCA pipeline.
+
+    Configure in Jira under Settings > System > Webhooks, or via
+    Jira Automation rules that POST to this URL on issue creation.
+    Accepts standard Jira webhook payloads (issue_created, issue_updated).
+    """
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "Invalid or missing JSON payload"}), 400
+
+    webhook_event = payload.get("webhookEvent", "")
+    issue = payload.get("issue", {})
+
+    if not issue:
+        return jsonify({"status": "ignored", "reason": "no issue in payload"}), 200
+
+    issue_type = (issue.get("fields", {}).get("issuetype") or {}).get("name", "").lower()
+    if issue_type not in ("bug", "incident", "problem", "defect", "production issue"):
+        return jsonify({"status": "ignored", "reason": f"issue type '{issue_type}' not configured for RCA"}), 200
+
+    from routes.jira.tasks import process_jira_webhook
+    process_jira_webhook.delay(payload=payload, user_id=user_id)
+
+    issue_key = issue.get("key", "unknown")
+    logger.info("[JIRA][WEBHOOK] Accepted %s for %s (user=%s)", webhook_event, issue_key, user_id)
+    return jsonify({"status": "accepted", "issue": issue_key}), 202
+
+
+# ------------------------------------------------------------------
+# GET /jira/webhook-url — returns the webhook URL for this user
+# ------------------------------------------------------------------
+
+@jira_bp.route("/webhook-url", methods=["GET"])
+@require_permission("connectors", "read")
+def get_webhook_url(user_id):
+    """Return the Jira webhook URL for the authenticated user."""
+    import os
+    backend_url = os.environ.get("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
+    url = f"{backend_url}/jira/webhook/{user_id}"
+    return jsonify({"webhook_url": url, "events": ["jira:issue_created", "jira:issue_updated"]})
