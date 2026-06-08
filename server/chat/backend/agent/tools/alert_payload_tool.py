@@ -80,7 +80,17 @@ def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Option
     source_type, source_alert_id, incident_created_at = row[0], row[1], row[2]
     table = _SOURCE_TABLE_MAP.get(source_type)
     if not table:
-        return None, f"Error: Unknown source type '{source_type}'. Cannot look up payload."
+        # Fallback: read alert_metadata directly from the incident row
+        cursor.execute(
+            "SELECT alert_metadata FROM incidents WHERE id = %s",
+            (incident_id,),
+        )
+        meta_row = cursor.fetchone()
+        if meta_row and meta_row[0]:
+            import json
+            payload = meta_row[0] if isinstance(meta_row[0], dict) else json.loads(meta_row[0])
+            return payload, None
+        return None, f"Error: No alert data found for source type '{source_type}'."
 
     # Primary: direct ID lookup
     cursor.execute(
