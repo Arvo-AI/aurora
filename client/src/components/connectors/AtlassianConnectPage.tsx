@@ -295,8 +295,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   <CardTitle className="text-base">Incoming Webhook</CardTitle>
                 </div>
                 <CardDescription className="text-xs">
-                  Configure this URL in Jira to trigger Aurora RCA when a bug is created.
-                  Go to Jira Settings &rarr; System &rarr; Webhooks, paste this URL, and select &quot;Issue created&quot;.
+                  Trigger Aurora RCA automatically when a bug is filed.
+                  In Jira: Settings &rarr; System &rarr; Advanced &rarr; WebHooks &rarr; paste this URL and select &quot;Issue created&quot;.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
