@@ -5,12 +5,12 @@ escalation) and the per-org domain matcher (so policies scoped to one
 org can't leak across tenants).
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from utils.auth import enforcer as enforcer_module
-from utils.auth.enforcer import assign_role_to_user
+from utils.auth.enforcer import assign_role_to_user, enforce_with_reload
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +24,7 @@ def fake_enforcer(monkeypatch):
     fake = MagicMock(name="casbin_enforcer")
     fake.get_roles_for_user_in_domain.return_value = []
     monkeypatch.setattr(enforcer_module, "get_enforcer", lambda: fake)
+    monkeypatch.setattr(enforcer_module, "get_redis_client", lambda: None)
     return fake
 
 

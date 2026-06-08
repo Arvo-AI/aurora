@@ -14,7 +14,7 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.enforcer import get_enforcer
+from utils.auth.enforcer import get_enforcer, increment_policy_version
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 from utils.log_sanitizer import sanitize
@@ -279,6 +279,7 @@ def assign_role(user_id, target_user_id):
         enforcer.add_grouping_policy(target_user_id, role)
 
     enforcer.save_policy()
+    increment_policy_version()
 
     # Keep the convenience column in sync
     conn = connect_to_db_as_user()
@@ -328,6 +329,7 @@ def revoke_role(user_id, target_user_id, role):
             enforcer.add_grouping_policy(target_user_id, "viewer")
 
     enforcer.save_policy()
+    increment_policy_version()
 
     if org_id:
         fallback_role = (enforcer.get_roles_for_user_in_domain(target_user_id, org_id) or ["viewer"])[0]
@@ -400,6 +402,7 @@ def delete_user(user_id, target_user_id):
             for r in roles:
                 enforcer.remove_grouping_policy(target_user_id, r)
         enforcer.save_policy()
+        increment_policy_version()
     except Exception as casbin_err:
         logger.warning("Failed to clean up Casbin policies for deleted user %s: %s",
                         target_user_id, casbin_err)

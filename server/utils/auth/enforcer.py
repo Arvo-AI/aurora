@@ -17,12 +17,16 @@ import casbin
 from casbin_sqlalchemy_adapter import Adapter
 from sqlalchemy import create_engine
 
+from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 _enforcer: casbin.Enforcer | None = None
 _lock = threading.RLock()
+
+POLICY_VERSION_KEY = "casbin:policy_version"
+_cached_version: str | None = None
 
 # Default permission policies seeded on first run.
 # Format: (role, domain, resource, action)
@@ -183,15 +187,42 @@ def get_enforcer() -> casbin.Enforcer:
 
 
 def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -> bool:
-    """Enforce a permission check, always loading fresh policy from the DB.
+    """Enforce a permission check, reloading policy only when the Redis version
+    counter indicates another worker has written changes.
 
-    Ensures every check reflects the current state of the casbin_rule table,
-    eliminating stale-cache issues across multiple workers.
+    Falls back to always-reload when Redis is unavailable (correctness over
+    performance).
     """
+    global _cached_version
     enforcer = get_enforcer()
+
+    try:
+        redis_client = get_redis_client()
+        version = (redis_client.get(POLICY_VERSION_KEY) or "0") if redis_client else None
+    except Exception:
+        version = None
+
+    if version is None or version != _cached_version:
+        with _lock:
+            try:
+                redis_client = get_redis_client()
+                version = (redis_client.get(POLICY_VERSION_KEY) or "0") if redis_client else None
+            except Exception:
+                version = None
+            if version is None or version != _cached_version:
+                enforcer.load_policy()
+                _cached_version = version
     with _lock:
-        enforcer.load_policy()
         return enforcer.enforce(user_id, org_id, resource, action)
+
+
+def increment_policy_version() -> None:
+    """Bump the Redis policy version counter so other workers know to reload."""
+    global _cached_version
+    redis_client = get_redis_client()
+    if redis_client:
+        new_version = str(redis_client.incr(POLICY_VERSION_KEY))
+        _cached_version = new_version
 
 
 def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
@@ -206,6 +237,7 @@ def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
             enforcer.add_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
         enforcer.load_policy()
+    increment_policy_version()
     logger.info("Assigned role %s to user %s in org %s (replaced: %s)", sanitize(role), sanitize(user_id), sanitize(org_id), current_roles)
 
 
@@ -216,6 +248,7 @@ def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
         enforcer.remove_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
         enforcer.load_policy()
+    increment_policy_version()
     logger.info("Removed role %s from user %s in org %s", sanitize(role), sanitize(user_id), sanitize(org_id))
 
 
