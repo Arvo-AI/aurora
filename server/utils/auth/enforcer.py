@@ -15,6 +15,7 @@ import threading
 
 import casbin
 from casbin_sqlalchemy_adapter import Adapter
+from sqlalchemy import create_engine
 
 from utils.log_sanitizer import sanitize
 
@@ -22,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 _enforcer: casbin.Enforcer | None = None
 _lock = threading.RLock()
-_last_reload: float = 0.0
-_RELOAD_INTERVAL = 300.0
 
 # Default permission policies seeded on first run.
 # Format: (role, domain, resource, action)
@@ -150,21 +149,9 @@ def _seed_default_policies(enforcer: casbin.Enforcer) -> None:
 
 
 def get_enforcer() -> casbin.Enforcer:
-    """Return the module-level Casbin enforcer, creating it on first call.
-
-    Periodically reloads policies from the DB (every 5 min) as a safety net
-    for role revocations.  For role *grants*, callers should use
-    ``enforce_with_reload`` which reloads on deny for instant propagation.
-    """
-    global _enforcer, _last_reload
+    """Return the module-level Casbin enforcer, creating it on first call."""
+    global _enforcer
     if _enforcer is not None:
-        import time
-        now = time.monotonic()
-        if now - _last_reload > _RELOAD_INTERVAL:
-            with _lock:
-                if now - _last_reload > _RELOAD_INTERVAL:
-                    _enforcer.load_policy()
-                    _last_reload = now
         return _enforcer
 
     with _lock:
@@ -175,55 +162,36 @@ def get_enforcer() -> casbin.Enforcer:
         model_path = _model_path()
         logger.info("Initialising Casbin enforcer (model=%s)", model_path)
 
-        adapter = Adapter(db_url)
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
+        adapter = Adapter(engine)
         _enforcer = casbin.Enforcer(model_path, adapter)
 
         def _domain_match(key1: str, key2: str) -> bool:
-            """Match org (domain) in Casbin grouping policies.
-
-            Supports exact match and wildcard ``*`` (used for policies that
-            apply across all organisations, e.g. the built-in role definitions).
-            """
             return key1 == key2 or key2 == "*"
 
         _enforcer.add_named_domain_matching_func("g", _domain_match)
 
         _seed_default_policies(_enforcer)
         _enforcer.load_policy()
-        import time
-        _last_reload = time.monotonic()
 
         logger.info("Casbin enforcer ready.")
         return _enforcer
 
 
 def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -> bool:
-    """Enforce a permission check, reloading from DB on first denial.
+    """Enforce a permission check, always loading fresh policy from the DB.
 
-    Handles the common case where a role was just granted: the in-memory
-    cache says deny, but the DB says allow.  One reload + retry keeps
-    the hot path fast (no DB hit) while making grants take effect instantly.
+    Ensures every check reflects the current state of the casbin_rule table,
+    eliminating stale-cache issues across multiple workers.
     """
     enforcer = get_enforcer()
-    if enforcer.enforce(user_id, org_id, resource, action):
-        return True
-    reload_policies()
-    return enforcer.enforce(user_id, org_id, resource, action)
-
-
-def reload_policies() -> None:
-    """Reload all policies from the database into memory.
-
-    Call this after any admin mutation (role assign / revoke) so that the
-    in-process enforcer cache stays current.
-
-    Thread-safe: acquires _lock so concurrent reloads cannot corrupt the
-    enforcer's in-memory policy cache.
-    """
     with _lock:
-        enforcer = get_enforcer()
         enforcer.load_policy()
-        logger.info("Casbin policies reloaded from database.")
+        return enforcer.enforce(user_id, org_id, resource, action)
 
 
 def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
