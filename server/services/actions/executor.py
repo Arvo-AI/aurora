@@ -173,20 +173,22 @@ def build_action_prompt(
     ]
 
     # Auto-maintain a living artifact for every action so results accumulate
-    # across runs without the user having to ask for it. Skip when the user
-    # already wrote their own artifact instructions — their steering wins.
-    if "artifact" not in action["instructions"].lower():
+    # across runs without the user having to ask for it. Skip when the user's
+    # own instructions already steer a persistent doc — their steering wins.
+    # ("artifact" also matches read_artifact / write_artifact mentions.)
+    instructions_lc = action["instructions"].lower()
+    user_steers_doc = any(
+        kw in instructions_lc
+        for kw in ("artifact", "living document", "living doc", "persist across runs")
+    )
+    if not user_steers_doc:
         title = action["name"]
         parts += [
             "",
             "## Maintain a Living Document",
-            f'Keep a persistent Aurora artifact titled "{title}" so this Action\'s results '
-            "accumulate across runs instead of being lost in chat.",
-            f'- First call read_artifact with title "{title}" to load the prior version, then '
-            f'write_artifact with that same exact title.',
-            "- Reconcile rather than regenerate: add new findings, remove anything now resolved, "
-            "keep items the user edited or added, and never re-add anything the user deleted or "
-            'listed under a "False positives" / "Won\'t fix" section.',
+            f'Keep a persistent Aurora artifact titled "{title}" so this Action\'s results accumulate across runs instead of being lost in chat.',
+            f'- First call read_artifact with title "{title}" to load the prior version, then write_artifact with that same exact title.',
+            '- Reconcile rather than regenerate: add new findings, remove anything now resolved, keep items the user edited or added, and never re-add anything the user deleted or listed under a "False positives" / "Won\'t fix" section.',
             "- If there is nothing new to record, leave the document unchanged.",
         ]
 
