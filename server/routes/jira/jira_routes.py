@@ -387,9 +387,7 @@ def webhook(user_id: str):
     from routes.jira.tasks import process_jira_webhook
     process_jira_webhook.delay(payload=payload, user_id=user_id)
 
-    issue_key = issue.get("key", "unknown")
-    logger.info("[JIRA][WEBHOOK] Accepted event for issue (user=%s)", user_id)
-    return jsonify({"status": "accepted", "issue": issue_key}), 202
+    return jsonify({"status": "accepted", "issue": issue.get("key", "unknown")}), 202
 
 
 # ------------------------------------------------------------------
