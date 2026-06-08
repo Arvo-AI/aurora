@@ -959,7 +959,7 @@ export default function CloudBeesAuthPage() {
                       <span className="text-[13px]">{d.service}</span>
                       {d.environment && <span className="text-[11px] text-[#555]">{d.environment}</span>}
                     </div>
-                    <span className="text-[11px] text-[#555]">#{d.build_number} · {timeAgo(d.created_at)}</span>
+                    <span className="text-[11px] text-[#555]">#{d.buildNumber} · {timeAgo(d.receivedAt)}</span>
                   </div>
                 ))}
               </div>

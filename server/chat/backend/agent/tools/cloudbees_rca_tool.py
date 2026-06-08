@@ -87,9 +87,12 @@ def _get_oc_client_for_user(user_id: str):
     if not creds:
         return None
     base_url = creds.get("base_url")
-    username = creds.get("username")
+    username = creds.get("username", "")
     api_token = creds.get("api_token")
-    if not base_url or not username or not api_token:
+    auth_mode = creds.get("auth_mode", "basic")
+    if not base_url or not api_token:
+        return None
+    if auth_mode == "basic" and not username:
         return None
     return CloudBeesOCClient(base_url=base_url, username=username, api_token=api_token)
 
@@ -133,10 +136,6 @@ def cloudbees_rca(
 
     # --- Enterprise actions (OC / FM) ---
     if action == "flag_changes":
-        if not app_id:
-            return json.dumps({
-                "error": "app_id is required for flag_changes. Specify a Feature Management application ID, or use the platform-status endpoint to list available applications."
-            })
         fm_client = _get_fm_client_for_user(user_id)
         if not fm_client:
             return json.dumps({

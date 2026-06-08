@@ -316,20 +316,23 @@ def connect_platform(user_id):
         from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
 
         fm_client = CloudBeesFMClient(api_token=fm_api_token)
-        if fm_client.validate_token():
-            fm_payload = {
-                "api_token": fm_api_token,
-                "app_id": fm_app_id or "",
-            }
-            try:
-                store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
-                fm_status = {"connected": True, "app_id": fm_app_id}
-                logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
-            except Exception:
-                logger.exception("[CLOUDBEES] Failed to store FM credentials for user %s", user_id)
-                fm_status = {"connected": False, "error": "Failed to store FM credentials"}
-        else:
-            fm_status = {"connected": False, "error": "Invalid Feature Management API token"}
+        try:
+            if fm_client.validate_token():
+                fm_payload = {
+                    "api_token": fm_api_token,
+                    "app_id": fm_app_id or "",
+                }
+                try:
+                    store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
+                    fm_status = {"connected": True, "app_id": fm_app_id}
+                    logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
+                except Exception:
+                    logger.exception("[CLOUDBEES] Failed to store FM credentials for user %s", user_id)
+                    fm_status = {"connected": False, "error": "Failed to store FM credentials"}
+            else:
+                fm_status = {"connected": False, "error": "Invalid Feature Management API token"}
+        finally:
+            fm_client.close()
 
     return jsonify({
         "success": True,
@@ -351,13 +354,13 @@ def platform_status(user_id):
     oc_status = {"connected": False}
     fm_status = {"connected": False}
 
-    # Check OC credentials exist
+    # Check OC credentials exist (PAT/bearer mode may have empty username)
     oc_creds = get_token_data(user_id, CLOUDBEES_OC_PROVIDER)
-    if oc_creds and oc_creds.get("base_url") and oc_creds.get("username") and oc_creds.get("api_token"):
+    if oc_creds and oc_creds.get("base_url") and oc_creds.get("api_token"):
         oc_status = {
             "connected": True,
             "url": oc_creds["base_url"],
-            "username": oc_creds["username"],
+            "username": oc_creds.get("username", ""),
         }
 
     # Check FM credentials exist
