@@ -72,14 +72,15 @@ def seed_org_tool_permissions(org_id: str, user_id: str) -> int:
     """Seed default tool permissions for org. Idempotent (DO NOTHING on conflict)."""
     from datetime import datetime, timezone
     from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
 
     defaults = get_default_enabled_tools()
     now = datetime.now(timezone.utc)
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[seed_tool_perms]")
+            cur.execute("SET myapp.current_user_id = %s;", (user_id,))
+            cur.execute("SET myapp.current_org_id = %s;", (org_id,))
+            conn.commit()
             for tool_key in TOOL_REGISTRY:
                 enabled = tool_key in defaults
                 cur.execute(
