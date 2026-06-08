@@ -219,10 +219,11 @@ def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -
 def increment_policy_version() -> None:
     """Bump the Redis policy version counter so other workers know to reload."""
     global _cached_version
-    redis_client = get_redis_client()
-    if redis_client:
-        new_version = str(redis_client.incr(POLICY_VERSION_KEY))
-        _cached_version = new_version
+    with _lock:
+        redis_client = get_redis_client()
+        if redis_client:
+            new_version = str(redis_client.incr(POLICY_VERSION_KEY))
+            _cached_version = new_version
 
 
 def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
