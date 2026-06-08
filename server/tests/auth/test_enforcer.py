@@ -5,12 +5,12 @@ escalation) and the per-org domain matcher (so policies scoped to one
 org can't leak across tenants).
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from utils.auth import enforcer as enforcer_module
-from utils.auth.enforcer import assign_role_to_user, enforce_with_reload
+from utils.auth.enforcer import assign_role_to_user
 
 
 # ---------------------------------------------------------------------------
