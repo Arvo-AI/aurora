@@ -186,16 +186,9 @@ def get_enforcer() -> casbin.Enforcer:
         return _enforcer
 
 
-def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -> bool:
-    """Enforce a permission check, reloading policy only when the Redis version
-    counter indicates another worker has written changes.
-
-    Falls back to always-reload when Redis is unavailable (correctness over
-    performance).
-    """
+def reload_if_stale() -> None:
+    """Reload policy from DB if the Redis version counter indicates staleness."""
     global _cached_version
-    enforcer = get_enforcer()
-
     try:
         redis_client = get_redis_client()
         version = (redis_client.get(POLICY_VERSION_KEY) or "0") if redis_client else None
@@ -210,10 +203,20 @@ def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -
             except Exception:
                 version = None
             if version is None or version != _cached_version:
-                enforcer.load_policy()
+                get_enforcer().load_policy()
                 _cached_version = version
+
+
+def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -> bool:
+    """Enforce a permission check, reloading policy only when the Redis version
+    counter indicates another worker has written changes.
+
+    Falls back to always-reload when Redis is unavailable (correctness over
+    performance).
+    """
+    reload_if_stale()
     with _lock:
-        return enforcer.enforce(user_id, org_id, resource, action)
+        return get_enforcer().enforce(user_id, org_id, resource, action)
 
 
 def increment_policy_version() -> None:
@@ -229,6 +232,7 @@ def increment_policy_version() -> None:
 def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
     """Replace all roles for a user in an org with a single new role."""
     with _lock:
+        reload_if_stale()
         enforcer = get_enforcer()
         current_roles = enforcer.get_roles_for_user_in_domain(user_id, org_id)
         for old_role in current_roles:
@@ -255,5 +259,6 @@ def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
 
 def get_user_roles_in_org(user_id: str, org_id: str) -> list[str]:
     """Get all roles assigned to a user in a specific org."""
+    reload_if_stale()
     enforcer = get_enforcer()
     return enforcer.get_roles_for_user_in_domain(user_id, org_id)

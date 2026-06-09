@@ -14,7 +14,7 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.enforcer import get_enforcer, increment_policy_version
+from utils.auth.enforcer import get_enforcer, increment_policy_version, reload_if_stale
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 from utils.log_sanitizer import sanitize
@@ -232,6 +232,7 @@ def get_user_roles(user_id, target_user_id):
     finally:
         conn.close()
 
+    reload_if_stale()
     enforcer = get_enforcer()
     if org_id:
         roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
@@ -253,7 +254,6 @@ def assign_role(user_id, target_user_id):
     if role not in VALID_ROLES:
         return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
 
-    enforcer = get_enforcer()
     org_id = get_org_id_from_request()
 
     conn = connect_to_db_as_user()
@@ -266,7 +266,9 @@ def assign_role(user_id, target_user_id):
     finally:
         conn.close()
 
-    # Remove any existing role assignments for this user
+    reload_if_stale()
+    enforcer = get_enforcer()
+
     if org_id:
         current_roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
         for old_role in current_roles:
@@ -304,7 +306,6 @@ def revoke_role(user_id, target_user_id, role):
     if role not in VALID_ROLES:
         return jsonify({"error": f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}"}), 400
 
-    enforcer = get_enforcer()
     org_id = get_org_id_from_request()
 
     conn = connect_to_db_as_user()
@@ -316,6 +317,9 @@ def revoke_role(user_id, target_user_id, role):
                 return jsonify({"error": "Target user not found in this organization"}), 404
     finally:
         conn.close()
+
+    reload_if_stale()
+    enforcer = get_enforcer()
 
     if org_id:
         enforcer.remove_grouping_policy(target_user_id, role, org_id)
@@ -392,6 +396,7 @@ def delete_user(user_id, target_user_id):
         conn.close()
 
     try:
+        reload_if_stale()
         enforcer = get_enforcer()
         if org_id:
             roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
