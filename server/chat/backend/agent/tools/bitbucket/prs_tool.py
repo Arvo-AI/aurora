@@ -164,7 +164,7 @@ def bitbucket_pull_requests(
             strategy = merge_strategy or "merge_commit"
             if cancelled := confirm_or_cancel(user_id,
                     f"Merge PR #{pr_id} in {ws}/{repo} (strategy: {strategy})",
-                    "bitbucket:merge_pr"):
+                    "bitbucket_pull_requests:merge_pr"):
                 return cancelled
             result = client.merge_pull_request(
                 ws, repo, pr_id,
@@ -196,7 +196,7 @@ def bitbucket_pull_requests(
                 return build_error_response(err)
             if cancelled := confirm_or_cancel(user_id,
                     f"Decline PR #{pr_id} in {ws}/{repo}",
-                    "bitbucket:decline_pr"):
+                    "bitbucket_pull_requests:decline_pr"):
                 return cancelled
             result = client.decline_pull_request(ws, repo, pr_id)
             if err := forward_if_error(result):
