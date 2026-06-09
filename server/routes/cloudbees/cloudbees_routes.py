@@ -511,11 +511,13 @@ def deployment_webhook(user_id: str):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
-    backend_url = os.getenv("BACKEND_URL", "").rstrip("/")
+    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
     if not backend_url:
         backend_url = request.host_url.rstrip("/")
+    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
 
-    webhook_url = f"{backend_url}/cloudbees/webhook/{user_id}"
+    webhook_url = f"{base_url}/cloudbees/webhook/{user_id}"
 
     creds = _get_stored_cloudbees_credentials(user_id) or {}
     webhook_secret = creds.get("webhook_secret", "")
