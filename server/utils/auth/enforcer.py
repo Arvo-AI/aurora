@@ -241,7 +241,6 @@ def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
         if role not in current_roles:
             enforcer.add_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
-        enforcer.load_policy()
     increment_policy_version()
     logger.info("Assigned role %s to user %s in org %s (replaced: %s)", sanitize(role), sanitize(user_id), sanitize(org_id), current_roles)
 
@@ -249,10 +248,10 @@ def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
 def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
     """Remove a role from a user within an org (domain)."""
     with _lock:
+        reload_if_stale()
         enforcer = get_enforcer()
         enforcer.remove_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
-        enforcer.load_policy()
     increment_policy_version()
     logger.info("Removed role %s from user %s in org %s", sanitize(role), sanitize(user_id), sanitize(org_id))
 
@@ -260,5 +259,28 @@ def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
 def get_user_roles_in_org(user_id: str, org_id: str) -> list[str]:
     """Get all roles assigned to a user in a specific org."""
     reload_if_stale()
-    enforcer = get_enforcer()
-    return enforcer.get_roles_for_user_in_domain(user_id, org_id)
+    with _lock:
+        enforcer = get_enforcer()
+        return enforcer.get_roles_for_user_in_domain(user_id, org_id)
+
+
+def revoke_role_from_user(user_id: str, role: str, org_id: str, fallback: str = "viewer") -> str:
+    """Revoke a specific role from a user in an org, assigning fallback if none remain.
+
+    Returns the user's effective role after the revocation.
+    """
+    with _lock:
+        reload_if_stale()
+        enforcer = get_enforcer()
+        enforcer.remove_grouping_policy(user_id, role, org_id)
+        remaining = enforcer.get_roles_for_user_in_domain(user_id, org_id)
+        if not remaining:
+            enforcer.add_grouping_policy(user_id, fallback, org_id)
+            effective_role = fallback
+        else:
+            effective_role = remaining[0]
+        enforcer.save_policy()
+    increment_policy_version()
+    logger.info("Revoked role %s from user %s in org %s (now: %s)",
+                sanitize(role), sanitize(user_id), sanitize(org_id), sanitize(effective_role))
+    return effective_role

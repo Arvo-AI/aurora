@@ -14,7 +14,15 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.enforcer import get_enforcer, increment_policy_version, reload_if_stale
+from utils.auth.enforcer import (
+    assign_role_to_user,
+    get_enforcer,
+    get_user_roles_in_org,
+    increment_policy_version,
+    reload_if_stale,
+    remove_role_from_user,
+    revoke_role_from_user,
+)
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
 from utils.log_sanitizer import sanitize
@@ -232,11 +240,11 @@ def get_user_roles(user_id, target_user_id):
     finally:
         conn.close()
 
-    reload_if_stale()
-    enforcer = get_enforcer()
     if org_id:
-        roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
+        roles = get_user_roles_in_org(target_user_id, org_id)
     else:
+        reload_if_stale()
+        enforcer = get_enforcer()
         roles = enforcer.get_roles_for_user(target_user_id)
     return jsonify({"user_id": target_user_id, "roles": roles}), 200
 
@@ -266,22 +274,17 @@ def assign_role(user_id, target_user_id):
     finally:
         conn.close()
 
-    reload_if_stale()
-    enforcer = get_enforcer()
-
     if org_id:
-        current_roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
-        for old_role in current_roles:
-            enforcer.remove_grouping_policy(target_user_id, old_role, org_id)
-        enforcer.add_grouping_policy(target_user_id, role, org_id)
+        assign_role_to_user(target_user_id, role, org_id)
     else:
+        reload_if_stale()
+        enforcer = get_enforcer()
         current_roles = enforcer.get_roles_for_user(target_user_id)
         for old_role in current_roles:
             enforcer.remove_grouping_policy(target_user_id, old_role)
         enforcer.add_grouping_policy(target_user_id, role)
-
-    enforcer.save_policy()
-    increment_policy_version()
+        enforcer.save_policy()
+        increment_policy_version()
 
     # Keep the convenience column in sync
     conn = connect_to_db_as_user()
@@ -318,26 +321,17 @@ def revoke_role(user_id, target_user_id, role):
     finally:
         conn.close()
 
-    reload_if_stale()
-    enforcer = get_enforcer()
-
     if org_id:
-        enforcer.remove_grouping_policy(target_user_id, role, org_id)
-        remaining = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
-        if not remaining:
-            enforcer.add_grouping_policy(target_user_id, "viewer", org_id)
+        fallback_role = revoke_role_from_user(target_user_id, role, org_id)
     else:
+        reload_if_stale()
+        enforcer = get_enforcer()
         enforcer.remove_grouping_policy(target_user_id, role)
         remaining = enforcer.get_roles_for_user(target_user_id)
         if not remaining:
             enforcer.add_grouping_policy(target_user_id, "viewer")
-
-    enforcer.save_policy()
-    increment_policy_version()
-
-    if org_id:
-        fallback_role = (enforcer.get_roles_for_user_in_domain(target_user_id, org_id) or ["viewer"])[0]
-    else:
+        enforcer.save_policy()
+        increment_policy_version()
         fallback_role = (enforcer.get_roles_for_user(target_user_id) or ["viewer"])[0]
 
     conn = connect_to_db_as_user()
@@ -396,18 +390,18 @@ def delete_user(user_id, target_user_id):
         conn.close()
 
     try:
-        reload_if_stale()
-        enforcer = get_enforcer()
         if org_id:
-            roles = enforcer.get_roles_for_user_in_domain(target_user_id, org_id)
+            roles = get_user_roles_in_org(target_user_id, org_id)
             for r in roles:
-                enforcer.remove_grouping_policy(target_user_id, r, org_id)
+                remove_role_from_user(target_user_id, r, org_id)
         else:
+            reload_if_stale()
+            enforcer = get_enforcer()
             roles = enforcer.get_roles_for_user(target_user_id)
             for r in roles:
                 enforcer.remove_grouping_policy(target_user_id, r)
-        enforcer.save_policy()
-        increment_policy_version()
+            enforcer.save_policy()
+            increment_policy_version()
     except Exception as casbin_err:
         logger.warning("Failed to clean up Casbin policies for deleted user %s: %s",
                         target_user_id, casbin_err)
