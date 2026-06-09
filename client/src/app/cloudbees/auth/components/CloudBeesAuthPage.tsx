@@ -82,7 +82,8 @@ export default function CloudBeesAuthPage() {
       const result = await cloudbeesService.getStatus();
       if (result) {
         setStatus(result);
-        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+        const cacheable = { connected: result.connected, baseUrl: result.baseUrl };
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cacheable));
         if (result.connected) {
           localStorage.setItem(CONNECTED_KEY, "true");
           setStep("connected");
@@ -96,12 +97,12 @@ export default function CloudBeesAuthPage() {
             }
           } catch { /* OC may not be connected — ignore */ }
 
-          fetch("/api/cloudbees/status?full=true").then(r => r.json()).then(d => {
+          apiRequest<any>("/api/cloudbees/status?full=true", { method: "GET", cache: "no-store" }).then(d => {
             if (d?.summary) setSummary(d.summary);
           }).catch(() => {});
-          fetch("/api/cloudbees/webhook-url").then(r => r.json()).then(setWebhookInfo).catch(() => {});
-          fetch("/api/cloudbees/deployments").then(r => r.json()).then(d => setDeployments(d.deployments || [])).catch(() => {});
-          fetch("/api/cloudbees/rca-settings").then(r => r.json()).then(d => setRcaEnabled(d.rcaEnabled ?? true)).catch(() => {});
+          apiRequest<any>("/api/cloudbees/webhook-url", { method: "GET", cache: "no-store" }).then(setWebhookInfo).catch(() => {});
+          apiRequest<any>("/api/cloudbees/deployments", { method: "GET", cache: "no-store" }).then(d => setDeployments(d?.deployments || [])).catch(() => {});
+          apiRequest<any>("/api/cloudbees/rca-settings", { method: "GET", cache: "no-store" }).then(d => setRcaEnabled(d?.rcaEnabled ?? true)).catch(() => {});
         } else {
           localStorage.removeItem(CONNECTED_KEY);
         }
@@ -117,10 +118,8 @@ export default function CloudBeesAuthPage() {
 
   useEffect(() => {
     if (step === 3 && !webhookInfo) {
-      fetch("/api/cloudbees/webhook-url").then(r => {
-        if (!r.ok) throw new Error("Failed to fetch webhook URL");
-        return r.json();
-      }).then(setWebhookInfo).catch(() => {});
+      apiRequest<any>("/api/cloudbees/webhook-url", { method: "GET", cache: "no-store" })
+        .then(setWebhookInfo).catch(() => {});
     }
   }, [step, webhookInfo]);
 
@@ -143,9 +142,8 @@ export default function CloudBeesAuthPage() {
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
-        await fetch("/api/provider-preferences", {
+        await apiRequest("/api/provider-preferences", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "add", provider: "cloudbees" }),
         });
       } catch { /* best-effort */ }
@@ -198,14 +196,13 @@ export default function CloudBeesAuthPage() {
         username: ocUsername,
       };
       setStatus(newStatus);
-      localStorage.setItem(CACHE_KEY, JSON.stringify(newStatus));
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true, baseUrl: ocUrl }));
       localStorage.setItem(CONNECTED_KEY, "true");
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
-        await fetch("/api/provider-preferences", {
+        await apiRequest("/api/provider-preferences", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "add", provider: "cloudbees" }),
         });
       } catch { /* best-effort */ }
@@ -257,14 +254,13 @@ export default function CloudBeesAuthPage() {
         username: result?.operations_center?.username,
       };
       setStatus(newStatus);
-      localStorage.setItem(CACHE_KEY, JSON.stringify(newStatus));
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true, baseUrl: platformUrl }));
       localStorage.setItem(CONNECTED_KEY, "true");
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
-        await fetch("/api/provider-preferences", {
+        await apiRequest("/api/provider-preferences", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "add", provider: "cloudbees" }),
         });
       } catch { /* best-effort */ }
@@ -286,14 +282,10 @@ export default function CloudBeesAuthPage() {
   const handleDisconnect = async () => {
     setLoading(true);
     try {
-      const response = await fetch("/api/connected-accounts/cloudbees", { method: "DELETE", credentials: "include" });
-      if (!response.ok && response.status !== 204) {
-        const text = await response.text();
-        throw new Error(text || "Failed to disconnect CloudBees");
-      }
+      await apiRequest("/api/connected-accounts/cloudbees", { method: "DELETE" });
 
       try {
-        await fetch("/api/cloudbees/disconnect-platform", { method: "POST", credentials: "include" });
+        await apiRequest("/api/cloudbees/disconnect-platform", { method: "POST" });
       } catch { /* best-effort */ }
 
       setStatus({ connected: false });
@@ -309,9 +301,8 @@ export default function CloudBeesAuthPage() {
       window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
-        await fetch("/api/provider-preferences", {
+        await apiRequest("/api/provider-preferences", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "remove", provider: "cloudbees" }),
         });
       } catch { /* best-effort */ }
@@ -329,14 +320,10 @@ export default function CloudBeesAuthPage() {
   const handleRcaToggle = async (checked: boolean) => {
     setRcaLoading(true);
     try {
-      const response = await fetch("/api/cloudbees/rca-settings", {
+      await apiRequest("/api/cloudbees/rca-settings", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rcaEnabled: checked }),
       });
-      if (!response.ok) {
-        throw new Error("Failed to update RCA settings");
-      }
       setRcaEnabled(checked);
       toast({ title: checked ? "RCA Enabled" : "RCA Disabled", description: checked ? "Auto-trigger RCA on failures is now active" : "Auto-trigger RCA has been turned off" });
     } catch (err) {

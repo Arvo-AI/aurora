@@ -11,12 +11,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
+import tldextract
 
 from connectors.jenkins_connector.api_client import JenkinsClient
 
 logger = logging.getLogger(__name__)
 
 MAX_CONTROLLERS = 20
+MAX_JOBS_PER_CONTROLLER = 50
 MAX_BUILDS_PER_CONTROLLER = 5
 DEFAULT_TIMEOUT = 15.0
 
@@ -69,39 +71,23 @@ class CloudBeesOCClient:
         return False
 
     def _validate_controller_url(self, controller_url: str) -> None:
-        """Validate that a controller URL belongs to the same registrable domain as the OC base URL.
-
-        Allows sibling subdomains (e.g., controller.company.com when OC is oc.company.com)
-        but blocks different domains (e.g., evil-company.com).
-
-        Uses suffix matching: the controller hostname must end with '.<oc_base_domain>'
-        or be exactly equal to the OC hostname.  The base domain is derived by taking
-        the last N parts of the OC hostname where N >= 2, with N = 3 when the
-        second-to-last label is short (likely a ccTLD like co.uk, com.au, etc.).
-        """
+        """Validate that a controller URL belongs to the same registrable domain as the OC URL."""
         oc_host = urlparse(self.base_url).hostname or ""
         ctrl_host = urlparse(controller_url).hostname or ""
 
         if not ctrl_host:
             raise ValueError(f"Invalid controller URL: {controller_url}")
 
-        # Exact match is always allowed
         if ctrl_host == oc_host:
             return
 
-        # Extract registrable domain from the OC host.
-        # Use 3 parts when the second-to-last label is <= 3 chars (e.g., co.uk, com.au)
-        oc_parts = oc_host.split(".")
-        if len(oc_parts) >= 3 and len(oc_parts[-2]) <= 3:
-            oc_base_domain = ".".join(oc_parts[-3:])
-        elif len(oc_parts) >= 2:
-            oc_base_domain = ".".join(oc_parts[-2:])
-        else:
-            oc_base_domain = oc_host
+        oc_extracted = tldextract.extract(oc_host)
+        ctrl_extracted = tldextract.extract(ctrl_host)
 
-        # The controller must end with the base domain as a proper suffix
-        # (preceded by a dot) to prevent prefix-based bypasses like evil-company.com
-        if not (ctrl_host == oc_base_domain or ctrl_host.endswith("." + oc_base_domain)):
+        oc_registered = oc_extracted.registered_domain
+        ctrl_registered = ctrl_extracted.registered_domain
+
+        if not oc_registered or not ctrl_registered or ctrl_registered != oc_registered:
             raise ValueError(
                 f"Controller URL domain '{ctrl_host}' does not match "
                 f"Operations Center domain '{oc_host}'"
@@ -255,7 +241,7 @@ class CloudBeesOCClient:
                 if service:
                     jobs = [j for j in jobs if service.lower() in (j.get("name", "") or "").lower()]
 
-                for job in jobs[:MAX_BUILDS_PER_CONTROLLER]:
+                for job in jobs[:MAX_JOBS_PER_CONTROLLER]:
                     job_name = job.get("name") or job.get("fullName")
                     if not job_name:
                         continue

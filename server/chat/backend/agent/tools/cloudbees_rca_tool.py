@@ -142,6 +142,8 @@ def cloudbees_rca(
 
     # --- Enterprise actions (OC / FM) ---
     if action == "flag_changes":
+        if not app_id:
+            return json.dumps({"error": "app_id is required for flag_changes action."})
         fm_client = _get_fm_client_for_user(user_id)
         if not fm_client:
             return json.dumps({

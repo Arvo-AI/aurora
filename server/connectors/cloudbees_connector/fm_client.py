@@ -160,6 +160,8 @@ class CloudBeesFMClient:
                     # Handle ISO format with or without Z suffix
                     updated_at = updated_at.replace("Z", "+00:00")
                     flag_time = datetime.fromisoformat(updated_at)
+                    if flag_time.tzinfo is None:
+                        flag_time = flag_time.replace(tzinfo=timezone.utc)
                 elif isinstance(updated_at, (int, float)):
                     # Epoch milliseconds or seconds
                     if updated_at > 1e12:
@@ -171,8 +173,8 @@ class CloudBeesFMClient:
 
                 if flag_time >= cutoff:
                     recent_changes.append(flag)
-            except (ValueError, OSError):
-                # Skip flags with unparseable timestamps
+            except (ValueError, TypeError, OSError):
+                # Skip flags with unparseable or tz-mismatched timestamps
                 continue
 
         return True, recent_changes, None
