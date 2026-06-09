@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, Pencil, RotateCw, X } from 'lucide-react';
+import { Loader2, Check, Pencil, RotateCw, X, RefreshCw } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -88,6 +88,16 @@ export default function BitbucketWorkspaceBrowser() {
     fetchWorkspaces();
     loadStoredSelection();
   }, []);
+
+  // Re-fetch repos when the parent triggers a refresh (e.g. via the Refresh button)
+  useEffect(() => {
+    const handler = () => {
+      fetchWorkspaces();
+      if (selectedWorkspace) fetchRepos(selectedWorkspace);
+    };
+    window.addEventListener('bitbucketRefresh', handler);
+    return () => window.removeEventListener('bitbucketRefresh', handler);
+  }, [selectedWorkspace]);
 
   useEffect(() => {
     if (isRestoringSelectionRef.current) return;
@@ -305,7 +315,19 @@ export default function BitbucketWorkspaceBrowser() {
       {selectedWorkspace && (
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-sm font-medium">Repositories</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Repositories</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => fetchRepos(selectedWorkspace)}
+                disabled={isLoadingRepos}
+                title="Refresh repository list"
+              >
+                <RefreshCw className={`h-3 w-3 ${isLoadingRepos ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
             {checkedRepos.size > 0 && (
               <Badge variant="outline" className="text-xs">{checkedRepos.size} selected</Badge>
             )}

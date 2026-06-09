@@ -245,7 +245,10 @@ export default function BitbucketProviderIntegration() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={checkStatus}
+              onClick={() => {
+                checkStatus();
+                window.dispatchEvent(new CustomEvent('bitbucketRefresh'));
+              }}
               title="Refresh"
             >
               <RefreshCw className="h-4 w-4" />
