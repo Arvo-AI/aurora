@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
-import tldextract
 
 from connectors.jenkins_connector.api_client import JenkinsClient
 
@@ -81,11 +80,17 @@ class CloudBeesOCClient:
         if ctrl_host == oc_host:
             return
 
-        oc_extracted = tldextract.extract(oc_host)
-        ctrl_extracted = tldextract.extract(ctrl_host)
-
-        oc_registered = oc_extracted.registered_domain
-        ctrl_registered = ctrl_extracted.registered_domain
+        try:
+            import tldextract
+            oc_extracted = tldextract.extract(oc_host)
+            ctrl_extracted = tldextract.extract(ctrl_host)
+            oc_registered = oc_extracted.registered_domain
+            ctrl_registered = ctrl_extracted.registered_domain
+        except ImportError:
+            oc_parts = oc_host.split(".")
+            ctrl_parts = ctrl_host.split(".")
+            oc_registered = ".".join(oc_parts[-2:]) if len(oc_parts) >= 2 else oc_host
+            ctrl_registered = ".".join(ctrl_parts[-2:]) if len(ctrl_parts) >= 2 else ctrl_host
 
         if not oc_registered or not ctrl_registered or ctrl_registered != oc_registered:
             raise ValueError(

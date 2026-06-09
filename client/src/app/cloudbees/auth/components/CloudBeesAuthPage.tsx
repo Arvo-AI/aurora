@@ -79,7 +79,7 @@ export default function CloudBeesAuthPage() {
         localStorage.removeItem(CACHE_KEY);
       }
 
-      const result = await cloudbeesService.getStatus();
+      const result = await apiRequest<any>("/api/cloudbees/status?full=true", { method: "GET", cache: "no-store" });
       if (result) {
         setStatus(result);
         const cacheable = { connected: result.connected, baseUrl: result.baseUrl };
@@ -87,18 +87,9 @@ export default function CloudBeesAuthPage() {
         if (result.connected) {
           localStorage.setItem(CONNECTED_KEY, "true");
           setStep("connected");
-          try {
-            const ctrlResp = await apiRequest<{ controllers?: DiscoveredController[] }>("/api/cloudbees/controllers", {
-              method: "GET",
-              cache: "no-store",
-            });
-            if (ctrlResp?.controllers) {
-              setControllers(ctrlResp.controllers);
-            }
-          } catch { /* OC may not be connected — ignore */ }
-
-          apiRequest<any>("/api/cloudbees/status?full=true", { method: "GET", cache: "no-store" }).then(d => {
-            if (d?.summary) setSummary(d.summary);
+          if (result.summary) setSummary(result.summary);
+          apiRequest<{ controllers?: DiscoveredController[] }>("/api/cloudbees/controllers", { method: "GET", cache: "no-store" }).then(d => {
+            if (d?.controllers) setControllers(d.controllers);
           }).catch(() => {});
           apiRequest<any>("/api/cloudbees/webhook-url", { method: "GET", cache: "no-store" }).then(setWebhookInfo).catch(() => {});
           apiRequest<any>("/api/cloudbees/deployments", { method: "GET", cache: "no-store" }).then(d => setDeployments(d?.deployments || [])).catch(() => {});
