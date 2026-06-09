@@ -4,7 +4,7 @@ import os
 from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.llm import LLMManager, ModelConfig
 from chat.backend.agent.model_mapper import ModelMapper
-from chat.backend.agent.providers import create_chat_model
+from chat.backend.agent.providers import create_chat_model, get_registry
 from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
@@ -21,7 +21,7 @@ from typing import Optional
 
 # Providers that must use their native SDKs even when LLM_PROVIDER_MODE=openrouter,
 # because features like Gemini thinking only work with their native SDK.
-_DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama"})
+_DIRECT_ONLY_PROVIDERS = frozenset({"vertex", "ollama", "bedrock"})
 
 
 def _extract_reasoning_from_delta(delta: dict) -> tuple:
@@ -539,11 +539,12 @@ class Agent:
 
             logging.info(f"Provider routing: model={model_name}, detected={detected_provider}, mode={provider_mode}, use_direct={_use_direct}")
 
+            effective_mode = "direct" if is_direct_only else provider_mode
             if _use_direct:
                 streaming_llm = create_chat_model(
                     model=model_name,
                     temperature=self.llm_manager.main_llm.temperature,
-                    provider_mode="direct" if is_direct_only else provider_mode,
+                    provider_mode=effective_mode,
                     streaming=True,
                     callbacks=[usage_callback],
                 )
@@ -591,7 +592,15 @@ class Agent:
             # ContextSafetyMiddleware is a lightweight safety net that also injects
             # correlated RCA context updates into background sessions.
             middlewares = [ContextTrimMiddleware(model_name=model_name)]
-            tool_choice_provider = detected_provider if _use_direct else "openrouter"
+            # Label the forced tool_choice by the provider that actually *serves* the
+            # model, not its id prefix: under LLM_PROVIDER_MODE=<provider> a clean
+            # anthropic/ model is served by e.g. Bedrock, whose client needs a different
+            # tool_choice format than the Anthropic API.
+            tool_choice_provider = (
+                get_registry().resolve_provider_name(model_name, effective_mode)
+                if _use_direct
+                else "openrouter"
+            )
             if getattr(state, "trigger_action_id", None):
                 middlewares.insert(
                     0, _ForceToolChoice("trigger_action", provider=tool_choice_provider)

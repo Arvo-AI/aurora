@@ -124,7 +124,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
     hook_allowed, hook_message = get_hook("before_llm_call")(_hook_org_id, user_id)
     if not hook_allowed:
         logger.warning("Hook blocked for user %s: %s", user_id, hook_message)
-        _update_metadata(user_id, repo_full_name, None, "error")
+        _update_metadata(user_id, repo_full_name, None, "limit_reached")
         return
 
     _update_metadata(user_id, repo_full_name, None, "generating")

@@ -31,11 +31,16 @@ class ChatContextManager:
         "openai/gpt-5.2": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-sonnet-4.5": 950000,  # 1M - 50K buffer
+        "anthropic/claude-opus-4.8": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.7": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.6": 950000,  # 1M - 50K buffer
         "anthropic/claude-opus-4.5": 180000,  # 200K - 20K buffer
         "anthropic/claude-3-haiku": 180000,  # 200K - 20K buffer
         "google/gemini-3.1-pro-preview": 1000000,  # 1M context
+        # Bedrock-hosted Claude (same models/windows as the direct Anthropic entries above)
+        "bedrock/us.anthropic.claude-sonnet-4-6": 950000,  # 1M - 50K buffer
+        "bedrock/us.anthropic.claude-opus-4-6-v1": 950000,  # 1M - 50K buffer
+        "bedrock/us.anthropic.claude-opus-4-8": 950000,  # 1M - 50K buffer
         # Default fallback
         "default": 7000,  # Conservative 8K - 1K buffer
     }
@@ -47,6 +52,7 @@ class ChatContextManager:
         "google": 1000000,
         "vertex": 1000000,
         "ollama": 120000,
+        "bedrock": 180000,  # ≈ Claude-on-Bedrock 200K window − buffer
     }
 
     @classmethod

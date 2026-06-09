@@ -926,12 +926,16 @@ def _check_kubectl(user_id: str, org_id: str) -> Dict[str, Any]:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                cursor.execute(
-                    """SELECT COUNT(*) FROM active_kubectl_connections ac
-                       JOIN kubectl_agent_tokens kat ON ac.token = kat.token
-                       WHERE (kat.user_id = %s OR kat.org_id = %s) AND ac.status = 'active'""",
-                    (user_id, org_id),
-                )
+                cursor.execute("""
+                    SELECT COUNT(*) FROM (
+                        SELECT 1 FROM active_kubectl_connections ac
+                            JOIN kubectl_agent_tokens kat ON ac.token = kat.token
+                            WHERE (kat.user_id = %s OR kat.org_id = %s) AND ac.status = 'active'
+                        UNION ALL
+                        SELECT 1 FROM kubeconfig_clusters
+                            WHERE org_id = %s AND is_active = TRUE
+                    ) combined
+                """, (user_id, org_id, org_id))
                 count = cursor.fetchone()[0]
         return {"connected": count > 0}
     except Exception as e:

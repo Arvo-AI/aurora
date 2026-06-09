@@ -33,9 +33,21 @@ from .anthropic_provider import AnthropicProvider
 from .google_provider import GoogleProvider
 from .vertex_provider import VertexAIProvider
 from .ollama_provider import OllamaProvider
+from .bedrock_provider import BedrockProvider
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
+
+# Hint for which env var configures each provider (used in "not available" errors).
+_ENV_VAR_HINTS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_AI_API_KEY",
+    "vertex": "VERTEX_AI_PROJECT",
+    "ollama": "OLLAMA_BASE_URL",
+    "bedrock": "BEDROCK_BASE_URL or BEDROCK_REGION",
+    "openrouter": "OPENROUTER_API_KEY",
+}
 
 
 class ProviderRegistry:
@@ -57,6 +69,7 @@ class ProviderRegistry:
         self._providers["google"] = GoogleProvider()
         self._providers["vertex"] = VertexAIProvider()
         self._providers["ollama"] = OllamaProvider()
+        self._providers["bedrock"] = BedrockProvider()
 
         logger.info("Initialized provider registry")
 
@@ -91,9 +104,18 @@ class ProviderRegistry:
         """
         Get the appropriate provider for a model based on selection mode.
 
+        Modes:
+        - ``openrouter``: route everything through OpenRouter.
+        - ``direct`` / ``auto`` (default): resolve the provider from the model-id prefix.
+        - a **provider name** (e.g. ``bedrock``, ``vertex``, ``anthropic``): route every
+          model that provider can serve through it, translating the clean model id to that
+          provider's native id. A model the forced provider can't serve (e.g. a Gemini
+          guardrail under ``bedrock`` mode) falls back to prefix-based direct routing so
+          auxiliary calls don't break.
+
         Args:
-            model: Model name (e.g., 'anthropic/claude-opus-4.5')
-            mode: Provider selection mode ('direct', 'auto', 'openrouter')
+            model: Model name (e.g., 'anthropic/claude-opus-4.7')
+            mode: Provider selection mode
 
         Returns:
             Provider instance
@@ -101,6 +123,9 @@ class ProviderRegistry:
         Raises:
             RuntimeError: If no suitable provider is available
         """
+        if mode is None:
+            mode = "direct"
+
         if mode == "openrouter":
             # Explicit OpenRouter mode - use OpenRouter for everything
             provider = self._providers["openrouter"]
@@ -110,21 +135,41 @@ class ProviderRegistry:
                 )
             return provider
 
-        # For 'direct' and 'auto' modes: resolve provider from model prefix
-        # No OpenRouter fallback - if direct provider unavailable, fail with clear error
-        detected_provider = ModelMapper.detect_provider(model)
-
-        if mode is None:
-            mode = "direct"
+        # Explicit provider-name mode (e.g. LLM_PROVIDER_MODE=bedrock): force that provider
+        # for any model it can serve; otherwise fall through to direct prefix routing.
         if mode not in ("direct", "auto"):
-            raise ValueError(
-                f"Invalid provider mode: {mode}. Use 'direct', 'auto', or 'openrouter'."
+            forced = self._providers.get(mode)
+            if forced is None:
+                raise ValueError(
+                    f"Invalid provider mode: {mode}. Use 'direct', 'auto', 'openrouter', "
+                    f"or a configured provider name ({', '.join(sorted(self._providers))})."
+                )
+            if not forced.is_available():
+                # The operator explicitly forced this provider; don't silently route
+                # elsewhere (that would leak traffic off the intended Bedrock/VPC path).
+                hint = _ENV_VAR_HINTS.get(mode, f"{mode.upper()}_API_KEY")
+                raise RuntimeError(
+                    f"LLM_PROVIDER_MODE={mode} but the '{mode}' provider is not configured. "
+                    f"Set {hint} (or change LLM_PROVIDER_MODE)."
+                )
+            if forced.supports_model(model):
+                logger.info(f"Routing model {model} via forced provider '{mode}'")
+                return forced
+            # Available but can't serve this specific model (e.g. a Gemini guardrail under
+            # bedrock mode): fall back to prefix-based direct routing so auxiliary calls work.
+            logger.info(
+                f"Forced provider '{mode}' cannot serve '{model}'; falling back to direct prefix routing"
             )
+            # fall through to direct resolution below
+
+        # 'direct' / 'auto' (and the forced-mode fallback): resolve provider from model prefix.
+        # No OpenRouter fallback - if direct provider unavailable, fail with a clear error.
+        detected_provider = ModelMapper.detect_provider(model)
 
         if not detected_provider or detected_provider == "openrouter":
             raise RuntimeError(
                 f"Model '{model}' has no direct provider mapping. "
-                f"Use mode='openrouter' to route through OpenRouter, or check model name format (e.g., 'anthropic/claude-opus-4.5')."
+                f"Use mode='openrouter' to route through OpenRouter, or check model name format (e.g., 'anthropic/claude-opus-4.7')."
             )
 
         provider = self._providers.get(detected_provider)
@@ -135,20 +180,28 @@ class ProviderRegistry:
             return provider
 
         # Provider exists but not available (missing credentials)
-        env_var_hints = {
-            "openai": "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "google": "GOOGLE_AI_API_KEY",
-            "vertex": "VERTEX_AI_PROJECT",
-            "ollama": "OLLAMA_BASE_URL",
-        }
-        hint = env_var_hints.get(
+        hint = _ENV_VAR_HINTS.get(
             detected_provider, f"{detected_provider.upper()}_API_KEY"
         )
         raise RuntimeError(
             f"Provider '{detected_provider}' is not available for model '{model}'. "
             f"Configure {hint} or set LLM_PROVIDER_MODE=openrouter to use OpenRouter instead."
         )
+
+    def resolve_provider_name(self, model: str, mode: str = "direct") -> str:
+        """Return the *name* of the provider that :meth:`get_provider_for_model` selects.
+
+        Mirrors the routing exactly (forced provider-name mode, fallback, prefix), so
+        callers can label a model by the provider that actually serves it — not just its
+        id prefix. Needed because a clean ``anthropic/`` model under ``LLM_PROVIDER_MODE=
+        bedrock`` is served by Bedrock, and the forced tool_choice format must match the
+        serving client, not the prefix.
+        """
+        provider = self.get_provider_for_model(model, mode=mode)
+        for name, candidate in self._providers.items():
+            if candidate is provider:
+                return name
+        return ModelMapper.detect_provider(model) or ""
 
     def get_provider_info(self) -> List[Dict]:
         """
@@ -249,6 +302,7 @@ __all__ = [
     "GoogleProvider",
     "VertexAIProvider",
     "OllamaProvider",
+    "BedrockProvider",
     "ProviderRegistry",
     "get_registry",
     "create_chat_model",

@@ -36,10 +36,16 @@ def _default_after_llm_call(org_id: Optional[str], user_id: str, metadata: dict)
     pass
 
 
+def _default_before_add_member(org_id: str, current_member_count: int) -> Tuple[bool, Optional[str]]:
+    """Called before adding a member to an org. Return (False, message) to block."""
+    return True, None
+
+
 # Explicit registry — only these names are valid hook points
 _HOOK_REGISTRY = {
     "before_llm_call": _default_before_llm_call,
     "after_llm_call": _default_after_llm_call,
+    "before_add_member": _default_before_add_member,
 }
 
 

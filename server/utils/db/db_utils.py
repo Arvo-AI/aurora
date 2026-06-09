@@ -1089,6 +1089,25 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubectl_connections_token ON active_kubectl_connections(token);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_kubectl_connections_cluster_id ON active_kubectl_connections(cluster_id);
                 """,
+                "kubeconfig_clusters": """
+                    CREATE TABLE IF NOT EXISTS kubeconfig_clusters (
+                        id SERIAL PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        org_id VARCHAR(255),
+                        cluster_id TEXT NOT NULL UNIQUE,
+                        context_name TEXT NOT NULL,
+                        cluster_name TEXT NOT NULL,
+                        server_url TEXT,
+                        namespace TEXT,
+                        vault_provider TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_kubeconfig_clusters_user ON kubeconfig_clusters(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_kubeconfig_clusters_org ON kubeconfig_clusters(org_id);
+                """,
                 "users": """
                     CREATE TABLE IF NOT EXISTS users (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1364,6 +1383,7 @@ def initialize_tables():
                 "rca_notification_emails",
                 "kubectl_agent_tokens",
                 "mcp_tokens",
+                "kubeconfig_clusters",
                 "user_manual_vms",
             ]
 
@@ -2636,7 +2656,7 @@ def initialize_tables():
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
                 "cloudwatch_alarms",
-                "mcp_tokens",
+                "mcp_tokens", "kubeconfig_clusters",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
                 "k8s_pod_metrics", "k8s_node_metrics",

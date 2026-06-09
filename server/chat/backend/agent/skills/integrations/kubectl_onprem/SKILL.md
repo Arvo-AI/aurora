@@ -1,7 +1,7 @@
 ---
 name: kubectl_onprem
 id: kubectl_onprem
-description: "On-prem Kubernetes cluster integration for running kubectl commands on connected clusters via Aurora agent relay"
+description: "On-prem Kubernetes cluster integration for running kubectl commands via Aurora agent relay or uploaded kubeconfig"
 category: infrastructure
 connection_check:
   method: is_connected_function
@@ -10,7 +10,7 @@ connection_check:
 tools:
   - get_connected_clusters
   - on_prem_kubectl
-index: "Infrastructure -- run kubectl on connected on-prem Kubernetes clusters"
+index: "Infrastructure -- run kubectl on connected Kubernetes clusters (agent or kubeconfig)"
 rca_priority: 8
 allowed-tools: get_connected_clusters, on_prem_kubectl
 metadata:
@@ -21,7 +21,7 @@ metadata:
 # On-Prem Kubernetes (kubectl) Integration
 
 ## Overview
-On-prem Kubernetes cluster integration for running kubectl commands on connected clusters. Commands are relayed through the Aurora agent installed on the cluster.
+On-prem Kubernetes cluster integration for running kubectl commands on connected clusters. Commands are either relayed through the Aurora agent installed on the cluster, or executed directly using uploaded kubeconfig credentials.
 
 **IMPORTANT:** Always call `get_connected_clusters` first to discover available clusters and their `cluster_id` before running any kubectl commands.
 
@@ -67,5 +67,5 @@ Specify the cluster using the `cluster_id` returned by `get_connected_clusters`.
 ### Important Rules
 - Always specify `cluster_id` to target the correct cluster.
 - For cloud-managed clusters (GCP GKE, AWS EKS, Azure AKS), use `terminal_exec` with kubectl commands.
-- This tool is for on-prem clusters connected via the Aurora kubectl agent only.
+- This tool is for on-prem/self-managed clusters connected via the Aurora kubectl agent or uploaded kubeconfigs.
 - Check pod status and events before diving into logs.

@@ -107,18 +107,11 @@ export function useGitHubStatus() {
         checkStatus();
       }
     };
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') checkStatus();
-    };
     window.addEventListener('providerStateChanged', handleProviderChange);
     window.addEventListener('message', handleAuthMessage);
-    window.addEventListener('focus', checkStatus);
-    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       window.removeEventListener('providerStateChanged', handleProviderChange);
       window.removeEventListener('message', handleAuthMessage);
-      window.removeEventListener('focus', checkStatus);
-      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [checkStatus]);
 

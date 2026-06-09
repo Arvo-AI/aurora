@@ -53,7 +53,7 @@ metadata:
   labels:
     {{- include "aurora.labels" . | nindent 4 }}
 spec:
-  minAvailable: 1
+  maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "aurora.name" . }}-celery-worker

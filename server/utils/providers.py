@@ -29,6 +29,7 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "incidentio",
     "jenkins",
     "jira",
+    "kubeconfig",
     "netdata",
     "newrelic",
     "notion",

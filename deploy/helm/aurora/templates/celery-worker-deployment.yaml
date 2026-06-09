@@ -8,6 +8,11 @@ spec:
   {{- if not .Values.autoscaling.celeryWorker.enabled }}
   replicas: {{ .Values.replicaCounts.celeryWorker }}
   {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "aurora.name" . }}-celery-worker
@@ -33,6 +38,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
     spec:
+      terminationGracePeriodSeconds: {{ if kindIs "invalid" .Values.celeryWorker.terminationGracePeriodSeconds }}1800{{ else }}{{ .Values.celeryWorker.terminationGracePeriodSeconds }}{{ end }}
       serviceAccountName: {{ include "aurora.fullname" . }}-celery-worker
       automountServiceAccountToken: false
       securityContext:

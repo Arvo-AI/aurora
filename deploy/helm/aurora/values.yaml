@@ -94,6 +94,13 @@ autoscaling:
     targetCPU: 70
 
 # ------------------------------------------------------------------------------
+# Celery worker pod settings
+# ------------------------------------------------------------------------------
+celeryWorker:
+  # Must exceed run_background_chat's time_limit (1800s) to avoid SIGKILL mid-task
+  terminationGracePeriodSeconds: 1860
+
+# ------------------------------------------------------------------------------
 # Replica counts per service
 # ------------------------------------------------------------------------------
 replicaCounts:
@@ -230,6 +237,14 @@ config:
   # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
   # Needs reliable tool-calling.
   RCA_SUBAGENT_MODEL: ""
+
+  # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
+  # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of
+  # Bedrock. Native mode: leave it empty and set BEDROCK_REGION + AWS creds (or use
+  # an IRSA role on the pods). Route models with LLM_PROVIDER_MODE=bedrock.
+  BEDROCK_BASE_URL: ""   # gateway mode (OpenAI-compatible URL); empty = native AWS SDK
+  BEDROCK_REGION: ""     # native mode AWS region; falls back to AWS_REGION
+  BEDROCK_PROFILE: ""    # native mode named AWS profile (alternative to keys)
 
   # --- Security ---
   RATE_LIMITING_ENABLED: "false"
@@ -404,6 +419,11 @@ secrets:
     OPENAI_API_KEY: ""           # Get from: https://platform.openai.com/api-keys
     ANTHROPIC_API_KEY: ""        # Get from: https://console.anthropic.com/
     GOOGLE_AI_API_KEY: ""        # Get from: https://makersuite.google.com/app/apikey
+    # AWS Bedrock — non-secret BEDROCK_BASE_URL/REGION/PROFILE live in config above.
+    BEDROCK_API_KEY: ""              # gateway mode only (often unneeded — VPC handles auth)
+    BEDROCK_ACCESS_KEY_ID: ""        # native mode; falls back to AWS_ACCESS_KEY_ID or an IRSA role
+    BEDROCK_SECRET_ACCESS_KEY: ""    # native mode; falls back to AWS_SECRET_ACCESS_KEY
+    BEDROCK_SESSION_TOKEN: ""        # native mode; only for temporary / STS credentials
 
 # ------------------------------------------------------------------------------
 # Security contexts

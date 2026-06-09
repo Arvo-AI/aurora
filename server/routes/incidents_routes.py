@@ -308,10 +308,25 @@ def get_incidents(user_id):
 
                 query += " ORDER BY i.started_at DESC"
 
+                # Get total count for pagination before applying LIMIT/OFFSET
+                count_query = "SELECT COUNT(*) FROM incidents i WHERE i.org_id = %s AND i.status != 'merged'"
+                count_params = [org_id]
+                if status_filter:
+                    count_query += " AND i.status = %s"
+                    count_params.append(status_filter)
+                cursor.execute(count_query, tuple(count_params))
+                total_count = cursor.fetchone()[0]
+
                 limit = request.args.get("limit", 100, type=int)
                 limit = max(1, min(limit, 100))
                 query += " LIMIT %s"
                 params.append(limit)
+
+                offset = request.args.get("offset", 0, type=int)
+                offset = max(0, offset)
+                if offset > 0:
+                    query += " OFFSET %s"
+                    params.append(offset)
 
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -328,7 +343,7 @@ def get_incidents(user_id):
                     len(incidents),
                     user_id,
                 )
-                return jsonify({"incidents": incidents}), 200
+                return jsonify({"incidents": incidents, "total": total_count}), 200
 
     except Exception as exc:
         logger.exception(
