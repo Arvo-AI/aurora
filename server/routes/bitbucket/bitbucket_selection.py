@@ -12,6 +12,7 @@ from flask import Blueprint, jsonify, request
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
+from utils.db.org_scope import resolve_org, org_read_predicate
 
 bitbucket_selection_bp = Blueprint("bitbucket_selection", __name__)
 logger = logging.getLogger(__name__)
@@ -22,14 +23,17 @@ logger = logging.getLogger(__name__)
 def get_workspace_selection(user_id):
     """Return connected Bitbucket repos, deriving workspace from repo_full_name."""
     try:
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketSelection:get]")
                 cur.execute(
-                    """SELECT repo_full_name, default_branch, metadata_summary, metadata_status
+                    f"""SELECT repo_full_name, default_branch, metadata_summary, metadata_status
                        FROM connected_repos
-                       WHERE provider = 'bitbucket'
+                       WHERE provider = 'bitbucket' AND {predicate}
                        ORDER BY repo_full_name""",
+                    pred_params,
                 )
                 rows = cur.fetchall()
 

@@ -48,6 +48,7 @@ export default function BitbucketWorkspaceBrowser() {
   const isRestoringSelectionRef = useRef(false);
   // Map of workspace → set of saved slugs (supports multi-workspace)
   const [savedReposByWorkspace, setSavedReposByWorkspace] = useState<Map<string, Set<string>>>(new Map());
+  const savedReposByWorkspaceRef = useRef<Map<string, Set<string>>>(new Map());
 
   // Connected repos with metadata status (for the "Connected Repositories" section)
   const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
@@ -83,6 +84,10 @@ export default function BitbucketWorkspaceBrowser() {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    savedReposByWorkspaceRef.current = savedReposByWorkspace;
+  }, [savedReposByWorkspace]);
 
   useEffect(() => {
     fetchWorkspaces();
@@ -126,8 +131,8 @@ export default function BitbucketWorkspaceBrowser() {
       const data = await BitbucketIntegrationService.getRepos(workspace);
       const repoList = Array.isArray(data) ? data : data?.repositories || [];
       setRepos(repoList);
-      // Restore checked state from saved selections for this workspace
-      const saved = savedReposByWorkspace.get(workspace);
+      // Use ref to always read the latest saved state (avoids stale closure)
+      const saved = savedReposByWorkspaceRef.current.get(workspace);
       setCheckedRepos(saved ? new Set(saved) : new Set());
     } catch (error) {
       console.error('Error fetching repos:', error);
@@ -166,6 +171,7 @@ export default function BitbucketWorkspaceBrowser() {
         byWorkspace.get(ws)!.add(slug);
       }
       setSavedReposByWorkspace(byWorkspace);
+      savedReposByWorkspaceRef.current = byWorkspace;
       setSavedRepos(connected);
       startMetadataPolling(connected);
 
@@ -204,6 +210,7 @@ export default function BitbucketWorkspaceBrowser() {
       setSavedReposByWorkspace(prev => {
         const next = new Map(prev);
         next.set(selectedWorkspace, new Set(checkedRepos));
+        savedReposByWorkspaceRef.current = next;
         return next;
       });
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -232,6 +239,7 @@ export default function BitbucketWorkspaceBrowser() {
       setCheckedRepos(new Set());
       setRepos([]);
       setSavedReposByWorkspace(new Map());
+      savedReposByWorkspaceRef.current = new Map();
       setSavedRepos([]);
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Cleared", description: "Bitbucket repos disconnected" });
