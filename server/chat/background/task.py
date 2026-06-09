@@ -1193,13 +1193,14 @@ async def _run_jira_action(
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 
-def _action_is_generate_postmortem(action_id: Optional[str]) -> bool:
+def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[str] = None) -> bool:
     """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
     if not action_id:
         return False
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:PostmortemCheck]")
                 cur.execute(
                     "SELECT 1 FROM actions WHERE id = %s AND system_key = 'generate_postmortem'",
                     (action_id,),
@@ -1329,7 +1330,7 @@ async def _execute_background_chat(
         _tm_source = (trigger_metadata or {}).get("source", "")
         _is_postmortem_action = _tm_source == "postmortem_generation" or (
             _tm_source == "action"
-            and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"))
+            and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"), user_id)
         )
 
         # Create state with is_background=True and rca_context for system prompt
