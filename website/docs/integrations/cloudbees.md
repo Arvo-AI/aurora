@@ -42,7 +42,7 @@ After connecting, Aurora will discover all managed controllers and can query bui
 
 ### Personal Access Token (PAT)
 
-Platform-level authentication for organizations using CloudBees Platform tokens.
+Platform-level authentication for organizations using CloudBees Platform tokens. PAT mode supports Operations Center discovery, cross-controller builds, and Feature Management — the same capabilities as OC mode. It does not support single-controller-only workflows.
 
 **You'll need:**
 - Platform URL (e.g., `https://your-org.cloudbees.io`)

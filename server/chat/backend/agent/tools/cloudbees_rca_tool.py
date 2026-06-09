@@ -48,15 +48,17 @@ class CloudBeesRCAArgs(BaseModel):
 
 
 def is_cloudbees_connected(user_id: str) -> bool:
-    """Check if CloudBees CI is connected for a user."""
+    """Check if CloudBees CI is connected for a user (legacy single-controller OR OC/PAT)."""
     from utils.auth.token_management import get_token_data
+    # Legacy single-controller credentials
     creds = get_token_data(user_id, "cloudbees")
-    return bool(
-        creds
-        and creds.get("base_url")
-        and creds.get("username")
-        and creds.get("api_token")
-    )
+    if creds and creds.get("base_url") and creds.get("username") and creds.get("api_token"):
+        return True
+    # OC/PAT enterprise credentials
+    oc_creds = get_token_data(user_id, "cloudbees_oc")
+    if oc_creds and oc_creds.get("base_url") and oc_creds.get("api_token"):
+        return True
+    return False
 
 
 def _get_client_for_cloudbees_user(user_id: str):
@@ -85,16 +87,20 @@ def _get_oc_client_for_user(user_id: str):
 
     creds = get_token_data(user_id, "cloudbees_oc")
     if not creds:
+        logger.debug("[CLOUDBEES_RCA] No OC credentials for user %s", user_id)
         return None
     base_url = creds.get("base_url")
     username = creds.get("username", "")
     api_token = creds.get("api_token")
     auth_mode = creds.get("auth_mode", "basic")
     if not base_url or not api_token:
+        logger.debug("[CLOUDBEES_RCA] Incomplete OC credentials for user %s (missing %s)", user_id,
+                     "base_url" if not base_url else "api_token")
         return None
     if auth_mode == "basic" and not username:
+        logger.debug("[CLOUDBEES_RCA] Basic auth requires username for user %s", user_id)
         return None
-    return CloudBeesOCClient(base_url=base_url, username=username, api_token=api_token)
+    return CloudBeesOCClient(base_url=base_url, username=username, api_token=api_token, auth_mode=auth_mode)
 
 
 def _get_fm_client_for_user(user_id: str):

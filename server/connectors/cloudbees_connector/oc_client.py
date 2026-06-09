@@ -255,7 +255,7 @@ class CloudBeesOCClient:
                 if service:
                     jobs = [j for j in jobs if service.lower() in (j.get("name", "") or "").lower()]
 
-                for job in jobs[:5]:  # Limit jobs per controller
+                for job in jobs[:MAX_BUILDS_PER_CONTROLLER]:
                     job_name = job.get("name") or job.get("fullName")
                     if not job_name:
                         continue

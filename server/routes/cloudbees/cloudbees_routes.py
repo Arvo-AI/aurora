@@ -267,11 +267,12 @@ def connect_platform(user_id):
     # Validate OC connection
     from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
 
+    oc_kwargs = {"base_url": oc_url, "username": "" if is_pat_mode else username, "api_token": api_token}
     if is_pat_mode:
-        oc_client = CloudBeesOCClient(base_url=oc_url, username="", api_token=api_token, auth_mode="bearer")
-    else:
-        oc_client = CloudBeesOCClient(base_url=oc_url, username=username, api_token=api_token)
-    try:
+        oc_kwargs["auth_mode"] = "bearer"
+
+    discovered_controllers = []
+    with CloudBeesOCClient(**oc_kwargs) as oc_client:
         success, server_data, error = oc_client.get_server_info()
         if not success:
             logger.warning("[CLOUDBEES] OC validation failed for user %s: %s", user_id, error)
@@ -300,23 +301,19 @@ def connect_platform(user_id):
             return jsonify({"error": "Failed to store Operations Center credentials"}), 500
 
         # Discover controllers
-        discovered_controllers = []
         try:
             ctrl_success, ctrl_list, ctrl_error = oc_client.discover_controllers()
             if ctrl_success:
                 discovered_controllers = ctrl_list
         except Exception:
             logger.exception("[CLOUDBEES] Failed to discover controllers for user %s", user_id)
-    finally:
-        oc_client.close()
 
     # Optionally validate and store FM credentials
     fm_status = {"connected": False}
     if fm_api_token:
         from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
 
-        fm_client = CloudBeesFMClient(api_token=fm_api_token)
-        try:
+        with CloudBeesFMClient(api_token=fm_api_token) as fm_client:
             if fm_client.validate_token():
                 fm_payload = {
                     "api_token": fm_api_token,
@@ -331,8 +328,6 @@ def connect_platform(user_id):
                     fm_status = {"connected": False, "error": "Failed to store FM credentials"}
             else:
                 fm_status = {"connected": False, "error": "Invalid Feature Management API token"}
-        finally:
-            fm_client.close()
 
     return jsonify({
         "success": True,

@@ -123,7 +123,10 @@ export default function CloudBeesAuthPage() {
 
   useEffect(() => {
     if (step === 3 && !webhookInfo) {
-      fetch("/api/cloudbees/webhook-url").then(r => r.json()).then(setWebhookInfo).catch(() => {});
+      fetch("/api/cloudbees/webhook-url").then(r => {
+        if (!r.ok) throw new Error("Failed to fetch webhook URL");
+        return r.json();
+      }).then(setWebhookInfo).catch(() => {});
     }
   }, [step, webhookInfo]);
 
@@ -766,7 +769,7 @@ export default function CloudBeesAuthPage() {
           {webhookInfo ? (
             <div className="space-y-6">
               <div>
-                <label className="block text-[13px] text-[#999] mb-2">Webhook URL</label>
+                <p className="block text-[13px] text-[#999] mb-2">Webhook URL</p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 text-[13px] text-[#777] bg-white/[0.02] border border-white/[0.06] px-4 py-3.5 rounded-xl truncate">
                     {webhookInfo.webhookUrl}
@@ -783,7 +786,7 @@ export default function CloudBeesAuthPage() {
 
               {webhookInfo.jenkinsfileBasic && (
                 <div>
-                  <label className="block text-[13px] text-[#999] mb-2">Jenkinsfile snippet</label>
+                  <p className="block text-[13px] text-[#999] mb-2">Jenkinsfile snippet</p>
                   <div className="relative">
                     <button
                       onClick={() => { navigator.clipboard.writeText(webhookInfo.jenkinsfileBasic); toast({ title: "Copied", description: "Jenkinsfile snippet copied to clipboard" }); }}
