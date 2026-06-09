@@ -27,9 +27,7 @@ metadata:
 ## Overview
 Bitbucket code repository integration for managing repositories, branches, pull requests, issues, and CI/CD pipelines.
 Connected account: {display_name}
-Selected workspace: {workspace_slug}
-Selected repository: {repo_name}
-Selected branch: {branch_name}
+Use `bitbucket_repos(action='list_repos', workspace='WS')` or `bitbucket_repos(action='list_workspaces')` to discover connected repos.
 Workspace and repository auto-resolve from saved user selection if not passed explicitly.
 
 ## Instructions
@@ -64,20 +62,23 @@ Workspace and repository auto-resolve from saved user selection if not passed ex
 
 ### RCA Investigation Flow
 
-1. Check recent commits for changes that may correlate with the alert:
+1. List connected repos in the workspace:
+   `bitbucket_repos(action='list_repos', workspace='WS')`
+2. Check recent commits for changes that may correlate with the alert:
    `bitbucket_branches(action='list_commits', workspace='WS', repo_slug='REPO')`
-2. Check recent PRs for merged changes:
+3. Check recent PRs for merged changes:
    `bitbucket_pull_requests(action='list_prs', workspace='WS', repo_slug='REPO', state='MERGED')`
-3. Check pipeline runs for deployment failures:
+4. Check pipeline runs for deployment failures:
    `bitbucket_pipelines(action='list_pipelines', workspace='WS', repo_slug='REPO')`
-4. Get step-level logs for failed pipelines:
+5. Get step-level logs for failed pipelines:
    `bitbucket_pipelines(action='get_step_log', workspace='WS', repo_slug='REPO', pipeline_uuid='UUID', step_uuid='UUID')`
-5. Inspect diffs for suspicious commits:
+6. Inspect diffs for suspicious commits:
    `bitbucket_branches(action='get_diff', workspace='WS', repo_slug='REPO', spec='COMMIT_SHA')`
-6. If a root cause code change is identified, propose a fix:
+7. If a root cause code change is identified, propose a fix:
    `bitbucket_fix(file_path='path/to/file', edits=[{old_string: '...', new_string: '...'}], fix_description='...', root_cause_summary='...')`
 
 ### Tool Usage Rules
+- `list_repos` and `list_workspaces` return only the repos/workspaces the user has connected — not everything in their Bitbucket account.
 - When user asks about PRs, issues, repos, or branches WITHOUT specifying a repository, use the selected workspace/repo from context.
 - Workspace and `repo_slug` auto-resolve from saved selection if not passed explicitly.
 - **During background RCA**: tools are READ-ONLY. Do NOT manually create branches, commit files, or create PRs. Use `bitbucket_fix` to propose code changes — it saves suggestions for user review.

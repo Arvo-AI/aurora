@@ -488,49 +488,17 @@ class SkillRegistry:
 
     @staticmethod
     def _get_bitbucket_workspace_context(user_id: str) -> Dict[str, Any]:
-        """Fetch the user's Bitbucket workspace selection for template rendering."""
+        """Fetch the user's Bitbucket display name for template rendering."""
         try:
-            # Fetch display_name from bitbucket credentials
             bb_creds = get_credentials_from_db(user_id, "bitbucket") or {}
             display_name = bb_creds.get("display_name", "")
-
-            ws_slug = ""
-            repo_name = ""
-            branch_name = ""
-
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[SkillsRegistry:bbCtx]")
-                    cur.execute(
-                        """SELECT repo_full_name, default_branch
-                           FROM connected_repos
-                           WHERE provider = 'bitbucket'
-                           ORDER BY repo_full_name
-                           LIMIT 1""",
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        full_name = row[0]
-                        if "/" in full_name:
-                            ws_slug = full_name.split("/")[0]
-                            repo_name = full_name.split("/", 1)[1]
-                        else:
-                            repo_name = full_name
-                        branch_name = row[1] or ""
-
             return {
                 "display_name": display_name or "(unknown)",
-                "workspace_slug": ws_slug or "(not selected)",
-                "repo_name": repo_name or "(not selected)",
-                "branch_name": branch_name or "(not selected)",
             }
         except Exception as e:
             logger.warning(f"Failed to fetch bitbucket workspace selection: {e}")
             return {
                 "display_name": "(unavailable)",
-                "workspace_slug": "(unavailable)",
-                "repo_name": "(unavailable)",
-                "branch_name": "(unavailable)",
             }
 
     @staticmethod

@@ -16,6 +16,9 @@ from .utils import (
     confirm_or_cancel,
 )
 
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,11 +76,24 @@ def bitbucket_repos(
 
     try:
         if action == "list_workspaces":
-            result = client.get_workspaces()
-            if isinstance(result, list):
-                workspaces = [{"slug": w.get("slug"), "name": w.get("name"), "uuid": w.get("uuid")} for w in result]
-                return build_success_response(workspaces=workspaces, count=len(workspaces))
-            return json.dumps(result, default=str)
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketRepos:workspaces]")
+                    cur.execute(
+                        """SELECT DISTINCT split_part(repo_full_name, '/', 1) AS workspace
+                           FROM connected_repos
+                           WHERE provider = 'bitbucket'
+                             AND repo_full_name LIKE '%%/%%'
+                           ORDER BY workspace""",
+                    )
+                    rows = cur.fetchall()
+            if not rows:
+                return build_success_response(
+                    workspaces=[], count=0,
+                    message="No workspaces connected. The user must select repos in the Bitbucket connector settings.",
+                )
+            workspaces = [{"slug": r[0], "name": r[0]} for r in rows]
+            return build_success_response(workspaces=workspaces, count=len(workspaces))
 
         if action == "get_workspace":
             if not ws:
@@ -87,19 +103,36 @@ def bitbucket_repos(
         if action == "list_repos":
             if not ws:
                 return build_error_response("workspace is required")
-            result = client.get_repositories(ws)
-            if isinstance(result, list):
-                repos = [{
-                    "slug": r.get("slug"),
-                    "name": r.get("name"),
-                    "full_name": r.get("full_name"),
-                    "is_private": r.get("is_private"),
-                    "description": r.get("description", ""),
-                    "mainbranch": r.get("mainbranch", {}).get("name") if r.get("mainbranch") else None,
-                    "updated_on": r.get("updated_on"),
-                } for r in result]
-                return build_success_response(repositories=repos, count=len(repos), workspace=ws)
-            return json.dumps(result, default=str)
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketRepos:list]")
+                    cur.execute(
+                        """SELECT repo_full_name, default_branch, is_private,
+                                  metadata_summary, metadata_status
+                           FROM connected_repos
+                           WHERE provider = 'bitbucket'
+                             AND repo_full_name LIKE %s
+                           ORDER BY repo_full_name""",
+                        (ws + "/%",),
+                    )
+                    rows = cur.fetchall()
+            if not rows:
+                return build_success_response(
+                    repositories=[], count=0, workspace=ws,
+                    message="No repos connected for this workspace. The user must select repos in the Bitbucket connector settings.",
+                )
+            repos = []
+            for r in rows:
+                full_name = r[0]
+                slug = full_name.split("/", 1)[1] if "/" in full_name else full_name
+                repos.append({
+                    "slug": slug,
+                    "full_name": full_name,
+                    "is_private": r[2],
+                    "description": r[3] or ("(generating...)" if r[4] != 'ready' else "(no description)"),
+                    "mainbranch": r[1],
+                })
+            return build_success_response(repositories=repos, count=len(repos), workspace=ws)
 
         if action == "get_repo":
             if err := require_repo(ws, repo):
