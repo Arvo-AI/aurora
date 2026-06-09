@@ -319,7 +319,7 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   </Button>
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-2">
-                  Triggers on issue types: Bug, Incident, Problem, Defect. Other types are ignored.
+                  Triggers on issue types: Bug, Incident, Problem, Defect, Production Issue. Other types are ignored.
                 </p>
               </CardContent>
             </Card>

@@ -16,6 +16,7 @@ from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import handle_correlated_alert
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,8 @@ def process_jira_webhook(
                     except (ValueError, TypeError):
                         logger.debug("[JIRA] Could not parse created date: %s", created_str)
 
-                source_alert_id_str = issue_key
+                # source_alert_id in incidents is an integer — stable hash of issue key
+                issue_id_int = int(hashlib.sha256(f"{org_id}:{issue_key}".encode()).hexdigest()[:8], 16) % (2**31)
 
                 try:
                     correlator = AlertCorrelator()
@@ -132,7 +134,7 @@ def process_jira_webhook(
                         cursor=cursor,
                         user_id=user_id,
                         source_type="jira",
-                        source_alert_id=source_alert_id_str,
+                        source_alert_id=issue_id_int,
                         alert_title=alert_title,
                         alert_service=service,
                         alert_severity=severity,
@@ -146,7 +148,7 @@ def process_jira_webhook(
                             user_id=user_id,
                             incident_id=correlation_result.incident_id,
                             source_type="jira",
-                            source_alert_id=source_alert_id_str,
+                            source_alert_id=issue_id_int,
                             alert_title=alert_title,
                             alert_service=service,
                             alert_severity=severity,
@@ -159,9 +161,6 @@ def process_jira_webhook(
                         return
                 except Exception as corr_exc:
                     logger.warning("[JIRA] Correlation check failed: %s", corr_exc)
-
-                # source_alert_id in incidents is an integer — stable hash of issue key
-                issue_id_int = int(hashlib.sha256(f"{org_id}:{issue_key}".encode()).hexdigest()[:8], 16) % (2**31)
 
                 cursor.execute(
                     """
@@ -194,7 +193,7 @@ def process_jira_webhook(
                 conn.commit()
 
                 if not incident_id:
-                    logger.error("[JIRA][WEBHOOK] Failed to create incident for %s", issue_key)
+                    logger.error("[JIRA][WEBHOOK] Failed to create incident for %s", sanitize(issue_key))
                     return
 
                 try:
@@ -204,7 +203,7 @@ def process_jira_webhook(
                             alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (
-                            user_id, org_id, incident_id, "jira", str(issue_id_int),
+                            user_id, org_id, incident_id, "jira", issue_id_int,
                             alert_title, service, severity, "primary", 1.0,
                             json.dumps(alert_metadata),
                         ),
@@ -236,7 +235,7 @@ def process_jira_webhook(
                         logger.warning("[JIRA] Failed to record lifecycle event: %s", e)
 
                 if incident_id:
-                    logger.info("[JIRA][WEBHOOK] Created incident %s for %s", incident_id, issue_key)
+                    logger.info("[JIRA][WEBHOOK] Created incident %s for %s", incident_id, sanitize(issue_key))
 
                     try:
                         from routes.incidents_sse import broadcast_incident_update_to_user_connections
@@ -304,7 +303,7 @@ def process_jira_webhook(
 
                             logger.info(
                                 "[JIRA][WEBHOOK] Triggered RCA for %s session=%s task=%s",
-                                issue_key, session_id, task.id,
+                                sanitize(issue_key), session_id, task.id,
                             )
                     except Exception as e:
                         logger.error("[JIRA][WEBHOOK] Failed to trigger RCA: %s", e)

@@ -374,7 +374,6 @@ def webhook(user_id: str):
     if not payload:
         return jsonify({"error": "Invalid or missing JSON payload"}), 400
 
-    webhook_event = payload.get("webhookEvent", "")
     issue = payload.get("issue", {})
 
     if not issue:
@@ -382,7 +381,7 @@ def webhook(user_id: str):
 
     issue_type = (issue.get("fields", {}).get("issuetype") or {}).get("name", "").lower()
     if issue_type not in ("bug", "incident", "problem", "defect", "production issue"):
-        logger.info("[JIRA][WEBHOOK] Ignored issue type '%s' (key=%s)", issue_type, issue.get("key", "?"))
+        logger.info("[JIRA][WEBHOOK] Ignored issue type '%s' (key=%s)", sanitize(issue_type), sanitize(issue.get("key", "?")))
         return jsonify({"status": "ignored", "reason": "issue type not configured for RCA"}), 200
 
     from routes.jira.tasks import process_jira_webhook

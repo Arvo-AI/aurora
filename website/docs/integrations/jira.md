@@ -39,7 +39,8 @@ The webhook triggers RCA for these issue types only (others are ignored):
 In Aurora, go to **Connectors** > **Jira** > connect your account. Once connected, the **Incoming Webhook** card shows your webhook URL. Copy it.
 
 The URL format is:
-```
+
+```text
 https://<your-aurora-domain>/jira/webhook/<your-user-id>
 ```
 
@@ -65,7 +66,7 @@ Create a Bug issue in Jira. Within a few seconds, you should see:
 
 ## How It Works
 
-```
+```text
 Jira Bug created
     |
     v
