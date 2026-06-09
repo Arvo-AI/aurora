@@ -103,8 +103,8 @@ class CloudBeesFMClient:
             return False, None, "Connection timeout reaching Feature Management API."
         except httpx.ConnectError:
             return False, None, "Cannot connect to Feature Management API."
-        except httpx.HTTPError as e:
-            logger.error("FM API request failed: %s", e)
+        except httpx.HTTPError:
+            logger.exception("FM API request failed")
             return False, None, "Feature Management API request failed."
 
     def validate_token(self) -> bool:
@@ -129,11 +129,7 @@ class CloudBeesFMClient:
     def get_recent_flag_changes(
         self, app_id: str, since_hours: int = 24
     ) -> Tuple[bool, List[Dict], Optional[str]]:
-        """Get flags that were modified within the given time window.
-
-        The API may not have a direct "changes" endpoint, so we fetch all flags
-        and filter by updatedAt timestamps.
-        """
+        """Get flags that were modified within the given time window."""
         success, data, error = self._request(
             "GET", f"/applications/{quote(app_id, safe='')}/flags"
         )
@@ -146,36 +142,36 @@ class CloudBeesFMClient:
         elif isinstance(data, dict):
             flags = data.get("items") or data.get("flags") or []
 
-        # Filter by modification time
         cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-        recent_changes = []
-
-        for flag in flags:
-            updated_at = flag.get("updatedAt") or flag.get("updated_at") or flag.get("modifiedAt")
-            if not updated_at:
-                continue
-
-            try:
-                if isinstance(updated_at, str):
-                    # Handle ISO format with or without Z suffix
-                    updated_at = updated_at.replace("Z", "+00:00")
-                    flag_time = datetime.fromisoformat(updated_at)
-                    if flag_time.tzinfo is None:
-                        flag_time = flag_time.replace(tzinfo=timezone.utc)
-                elif isinstance(updated_at, (int, float)):
-                    # Epoch milliseconds or seconds
-                    if updated_at > 1e12:
-                        flag_time = datetime.fromtimestamp(updated_at / 1000, tz=timezone.utc)
-                    else:
-                        flag_time = datetime.fromtimestamp(updated_at, tz=timezone.utc)
-                else:
-                    continue
-
-                if flag_time >= cutoff:
-                    recent_changes.append(flag)
-            except (ValueError, TypeError, OSError):
-                # Skip flags with unparseable or tz-mismatched timestamps
-                continue
-
+        recent_changes = [
+            flag for flag in flags
+            if _is_recently_modified(flag, cutoff)
+        ]
         return True, recent_changes, None
 
+
+def _is_recently_modified(flag: Dict, cutoff: datetime) -> bool:
+    """Check if a flag was modified after the cutoff time."""
+    updated_at = flag.get("updatedAt") or flag.get("updated_at") or flag.get("modifiedAt")
+    if not updated_at:
+        return False
+    try:
+        flag_time = _parse_timestamp(updated_at)
+        return flag_time is not None and flag_time >= cutoff
+    except (ValueError, TypeError, OSError):
+        return False
+
+
+def _parse_timestamp(value) -> Optional[datetime]:
+    """Parse a timestamp value (ISO string or epoch number) into an aware datetime."""
+    if isinstance(value, str):
+        value = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    if isinstance(value, (int, float)):
+        if value > 1e12:
+            return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    return None

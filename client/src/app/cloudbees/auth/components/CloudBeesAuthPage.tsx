@@ -139,7 +139,7 @@ export default function CloudBeesAuthPage() {
       const connectResult = await cloudbeesService.connect({ baseUrl, username, apiToken });
       setStatus(connectResult);
       localStorage.setItem(CONNECTED_KEY, "true");
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
         await apiRequest("/api/provider-preferences", {
@@ -198,7 +198,7 @@ export default function CloudBeesAuthPage() {
       setStatus(newStatus);
       localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true, baseUrl: ocUrl }));
       localStorage.setItem(CONNECTED_KEY, "true");
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
         await apiRequest("/api/provider-preferences", {
@@ -207,16 +207,17 @@ export default function CloudBeesAuthPage() {
         });
       } catch { /* best-effort */ }
 
-      if (result?.controllers && result.controllers.length === 0) {
+      if (result?.controllers?.length === 0) {
         toast({
           title: "Operations Center Connected",
           description: "Connected successfully, but no managed controllers were found. Check that your account has permission to view controllers in Operations Center.",
           variant: "destructive",
         });
       } else {
+        const controllerSuffix = result?.controllers ? ` — ${result.controllers.length} controller(s) discovered` : "";
         toast({
           title: "Operations Center Connected",
-          description: `Connected to ${ocUrl}${result?.controllers ? ` — ${result.controllers.length} controller(s) discovered` : ""}`,
+          description: `Connected to ${ocUrl}${controllerSuffix}`,
         });
       }
       setStep(3);
@@ -256,7 +257,7 @@ export default function CloudBeesAuthPage() {
       setStatus(newStatus);
       localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true, baseUrl: platformUrl }));
       localStorage.setItem(CONNECTED_KEY, "true");
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
         await apiRequest("/api/provider-preferences", {
@@ -298,7 +299,7 @@ export default function CloudBeesAuthPage() {
       setControllers([]);
       localStorage.removeItem(CACHE_KEY);
       localStorage.removeItem(CONNECTED_KEY);
-      window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       try {
         await apiRequest("/api/provider-preferences", {

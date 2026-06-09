@@ -44,7 +44,7 @@ export function CredentialForms({
   baseUrl, setBaseUrl, username, setUsername, apiToken, setApiToken,
   platformUrl, setPlatformUrl, pat, setPat,
   onOCConnect, onSingleConnect, onPATConnect, onBack,
-}: CredentialFormsProps) {
+}: Readonly<CredentialFormsProps>) {
   const [showOcToken, setShowOcToken] = useState(false);
   const [showRolloutToken, setShowRolloutToken] = useState(false);
   const [showToken, setShowToken] = useState(false);

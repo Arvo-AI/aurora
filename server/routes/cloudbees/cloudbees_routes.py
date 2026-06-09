@@ -64,7 +64,7 @@ def connect(user_id):
 
     if not base_url:
         return jsonify({"error": "CloudBees CI URL is required"}), 400
-    if not base_url.startswith(("http://", "https://")):  # NOSONAR:
+    if not base_url.startswith(("http://", "https://")):  # NOSONAR
         return jsonify({"error": "CloudBees CI URL must start with http:// or https://"}), 400
     if not username:
         return jsonify({"error": "CloudBees CI username is required"}), 400
@@ -252,7 +252,7 @@ def connect_platform(user_id):
 
     if not oc_url:
         return jsonify({"error": "Operations Center URL is required"}), 400
-    if not oc_url.startswith(("http://", "https://")):  # NOSONAR:
+    if not oc_url.startswith(("http://", "https://")):  # NOSONAR
         return jsonify({"error": "Operations Center URL must start with http:// or https://"}), 400
     if not api_token or not isinstance(api_token, str):
         return jsonify({"error": "API token is required"}), 400
@@ -273,7 +273,7 @@ def connect_platform(user_id):
 
     discovered_controllers = []
     with CloudBeesOCClient(**oc_kwargs) as oc_client:
-        success, server_data, error = oc_client.get_server_info()
+        success, _, error = oc_client.get_server_info()
         if not success:
             logger.warning("[CLOUDBEES] OC validation failed for user %s: %s", user_id, error)
             safe_oc_errors = {
@@ -302,32 +302,13 @@ def connect_platform(user_id):
 
         # Discover controllers
         try:
-            ctrl_success, ctrl_list, ctrl_error = oc_client.discover_controllers()
+            ctrl_success, ctrl_list, _ = oc_client.discover_controllers()
             if ctrl_success:
                 discovered_controllers = ctrl_list
         except Exception:
             logger.exception("[CLOUDBEES] Failed to discover controllers for user %s", user_id)
 
-    # Optionally validate and store FM credentials
-    fm_status = {"connected": False}
-    if fm_api_token:
-        from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
-
-        with CloudBeesFMClient(api_token=fm_api_token) as fm_client:
-            if fm_client.validate_token():
-                fm_payload = {
-                    "api_token": fm_api_token,
-                    "app_id": fm_app_id or "",
-                }
-                try:
-                    store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
-                    fm_status = {"connected": True, "app_id": fm_app_id}
-                    logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
-                except Exception:
-                    logger.exception("[CLOUDBEES] Failed to store FM credentials for user %s", user_id)
-                    fm_status = {"connected": False, "error": "Failed to store FM credentials"}
-            else:
-                fm_status = {"connected": False, "error": "Invalid Feature Management API token"}
+    fm_status = _validate_and_store_fm(user_id, fm_api_token, fm_app_id)
 
     return jsonify({
         "success": True,
@@ -335,6 +316,29 @@ def connect_platform(user_id):
         "operations_center": {"connected": True, "url": oc_url, "username": username},
         "feature_management": fm_status,
     })
+
+
+def _validate_and_store_fm(user_id: str, fm_api_token: str | None, fm_app_id: str | None) -> dict:
+    """Validate Feature Management token and store credentials if valid."""
+    if not fm_api_token:
+        return {"connected": False}
+
+    from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
+
+    with CloudBeesFMClient(api_token=fm_api_token) as fm_client:
+        if not fm_client.validate_token():
+            return {"connected": False, "error": "Invalid Feature Management API token"}
+        fm_payload = {
+            "api_token": fm_api_token,
+            "app_id": fm_app_id or "",
+        }
+        try:
+            store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
+            logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
+            return {"connected": True, "app_id": fm_app_id}
+        except Exception:
+            logger.exception("[CLOUDBEES] Failed to store FM credentials for user %s", user_id)
+            return {"connected": False, "error": "Failed to store FM credentials"}
 
 
 @cloudbees_bp.route("/platform-status", methods=["GET"])
@@ -391,7 +395,7 @@ def list_controllers(user_id):
         api_token=oc_creds["api_token"],
         auth_mode=oc_creds.get("auth_mode", "basic"),
     ) as oc_client:
-        success, controllers, error = oc_client.discover_controllers()
+        success, controllers, _ = oc_client.discover_controllers()
         if not success:
             return jsonify({"connected": True, "controllers": [], "error": "Failed to discover controllers from Operations Center"}), 502
 

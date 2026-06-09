@@ -28,7 +28,7 @@ interface ConnectedDashboardProps {
 function timeAgo(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
   const date = new Date(dateStr);
-  if (isNaN(date.getTime())) return "";
+  if (Number.isNaN(date.getTime())) return "";
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
@@ -43,7 +43,7 @@ export function ConnectedDashboard({
   status, summary, webhookInfo, deployments, controllers,
   rcaEnabled, rcaLoading, loading,
   onDisconnect, onRcaToggle,
-}: ConnectedDashboardProps) {
+}: Readonly<ConnectedDashboardProps>) {
   const { toast } = useToast();
   const [webhookCopied, setWebhookCopied] = useState(false);
 
@@ -180,16 +180,19 @@ export function ConnectedDashboard({
         <div className="mt-8 pt-6 border-t border-white/[0.04]">
           <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">Recent Deployments</p>
           <div className="space-y-2">
-            {deployments.slice(0, 5).map((d, i) => (
-              <div key={i} className="flex items-center justify-between py-2.5 px-4 rounded-xl bg-white/[0.02]">
+            {deployments.slice(0, 5).map((d) => {
+              const statusColor = d.result === "SUCCESS" ? "bg-emerald-400" : d.result === "FAILURE" ? "bg-red-400" : "bg-[#666]";
+              return (
+              <div key={`${d.service}-${d.buildNumber}`} className="flex items-center justify-between py-2.5 px-4 rounded-xl bg-white/[0.02]">
                 <div className="flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full ${d.result === "SUCCESS" ? "bg-emerald-400" : d.result === "FAILURE" ? "bg-red-400" : "bg-[#666]"}`} />
+                  <div className={`w-2 h-2 rounded-full ${statusColor}`} />
                   <span className="text-[13px]">{d.service}</span>
                   {d.environment && <span className="text-[11px] text-[#555]">{d.environment}</span>}
                 </div>
                 <span className="text-[11px] text-[#555]">#{d.buildNumber} · {timeAgo(d.receivedAt)}</span>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

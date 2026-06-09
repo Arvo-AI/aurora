@@ -9,7 +9,7 @@ interface WebhookSetupProps {
   onDone: () => void;
 }
 
-export function WebhookSetup({ webhookInfo, onDone }: WebhookSetupProps) {
+export function WebhookSetup({ webhookInfo, onDone }: Readonly<WebhookSetupProps>) {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 

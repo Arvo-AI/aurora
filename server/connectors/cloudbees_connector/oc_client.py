@@ -123,8 +123,8 @@ class CloudBeesOCClient:
             return False, None, "Connection timeout. Verify the Operations Center URL is reachable."
         except httpx.ConnectError:
             return False, None, "Cannot connect to Operations Center. Verify the URL and network access."
-        except httpx.HTTPError as e:
-            logger.error("OC API request failed: %s", e)
+        except httpx.HTTPError:
+            logger.exception("OC API request failed")
             return False, None, "Cannot connect to Operations Center. Verify the URL and network access."
 
     def get_server_info(self) -> Tuple[bool, Optional[Dict], Optional[str]]:
@@ -142,56 +142,26 @@ class CloudBeesOCClient:
         )
 
     def discover_controllers(self) -> Tuple[bool, List[Dict], Optional[str]]:
-        """Discover managed controllers from Operations Center.
-
-        Returns list of {name, url, status} dicts.
-        """
-        # Primary endpoint: masterProvisioning API
-        success, data, error = self._request(
-            "GET", "/cjoc/masterProvisioning/api/json"
-        )
-
-        if not success:
-            # Fallback: try the root-level view which may list controllers
-            success, data, error = self._request(
-                "GET",
-                "/cjoc/api/json",
-                params={"tree": "jobs[name,url,color,description]"},
-            )
-            if not success:
-                # Final fallback: root without /cjoc
-                success, data, error = self._request(
-                    "GET",
-                    "/api/json",
-                    params={"tree": "jobs[name,url,color,description]"},
-                )
-
+        """Discover managed controllers from Operations Center."""
+        success, data, error = self._fetch_controller_data()
         if not success:
             return False, [], error
 
-        controllers = []
-        if data:
-            # masterProvisioning response has 'masters' list
-            masters = data.get("masters") or data.get("items") or []
-            if masters:
-                for master in masters[:MAX_CONTROLLERS]:
-                    controllers.append({
-                        "name": master.get("name") or master.get("displayName", "unknown"),
-                        "url": master.get("url") or master.get("homepageUrl", ""),
-                        "status": master.get("status") or master.get("state", "unknown"),
-                    })
-            else:
-                # Fallback: treat top-level jobs as controllers
-                jobs = data.get("jobs", [])
-                for job in jobs[:MAX_CONTROLLERS]:
-                    # In OC, managed controllers appear as top-level items
-                    controllers.append({
-                        "name": job.get("name", "unknown"),
-                        "url": job.get("url", ""),
-                        "status": _color_to_status(job.get("color", "")),
-                    })
-
+        controllers = _parse_controller_response(data) if data else []
         return True, controllers, None
+
+    def _fetch_controller_data(self) -> Tuple[bool, Optional[Any], Optional[str]]:
+        """Try multiple OC endpoints to fetch controller data."""
+        endpoints = [
+            ("/cjoc/masterProvisioning/api/json", None),
+            ("/cjoc/api/json", {"tree": "jobs[name,url,color,description]"}),
+            ("/api/json", {"tree": "jobs[name,url,color,description]"}),
+        ]
+        for path, params in endpoints:
+            success, data, error = self._request("GET", path, params=params)
+            if success:
+                return True, data, None
+        return False, None, error
 
     def get_controller_client(self, controller_url: str) -> JenkinsClient:
         """Return a JenkinsClient configured for a specific managed controller."""
@@ -205,11 +175,7 @@ class CloudBeesOCClient:
     def query_recent_builds_across_controllers(
         self, service: Optional[str] = None, time_window_hours: int = 24
     ) -> Tuple[bool, List[Dict], Optional[str]]:
-        """Query recent builds across all discovered controllers.
-
-        Caps at MAX_CONTROLLERS controllers and MAX_BUILDS_PER_CONTROLLER builds each
-        to avoid timeout.  Only returns builds within the specified time window.
-        """
+        """Query recent builds across all discovered controllers."""
         import time as _time
 
         success, controllers, error = self.discover_controllers()
@@ -225,47 +191,78 @@ class CloudBeesOCClient:
         errors: List[str] = []
 
         for controller in controllers[:MAX_CONTROLLERS]:
-            controller_url = controller.get("url")
-            if not controller_url:
-                continue
+            ctrl_builds, ctrl_error = self._query_single_controller(
+                controller, service, cutoff_ms
+            )
+            all_builds.extend(ctrl_builds)
+            if ctrl_error:
+                errors.append(ctrl_error)
 
-            try:
-                self._validate_controller_url(controller_url)
-                client = self.get_controller_client(controller_url)
-                ok, jobs, err = client.list_jobs()
-                if not ok:
-                    errors.append(f"{controller['name']}: Failed to query controller")
+        all_builds.sort(key=lambda b: b.get("timestamp", 0), reverse=True)
+        return True, all_builds, "; ".join(errors) if errors else None
+
+    def _query_single_controller(
+        self, controller: Dict, service: Optional[str], cutoff_ms: int
+    ) -> Tuple[List[Dict], Optional[str]]:
+        """Query builds from a single controller. Returns (builds, error_msg)."""
+        controller_url = controller.get("url")
+        if not controller_url:
+            return [], None
+
+        try:
+            self._validate_controller_url(controller_url)
+            client = self.get_controller_client(controller_url)
+            ok, jobs, _ = client.list_jobs()
+            if not ok:
+                return [], f"{controller['name']}: Failed to query controller"
+
+            if service:
+                jobs = [j for j in jobs if service.lower() in (j.get("name", "") or "").lower()]
+
+            builds = []
+            for job in jobs[:MAX_JOBS_PER_CONTROLLER]:
+                job_name = job.get("name") or job.get("fullName")
+                if not job_name:
                     continue
 
-                # Filter by service name if provided
-                if service:
-                    jobs = [j for j in jobs if service.lower() in (j.get("name", "") or "").lower()]
-
-                for job in jobs[:MAX_JOBS_PER_CONTROLLER]:
-                    job_name = job.get("name") or job.get("fullName")
-                    if not job_name:
+                ok, job_builds, _ = client.list_builds(job_name, limit=MAX_BUILDS_PER_CONTROLLER)
+                if not ok or not job_builds:
+                    continue
+                for build in job_builds:
+                    if build.get("timestamp", 0) < cutoff_ms:
                         continue
+                    build["_controller"] = controller["name"]
+                    build["_job"] = job_name
+                    builds.append(build)
 
-                    ok, builds, err = client.list_builds(job_name, limit=MAX_BUILDS_PER_CONTROLLER)
-                    if ok and builds:
-                        for build in builds:
-                            # Filter by time window
-                            if build.get("timestamp", 0) < cutoff_ms:
-                                continue
-                            build["_controller"] = controller["name"]
-                            build["_job"] = job_name
-                            all_builds.append(build)
+            return builds, None
 
-            except Exception as e:
-                logger.warning(
-                    "Failed to query controller %s: %s", controller.get("name"), e
-                )
-                errors.append(f"{controller.get('name', 'unknown')}: Failed to query controller")
+        except Exception as e:
+            logger.warning("Failed to query controller %s: %s", controller.get("name"), e)
+            return [], f"{controller.get('name', 'unknown')}: Failed to query controller"
 
-        # Sort by timestamp descending
-        all_builds.sort(key=lambda b: b.get("timestamp", 0), reverse=True)
 
-        return True, all_builds, "; ".join(errors) if errors else None
+def _parse_controller_response(data: Dict) -> List[Dict]:
+    """Parse controller list from OC API response data."""
+    masters = data.get("masters") or data.get("items") or []
+    if masters:
+        return [
+            {
+                "name": m.get("name") or m.get("displayName", "unknown"),
+                "url": m.get("url") or m.get("homepageUrl", ""),
+                "status": m.get("status") or m.get("state", "unknown"),
+            }
+            for m in masters[:MAX_CONTROLLERS]
+        ]
+    jobs = data.get("jobs", [])
+    return [
+        {
+            "name": job.get("name", "unknown"),
+            "url": job.get("url", ""),
+            "status": _color_to_status(job.get("color", "")),
+        }
+        for job in jobs[:MAX_CONTROLLERS]
+    ]
 
 
 def _color_to_status(color: str) -> str:

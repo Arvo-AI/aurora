@@ -8,7 +8,7 @@ interface ModeSelectorProps {
   onSelect: (mode: ConnectionMode) => void;
 }
 
-export function ModeSelector({ onSelect }: ModeSelectorProps) {
+export function ModeSelector({ onSelect }: Readonly<ModeSelectorProps>) {
   return (
     <div className="animate-step-in">
       <h1 className="text-[28px] font-bold tracking-tight mb-3">How should Aurora connect?</h1>
