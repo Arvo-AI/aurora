@@ -900,6 +900,14 @@ def _check_all_connectors(
                 logger.warning("[STATUS] %s check timed out: %s", prov, exc)
                 results[prov] = {"connected": False}
 
+    # CloudBees OC/PAT (cloudbees_oc) and FM (cloudbees_fm) are stored as separate
+    # providers but surface under the single "cloudbees" connector card in the UI.
+    if not results.get("cloudbees", {}).get("connected") and (
+        results.get("cloudbees_oc", {}).get("connected")
+        or results.get("cloudbees_fm", {}).get("connected")
+    ):
+        results["cloudbees"] = {"connected": True}
+
     return results
 
 
