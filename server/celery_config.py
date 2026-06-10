@@ -1,6 +1,7 @@
 from celery import Celery
 import importlib
 import os
+import sys
 import logging
 from dotenv import load_dotenv
 
@@ -8,12 +9,17 @@ from dotenv import load_dotenv
 # Configure root logger BEFORE Celery starts.
 # Uses stdout-only logging for container-native log aggregation.
 # Logs are accessible via `docker logs` or `kubectl logs`.
+#
+# IMPORTANT: sys.stdout must be passed explicitly to StreamHandler.
+# The default (no argument) routes to sys.stderr, which causes GCP
+# Cloud Logging to classify ALL log lines — including INFO — as ERROR
+# severity, generating false-positive error-log-spike alerts (INC-445).
 # ------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
+    handlers=[logging.StreamHandler(sys.stdout)],
     force=True  # Remove any existing handlers set by other modules to avoid duplicate logs
 )
 
