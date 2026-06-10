@@ -496,6 +496,7 @@ def run_background_chat(
     
     try:
         # Link session and Celery task ID to incident if provided
+        is_action_source = (trigger_metadata or {}).get('source') == 'action'
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
@@ -513,103 +514,109 @@ def run_background_chat(
                         )
                     conn.commit()
 
-                    # Store session ID and Celery task ID (if not already set by webhook handler)
-                    # RLS already set on this conn at line above
-                    with conn.cursor() as cursor:
-                        # First check if there's already a task ID set
-                        cursor.execute(
-                            "SELECT rca_celery_task_id FROM incidents WHERE id = %s",
-                            (incident_id,)
-                        )
-                        row = cursor.fetchone()
-                        existing_task_id = row[0] if row and row[0] else None
-                        
-                        if existing_task_id and existing_task_id != self.request.id:
-                            logger.warning(
-                                f"[BackgroundChat] Incident {incident_id} already has task ID {existing_task_id}, "
-                                f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
+                    # Action-triggered chats must not overwrite the RCA session on the incident
+                    if not is_action_source:
+                        # Store session ID and Celery task ID (if not already set by webhook handler)
+                        # RLS already set on this conn at line above
+                        with conn.cursor() as cursor:
+                            # First check if there's already a task ID set
+                            cursor.execute(
+                                "SELECT rca_celery_task_id FROM incidents WHERE id = %s",
+                                (incident_id,)
                             )
-                        
-                        cursor.execute(
-                            """UPDATE incidents 
-                               SET aurora_chat_session_id = %s, 
-                                   rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
-                               WHERE id = %s""",
-                            (session_id, self.request.id, incident_id)
-                        )
-                        conn.commit()
-                        
-                        if existing_task_id:
-                            logger.info(
-                                f"[BackgroundChat] Linked session {session_id} to incident {incident_id} "
-                                f"(task ID already set to {existing_task_id})"
-                            )
-                        else:
-                            logger.info(
-                                f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}"
-                            )
-                    
-                    # Set incident aurora_status to running and stamp the moment
-                    # the worker actually picked up the task. Used by the SRE
-                    # metrics dashboard to compute pickup latency (MTTD as
-                    # "time from webhook arrival to investigation start"). We
-                    # COALESCE so a retry doesn't overwrite the original pickup.
-                    pickup_at = datetime.now()
-                    # RLS already set on this conn at line above
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            """UPDATE incidents
-                               SET aurora_status = %s,
-                                   investigation_started_at = COALESCE(investigation_started_at, %s),
-                                   updated_at = %s
-                               WHERE id = %s""",
-                            ("running", pickup_at, pickup_at, incident_id),
-                        )
-                        conn.commit()
-                        logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to 'running' at start of RCA")
+                            row = cursor.fetchone()
+                            existing_task_id = row[0] if row and row[0] else None
 
-                    # Record lifecycle event for RCA start
-                    try:
+                            if existing_task_id and existing_task_id != self.request.id:
+                                logger.warning(
+                                    f"[BackgroundChat] Incident {incident_id} already has task ID {existing_task_id}, "
+                                    f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
+                                )
+
+                            cursor.execute(
+                                """UPDATE incidents 
+                                   SET aurora_chat_session_id = %s, 
+                                       rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
+                                   WHERE id = %s""",
+                                (session_id, self.request.id, incident_id)
+                            )
+                            conn.commit()
+
+                            if existing_task_id:
+                                logger.info(
+                                    f"[BackgroundChat] Linked session {session_id} to incident {incident_id} "
+                                    f"(task ID already set to {existing_task_id})"
+                                )
+                            else:
+                                logger.info(
+                                    f"[BackgroundChat] Linked session {session_id} and task {self.request.id} to incident {incident_id}"
+                                )
+                    else:
+                        logger.info(f"[BackgroundChat] Action session {session_id} linked to incident {incident_id} (aurora_chat_session_id not overwritten)")
+
+                    # Actions should not touch incident status or dispatch further on_incident actions
+                    if not is_action_source:
+                        # Set incident aurora_status to running and stamp the moment
+                        # the worker actually picked up the task. Used by the SRE
+                        # metrics dashboard to compute pickup latency (MTTD as
+                        # "time from webhook arrival to investigation start"). We
+                        # COALESCE so a retry doesn't overwrite the original pickup.
+                        pickup_at = datetime.now()
                         # RLS already set on this conn at line above
                         with conn.cursor() as cursor:
                             cursor.execute(
-                                """INSERT INTO incident_lifecycle_events
-                                   (incident_id, user_id, org_id, event_type, new_value)
-                                   VALUES (%s, %s, %s, %s, %s)""",
-                                (incident_id, user_id, rls_org_id, 'rca_started', 'running')
+                                """UPDATE incidents
+                                   SET aurora_status = %s,
+                                       investigation_started_at = COALESCE(investigation_started_at, %s),
+                                       updated_at = %s
+                                   WHERE id = %s""",
+                                ("running", pickup_at, pickup_at, incident_id),
                             )
                             conn.commit()
-                            logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
-                    except Exception as le:
-                        logger.error(f"[BackgroundChat] Failed to record lifecycle event 'rca_started' for incident {incident_id}: {le}")
+                            logger.info(f"[BackgroundChat] Set incident {incident_id} aurora_status to 'running' at start of RCA")
 
-                    # Dispatch on_incident actions for this incident (fire-and-forget)
-                    source = trigger_metadata.get('source', '') if trigger_metadata else ''
-                    # Prevent infinite loops: actions must not trigger other on_incident actions
-                    if source and source != 'action':
+                        # Record lifecycle event for RCA start
                         try:
-                            from services.actions.executor import dispatch_on_incident_actions
-                            dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
-                        except Exception:
-                            logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
-                    
-                    # Send investigation started notifications (if enabled)
-                    # Skip notifications if explicitly disabled (e.g., for Slack @mentions)
-                    # For email: need both general notifications AND start notifications enabled
-                    # For Slack: only need general notifications (no separate start preference since start message is overwritten by end message)
-                    email_general_enabled = _is_rca_email_notification_enabled(user_id)
-                    email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
-                    email_start_notification_enabled = email_general_enabled and email_start_enabled
-                    
-                    slack_notification_enabled = get_slack_client_for_user(user_id) is not None
-                    google_chat_notification_enabled = _has_google_chat_connected(user_id)
-                    
-                    if send_notifications and (email_start_notification_enabled or slack_notification_enabled or google_chat_notification_enabled):
-                        _send_rca_notification(user_id, incident_id, 'started', 
-                            email_enabled=email_start_notification_enabled,
-                            slack_enabled=slack_notification_enabled,
-                            google_chat_enabled=google_chat_notification_enabled
-                        )
+                            # RLS already set on this conn at line above
+                            with conn.cursor() as cursor:
+                                cursor.execute(
+                                    """INSERT INTO incident_lifecycle_events
+                                       (incident_id, user_id, org_id, event_type, new_value)
+                                       VALUES (%s, %s, %s, %s, %s)""",
+                                    (incident_id, user_id, rls_org_id, 'rca_started', 'running')
+                                )
+                                conn.commit()
+                                logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
+                        except Exception as le:
+                            logger.error(f"[BackgroundChat] Failed to record lifecycle event 'rca_started' for incident {incident_id}: {le}")
+
+                        # Dispatch on_incident actions for this incident (fire-and-forget)
+                        source = trigger_metadata.get('source', '') if trigger_metadata else ''
+                        # Prevent infinite loops: actions must not trigger other on_incident actions
+                        if source and source != 'action':
+                            try:
+                                from services.actions.executor import dispatch_on_incident_actions
+                                dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
+                            except Exception:
+                                logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
+
+                        # Send investigation started notifications (if enabled)
+                        # Skip notifications if explicitly disabled (e.g., for Slack @mentions)
+                        # For email: need both general notifications AND start notifications enabled
+                        # For Slack: only need general notifications (no separate start preference since start message is overwritten by end message)
+                        email_general_enabled = _is_rca_email_notification_enabled(user_id)
+                        email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
+                        email_start_notification_enabled = email_general_enabled and email_start_enabled
+
+                        slack_notification_enabled = get_slack_client_for_user(user_id) is not None
+                        google_chat_notification_enabled = _has_google_chat_connected(user_id)
+
+                        if send_notifications and (email_start_notification_enabled or slack_notification_enabled or google_chat_notification_enabled):
+                            _send_rca_notification(user_id, incident_id, 'started', 
+                                email_enabled=email_start_notification_enabled,
+                                slack_enabled=slack_notification_enabled,
+                                google_chat_enabled=google_chat_notification_enabled
+                            )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
         
@@ -1280,6 +1287,7 @@ async def _execute_background_chat(
         # Create the initial message; tag it so the UI layer can skip the
         # synthesized RCA scaffold (internal instructions, not user input).
         # Slack/Google Chat messages are user-authored and should NOT be hidden.
+        # Action messages follow the same display logic as RCA (controlled by DISPLAY__RCA_USER_MSG).
         source = trigger_metadata.get("source", "") if trigger_metadata else ""
         is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat')
         human_message = HumanMessage(
