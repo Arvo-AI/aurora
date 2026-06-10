@@ -95,11 +95,12 @@ class VertexAIProvider(BaseLLMProvider):
 
     def supports_model(self, model: str) -> bool:
         if "/" in model:
-            return model.split("/")[0] == "vertex"
+            prefix = model.split("/")[0]
+            return prefix in ("vertex", "google")
         return False
 
     def get_native_model_name(self, model: str) -> str:
-        if "/" in model and model.split("/")[0] == "vertex":
+        if "/" in model and model.split("/")[0] in ("vertex", "google"):
             return model.split("/", 1)[1]
         return model
 
