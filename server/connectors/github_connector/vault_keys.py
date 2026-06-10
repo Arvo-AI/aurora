@@ -1,8 +1,17 @@
-"""GitHub App secret helpers backed by Vault.
+"""GitHub App secret helpers with secrets-backend + env var fallback.
 
-Setup:
+When the secrets backend (Vault or AWS SM) is available, secrets are read from
+it first. If the backend is unavailable or the lookup fails, environment
+variables are checked as a fallback. This makes the module compatible with any
+configured SECRETS_BACKEND.
+
+Setup (Vault):
   vault kv put aurora/system/github-app/private-key value=@/path/to/github-app-private-key.pem
   vault kv put aurora/system/github-app/webhook-secret value='your-github-app-webhook-secret'
+
+Setup (env var — required when SECRETS_BACKEND != vault):
+  GITHUB_APP_PRIVATE_KEY=<PEM contents>
+  GITHUB_APP_WEBHOOK_SECRET=<secret>
 """
 
 import logging
@@ -14,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 _PRIVATE_KEY_SECRET_REF = "vault:kv/data/aurora/system/github-app/private-key"
 _WEBHOOK_SECRET_SECRET_REF = "vault:kv/data/aurora/system/github-app/webhook-secret"
+_PRIVATE_KEY_ENV_VARS = (
+    "GITHUB_APP_PRIVATE_KEY",
+)
 _WEBHOOK_SECRET_ENV_VARS = (
     "GITHUB_APP_WEBHOOK_SECRET",
     "GH_APP_WEBHOOK_SECRET",
@@ -25,7 +37,7 @@ _cached_webhook_secret: str | None = None
 
 
 class GitHubAppConfigError(RuntimeError):
-    """Raised when GitHub App Vault or environment configuration is invalid."""
+    """Raised when GitHub App secrets configuration is invalid."""
 
 
 def clear_cache() -> None:
@@ -35,12 +47,17 @@ def clear_cache() -> None:
     _cached_webhook_secret = None
 
 
-def _read_vault_secret(secret_ref: str, *, secret_label: str) -> str:
+def _read_from_backend(secret_ref: str, *, secret_label: str) -> str:
     backend = get_secrets_backend()
 
     if not backend.is_available():
         raise GitHubAppConfigError(
-            f"Vault secrets backend is unavailable while reading GitHub App {secret_label}."
+            f"Secrets backend is unavailable while reading GitHub App {secret_label}."
+        )
+
+    if not backend.can_handle_ref(secret_ref):
+        raise GitHubAppConfigError(
+            f"Active secrets backend cannot handle reference for GitHub App {secret_label}."
         )
 
     try:
@@ -49,12 +66,12 @@ def _read_vault_secret(secret_ref: str, *, secret_label: str) -> str:
         raise
     except Exception as exc:
         raise GitHubAppConfigError(
-            f"Failed to read GitHub App {secret_label} from Vault."
+            f"Failed to read GitHub App {secret_label} from secrets backend."
         ) from exc
 
     if not secret_value:
         raise GitHubAppConfigError(
-            f"GitHub App {secret_label} is empty in Vault."
+            f"GitHub App {secret_label} is empty in secrets backend."
         )
 
     return secret_value
@@ -68,41 +85,61 @@ def _read_webhook_secret_from_env() -> str:
             return value
 
     raise GitHubAppConfigError(
-        "GitHub App webhook secret is not configured in Vault or environment."
+        "GitHub App webhook secret is not configured in secrets backend or environment."
+    )
+
+
+def _read_private_key_from_env() -> str:
+    for env_var in _PRIVATE_KEY_ENV_VARS:
+        value = os.getenv(env_var)
+        if value:
+            value = value.replace("\\n", "\n")
+            logger.info("Using GitHub App private key from environment variable")
+            return value
+
+    raise GitHubAppConfigError(
+        "GitHub App private key is not configured in secrets backend or environment."
     )
 
 
 def get_app_private_key() -> str:
-    """Return the GitHub App private key from Vault."""
+    """Return the GitHub App private key from secrets backend, with env fallback."""
     global _cached_private_key
 
     if _cached_private_key is not None:
         return _cached_private_key
 
-    _cached_private_key = _read_vault_secret(
-        _PRIVATE_KEY_SECRET_REF,
-        secret_label="private key",
-    )
+    try:
+        _cached_private_key = _read_from_backend(
+            _PRIVATE_KEY_SECRET_REF,
+            secret_label="private key",
+        )
+        return _cached_private_key
+    except GitHubAppConfigError:
+        logger.debug(
+            "GitHub App private key not available from secrets backend; trying environment fallback.",
+        )
+
+    _cached_private_key = _read_private_key_from_env()
     return _cached_private_key
 
 
 def get_app_webhook_secret() -> str:
-    """Return the GitHub App webhook secret from Vault, with env fallback."""
+    """Return the GitHub App webhook secret from secrets backend, with env fallback."""
     global _cached_webhook_secret
 
     if _cached_webhook_secret is not None:
         return _cached_webhook_secret
 
     try:
-        _cached_webhook_secret = _read_vault_secret(
+        _cached_webhook_secret = _read_from_backend(
             _WEBHOOK_SECRET_SECRET_REF,
             secret_label="webhook secret",
         )
         return _cached_webhook_secret
-    except GitHubAppConfigError as vault_error:
-        logger.warning(
-            "GitHub App webhook secret lookup from Vault failed; trying environment fallback (%s)",
-            type(vault_error).__name__,
+    except GitHubAppConfigError:
+        logger.debug(
+            "GitHub App webhook secret not available from secrets backend; trying environment fallback.",
         )
 
     _cached_webhook_secret = _read_webhook_secret_from_env()
