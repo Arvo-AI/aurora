@@ -45,6 +45,7 @@ class CloudBeesRCAArgs(BaseModel):
     service: Optional[str] = Field(default=None, description="Service name filter for recent_deployments")
     time_window_hours: Optional[int] = Field(default=24, description="Lookback window in hours for recent_deployments")
     app_id: Optional[str] = Field(default=None, description="Feature Management application ID for flag_changes")
+    controller_url: Optional[str] = Field(default=None, description="Controller URL for OC mode (from controller_list or cross_controller_deployments results). Required for build introspection when connected via Operations Center.")
 
 
 def is_cloudbees_connected(user_id: str) -> bool:
@@ -128,6 +129,7 @@ def cloudbees_rca(
     service: Optional[str] = None,
     time_window_hours: int = 24,
     app_id: Optional[str] = None,
+    controller_url: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Unified CloudBees CI investigation tool for RCA.
@@ -187,9 +189,23 @@ def cloudbees_rca(
     elif action == "recent_deployments":
         return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
 
-    client = _get_client_for_cloudbees_user(user_id) or _get_oc_client_for_user(user_id)
+    # Resolve client: prefer legacy single-controller, then OC per-controller
+    client = _get_client_for_cloudbees_user(user_id)
     if not client:
-        return json.dumps({"error": "CloudBees CI is not connected. Configure credentials in Settings > Connectors > CloudBees CI."})
+        oc_client = _get_oc_client_for_user(user_id)
+        if not oc_client:
+            return json.dumps({"error": "CloudBees CI is not connected. Configure credentials in Settings > Connectors > CloudBees CI."})
+        # OC mode: route build introspection through a per-controller JenkinsClient
+        if not controller_url:
+            return json.dumps({
+                "error": "controller_url is required for build introspection in Operations Center mode. "
+                "Use controller_list or cross_controller_deployments first to discover controller URLs, "
+                "then pass the relevant controller_url for this action."
+            })
+        try:
+            client = oc_client.get_controller_client(controller_url)
+        except ValueError as e:
+            return json.dumps({"error": str(e)})
 
     from .jenkins_rca_tool import (
         _action_build_detail,
