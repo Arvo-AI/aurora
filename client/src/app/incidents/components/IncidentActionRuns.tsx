@@ -115,7 +115,7 @@ export default function IncidentActionRuns({ incidentId }: IncidentActionRunsPro
             )}
             {run.chat_session_id && (
               <Link
-                href={`/chat?sessionId=${run.chat_session_id}`}
+                href={`/chat?sessionId=${encodeURIComponent(run.chat_session_id)}`}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
               >
                 View

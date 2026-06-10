@@ -533,13 +533,21 @@ def run_background_chat(
                                     f"but this task is {self.request.id}. This may indicate a race condition or duplicate RCA start."
                                 )
 
-                            cursor.execute(
-                                """UPDATE incidents 
-                                   SET aurora_chat_session_id = %s, 
-                                       rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
-                                   WHERE id = %s""",
-                                (session_id, self.request.id, incident_id)
-                            )
+                            # Only update aurora_chat_session_id when this task owns the RCA
+                            if not existing_task_id or existing_task_id == self.request.id:
+                                cursor.execute(
+                                    """UPDATE incidents 
+                                       SET aurora_chat_session_id = %s, 
+                                           rca_celery_task_id = COALESCE(rca_celery_task_id, %s)
+                                       WHERE id = %s""",
+                                    (session_id, self.request.id, incident_id)
+                                )
+                            else:
+                                logger.warning(
+                                    "[BackgroundChat] Skipping aurora_chat_session_id overwrite for incident %s; RCA task %s already owns it",
+                                    incident_id,
+                                    existing_task_id,
+                                )
                             conn.commit()
 
                             if existing_task_id:
@@ -627,7 +635,7 @@ def run_background_chat(
         hook_allowed, hook_message = get_hook("before_llm_call")(_hook_org_id, user_id)
         if not hook_allowed:
             logger.warning(f"[BackgroundChat] Hook blocked for user {user_id}: {hook_message}")
-            if incident_id:
+            if incident_id and not is_action_source:
                 try:
                     with db_pool.get_admin_connection() as conn:
                         with conn.cursor() as cursor:
@@ -667,7 +675,7 @@ def run_background_chat(
         
         # Update incident status to analyzed if incident_id provided
         # (may already be done inside _execute_background_chat as crash protection)
-        if incident_id:
+        if incident_id and not is_action_source:
             # Clear the Celery task ID since we're done
             try:
                 with db_pool.get_admin_connection() as conn:
@@ -823,7 +831,7 @@ def run_background_chat(
     except SoftTimeLimitExceeded:
         logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
         _update_session_status(session_id, "failed", user_id=user_id)
-        if incident_id:
+        if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
@@ -843,7 +851,7 @@ def run_background_chat(
     except Exception as e:
         logger.exception(f"[BackgroundChat] Failed for session {session_id}: {e}")
         _update_session_status(session_id, "failed", user_id=user_id)
-        if incident_id:
+        if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
         if trigger_metadata and trigger_metadata.get('source') == 'action':

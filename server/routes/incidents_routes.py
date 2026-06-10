@@ -2037,21 +2037,20 @@ def get_incident_action_runs(user_id, incident_id: str):
     org_id = get_org_id_from_request()
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                cursor.execute(
-                    """SELECT r.id, r.action_id, r.status, r.chat_session_id,
-                              r.started_at, r.completed_at, r.error,
-                              a.name AS action_name
-                       FROM action_runs r
-                       JOIN actions a ON a.id = r.action_id
-                       WHERE r.incident_id = %s AND r.org_id = %s
-                       ORDER BY r.started_at DESC""",
-                    (incident_id, org_id),
-                )
-                cols = [d[0] for d in cursor.description]
-                rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+            cursor.execute(
+                """SELECT r.id, r.action_id, r.status, r.chat_session_id,
+                          r.started_at, r.completed_at, r.error,
+                          a.name AS action_name
+                   FROM action_runs r
+                   JOIN actions a ON a.id = r.action_id
+                   WHERE r.incident_id = %s AND r.org_id = %s
+                   ORDER BY r.started_at DESC""",
+                (incident_id, org_id),
+            )
+            cols = [d[0] for d in cursor.description]
+            rows = [dict(zip(cols, row, strict=False)) for row in cursor.fetchall()]
 
         for r in rows:
             r["id"] = str(r["id"])
