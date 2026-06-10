@@ -802,12 +802,14 @@ def run_background_chat(
                     logger.warning(f"[BackgroundChat] Failed to send action notification email: {e}")
 
         # Dispatch on_incident actions configured for after_rca timing
+        # Skip if already dispatched inside _execute_background_chat (crash-protection path)
         if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
-            try:
-                from services.actions.executor import dispatch_on_incident_actions
-                dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
+            if not result.get('after_rca_dispatched'):
+                try:
+                    from services.actions.executor import dispatch_on_incident_actions
+                    dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         return result
@@ -1474,10 +1476,12 @@ async def _execute_background_chat(
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
 
         # Dispatch after_rca actions before returning (same reason as above).
+        after_rca_dispatched = False
         if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
             try:
                 from services.actions.executor import dispatch_on_incident_actions
                 dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+                after_rca_dispatched = True
             except Exception:
                 logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
@@ -1487,6 +1491,7 @@ async def _execute_background_chat(
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
             "guardrail_blocked": guardrail_blocked,
+            "after_rca_dispatched": after_rca_dispatched,
         }
         
     except Exception as e:
