@@ -187,7 +187,7 @@ def cloudbees_rca(
     elif action == "recent_deployments":
         return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
 
-    client = _get_client_for_cloudbees_user(user_id)
+    client = _get_client_for_cloudbees_user(user_id) or _get_oc_client_for_user(user_id)
     if not client:
         return json.dumps({"error": "CloudBees CI is not connected. Configure credentials in Settings > Connectors > CloudBees CI."})
 

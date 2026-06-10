@@ -28,9 +28,16 @@ CLOUDBEES_PROVIDER = "cloudbees"
 
 
 def _get_stored_cloudbees_credentials(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get credentials from any CloudBees provider (legacy, OC, or FM)."""
     try:
-        return get_token_data(user_id, CLOUDBEES_PROVIDER)
-    except Exception as exc:
+        creds = get_token_data(user_id, CLOUDBEES_PROVIDER)
+        if creds:
+            return creds
+        oc_creds = get_token_data(user_id, CLOUDBEES_OC_PROVIDER)
+        if oc_creds:
+            return oc_creds
+        return None
+    except Exception:
         logger.error("Failed to retrieve CloudBees credentials for user %s", user_id)
         return None
 
@@ -39,8 +46,12 @@ def _build_client(creds: Dict[str, Any]) -> Optional[JenkinsClient]:
     base_url = creds.get("base_url")
     username = creds.get("username")
     api_token = creds.get("api_token")
-    if not base_url or not username or not api_token:
+    auth_mode = creds.get("auth_mode", "basic")
+    if not base_url or not api_token:
         return None
+    if auth_mode == "bearer" or not username:
+        from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
+        return CloudBeesOCClient(base_url=base_url, username=username or "", api_token=api_token, auth_mode=auth_mode)
     return JenkinsClient(base_url=base_url, username=username, api_token=api_token)
 
 
@@ -292,6 +303,7 @@ def connect_platform(user_id):
             "username": username,
             "api_token": api_token,
             "auth_mode": "bearer" if is_pat_mode else "basic",
+            "webhook_secret": secrets.token_hex(32),
         }
         try:
             store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
@@ -452,8 +464,8 @@ def _verify_webhook_user(user_id: str) -> bool:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[CLOUDBEES:verify_webhook]"):
                     return False
                 cursor.execute(
-                    "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider = %s LIMIT 1",
-                    (user_id, CLOUDBEES_PROVIDER),
+                    "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider IN (%s, %s) LIMIT 1",
+                    (user_id, CLOUDBEES_PROVIDER, CLOUDBEES_OC_PROVIDER),
                 )
                 return cursor.fetchone() is not None
     except Exception as e:

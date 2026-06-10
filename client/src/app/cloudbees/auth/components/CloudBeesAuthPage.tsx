@@ -435,7 +435,7 @@ export default function CloudBeesAuthPage() {
         />
       )}
 
-      <style jsx>{`
+      <style jsx global>{`
         @keyframes stepIn {
           from {
             opacity: 0;
