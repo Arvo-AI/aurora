@@ -21,34 +21,26 @@ logger = logging.getLogger(__name__)
 health_bp = Blueprint('health', __name__)
 
 def check_database_health():
-    """Check PostgreSQL database connectivity."""
+    """Check PostgreSQL database connectivity using the shared connection pool.
+
+    Previously this function opened a brand-new psycopg2 connection on every
+    call.  The /health/readiness endpoint is polled by Kubernetes probes at
+    ~6 req/min per pod, so two server pods together were creating ~12 new
+    backend connections per minute against Cloud SQL — even under normal load.
+    Under I/O pressure (escalating checkpoint write times, high autovacuum
+    activity) those extra connections amplified latency for all
+    database-touching requests.
+
+    Using db_pool.get_connection() borrows an already-open connection from the
+    pool and returns it immediately after the SELECT 1, keeping the backend
+    connection count stable.
+    """
     try:
-        # Connect using unified POSTGRES_* variables
-        user = os.getenv('POSTGRES_USER')
-        password = os.getenv('POSTGRES_PASSWORD')
-        host = os.getenv('POSTGRES_HOST')
-        port = os.getenv('POSTGRES_PORT')
-        dbname = os.getenv('POSTGRES_DB')
-
-        if not user or not password:
-            return {"status": "unhealthy", "error": "Database credentials not configured"}
-
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=user,
-            password=password,
-            sslmode=os.getenv('POSTGRES_SSLMODE', 'prefer') or None,
-            sslrootcert=os.getenv('POSTGRES_SSLROOTCERT') or None,
-        )
-
-        cursor = conn.cursor()
-        # No RLS needed — infrastructure health check
-        cursor.execute("SELECT 1")
-        cursor.close()
-        conn.close()
-
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # No RLS needed — infrastructure health check
+                cursor.execute("SELECT 1")
         return {"status": "healthy", "message": "Database connection successful"}
     except Exception as e:
         logger.warning(f"Database health check failed: {e}", exc_info=True)
