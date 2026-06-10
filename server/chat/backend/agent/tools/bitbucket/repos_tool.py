@@ -8,13 +8,16 @@ from pydantic import BaseModel, Field
 
 from .utils import (
     get_bb_client_for_user,
-    resolve_workspace_repo,
+    get_default_branch,
     require_repo,
     forward_if_error,
     build_error_response,
     build_success_response,
     confirm_or_cancel,
 )
+
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +34,8 @@ class BitbucketReposArgs(BaseModel):
         "list_workspaces",
         "get_workspace",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: Optional[str] = Field(None, description="Workspace slug (required for repo-scoped actions).")
+    repo_slug: Optional[str] = Field(None, description="Repository slug (required for repo-scoped actions).")
     path: Optional[str] = Field(None, description="File or directory path (for file/directory operations).")
     content: Optional[str] = Field(None, description="File content (for create_or_update_file).")
     message: Optional[str] = Field(None, description="Commit message (for create_or_update_file, delete_file).")
@@ -61,17 +64,36 @@ def bitbucket_repos(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source = resolve_workspace_repo(user_id, workspace, repo_slug)
-    if not branch:
-        branch = saved_branch
+    ws, repo = workspace, repo_slug
+
+    repo_scoped = action in (
+        "get_repo", "get_file_contents", "create_or_update_file",
+        "delete_file", "get_directory_tree",
+    )
+    if repo_scoped and ws and repo:
+        if not branch:
+            branch = get_default_branch(user_id, ws, repo)
 
     try:
         if action == "list_workspaces":
-            result = client.get_workspaces()
-            if isinstance(result, list):
-                workspaces = [{"slug": w.get("slug"), "name": w.get("name"), "uuid": w.get("uuid")} for w in result]
-                return build_success_response(workspaces=workspaces, count=len(workspaces))
-            return json.dumps(result, default=str)
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketRepos:workspaces]")
+                    cur.execute(
+                        """SELECT DISTINCT split_part(repo_full_name, '/', 1) AS workspace
+                           FROM connected_repos
+                           WHERE provider = 'bitbucket'
+                             AND repo_full_name LIKE '%%/%%'
+                           ORDER BY workspace""",
+                    )
+                    rows = cur.fetchall()
+            if not rows:
+                return build_success_response(
+                    workspaces=[], count=0,
+                    message="No workspaces connected. The user must select repos in the Bitbucket connector settings.",
+                )
+            workspaces = [{"slug": r[0], "name": r[0]} for r in rows]
+            return build_success_response(workspaces=workspaces, count=len(workspaces))
 
         if action == "get_workspace":
             if not ws:
@@ -81,19 +103,36 @@ def bitbucket_repos(
         if action == "list_repos":
             if not ws:
                 return build_error_response("workspace is required")
-            result = client.get_repositories(ws)
-            if isinstance(result, list):
-                repos = [{
-                    "slug": r.get("slug"),
-                    "name": r.get("name"),
-                    "full_name": r.get("full_name"),
-                    "is_private": r.get("is_private"),
-                    "description": r.get("description", ""),
-                    "mainbranch": r.get("mainbranch", {}).get("name") if r.get("mainbranch") else None,
-                    "updated_on": r.get("updated_on"),
-                } for r in result]
-                return build_success_response(repositories=repos, count=len(repos), workspace=ws)
-            return json.dumps(result, default=str)
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[BitbucketRepos:list]")
+                    cur.execute(
+                        """SELECT repo_full_name, default_branch, is_private,
+                                  metadata_summary, metadata_status
+                           FROM connected_repos
+                           WHERE provider = 'bitbucket'
+                             AND repo_full_name LIKE %s
+                           ORDER BY repo_full_name""",
+                        (ws + "/%",),
+                    )
+                    rows = cur.fetchall()
+            if not rows:
+                return build_success_response(
+                    repositories=[], count=0, workspace=ws,
+                    message="No repos connected for this workspace. The user must select repos in the Bitbucket connector settings.",
+                )
+            repos = []
+            for r in rows:
+                full_name = r[0]
+                slug = full_name.split("/", 1)[1] if "/" in full_name else full_name
+                repos.append({
+                    "slug": slug,
+                    "full_name": full_name,
+                    "is_private": r[2],
+                    "description": r[3] or ("(generating...)" if r[4] != 'ready' else "(no description)"),
+                    "mainbranch": r[1],
+                })
+            return build_success_response(repositories=repos, count=len(repos), workspace=ws)
 
         if action == "get_repo":
             if err := require_repo(ws, repo):
@@ -121,7 +160,7 @@ def bitbucket_repos(
                 return build_error_response("branch is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Commit file '{path}' to branch '{branch}' in {ws}/{repo}",
-                    "bitbucket:commit_file"):
+                    "bitbucket_repos:commit_file"):
                 return cancelled
             result = client.create_or_update_file(ws, repo, path, content, message, branch)
             if err := forward_if_error(result):
@@ -139,7 +178,7 @@ def bitbucket_repos(
                 return build_error_response("branch is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Delete file '{path}' from branch '{branch}' in {ws}/{repo}",
-                    "bitbucket:delete_file"):
+                    "bitbucket_repos:delete_file"):
                 return cancelled
             result = client.delete_file(ws, repo, path, message, branch)
             if err := forward_if_error(result):

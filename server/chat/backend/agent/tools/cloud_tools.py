@@ -23,7 +23,7 @@ from .github_commit_tool import github_commit, GitHubCommitArgs
 from .github_rca_tool import github_rca, GitHubRCAArgs
 from .github_fix_tool import github_fix, GitHubFixArgs
 from .github_repos_tool import get_connected_repos, GetConnectedReposArgs
-from .kubectl_clusters_tool import get_connected_clusters, GetConnectedClustersArgs
+from .list_clusters_tool import get_connected_clusters, GetConnectedClustersArgs
 from utils.auth.github_auth_router import is_github_connected
 from .jenkins_rca_tool import jenkins_rca, JenkinsRCAArgs, is_jenkins_connected
 from .cloudbees_rca_tool import cloudbees_rca, CloudBeesRCAArgs, is_cloudbees_connected
@@ -978,6 +978,25 @@ from .mcp_tools import (
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
 
+
+_NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
+
+
+def _is_background_rca(state_context, is_background: bool) -> bool:
+    """True when the session is a background RCA investigating a real incident.
+
+    Used to gate tools like github_fix that only make sense during incident
+    investigation (where the user will see the incident card afterwards).
+    """
+    if not state_context or not is_background:
+        return False
+    incident_id = getattr(state_context, 'incident_id', None)
+    if not incident_id:
+        return False
+    rca_source = ((getattr(state_context, 'rca_context', None) or {}).get('source', '') or '').lower()
+    return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
+
+
 def get_cloud_tools():
     """Get all cloud management tools including both Aurora native tools and REAL MCP tools."""
     # Import required classes at function start to avoid scope issues
@@ -1009,10 +1028,11 @@ def get_cloud_tools():
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
+    is_rca_context = _is_background_rca(state_context, is_background)
     if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
+        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}"
     else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}"
+        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}"
     
     current_time = time.time()
     if (
@@ -1323,8 +1343,13 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
         tool_functions.append((github_rca, "github_rca"))
-        tool_functions.append((github_fix, "github_fix"))
-        logging.info(f"Added GitHub tools for user {user_id}")
+        # github_fix saves suggestions for user review in the incident card UI.
+        # Only include during background RCA (real incident investigation) where
+        # the user will see the incident card. Exclude from actions (autonomous,
+        # should use MCP create_pull_request), prediscovery, and interactive chat.
+        if is_rca_context:
+            tool_functions.append((github_fix, "github_fix"))
+        logging.info(f"Added GitHub tools for user {user_id} (github_fix={'included' if is_rca_context else 'excluded (not RCA)'})")
 
     if _safe_connected(is_tailscale_connected, "Tailscale"):
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
@@ -1370,6 +1395,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             tool_functions.append((save_postmortem, "save_postmortem"))
     except ImportError:
         logger.warning("Postmortem tools not available — import failed")
+
+    # Artifacts: persistent markdown documents Aurora maintains across runs.
+    # Unconditional (no connector gating) so any agent surface — chat, scheduled
+    # Actions, background RCA, MCP — can list/read/write them. Steering lives
+    # entirely in the tool descriptions below; never in a system prompt.
+    try:
+        from .artifact_tool import list_artifacts, read_artifact, write_artifact
+        tool_functions.append((list_artifacts, "list_artifacts"))
+        tool_functions.append((read_artifact, "read_artifact"))
+        tool_functions.append((write_artifact, "write_artifact"))
+    except ImportError:
+        logger.warning("Artifact tools not available — import failed")
 
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1589,6 +1626,54 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "structured markdown (Summary, Timeline, Root Cause, Impact, etc.)."
                 ),
                 args_schema=SavePostmortemArgs,
+            )
+        elif name == 'list_artifacts':
+            from .artifact_tool import ListArtifactsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all persistent documents (artifacts) maintained for this workspace, "
+                    "with titles, versions, and last-updated times. Call this to discover what "
+                    "documents already exist before deciding whether to read, update, or create "
+                    "one — especially when instructions reference maintaining/updating a document "
+                    "but don't say it's new. Metadata only, not content."
+                ),
+                args_schema=ListArtifactsArgs,
+            )
+        elif name == 'read_artifact':
+            from .artifact_tool import ReadArtifactArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Read the full current markdown of one artifact by exact title. Call after "
+                    "list_artifacts to get a document's current state — e.g. to see what you "
+                    "reported last run before producing an update, or to respect a user's edits. "
+                    "Returns content, version, and last-updated time, or that it doesn't exist."
+                ),
+                args_schema=ReadArtifactArgs,
+            )
+        elif name == 'write_artifact':
+            from .artifact_tool import WriteArtifactArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Create or update a persistent markdown document by title. If the title "
+                    "exists, its content is replaced and a new version recorded; otherwise it's "
+                    "created. Use when instructions ask you to maintain/update/record findings in "
+                    "a document that persists across runs (a living findings list, cost report, "
+                    "runbook) — not for one-off chat answers. ALWAYS read the existing artifact "
+                    "first and reconcile rather than regenerate: keep items the user edited or "
+                    "added, remove findings that are now resolved or no longer reproduce, do not "
+                    "re-add anything the user deleted, and avoid duplicates. Honor any "
+                    "user-maintained 'False positives', 'Suppressed', or 'Won't fix' section: "
+                    "preserve it verbatim and never re-report or re-add the items it lists, even "
+                    "if a fresh scan surfaces them again. If the existing doc was last edited by "
+                    "the user, treat their version as authoritative and change it minimally."
+                ),
+                args_schema=WriteArtifactArgs,
             )
         elif name == 'list_slack_channels':
             from .slack_tool import ListSlackChannelsArgs
@@ -2019,35 +2104,81 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 bitbucket_pull_requests, BitbucketPullRequestsArgs,
                 bitbucket_issues, BitbucketIssuesArgs,
                 bitbucket_pipelines, BitbucketPipelinesArgs,
+                bitbucket_fix, BitbucketFixArgs,
             )
 
-            _bb_tools = [
-                (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
-                 "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                 "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                 "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
-                 "from saved selection if not specified."),
-                (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
-                 "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
-                 "delete_branch, list_commits, get_commit, get_diff, compare."),
-                (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
-                 "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
-                 "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
-                 "get_pr_diff, get_pr_activity."),
-                (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
-                 "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
-                 "update_issue, list_issue_comments, add_issue_comment."),
-                (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
-                 "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
-                 "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
-            ]
+            _is_rca_background = getattr(state_context, 'is_background', False) if state_context else False
+
+            if _is_rca_background:
+                _bb_tools = [
+                    (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                     "Query Bitbucket repositories and files (READ-ONLY during RCA). "
+                     "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. "
+                     "Do NOT use create_or_update_file — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                     "Query Bitbucket branches and commits (READ-ONLY during RCA). "
+                     "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
+                     "Do NOT create branches manually — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                     "Query Bitbucket pull requests (READ-ONLY during RCA). "
+                     "Actions: list_prs, get_pr, list_pr_comments, get_pr_diff, get_pr_activity. "
+                     "Do NOT create PRs manually — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                     "Query Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                     "list_pipeline_steps, get_step_log, get_pipeline_step."),
+                ]
+            else:
+                _bb_tools = [
+                    (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                     "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
+                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
+                     "from saved selection if not specified."),
+                    (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                     "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
+                     "delete_branch, list_commits, get_commit, get_diff, compare."),
+                    (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                     "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
+                     "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
+                     "get_pr_diff, get_pr_activity."),
+                    (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
+                     "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
+                     "update_issue, list_issue_comments, add_issue_comment."),
+                    (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                     "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                     "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
+                ]
             for _func, _name, _schema, _desc in _bb_tools:
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
                 tools.append(StructuredTool.from_function(
                     func=_final, name=_name, description=_desc, args_schema=_schema))
-            logging.info(f"Added {len(_bb_tools)} Bitbucket tools for user {user_id}")
+
+            # bitbucket_fix needs forced context (incident_id injection) like github_fix
+            _bb_fix_ctx = with_forced_context(bitbucket_fix)
+            _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
+            _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
+            tools.append(StructuredTool.from_function(
+                func=_bb_fix_final,
+                name="bitbucket_fix",
+                description=(
+                    "Suggest a code fix or create a new file for an identified issue during RCA. "
+                    "Use this when you identify a specific code change that would fix the root cause "
+                    "and the repository is on Bitbucket. "
+                    "The fix is stored for user review before being applied as a PR. "
+                    "Parameters: file_path (path in repo), "
+                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                    "set replace_all=true if you want every occurrence replaced; "
+                    "to CREATE a new file, use old_string='' with the full content in new_string), "
+                    "fix_description (what this fix does), root_cause_summary (why this change is needed). "
+                    "Optional: repo (workspace/repo_slug format), commit_message, branch."
+                ),
+                args_schema=BitbucketFixArgs,
+            ))
+            logging.info(f"Added {len(_bb_tools) + 1} Bitbucket tools for user {user_id} (rca_background={_is_rca_background})")
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
 

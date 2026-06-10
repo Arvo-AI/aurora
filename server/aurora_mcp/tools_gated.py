@@ -12,7 +12,7 @@ Every path here has been verified against the Flask url_map — only real
 endpoints are reachable. Tools whose backing connectors expose no REST
 data-query routes (Coroot, ThousandEyes, distributed tracing across all
 connectors, GitHub `rca`) have been dropped — the agent's Python tools
-for those are reachable through `chat_with_aurora` instead.
+for those are reachable through the Aurora UI agent instead.
 """
 
 from __future__ import annotations
@@ -302,8 +302,7 @@ def register_tier2_tools(
         limit: int = 50,
     ) -> Dict[str, Any]:
         """Query logs. Pass `source` to pin a backend (datadog/splunk); omit to
-        let Aurora pick the first connected one. Advanced — for investigations
-        prefer chat_with_aurora."""
+        let Aurora pick the first connected one."""
         return await _do_query_logs(
             api_call, _user_id(), query, source, time_range_minutes, limit,
         )

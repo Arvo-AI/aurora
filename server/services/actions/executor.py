@@ -172,6 +172,20 @@ def build_action_prompt(
         "- Report what you did and any issues encountered.",
     ]
 
+    # Auto-maintain a living artifact on every action so results accumulate
+    # across runs without the user having to ask for it. Always applied; if the
+    # user's instructions already name a document to keep, the agent reuses that
+    # title instead of the default below (handled in prose, not by parsing).
+    title = action["name"]
+    parts += [
+        "",
+        "## Maintain a Living Document",
+        f'Keep a persistent Aurora artifact so this Action\'s results accumulate across runs instead of being lost in chat. Title it "{title}", unless your instructions above already name a specific document to maintain — then use that title.',
+        "- First read_artifact to load the prior version, then write_artifact with that same exact title every run.",
+        '- Reconcile rather than regenerate: add new findings, remove anything now resolved, keep items the user edited or added, and never re-add anything the user deleted or listed under a "False positives" / "Won\'t fix" section.',
+        "- If there is nothing new to record, leave the document unchanged.",
+    ]
+
     return "\n".join(parts), rail_text
 
 

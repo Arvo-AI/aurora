@@ -15,12 +15,14 @@ Actions:
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Literal
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field
+
+from .apply_fix_utils import update_suggestion_with_pr
 
 from routes.gitlab.gitlab_api_utils import gitlab_api_request, build_error_response, build_success_response, is_gitlab_connected
 from utils.auth.command_gate import gate_action
@@ -362,8 +364,8 @@ def _action_apply_fix(
                           s.original_content, s.suggested_content, s.user_edited_content,
                           s.repository, s.command, s.pr_url, s.created_branch
                    FROM incident_suggestions s JOIN incidents i ON s.incident_id = i.id
-                   WHERE s.id = %s AND i.user_id = %s AND s.type = 'fix'""",
-                (suggestion_id, user_id),
+                   WHERE s.id = %s AND s.type = 'fix'""",
+                (suggestion_id,),
             )
             row = cursor.fetchone()
             if row:
@@ -463,16 +465,7 @@ def _action_apply_fix(
     mr_url = mr_resp.get("web_url", "")
     mr_iid = mr_resp.get("iid", 0)
 
-    try:
-        with db_pool.get_admin_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE incident_suggestions SET pr_url=%s, pr_number=%s, created_branch=%s, applied_at=%s WHERE id=%s",
-                (mr_url, mr_iid, branch_name, datetime.now(timezone.utc), suggestion_id),
-            )
-            conn.commit()
-    except Exception as e:
-        logger.warning("Failed to update suggestion with MR info: %s", e)
+    if not update_suggestion_with_pr(suggestion_id, mr_url, mr_iid, branch_name):
         return build_success_response(
             message="Merge Request created but DB sync failed — duplicate MR guard may not work on retry",
             mrUrl=mr_url, mrIid=mr_iid, branch=branch_name,

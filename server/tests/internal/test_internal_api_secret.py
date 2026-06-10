@@ -57,6 +57,9 @@ def _stub_ws_handler(monkeypatch):
     ws_handler_stub.get_agent_websocket_by_cluster.return_value = None
     monkeypatch.setitem(sys.modules, "websockets", MagicMock())
     monkeypatch.setitem(sys.modules, "utils.kubectl.agent_ws_handler", ws_handler_stub)
+    monkeypatch.setattr(
+        _api_handler_module, "_get_kubeconfig_for_cluster", lambda *a, **kw: None
+    )
 
 
 def _valid_body(user_id="u-1", cluster_id="cluster-1", command="kubectl get pods"):
@@ -212,7 +215,7 @@ class TestConstantTimeComparison:
 
 # Expected error emitted by the handler body when no agent websocket is
 # registered — used as the positive "gate was passed" signal below.
-_NO_AGENT_ERROR_PREFIX = "No active agent for cluster"
+_NO_AGENT_ERROR_PREFIX = "No active agent or kubeconfig for cluster"
 
 
 class TestSecretUnsetBypass:

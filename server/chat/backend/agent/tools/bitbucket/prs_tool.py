@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from .utils import (
     DIFF_TRUNCATE_LIMIT,
     get_bb_client_for_user,
-    resolve_workspace_repo,
+    get_default_branch,
     require_repo,
     forward_if_error,
     truncate_text,
@@ -36,8 +36,8 @@ class BitbucketPullRequestsArgs(BaseModel):
         "get_pr_diff",
         "get_pr_activity",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     pr_id: Optional[int] = Field(None, description="Pull request ID (required for single-PR operations).")
     title: Optional[str] = Field(None, description="PR title (for create_pr, update_pr).")
     source_branch: Optional[str] = Field(None, description="Source branch (for create_pr).")
@@ -84,7 +84,9 @@ def bitbucket_pull_requests(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source_desc = resolve_workspace_repo(user_id, workspace, repo_slug)
+    default_branch = get_default_branch(user_id, workspace, repo_slug)
+
+    ws, repo = workspace, repo_slug
 
     try:
         if action == "list_prs":
@@ -120,7 +122,11 @@ def bitbucket_pull_requests(
             if not source_branch:
                 return build_error_response("source_branch is required")
             if not dest_branch:
-                dest_branch = saved_branch or "main"
+                if not default_branch:
+                    return build_error_response(
+                        "dest_branch is required (could not determine default branch for this repo)"
+                    )
+                dest_branch = default_branch
             if source_branch == dest_branch:
                 return build_error_response(f"source_branch and dest_branch are the same ('{source_branch}')")
             result = client.create_pull_request(
@@ -158,7 +164,7 @@ def bitbucket_pull_requests(
             strategy = merge_strategy or "merge_commit"
             if cancelled := confirm_or_cancel(user_id,
                     f"Merge PR #{pr_id} in {ws}/{repo} (strategy: {strategy})",
-                    "bitbucket:merge_pr"):
+                    "bitbucket_pull_requests:merge_pr"):
                 return cancelled
             result = client.merge_pull_request(
                 ws, repo, pr_id,
@@ -190,7 +196,7 @@ def bitbucket_pull_requests(
                 return build_error_response(err)
             if cancelled := confirm_or_cancel(user_id,
                     f"Decline PR #{pr_id} in {ws}/{repo}",
-                    "bitbucket:decline_pr"):
+                    "bitbucket_pull_requests:decline_pr"):
                 return cancelled
             result = client.decline_pull_request(ws, repo, pr_id)
             if err := forward_if_error(result):

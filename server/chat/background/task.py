@@ -404,10 +404,12 @@ def _build_rca_context(
 
 
 @celery_app.task(
-    bind=True, 
+    bind=True,
     name="chat.background.run_background_chat",
     time_limit=1800,  # Hard timeout: 30 minutes (task killed)
-    soft_time_limit=1740  # Soft timeout: 29 minutes (exception raised, 60s grace for cleanup before hard kill)
+    soft_time_limit=1740,  # Soft timeout: 29 minutes (exception raised, 60s grace for cleanup before hard kill)
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def run_background_chat(
     self,
@@ -799,8 +801,9 @@ def run_background_chat(
                 except Exception as e:
                     logger.warning(f"[BackgroundChat] Failed to send action notification email: {e}")
 
-        # Dispatch on_incident actions configured for after_rca timing
-        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+        # Dispatch on_incident actions configured for after_rca timing.
+        # Guarded: skip if already dispatched inside _execute_background_chat.
+        if not result.get('after_rca_dispatched') and incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
             try:
                 from services.actions.executor import dispatch_on_incident_actions
                 dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
@@ -1193,13 +1196,14 @@ async def _run_jira_action(
     logger.info(f"[JiraAction] Completed for {session_id}")
 
 
-def _action_is_generate_postmortem(action_id: Optional[str]) -> bool:
+def _action_is_generate_postmortem(action_id: Optional[str], user_id: Optional[str] = None) -> bool:
     """Return True when action_id belongs to the built-in 'generate_postmortem' system action."""
     if not action_id:
         return False
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[BackgroundChat:PostmortemCheck]")
                 cur.execute(
                     "SELECT 1 FROM actions WHERE id = %s AND system_key = 'generate_postmortem'",
                     (action_id,),
@@ -1329,7 +1333,7 @@ async def _execute_background_chat(
         _tm_source = (trigger_metadata or {}).get("source", "")
         _is_postmortem_action = _tm_source == "postmortem_generation" or (
             _tm_source == "action"
-            and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"))
+            and _action_is_generate_postmortem((trigger_metadata or {}).get("action_id"), user_id)
         )
 
         # Create state with is_background=True and rca_context for system prompt
@@ -1451,13 +1455,40 @@ async def _execute_background_chat(
         llm_context = _ensure_llm_context_history(session_id, user_id)
         tool_calls = _extract_tool_calls_for_viz(session_id, user_id, llm_context)
         logger.info(f"[BackgroundChat] Extracted {len(tool_calls)} tool calls for visualization")
-        
+
+        # Mark action run as success INSIDE the async function. asyncio.run() may
+        # never return to the caller (worker process exits during event loop teardown
+        # due to MCP subprocess cleanup), so this must happen before we return.
+        guardrail_blocked = getattr(state, "guardrail_blocked", False)
+        if trigger_metadata and trigger_metadata.get('source') == 'action':
+            try:
+                from services.actions.executor import update_action_run_status
+                if guardrail_blocked:
+                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
+                    update_action_run_status(
+                        run_id=trigger_metadata['run_id'], status='error',
+                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                    )
+                else:
+                    update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+        # Dispatch after_rca actions before returning (same reason as above).
+        if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
+            try:
+                from services.actions.executor import dispatch_on_incident_actions
+                dispatch_on_incident_actions(user_id, str(incident_id), timing='after_rca')
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
+
         return {
             "session_id": session_id,
             "status": "completed",
             "trigger_metadata": trigger_metadata,
             "tool_calls": tool_calls,
-            "guardrail_blocked": getattr(state, "guardrail_blocked", False),
+            "guardrail_blocked": guardrail_blocked,
+            "after_rca_dispatched": True,
         }
         
     except Exception as e:

@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, LogOut, RefreshCw } from 'lucide-react';
+import { Loader2, Check, LogOut, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
 import BitbucketWorkspaceBrowser from '@/components/bitbucket-workspace-browser';
+import { isBitbucketOAuthEnabled } from '@/lib/feature-flags';
 
 // Re-export service so existing imports from this path keep working
 export { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
@@ -28,49 +29,31 @@ const REQUIRED_API_TOKEN_SCOPES = [
 ] as const;
 
 export default function BitbucketProviderIntegration() {
-  const [userId, setUserId] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
   const [displayName, setDisplayName] = useState<string>('');
   const [authType, setAuthType] = useState<string>('');
+  const [missingScopes, setMissingScopes] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const { toast } = useToast();
+  const oauthAvailable = isBitbucketOAuthEnabled();
 
   // API token form
   const [email, setEmail] = useState('');
   const [apiToken, setApiToken] = useState('');
 
-  // Fetch user ID on mount
   useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const response = await fetch('/api/getUserId');
-        if (response.ok) {
-          const data = await response.json();
-          setUserId(data.userId);
-        }
-      } catch (error) {
-        console.error('Error fetching user ID:', error);
-      }
-    };
-    fetchUserId();
+    checkStatus();
   }, []);
 
-  // Check connection status
-  useEffect(() => {
-    if (userId) {
-      checkStatus();
-    }
-  }, [userId]);
-
   const checkStatus = async () => {
-    if (!userId) return;
-    setIsCheckingStatus(true);
     try {
       const data = await BitbucketIntegrationService.checkStatus();
       setIsAuthenticated(data.connected || false);
       setDisplayName(data.display_name || data.username || '');
       setAuthType(data.auth_type || '');
+      setMissingScopes(data.missing_scopes || []);
     } catch (error) {
       console.error('Error checking Bitbucket status:', error);
       setIsAuthenticated(false);
@@ -80,10 +63,6 @@ export default function BitbucketProviderIntegration() {
   };
 
   const handleOAuthLogin = async () => {
-    if (!userId) {
-      toast({ title: "Error", description: "User ID is required", variant: "destructive" });
-      return;
-    }
     setIsLoading(true);
     try {
       const oauthUrl = await BitbucketIntegrationService.initiateOAuth();
@@ -113,17 +92,15 @@ export default function BitbucketProviderIntegration() {
   };
 
   const handleApiTokenLogin = async () => {
-    if (!userId) {
-      toast({ title: "Error", description: "User ID is required", variant: "destructive" });
-      return;
-    }
     if (!email || !apiToken) {
       toast({ title: "Error", description: "Email and API token are required", variant: "destructive" });
       return;
     }
     setIsLoading(true);
+    setLoginError(null);
     try {
-      await BitbucketIntegrationService.connectWithApiToken(email, apiToken);
+      const result = await BitbucketIntegrationService.connectWithApiToken(email, apiToken);
+      setMissingScopes(result.missing_scopes || []);
       toast({ title: "Connected", description: "Bitbucket connected with API token" });
       setEmail('');
       setApiToken('');
@@ -131,19 +108,19 @@ export default function BitbucketProviderIntegration() {
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (error: any) {
       console.error('API token login error:', error);
-      toast({ title: "Connection Failed", description: error.message || "Failed to connect with API token", variant: "destructive" });
+      setLoginError(error.message || "Failed to connect with API token");
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDisconnect = async () => {
-    if (!userId) return;
     try {
       await BitbucketIntegrationService.disconnect();
       setIsAuthenticated(false);
       setDisplayName('');
       setAuthType('');
+      setMissingScopes([]);
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
       toast({ title: "Disconnected", description: "Bitbucket account disconnected successfully" });
     } catch (error: any) {
@@ -161,13 +138,56 @@ export default function BitbucketProviderIntegration() {
     );
   }
 
+  const apiTokenForm = (
+    <>
+      <p className="text-sm text-muted-foreground">
+        Connect using a Bitbucket API token. Go to{' '}
+        <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="underline">
+          Atlassian API tokens
+        </a>
+        , click &quot;Create API token with scopes&quot;, and grant these scopes:
+      </p>
+      <div className="text-xs bg-muted rounded-md p-2.5 space-y-0.5 font-mono">
+        {REQUIRED_API_TOKEN_SCOPES.map((scope) => (
+          <div key={scope}>{scope}</div>
+        ))}
+      </div>
+      <Input
+        type="email"
+        placeholder="Bitbucket email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <Input
+        type="password"
+        placeholder="API token"
+        value={apiToken}
+        onChange={(e) => setApiToken(e.target.value)}
+      />
+      <Button onClick={handleApiTokenLogin} disabled={isLoading || !email || !apiToken} className="w-full">
+        {isLoading ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Connecting...
+          </>
+        ) : (
+          "Connect"
+        )}
+      </Button>
+      {loginError && (
+        <p className="text-sm text-destructive">{loginError}</p>
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-4">
       {!isAuthenticated ? (
-        <Tabs defaultValue="oauth" className="w-full">
+        oauthAvailable ? (
+        <Tabs defaultValue="api-token" className="w-full">
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="oauth">OAuth</TabsTrigger>
             <TabsTrigger value="api-token">API Token</TabsTrigger>
+            <TabsTrigger value="oauth">OAuth</TabsTrigger>
           </TabsList>
           <TabsContent value="oauth" className="space-y-3 mt-3">
             <p className="text-sm text-muted-foreground">
@@ -186,7 +206,7 @@ export default function BitbucketProviderIntegration() {
               <div>Issues: <span className="font-medium">Write</span></div>
               <div>Pipelines: <span className="font-medium">Write</span></div>
             </div>
-            <Button onClick={handleOAuthLogin} disabled={isLoading || !userId} className="w-full">
+            <Button onClick={handleOAuthLogin} disabled={isLoading} className="w-full">
               {isLoading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -198,42 +218,12 @@ export default function BitbucketProviderIntegration() {
             </Button>
           </TabsContent>
           <TabsContent value="api-token" className="space-y-3 mt-3">
-            <p className="text-sm text-muted-foreground">
-              Connect using a Bitbucket API token. Click{' '}
-              <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="underline">
-                &quot;Create API token with scopes&quot;
-              </a>{' '}
-              and grant these scopes:
-            </p>
-            <div className="text-xs bg-muted rounded-md p-2.5 space-y-0.5 font-mono">
-              {REQUIRED_API_TOKEN_SCOPES.map((scope) => (
-                <div key={scope}>{scope}</div>
-              ))}
-            </div>
-            <Input
-              type="email"
-              placeholder="Bitbucket email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <Input
-              type="password"
-              placeholder="API token"
-              value={apiToken}
-              onChange={(e) => setApiToken(e.target.value)}
-            />
-            <Button onClick={handleApiTokenLogin} disabled={isLoading || !userId || !email || !apiToken} className="w-full">
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Connecting...
-                </>
-              ) : (
-                "Connect"
-              )}
-            </Button>
+            {apiTokenForm}
           </TabsContent>
         </Tabs>
+        ) : (
+          <div className="space-y-3">{apiTokenForm}</div>
+        )
       ) : (
         <div className="flex items-center justify-between p-3 border border-border rounded-lg">
           <div className="flex items-center gap-3">
@@ -255,7 +245,10 @@ export default function BitbucketProviderIntegration() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={checkStatus}
+              onClick={() => {
+                checkStatus();
+                window.dispatchEvent(new CustomEvent('bitbucketRefresh'));
+              }}
               title="Refresh"
             >
               <RefreshCw className="h-4 w-4" />
@@ -273,7 +266,28 @@ export default function BitbucketProviderIntegration() {
         </div>
       )}
 
-      {isAuthenticated && userId && (
+      {isAuthenticated && missingScopes.length > 0 && (
+        <div className="flex gap-2 p-3 border border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-950 rounded-lg">
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 shrink-0 mt-0.5" />
+          <div className="text-xs">
+            <p className="font-medium text-yellow-800 dark:text-yellow-400">Limited permissions</p>
+            <p className="text-yellow-700 dark:text-yellow-500 mt-0.5">
+              Missing: {missingScopes.join(', ')}.{' '}
+              <a
+                href="https://id.atlassian.com/manage-profile/security/api-tokens"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-medium hover:text-yellow-900 dark:hover:text-yellow-300"
+              >
+                Recreate your token
+              </a>{' '}
+              with the required scopes to fix this.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isAuthenticated && (
         <BitbucketWorkspaceBrowser />
       )}
     </div>

@@ -193,6 +193,21 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     const humanTitle = tool.tool_name.replace(/_/g, " ").replace(/\bnotion\b/i, "Notion")
     command = humanTitle
   }
+  // Bitbucket tools: show the action being performed instead of just the tool name
+  else if (tool.tool_name?.startsWith("bitbucket_")) {
+    try {
+      const parsed = JSON.parse(normalizedInput)
+      const action = parsed.action || parsed.kwargs?.action
+      if (action) {
+        const humanAction = action.replace(/_/g, " ")
+        command = `Bitbucket: ${humanAction}`
+      } else {
+        command = tool.tool_name.replace(/_/g, " ").replace(/\bbitbucket\b/i, "Bitbucket")
+      }
+    } catch {
+      command = tool.tool_name.replace(/_/g, " ").replace(/\bbitbucket\b/i, "Bitbucket")
+    }
+  }
   // Slack tools parsing
   else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
     command = parseSlackCommand(tool.tool_name, normalizedInput)

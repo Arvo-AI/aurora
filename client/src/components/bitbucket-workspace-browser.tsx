@@ -1,18 +1,39 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Check, GitBranch } from 'lucide-react';
+import { Loader2, Check, Pencil, RotateCw, X, RefreshCw } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { BitbucketIntegrationService } from '@/services/bitbucket-integration-service';
-import type { Workspace, Repo, Branch } from '@/services/bitbucket-integration-service';
+import type { Workspace, Repo } from '@/services/bitbucket-integration-service';
 
-interface BitbucketWorkspaceBrowserProps {
+interface ConnectedRepo {
+  slug: string;
+  full_name: string;
+  workspace: string | null;
+  default_branch: string | null;
+  metadata_summary: string | null;
+  metadata_status: string | null;
 }
 
-export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserProps) {
+function parseConnectedRepos(repositories: NonNullable<import('@/services/bitbucket-integration-service').WorkspaceSelectionResponse['repositories']>): ConnectedRepo[] {
+  return repositories
+    .filter((r): r is Exclude<typeof r, string> => typeof r !== 'string')
+    .map(r => ({
+      slug: r.slug,
+      full_name: r.full_name || '',
+      workspace: r.workspace || null,
+      default_branch: r.default_branch || null,
+      metadata_summary: r.metadata_summary || null,
+      metadata_status: r.metadata_status || null,
+    }));
+}
+
+export default function BitbucketWorkspaceBrowser() {
   const { toast } = useToast();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -20,21 +41,69 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(false);
 
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
+  const [checkedRepos, setCheckedRepos] = useState<Set<string>>(new Set());
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState<string>('');
-  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const isRestoringSelectionRef = useRef(false);
-  const [savedSelection, setSavedSelection] = useState<{ workspace: string; repoSlug: string; branch: string } | null>(null);
+  // Map of workspace → set of saved slugs (supports multi-workspace)
+  const [savedReposByWorkspace, setSavedReposByWorkspace] = useState<Map<string, Set<string>>>(new Map());
+  const savedReposByWorkspaceRef = useRef<Map<string, Set<string>>>(new Map());
+
+  // Connected repos with metadata status (for the "Connected Repositories" section)
+  const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
+  const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    const hasPending = repos.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
+    if (!hasPending) return;
+    pollingRef.current = setInterval(async () => {
+      try {
+        const data = await BitbucketIntegrationService.loadWorkspaceSelection();
+        if (!data?.repositories) return;
+        const updated = parseConnectedRepos(data.repositories);
+        setSavedRepos(updated);
+        const stillPending = updated.some(r => r.metadata_status === 'pending' || r.metadata_status === 'generating');
+        if (!stillPending && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch (err) {
+        console.warn('[BitbucketWorkspaceBrowser] Metadata polling failed:', err);
+      }
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    savedReposByWorkspaceRef.current = savedReposByWorkspace;
+  }, [savedReposByWorkspace]);
 
   useEffect(() => {
     fetchWorkspaces();
     loadStoredSelection();
   }, []);
 
-  // Fetch repos when workspace changes (skip during selection restore)
+  // Re-fetch repos when the parent triggers a refresh (e.g. via the Refresh button)
+  useEffect(() => {
+    const handler = () => {
+      fetchWorkspaces();
+      if (selectedWorkspace) fetchRepos(selectedWorkspace);
+    };
+    window.addEventListener('bitbucketRefresh', handler);
+    return () => window.removeEventListener('bitbucketRefresh', handler);
+  }, [selectedWorkspace]);
+
   useEffect(() => {
     if (isRestoringSelectionRef.current) return;
     if (selectedWorkspace) {
@@ -58,127 +127,166 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
 
   const fetchRepos = async (workspace: string) => {
     setIsLoadingRepos(true);
-    setSelectedRepo(null);
-    setBranches([]);
-    setSelectedBranch('');
     try {
       const data = await BitbucketIntegrationService.getRepos(workspace);
       const repoList = Array.isArray(data) ? data : data?.repositories || [];
       setRepos(repoList);
+      // Use ref to always read the latest saved state (avoids stale closure)
+      const saved = savedReposByWorkspaceRef.current.get(workspace);
+      setCheckedRepos(saved ? new Set(saved) : new Set());
     } catch (error) {
       console.error('Error fetching repos:', error);
       setRepos([]);
+      setCheckedRepos(new Set());
     } finally {
       setIsLoadingRepos(false);
     }
   };
 
-  const fetchBranches = async (workspace: string, repoSlug: string) => {
-    setIsLoadingBranches(true);
-    try {
-      const data = await BitbucketIntegrationService.getBranches(workspace, repoSlug);
-      const branchList = Array.isArray(data) ? data : data?.branches || [];
-      setBranches(branchList);
-      if (branchList.length > 0) {
-        const repo = repos.find(r => r.slug === repoSlug);
-        const defaultBranchName = repo?.mainbranch?.name || 'main';
-        const defaultBranch = branchList.find((b: Branch) => b.name === defaultBranchName);
-        setSelectedBranch(defaultBranch ? defaultBranch.name : branchList[0].name);
+  const toggleRepo = (slug: string) => {
+    setCheckedRepos(prev => {
+      const next = new Set(prev);
+      if (next.has(slug)) {
+        next.delete(slug);
+      } else {
+        next.add(slug);
       }
-    } catch (error) {
-      console.error('Error fetching branches:', error);
-      setBranches([]);
-    } finally {
-      setIsLoadingBranches(false);
-    }
-  };
-
-  const handleRepoSelect = (repo: Repo) => {
-    setSelectedRepo(repo);
-    setBranches([]);
-    setSelectedBranch('');
-    fetchBranches(selectedWorkspace, repo.slug);
+      return next;
+    });
   };
 
   const loadStoredSelection = async () => {
     try {
       const data = await BitbucketIntegrationService.loadWorkspaceSelection();
-      if (!data?.workspace) return;
+      if (!data?.repositories || !Array.isArray(data.repositories) || data.repositories.length === 0) return;
 
-      isRestoringSelectionRef.current = true;
-      setSelectedWorkspace(data.workspace);
-
-      const repoData = await BitbucketIntegrationService.getRepos(data.workspace);
-      const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
-      setRepos(repoList);
-
-      if (data.repository) {
-        const repoSlug = typeof data.repository === 'string' ? data.repository : data.repository.slug;
-        const matchedRepo = repoList.find((r: Repo) => r.slug === repoSlug);
-        if (matchedRepo) {
-          setSelectedRepo(matchedRepo);
-
-          const branchData = await BitbucketIntegrationService.getBranches(data.workspace, matchedRepo.slug);
-          const branchList = Array.isArray(branchData) ? branchData : branchData?.branches || [];
-          setBranches(branchList);
-
-          if (data.branch) {
-            const branchName = typeof data.branch === 'string' ? data.branch : data.branch.name;
-            setSelectedBranch(branchName);
-            setSavedSelection({ workspace: data.workspace, repoSlug: matchedRepo.slug, branch: branchName });
-          }
-        }
+      // Build the saved map from all returned repos (each has a workspace field)
+      const byWorkspace = new Map<string, Set<string>>();
+      const connected = parseConnectedRepos(data.repositories);
+      for (const repo of connected) {
+        const ws = repo.workspace || data.workspace || '';
+        const slug = repo.slug;
+        if (!ws || !slug) continue;
+        if (!byWorkspace.has(ws)) byWorkspace.set(ws, new Set());
+        byWorkspace.get(ws)!.add(slug);
       }
+      setSavedReposByWorkspace(byWorkspace);
+      savedReposByWorkspaceRef.current = byWorkspace;
+      setSavedRepos(connected);
+      startMetadataPolling(connected);
 
-      isRestoringSelectionRef.current = false;
+      // Set the active workspace to the first one with saved repos
+      const firstWorkspace = data.workspace || byWorkspace.keys().next().value;
+      if (firstWorkspace) {
+        isRestoringSelectionRef.current = true;
+        setSelectedWorkspace(firstWorkspace);
+
+        const repoData = await BitbucketIntegrationService.getRepos(firstWorkspace);
+        const repoList = Array.isArray(repoData) ? repoData : repoData?.repositories || [];
+        setRepos(repoList);
+
+        const saved = byWorkspace.get(firstWorkspace);
+        setCheckedRepos(saved ? new Set(saved) : new Set());
+        isRestoringSelectionRef.current = false;
+      }
     } catch (error) {
       console.error('Error loading stored selection:', error);
       isRestoringSelectionRef.current = false;
     }
   };
 
-  const handleSaveSelection = async () => {
-    if (!selectedWorkspace || !selectedRepo || !selectedBranch) {
-      toast({ title: "Error", description: "Please select a workspace, repository, and branch", variant: "destructive" });
+  const handleSave = async () => {
+    if (!selectedWorkspace || checkedRepos.size === 0) {
+      toast({ title: "Error", description: "Select at least one repository", variant: "destructive" });
       return;
     }
+    setIsSaving(true);
     try {
+      const selectedRepoObjects = repos.filter(r => checkedRepos.has(r.slug));
       await BitbucketIntegrationService.saveWorkspaceSelection({
         workspace: selectedWorkspace,
-        repository: selectedRepo,
-        branch: selectedBranch,
+        repositories: selectedRepoObjects,
       });
-      setSavedSelection({ workspace: selectedWorkspace, repoSlug: selectedRepo.slug, branch: selectedBranch });
+      setSavedReposByWorkspace(prev => {
+        const next = new Map(prev);
+        next.set(selectedWorkspace, new Set(checkedRepos));
+        savedReposByWorkspaceRef.current = next;
+        return next;
+      });
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      toast({ title: "Selection Saved", description: `${selectedWorkspace} / ${selectedRepo.name} / ${selectedBranch}` });
-    } catch (error: any) {
-      console.error('Error saving selection:', error);
-      toast({ title: "Error", description: error.message || "Failed to save selection", variant: "destructive" });
+      toast({ title: "Saved", description: `${checkedRepos.size} repo${checkedRepos.size > 1 ? 's' : ''} connected` });
+
+      // Refresh connected repos to show metadata generation status
+      const data = await BitbucketIntegrationService.loadWorkspaceSelection();
+      if (data?.repositories) {
+        const connected = parseConnectedRepos(data.repositories);
+        setSavedRepos(connected);
+        startMetadataPolling(connected);
+      }
+    } catch (error: unknown) {
+      const err = error as Error;
+      console.error('Error saving selection:', err);
+      toast({ title: "Error", description: err.message || "Failed to save selection", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleClearSelection = async () => {
+  const handleClear = async () => {
     try {
       await BitbucketIntegrationService.clearWorkspaceSelection();
       setSelectedWorkspace('');
-      setSelectedRepo(null);
-      setBranches([]);
-      setSelectedBranch('');
+      setCheckedRepos(new Set());
       setRepos([]);
-      setSavedSelection(null);
+      setSavedReposByWorkspace(new Map());
+      savedReposByWorkspaceRef.current = new Map();
+      setSavedRepos([]);
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
-      toast({ title: "Selection Cleared", description: "Bitbucket workspace selection cleared" });
-    } catch (error: any) {
-      console.error('Error clearing selection:', error);
-      toast({ title: "Error", description: error.message || "Failed to clear selection", variant: "destructive" });
+      toast({ title: "Cleared", description: "Bitbucket repos disconnected" });
+    } catch (error: unknown) {
+      const err = error as Error;
+      console.error('Error clearing selection:', err);
+      toast({ title: "Error", description: err.message || "Failed to clear", variant: "destructive" });
     }
   };
 
-  const hasCompleteSelection = selectedWorkspace && selectedRepo && selectedBranch;
-  const selectionMatchesSaved = hasCompleteSelection && savedSelection &&
-    savedSelection.workspace === selectedWorkspace &&
-    savedSelection.repoSlug === selectedRepo.slug &&
-    savedSelection.branch === selectedBranch;
+  const handleRegenerate = async (repoFullName: string) => {
+    try {
+      await BitbucketIntegrationService.generateRepoMetadata(repoFullName);
+      const updated = savedRepos.map(r =>
+        r.full_name === repoFullName ? { ...r, metadata_status: 'generating' } : r
+      );
+      setSavedRepos(updated);
+      startMetadataPolling(updated);
+    } catch {
+      toast({ title: "Error", description: "Failed to regenerate description", variant: "destructive" });
+    }
+  };
+
+  const handleSaveMetadata = async (repoFullName: string) => {
+    const summary = editingMetadata[repoFullName];
+    if (summary === undefined) return;
+    try {
+      await BitbucketIntegrationService.updateRepoMetadata(repoFullName, summary);
+      setSavedRepos(prev => prev.map(r =>
+        r.full_name === repoFullName ? { ...r, metadata_summary: summary, metadata_status: 'ready' } : r
+      ));
+      setEditingMetadata(prev => {
+        const next = { ...prev };
+        delete next[repoFullName];
+        return next;
+      });
+    } catch {
+      toast({ title: "Error", description: "Failed to save description", variant: "destructive" });
+    }
+  };
+
+  const totalSavedRepos = Array.from(savedReposByWorkspace.values()).reduce((sum, set) => sum + set.size, 0);
+  const currentWorkspaceSaved = savedReposByWorkspace.get(selectedWorkspace);
+  const selectionChanged = selectedWorkspace && (
+    checkedRepos.size !== (currentWorkspaceSaved?.size ?? 0) ||
+    [...checkedRepos].some(s => !currentWorkspaceSaved?.has(s))
+  );
 
   return (
     <div className="space-y-3">
@@ -197,7 +305,14 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
             <SelectContent>
               {workspaces.map((ws) => (
                 <SelectItem key={ws.slug} value={ws.slug}>
-                  {ws.name || ws.slug}
+                  <span className="flex items-center gap-2">
+                    {ws.name || ws.slug}
+                    {savedReposByWorkspace.has(ws.slug) && (
+                      <Badge variant="secondary" className="text-xs ml-1">
+                        {savedReposByWorkspace.get(ws.slug)!.size} saved
+                      </Badge>
+                    )}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -208,9 +323,21 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
       {selectedWorkspace && (
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-sm font-medium">Repositories</span>
-            {repos.length > 0 && (
-              <Badge variant="outline" className="text-xs">{repos.length} available</Badge>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Repositories</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => fetchRepos(selectedWorkspace)}
+                disabled={isLoadingRepos}
+                title="Refresh repository list"
+              >
+                <RefreshCw className={`h-3 w-3 ${isLoadingRepos ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+            {checkedRepos.size > 0 && (
+              <Badge variant="outline" className="text-xs">{checkedRepos.size} selected</Badge>
             )}
           </div>
           {isLoadingRepos ? (
@@ -221,14 +348,14 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
           ) : repos.length > 0 ? (
             <div className="space-y-1 max-h-48 overflow-y-auto border border-border rounded-lg p-2">
               {repos.map((repo) => (
-                <button
-                  type="button"
+                <label
                   key={repo.slug}
-                  className={`w-full flex items-center justify-between p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors text-left bg-transparent ${
-                    selectedRepo?.slug === repo.slug ? 'border border-primary/50 bg-primary/5' : 'border border-transparent'
-                  }`}
-                  onClick={() => handleRepoSelect(repo)}
+                  className="w-full flex items-center gap-3 p-2 rounded-md cursor-pointer hover:bg-muted/30 transition-colors"
                 >
+                  <Checkbox
+                    checked={checkedRepos.has(repo.slug)}
+                    onCheckedChange={() => toggleRepo(repo.slug)}
+                  />
                   <div className="flex flex-col min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium truncate">{repo.name}</span>
@@ -236,8 +363,16 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
                         {repo.is_private ? 'Private' : 'Public'}
                       </Badge>
                     </div>
+                    {repo.mainbranch?.name && (
+                      <span className="text-xs text-muted-foreground mt-0.5">
+                        {repo.mainbranch.name}
+                      </span>
+                    )}
                   </div>
-                </button>
+                  {currentWorkspaceSaved?.has(repo.slug) && (
+                    <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                  )}
+                </label>
               ))}
             </div>
           ) : (
@@ -246,56 +381,111 @@ export default function BitbucketWorkspaceBrowser({}: BitbucketWorkspaceBrowserP
         </div>
       )}
 
-      {selectedRepo && (
-        <div>
-          <span className="text-sm font-medium mb-1.5 block">Branch</span>
-          {isLoadingBranches ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Loading branches...
-            </div>
-          ) : branches.length > 0 ? (
-            <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a branch..." />
-              </SelectTrigger>
-              <SelectContent>
-                {branches.map((branch) => (
-                  <SelectItem key={branch.name} value={branch.name}>
-                    <div className="flex items-center gap-2">
-                      <GitBranch className="w-3 h-3 text-muted-foreground" />
-                      <span>{branch.name}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <p className="text-xs text-muted-foreground">No branches found.</p>
+      {selectedWorkspace && repos.length > 0 && (
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={isSaving || checkedRepos.size === 0 || !selectionChanged}
+          >
+            {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+            Save
+          </Button>
+          {totalSavedRepos > 0 && (
+            <Button size="sm" variant="outline" onClick={handleClear}>
+              Clear All
+            </Button>
           )}
         </div>
       )}
 
-      {hasCompleteSelection && (
-        <div className="flex items-center justify-between p-3 border border-border rounded-lg bg-muted/30">
-          <div className="text-sm flex items-center gap-2">
-            {selectionMatchesSaved && <Check className="w-4 h-4 text-green-500" />}
-            <span className="font-medium">{selectedWorkspace}</span>
-            <span className="text-muted-foreground">/</span>
-            <span className="font-medium">{selectedRepo.name}</span>
-            <span className="text-muted-foreground">/</span>
-            <span className="font-medium">{selectedBranch}</span>
-          </div>
-          <div className="flex gap-2">
-            {!selectionMatchesSaved && (
-              <Button size="sm" onClick={handleSaveSelection}>
-                Save
-              </Button>
-            )}
-            <Button size="sm" variant="outline" onClick={handleClearSelection}>
-              Clear
-            </Button>
-          </div>
+      {savedRepos.length > 0 && (
+        <div className="space-y-2 pt-2 border-t border-border">
+          <p className="text-sm font-medium text-muted-foreground">Connected Repositories</p>
+          {savedRepos.map(repo => {
+            const isEditing = editingMetadata[repo.full_name] !== undefined;
+            const isReady = repo.metadata_status === 'ready';
+            const isPending = repo.metadata_status === 'pending' || repo.metadata_status === 'generating';
+            const isError = repo.metadata_status === 'error';
+            return (
+              <div key={repo.full_name} className="p-2 rounded-md border border-border space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-medium truncate">{repo.full_name}</span>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {isReady && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => {
+                            setEditingMetadata(prev => {
+                              if (isEditing) {
+                                const next = { ...prev };
+                                delete next[repo.full_name];
+                                return next;
+                              }
+                              return { ...prev, [repo.full_name]: repo.metadata_summary || '' };
+                            });
+                          }}
+                          title={isEditing ? 'Cancel edit' : 'Edit description'}
+                        >
+                          {isEditing ? <X className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => handleRegenerate(repo.full_name)}
+                          title="Regenerate description"
+                        >
+                          <RotateCw className="h-3 w-3" />
+                        </Button>
+                      </>
+                    )}
+                    {isError && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => handleRegenerate(repo.full_name)}
+                      >
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {isPending && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Generating description...
+                  </div>
+                )}
+                {isError && (
+                  <p className="text-xs text-red-500">Failed to generate description</p>
+                )}
+                {isReady && isEditing && (
+                  <div className="space-y-1">
+                    <Textarea
+                      value={editingMetadata[repo.full_name]}
+                      onChange={e => setEditingMetadata(prev => ({ ...prev, [repo.full_name]: e.target.value }))}
+                      className="text-xs min-h-[60px]"
+                      rows={2}
+                    />
+                    <Button size="sm" className="h-6 text-xs" onClick={() => handleSaveMetadata(repo.full_name)}>
+                      Save
+                    </Button>
+                  </div>
+                )}
+                {isReady && !isEditing && repo.metadata_summary && (
+                  <p className="text-xs text-muted-foreground line-clamp-2">{repo.metadata_summary}</p>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

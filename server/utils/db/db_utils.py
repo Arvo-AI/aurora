@@ -1089,6 +1089,25 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubectl_connections_token ON active_kubectl_connections(token);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_kubectl_connections_cluster_id ON active_kubectl_connections(cluster_id);
                 """,
+                "kubeconfig_clusters": """
+                    CREATE TABLE IF NOT EXISTS kubeconfig_clusters (
+                        id SERIAL PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        org_id VARCHAR(255),
+                        cluster_id TEXT NOT NULL UNIQUE,
+                        context_name TEXT NOT NULL,
+                        cluster_name TEXT NOT NULL,
+                        server_url TEXT,
+                        namespace TEXT,
+                        vault_provider TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_kubeconfig_clusters_user ON kubeconfig_clusters(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_kubeconfig_clusters_org ON kubeconfig_clusters(org_id);
+                """,
                 "users": """
                     CREATE TABLE IF NOT EXISTS users (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1238,6 +1257,38 @@ def initialize_tables():
                     CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
+                "artifacts": """
+                    CREATE TABLE IF NOT EXISTS artifacts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        title VARCHAR(500) NOT NULL,
+                        content TEXT,
+                        last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        current_version_id UUID,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
+                """,
+                "artifact_versions": """
+                    CREATE TABLE IF NOT EXISTS artifact_versions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        artifact_id UUID NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT NOT NULL,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        source VARCHAR(50) NOT NULL DEFAULT 'agent',
+                        generation_session_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_versions_artifact
+                        ON artifact_versions(artifact_id, version_number DESC);
+                    CREATE INDEX IF NOT EXISTS idx_artifact_versions_org ON artifact_versions(org_id);
+                """,
                 "incident_lifecycle_events": """
                     CREATE TABLE IF NOT EXISTS incident_lifecycle_events (
                         id SERIAL PRIMARY KEY,
@@ -1364,6 +1415,7 @@ def initialize_tables():
                 "rca_notification_emails",
                 "kubectl_agent_tokens",
                 "mcp_tokens",
+                "kubeconfig_clusters",
                 "user_manual_vms",
             ]
 
@@ -1413,6 +1465,8 @@ def initialize_tables():
             rls_tables.append("actions")
             rls_tables.append("action_runs")
             rls_tables.append("postmortem_versions")
+            rls_tables.append("artifacts")
+            rls_tables.append("artifact_versions")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -2636,7 +2690,7 @@ def initialize_tables():
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
                 "cloudwatch_alarms",
-                "mcp_tokens",
+                "mcp_tokens", "kubeconfig_clusters",
                 "k8s_pods", "k8s_nodes", "k8s_node_conditions",
                 "k8s_services", "k8s_deployments", "k8s_ingresses",
                 "k8s_pod_metrics", "k8s_node_metrics",

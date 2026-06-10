@@ -44,6 +44,8 @@ def _arg_schema(entry) -> List[Dict[str, Any]]:
         out.append({"name": a, "in": "path", "required": True})
     for a in entry.body_keys:
         out.append({"name": a, "in": "body", "required": False})
+    for a in getattr(entry, "query_keys", ()):
+        out.append({"name": a, "in": "query", "required": False})
     return out
 
 
@@ -135,7 +137,7 @@ def _do_search_tools(
                 "logs, metrics, deployments (Jenkins/CloudBees/Spinnaker), "
                 "Jira, GitHub, Sentry, Grafana, postmortems, actions/automations, "
                 "and DORA metrics (MTTR/MTTD/CFR). Search here before assuming a "
-                "capability is missing or defaulting to chat_with_aurora. "
+                "capability is missing. "
                 "call_tool requires a tool whose `callable_now` is true; connect "
                 "the integration in Aurora to enable the rest."
             ),
@@ -206,8 +208,8 @@ def register_dispatch_tools(
         limit: int = 10,
     ) -> Dict[str, Any]:
         """Discover the many tools Aurora exposes beyond the few shown upfront.
-        Call this BEFORE assuming a capability is missing or defaulting to
-        chat_with_aurora. Searchable families include logs, metrics,
+        Call this BEFORE assuming a capability is missing. Searchable families
+        include logs, metrics,
         deployments (Jenkins/CloudBees/Spinnaker), Jira, GitHub, Sentry, Grafana,
         Bitbucket, Notion, Confluence/SharePoint runbooks, postmortems,
         actions/automations, and DORA metrics (MTTR/MTTD/CFR/incident frequency).

@@ -361,6 +361,10 @@ app.register_blueprint(gitlab_bp, url_prefix="/gitlab")
 from routes.kubectl_token_routes import kubectl_token_bp
 app.register_blueprint(kubectl_token_bp)
 
+# --- Kubeconfig Upload Routes ---
+from routes.kubeconfig.kubeconfig_routes import kubeconfig_bp
+app.register_blueprint(kubeconfig_bp)
+
 # --- MCP API Token Routes ---
 from routes.mcp_token_routes import mcp_token_bp
 app.register_blueprint(mcp_token_bp)
@@ -512,6 +516,9 @@ app.register_blueprint(actions_bp, url_prefix="/api/actions")
 
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
+
+from routes.artifact_routes import artifact_bp
+app.register_blueprint(artifact_bp)
 
 # --- SRE Metrics Routes ---
 from routes.metrics_routes import metrics_bp

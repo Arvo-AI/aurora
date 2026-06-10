@@ -24,6 +24,7 @@ export interface StatusResponse {
   display_name?: string;
   username?: string;
   auth_type?: string;
+  missing_scopes?: string[];
 }
 
 interface WorkspacesResponse {
@@ -48,8 +49,16 @@ interface IssuesResponse {
 
 export interface WorkspaceSelectionResponse {
   workspace?: string;
-  repository?: string | { slug: string; name: string };
-  branch?: string | { name: string };
+  workspaces?: string[];
+  repositories?: (string | {
+    slug: string;
+    name: string;
+    full_name?: string;
+    workspace?: string;
+    default_branch?: string | null;
+    metadata_summary?: string | null;
+    metadata_status?: string | null;
+  })[];
 }
 
 // ----- Service -----
@@ -75,7 +84,12 @@ export class BitbucketIntegrationService {
       let message = errorText;
       try {
         const json = JSON.parse(errorText);
-        message = json.message || json.error || errorText;
+        let err = json.error || json.message || errorText;
+        // Proxy wraps JSON responses as { error: "<raw json>" } — unwrap if needed
+        if (typeof err === 'string' && err.startsWith('{')) {
+          try { err = JSON.parse(err).error || err; } catch {}
+        }
+        message = err;
       } catch {
         // plain text error, use as-is
       }
@@ -106,7 +120,7 @@ export class BitbucketIntegrationService {
     return data.oauth_url;
   }
 
-  static async connectWithApiToken(email: string, apiToken: string): Promise<{ success: boolean; message: string }> {
+  static async connectWithApiToken(email: string, apiToken: string): Promise<{ success: boolean; message?: string; missing_scopes?: string[] }> {
     return this.request(
       '/login',
       { method: 'POST', body: { api_token: apiToken, email }, errorMessage: 'Failed to connect with API token' }
@@ -161,7 +175,7 @@ export class BitbucketIntegrationService {
     return this.request<WorkspaceSelectionResponse>('/workspace-selection', { errorMessage: null });
   }
 
-  static async saveWorkspaceSelection(data: { workspace: string; repository: Repo; branch: string }): Promise<{ message: string }> {
+  static async saveWorkspaceSelection(data: { workspace: string; repository?: Repo; repositories?: Repo[] }): Promise<{ message: string }> {
     return this.request(
       '/workspace-selection',
       { method: 'POST', body: data, errorMessage: 'Failed to save workspace selection' }
@@ -172,6 +186,20 @@ export class BitbucketIntegrationService {
     await this.request(
       '/workspace-selection',
       { method: 'DELETE', errorMessage: 'Failed to clear workspace selection' }
+    );
+  }
+
+  static async generateRepoMetadata(repoFullName: string): Promise<void> {
+    await this.request(
+      '/repo-metadata/generate',
+      { method: 'POST', body: { repo_full_name: repoFullName }, errorMessage: 'Failed to trigger metadata generation' }
+    );
+  }
+
+  static async updateRepoMetadata(repoFullName: string, summary: string): Promise<void> {
+    await this.request(
+      `/repo-metadata/${encodeURIComponent(repoFullName)}`,
+      { method: 'PUT', body: { metadata_summary: summary }, errorMessage: 'Failed to update metadata' }
     );
   }
 }

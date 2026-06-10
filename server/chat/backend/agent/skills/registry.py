@@ -10,6 +10,7 @@ import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import importlib
 
 from .loader import (
     SkillLoadResult,
@@ -19,6 +20,13 @@ from .loader import (
     parse_skill_file,
     resolve_template,
 )
+
+from utils.auth.stateless_auth import get_credentials_from_db
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
+from utils.auth.token_management import get_token_data
+from utils.auth.stateless_auth import get_connected_providers
+from utils.flags import feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +196,6 @@ class SkillRegistry:
             return bool(creds)
 
         if method == "get_credentials_from_db":
-            from utils.auth.stateless_auth import get_credentials_from_db
-
             creds = get_credentials_from_db(user_id, provider_key)
             if _has_required_fields(creds):
                 # Enrich with extra context for specific skills
@@ -204,8 +210,6 @@ class SkillRegistry:
             if feature_flag:
                 if not self._check_feature_flag(feature_flag):
                     return False, {}
-
-            from utils.auth.token_management import get_token_data
 
             creds = get_token_data(user_id, provider_key)
             if _has_required_fields(creds):
@@ -231,8 +235,6 @@ class SkillRegistry:
                 )
                 return False, {}
 
-            import importlib
-
             mod = importlib.import_module(module_path)
             func = getattr(mod, func_name)
             connected = func(user_id)
@@ -243,8 +245,6 @@ class SkillRegistry:
         elif method == "provider_in_preference":
             # For provider-bound skills (e.g., ovh/scaleway/tailscale/grafana),
             # only load if the provider is actually connected for this user.
-            from utils.auth.stateless_auth import get_connected_providers
-
             target_provider = (
                 str(
                     check.get("provider_key")
@@ -272,8 +272,6 @@ class SkillRegistry:
     def _check_feature_flag(flag_name: str) -> bool:
         """Check a feature flag by name."""
         try:
-            from utils.flags import feature_flags
-
             fn = getattr(feature_flags, flag_name, None)
             if not callable(fn):
                 logger.warning(f"Unknown feature flag function '{flag_name}'")
@@ -490,37 +488,17 @@ class SkillRegistry:
 
     @staticmethod
     def _get_bitbucket_workspace_context(user_id: str) -> Dict[str, Any]:
-        """Fetch the user's Bitbucket workspace selection for template rendering."""
+        """Fetch the user's Bitbucket display name for template rendering."""
         try:
-            from utils.auth.stateless_auth import get_credentials_from_db
-
-            # Fetch display_name from bitbucket credentials
             bb_creds = get_credentials_from_db(user_id, "bitbucket") or {}
             display_name = bb_creds.get("display_name", "")
-
-            selection = get_credentials_from_db(user_id, "bitbucket_workspace_selection") or {}
-            ws = selection.get("workspace")
-            repo = selection.get("repository")
-            branch = selection.get("branch")
-
-            # workspace/repository may be dicts with slug/name keys or plain strings
-            ws_slug = ws.get("slug", ws) if isinstance(ws, dict) else (ws or "")
-            repo_name = repo.get("name", repo) if isinstance(repo, dict) else (repo or "")
-            branch_name = branch.get("name", branch) if isinstance(branch, dict) else (branch or "")
-
             return {
                 "display_name": display_name or "(unknown)",
-                "workspace_slug": ws_slug or "(not selected)",
-                "repo_name": repo_name or "(not selected)",
-                "branch_name": branch_name or "(not selected)",
             }
         except Exception as e:
             logger.warning(f"Failed to fetch bitbucket workspace selection: {e}")
             return {
                 "display_name": "(unavailable)",
-                "workspace_slug": "(unavailable)",
-                "repo_name": "(unavailable)",
-                "branch_name": "(unavailable)",
             }
 
     @staticmethod
@@ -572,9 +550,6 @@ class SkillRegistry:
     def _get_recent_deploys(user_id: str, service_name: str, provider: str) -> List[Dict]:
         """Fetch recent deployment records from the database."""
         try:
-            from utils.db.connection_pool import db_pool
-            from utils.auth.stateless_auth import set_rls_context
-
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     set_rls_context(cur, conn, user_id, log_prefix="[SkillRegistry:_get_recent_deploys]")

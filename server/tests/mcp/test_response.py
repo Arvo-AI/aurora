@@ -10,13 +10,11 @@ def test_small_payload_passes_through():
     assert response.truncate_payload(payload) == payload
 
 
-def test_large_payload_returns_truncation_envelope():
-    big = "x" * (response.RESPONSE_HARD_CHAR_CAP + 1000)
+def test_large_payload_passes_through_unchanged():
+    """Large payloads are returned as-is — no truncation, no broken JSON."""
+    big = "x" * 100_000
     out = response.truncate_payload({"blob": big}, tool_name="t1")
-    assert out["truncated"] is True
-    assert out["tool"] == "t1"
-    assert out["original_size_chars"] > response.RESPONSE_HARD_CHAR_CAP
-    assert "summary" in out
+    assert out == {"blob": big}
 
 
 def test_paginate_returns_next_cursor_when_more_remain():
@@ -47,12 +45,9 @@ def test_paginate_handles_invalid_cursor():
 
 def test_wrap_listing_shape():
     out = response.wrap_listing([1, 2, 3], limit=2)
-    # Either returns the envelope directly, or wraps it in the truncation
-    # shape if too big — the items list should be 2 long either way.
-    if "items" in out:
-        assert out["items"] == [1, 2]
-        assert out["next_cursor"] == "2"
-        assert out["total"] == 3
+    assert out["items"] == [1, 2]
+    assert out["next_cursor"] == "2"
+    assert out["total"] == 3
 
 
 def test_list_payload_is_coerced_to_dict():

@@ -24,6 +24,7 @@ def _query_kubectl_orgs(cur):
     kubectl_agent_tokens has FORCE RLS; we opt in to the permissive
     select_by_token_resolve policy (same pattern as agent_ws_handler) so the
     cross-org scan can see all tokens without setting org context per row.
+    Also includes kubeconfig_clusters which are not RLS-protected by token.
     """
     cur.execute("SET LOCAL myapp.kubectl_token_resolve = 'true'")
     cur.execute("""
@@ -34,7 +35,16 @@ def _query_kubectl_orgs(cur):
         WHERE t.status = 'active' AND c.status = 'active'
           AND t.org_id IS NOT NULL
         GROUP BY t.org_id, c.cluster_id, t.cluster_name
-        ORDER BY t.org_id
+
+        UNION ALL
+
+        SELECT kc.org_id, MIN(u.id) AS user_id, kc.cluster_id, kc.cluster_name
+        FROM kubeconfig_clusters kc
+        JOIN users u ON u.org_id = kc.org_id
+        WHERE kc.is_active = TRUE AND kc.org_id IS NOT NULL
+        GROUP BY kc.org_id, kc.cluster_id, kc.cluster_name
+
+        ORDER BY 1
     """)
     rows = cur.fetchall()
 

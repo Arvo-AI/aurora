@@ -382,6 +382,16 @@ def add_member(user_id):
     if role not in VALID_ROLES:
         return jsonify({"error": "Invalid role"}), 400
 
+    # Hook: check if org can add more members (seat limit enforcement)
+    from utils.hooks import get_hook
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
+            member_count = cur.fetchone()[0]
+    hook_allowed, hook_message = get_hook("before_add_member")(org_id, member_count)
+    if not hook_allowed:
+        return jsonify({"error": hook_message or "Seat limit reached for your plan. Upgrade to add more members."}), 403
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -689,6 +699,18 @@ def _create_invitation(org_id: str, user_id: str):
     if role not in VALID_ROLES:
         return jsonify({"error": "Invalid role"}), 400
 
+    # Hook: check if org can add more members (seat limit enforcement)
+    from utils.hooks import get_hook
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (org_id,))
+            member_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM org_invitations WHERE org_id = %s AND status = 'pending'", (org_id,))
+            pending_count = cur.fetchone()[0]
+    hook_allowed, hook_message = get_hook("before_add_member")(org_id, member_count + pending_count)
+    if not hook_allowed:
+        return jsonify({"error": hook_message or "Seat limit reached for your plan. Upgrade to add more members."}), 403
+
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -826,6 +848,20 @@ def join_org(user_id):
                         )
                         conn.commit()
                     return jsonify({"error": "You are already a member of this organization"}), 409
+
+                # Best-effort seat enforcement (not serialised — concurrent requests can overshoot by 1)
+                from utils.hooks import get_hook
+                cursor.execute("SELECT COUNT(*) FROM users WHERE org_id = %s", (new_org_id,))
+                _cnt = cursor.fetchone()[0]
+                cursor.execute(
+                    """SELECT COUNT(*) FROM org_invitations
+                       WHERE org_id = %s AND status = 'pending' AND id IS DISTINCT FROM %s""",
+                    (new_org_id, invitation_id),
+                )
+                _cnt += cursor.fetchone()[0]
+                allowed, msg = get_hook("before_add_member")(new_org_id, _cnt)
+                if not allowed:
+                    return jsonify({"error": msg or "Seat limit reached"}), 403
 
                 set_rls_context(cursor, conn, user_id, log_prefix="[OrgJoin]")
                 _transfer_user_to_org(cursor, user_id, old_org_id, new_org_id, new_role)

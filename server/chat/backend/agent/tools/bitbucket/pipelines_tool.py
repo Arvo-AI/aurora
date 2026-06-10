@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .utils import (
     get_bb_client_for_user,
-    resolve_workspace_repo,
+    get_default_branch,
     require_repo,
     forward_if_error,
     truncate_text,
@@ -39,8 +39,8 @@ class BitbucketPipelinesArgs(BaseModel):
         "get_step_log",
         "get_pipeline_step",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     pipeline_uuid: Optional[str] = Field(None, description="Pipeline UUID (required for single-pipeline operations).")
     step_uuid: Optional[str] = Field(None, description="Step UUID (for get_step_log, get_pipeline_step).")
     target_branch: Optional[str] = Field(None, description="Branch to run pipeline on (for trigger_pipeline).")
@@ -77,7 +77,8 @@ def bitbucket_pipelines(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo = workspace, repo_slug
+    default_branch = get_default_branch(user_id, workspace, repo_slug)
 
     try:
         if action == "list_pipelines":
@@ -105,12 +106,12 @@ def bitbucket_pipelines(
         if action == "trigger_pipeline":
             if err := require_repo(ws, repo):
                 return build_error_response(err)
-            branch = target_branch or saved_branch
+            branch = target_branch or default_branch
             if not branch:
                 return build_error_response("target_branch is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Trigger pipeline on branch '{branch}' in {ws}/{repo}",
-                    "bitbucket:trigger_pipeline"):
+                    "bitbucket_pipelines:trigger_pipeline"):
                 return cancelled
             result = client.trigger_pipeline(ws, repo, branch, pattern=pattern, variables=variables)
             if err := forward_if_error(result):
@@ -126,7 +127,7 @@ def bitbucket_pipelines(
                 return build_error_response(err)
             if cancelled := confirm_or_cancel(user_id,
                     f"Stop pipeline {pipeline_uuid} in {ws}/{repo}",
-                    "bitbucket:stop_pipeline"):
+                    "bitbucket_pipelines:stop_pipeline"):
                 return cancelled
             result = client.stop_pipeline(ws, repo, pipeline_uuid)
             if err := forward_if_error(result):

@@ -91,6 +91,35 @@ def _fetch_gitlab_listing(base_url: str, token: str, project_path: str) -> str:
     return "\n".join(f"{'dir' if i.get('type') == 'tree' else 'file'}: {i.get('name')}" for i in items)
 
 
+def _fetch_bitbucket_readme(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
+    from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+    client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
+    for filename in ("README.md", "README.rst", "README.txt", "README"):
+        result = client.get_file_contents(workspace, repo_slug, filename)
+        if isinstance(result, dict) and result.get("error"):
+            continue
+        if isinstance(result, str):
+            return result[:4000]
+    return ""
+
+
+def _fetch_bitbucket_listing(access_token: str, auth_type: str, workspace: str, repo_slug: str, email: Optional[str] = None) -> str:
+    from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+    client = BitbucketAPIClient(access_token, auth_type=auth_type, email=email)
+    # Call without format=meta to get the actual file listing (paginated with "values")
+    result = client.get_directory_tree(workspace, repo_slug, "", list_files=True)
+    if isinstance(result, dict) and result.get("error"):
+        logger.warning(f"Bitbucket directory listing error for {workspace}/{repo_slug}: {result.get('error')}")
+        return "(could not list files)"
+    if isinstance(result, dict) and "values" in result:
+        items = result["values"]
+        return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in items[:100])
+    if isinstance(result, list):
+        return "\n".join(f"{'dir' if i.get('type') == 'commit_directory' else 'file'}: {i.get('path', i.get('name', ''))}" for i in result[:100])
+    logger.warning(f"Bitbucket directory listing unexpected response for {workspace}/{repo_slug}: keys={list(result.keys()) if isinstance(result, dict) else type(result)}")
+    return "(could not list files)"
+
+
 # ---------------------------------------------------------------------------
 # Shared logic
 # ---------------------------------------------------------------------------
@@ -132,6 +161,19 @@ def _fetch_repo_context(provider: str, creds: dict, repo_full_name: str) -> tupl
         token = creds["access_token"]
         base_url = creds.get("base_url", "https://gitlab.com").rstrip("/")
         return _fetch_gitlab_readme(base_url, token, repo_full_name), _fetch_gitlab_listing(base_url, token, repo_full_name)
+
+    elif provider == "bitbucket":
+        token = creds["access_token"]
+        auth_type = creds.get("auth_type", "oauth")
+        email = creds.get("email")
+        parts = repo_full_name.split("/")
+        if len(parts) != 2:
+            return "", "(invalid repo format)"
+        workspace, repo_slug = parts
+        return (
+            _fetch_bitbucket_readme(token, auth_type, workspace, repo_slug, email),
+            _fetch_bitbucket_listing(token, auth_type, workspace, repo_slug, email),
+        )
 
     return "", "(unsupported provider)"
 
@@ -185,7 +227,8 @@ def generate_repo_metadata(self, user_id: str, provider: str, repo_full_name: st
 
         readme, file_list = _fetch_repo_context(provider, creds, repo_full_name)
 
-        if not readme and file_list == "(could not list files)":
+        # Both README and file listing failed — nothing to summarize
+        if not readme and (not file_list or file_list == "(could not list files)"):
             logger.warning(f"Could not fetch any content for {provider}:{repo_full_name}")
             _update_metadata(user_id, provider, repo_full_name, None, "error")
             return

@@ -25,23 +25,19 @@ The surface is **hybrid**: a small set of always-visible tools handles the 80% c
 | `list_actions` | List the org's Aurora actions (automations): trigger, mode, run count, last-run status |
 | `get_action` | One action's config plus its 20 most recent runs |
 | `list_action_runs` | An action's run history: status, timing, errors (`limit`, `offset`) |
-| `ask_incident` | Incident-scoped free-text follow-up (runs an investigation) |
 | `trigger_rca` | Start a new RCA from a free-text description |
-| `regenerate_rca` | Re-run RCA for an existing incident |
 | `knowledge_base_search` | Semantic search across Aurora's ingested docs |
 | `search_runbooks` | Unified runbook search across the knowledge base, Confluence, SharePoint |
-| `chat_with_aurora` | Aurora's autonomous agent over your connected systems — investigates (multi-source RCA) *and acts* (provisions/changes infra via Terraform/kubectl/cloud CLIs, applies code fixes, remediates). Runs the full agent workflow, so it's slower than the direct read tools above. |
 | `search_tools` | Discover additional tools available behind the long-tail dispatch |
 | `call_tool` | Invoke a tool returned by `search_tools` |
 
-#### Two kinds of tools: fast reads vs. the agent
+#### Tool design philosophy
 
-The MCP surface has two complementary parts, and your AI assistant picks between them automatically — there's nothing to configure:
+The MCP surface exposes fast, single-purpose reads (incidents, alerts, topology, service impact, RCA findings, metrics, postmortems, your actions). They return in about a second, so most everyday questions — *"what was my last incident?"*, *"what depends on payments-svc?"* — resolve through these.
 
-- **Direct tools** are fast, single-purpose reads (incidents, alerts, topology, service impact, RCA findings, metrics, postmortems, your actions). They return in about a second, so most everyday questions — *"what was my last incident?"*, *"what depends on payments-svc?"* — resolve through these.
-- **`chat_with_aurora`** is Aurora's full autonomous agent running against your connected systems. It handles open-ended investigations and RCA, and can also take action — provisioning or changing infrastructure (Terraform/IaC, kubectl, cloud CLIs), applying code fixes, and remediating. It runs the full agent workflow, so it's slower and is meant for work that genuinely needs it, e.g. *"why did checkout-svc page at 3am?"* or *"set up auto-scaling for my cluster"*.
+To start a new investigation, use `trigger_rca` with a problem description. It creates an incident and dispatches Aurora's full background RCA pipeline — the same pipeline used by the UI's RCA button and webhook-triggered alerts.
 
-The guidance for choosing between them is built into the tool descriptions, so this works across MCP clients (Cursor, Claude Desktop/Code, Codex, Windsurf, …) without any per-client tuning. Note that `chat_with_aurora` works against your *connected* data and infrastructure — it isn't a help desk for the Aurora product itself.
+The guidance for tool selection is built into the tool descriptions, so this works across MCP clients (Cursor, Claude Desktop/Code, Codex, Windsurf, ...) without any per-client tuning.
 
 ### Tier 2 — Connector-gated
 
@@ -246,8 +242,8 @@ Once connected, your AI assistant can interact with Aurora:
 → calls search_tools(query="mttr dora") → call_tool("metrics_mttr", { period: "30d" })
 
 "Why did checkout-svc page at 3am — dig into it?"
-→ calls chat_with_aurora("Why did checkout-svc page at 3am?")
-   The open-ended case: Aurora's agent runs the full RCA and replies with citations.
+→ calls trigger_rca(issue_description="checkout-svc paged at 3am", service="checkout-svc")
+   Creates an incident and starts the full RCA pipeline in the background.
 ```
 
-These map to the same capabilities you see in the Aurora UI: quick questions resolve through the fast direct tools (about a second), while `chat_with_aurora` runs Aurora's full agent server-side — the same system prompts and skill loader as the in-app chat — for investigations and actions that genuinely need it (which is why those take longer).
+These map to the same capabilities you see in the Aurora UI: questions resolve through the fast direct tools (about a second), while `trigger_rca` dispatches Aurora's full agent-driven investigation in the background — the same system prompts and skill loader as the in-app RCA.

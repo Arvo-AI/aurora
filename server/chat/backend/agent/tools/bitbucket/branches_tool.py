@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from .utils import (
     DIFF_TRUNCATE_LIMIT,
     get_bb_client_for_user,
-    resolve_workspace_repo,
+    get_default_branch,
     require_repo,
     forward_if_error,
     truncate_text,
@@ -31,8 +31,8 @@ class BitbucketBranchesArgs(BaseModel):
         "get_diff",
         "compare",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     branch: Optional[str] = Field(None, description="Branch name (for list_commits, create_branch target lookup).")
     name: Optional[str] = Field(None, description="New branch name (for create_branch).")
     target_hash: Optional[str] = Field(None, description="Target commit hash to branch from (for create_branch).")
@@ -59,9 +59,10 @@ def bitbucket_branches(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source = resolve_workspace_repo(user_id, workspace, repo_slug)
     if not branch:
-        branch = saved_branch
+        branch = get_default_branch(user_id, workspace, repo_slug)
+
+    ws, repo = workspace, repo_slug
 
     try:
         if action == "list_branches":
@@ -101,7 +102,7 @@ def bitbucket_branches(
                 return build_error_response("name (branch name) is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Delete branch '{name}' in {ws}/{repo}",
-                    "bitbucket:delete_branch"):
+                    "bitbucket_branches:delete_branch"):
                 return cancelled
             result = client.delete_branch(ws, repo, name)
             if err := forward_if_error(result):

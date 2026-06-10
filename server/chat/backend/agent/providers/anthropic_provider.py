@@ -12,6 +12,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .base_provider import BaseLLMProvider
+from ._sampling_guard import make_adaptive_sampling_cls
 from ..model_mapper import ModelMapper
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,10 @@ class AnthropicProvider(BaseLLMProvider):
         }
         config.update(kwargs)
 
-        return ChatAnthropic(**config)
+        # Opus 4.7+ rejects the hardcoded temperature; the adaptive subclass strips
+        # rejected sampling params and retries. ChatAnthropic has native async paths,
+        # so wrap them too (wrap_async default).
+        return make_adaptive_sampling_cls(ChatAnthropic)(**config)
 
     def is_available(self) -> bool:
         """Check if Anthropic API key is configured."""

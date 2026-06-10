@@ -141,7 +141,7 @@ def on_prem_kubectl(
 
 
 def is_kubectl_onprem_connected(user_id: str) -> bool:
-    """Check if the org has active on-prem kubectl connections."""
+    """Check if the org has active on-prem kubectl connections (agent or kubeconfig)."""
     if not user_id:
         return False
     try:
@@ -152,12 +152,16 @@ def is_kubectl_onprem_connected(user_id: str) -> bool:
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[KubectlOnprem:check]")
-                cursor.execute(
-                    """SELECT COUNT(*) FROM active_kubectl_connections c
-                       JOIN kubectl_agent_tokens t ON c.token = t.token
-                       WHERE (t.user_id = %s OR t.org_id = %s) AND c.status = 'active'""",
-                    (user_id, org_id),
-                )
+                cursor.execute("""
+                    SELECT COUNT(*) FROM (
+                        SELECT 1 FROM active_kubectl_connections c
+                            JOIN kubectl_agent_tokens t ON c.token = t.token
+                            WHERE (t.user_id = %s OR t.org_id = %s) AND c.status = 'active'
+                        UNION ALL
+                        SELECT 1 FROM kubeconfig_clusters
+                            WHERE org_id = %s AND is_active = TRUE
+                    ) combined
+                """, (user_id, org_id, org_id))
                 count = cursor.fetchone()[0]
                 return count > 0
     except Exception:

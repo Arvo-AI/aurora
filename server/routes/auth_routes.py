@@ -146,6 +146,12 @@ def register():
                 except Exception as policy_err:
                     logging.warning("Failed to seed command policy for org %s", org_id, exc_info=policy_err)
 
+                try:
+                    from utils.auth.tool_registry import seed_org_tool_permissions
+                    seed_org_tool_permissions(org_id, user_id)
+                except Exception as tool_perm_err:
+                    logging.warning("Failed to seed tool permissions for org %s", org_id, exc_info=tool_perm_err)
+
                 record_audit_event(org_id, user_id, "register", "organization", org_id,
                                    {"email": email}, request)
 
@@ -262,6 +268,12 @@ def setup_org(user_id):
                     seed_default_command_policy(org_id, user_id)
                 except Exception as policy_err:
                     logging.warning("Failed to seed command policy for org %s", org_id, exc_info=policy_err)
+
+                try:
+                    from utils.auth.tool_registry import seed_org_tool_permissions
+                    seed_org_tool_permissions(org_id, user_id)
+                except Exception as tool_perm_err:
+                    logging.warning("Failed to seed tool permissions for org %s", org_id, exc_info=tool_perm_err)
 
                 logging.info(f"User {user_id} created org {org_id} ({org_name})")
 

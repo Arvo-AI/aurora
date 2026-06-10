@@ -17,6 +17,7 @@ _PROVIDER_SIGNATURES: list[tuple[str, str, str, str]] = [
     ("langchain_anthropic", "chatanthropic", "anthropic", "anthropic"),
     ("langchain_google_vertexai", "chatvertexai", "vertexai", "vertex"),
     ("langchain_google", "chatgooglegenerativeai", "google", "google"),
+    ("langchain_aws", "chatbedrockconverse", "bedrock", "bedrock"),
     ("langchain_openai", "chatopenai", "openai", "openai"),
 ]
 
@@ -40,8 +41,10 @@ class ForceToolChoice(AgentMiddleware):
     def _infer_provider(model: Any) -> str | None:
         """Best-effort provider detection from a LangChain model instance.
 
-        This is a fallback — agent.py always passes provider= explicitly.
-        When the explicit provider is set, this method is never called.
+        Normally a fallback — agent.py passes provider= explicitly. The exception is
+        the dual-mode "bedrock" provider, whose gateway (ChatOpenAI) and native
+        (ChatBedrockConverse) clients share provider="bedrock"; _tool_choice calls
+        this to tell the two apart and pick the right tool_choice format.
         """
         seen: set[int] = set()
         candidates: deque[Any] = deque([model])
@@ -78,6 +81,18 @@ class ForceToolChoice(AgentMiddleware):
             return {"type": "tool", "name": self._tool_name}
         if provider in {"google", "vertex"}:
             return self._tool_name
+        if provider == "bedrock":
+            # Gateway (ChatOpenAI) and native (ChatBedrockConverse) both report
+            # provider="bedrock". Only the gateway — positively detected as ChatOpenAI
+            # — wants OpenAI-style. Native Converse wants the Bedrock toolChoice shape
+            # {"tool": {"name": ...}}; its first key must be "tool" (not "type"), or
+            # ChatBedrockConverse rejects it as an unsupported tool_choice type.
+            if self._infer_provider(getattr(request, "model", None)) == "openai":
+                return {
+                    "type": "function",
+                    "function": {"name": self._tool_name},
+                }
+            return {"tool": {"name": self._tool_name}}
         return {
             "type": "function",
             "function": {"name": self._tool_name},
