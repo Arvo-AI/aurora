@@ -1,9 +1,13 @@
 """
 Bitbucket workspace/repo selection endpoints.
-Manages which repos a user has connected for RCA investigation.
+Manages which repos an org has connected for RCA investigation.
 
-Uses the `connected_repos` table as the sole source of truth. 
+Uses the `connected_repos` table as the sole source of truth.
 The workspace is derived from repo_full_name (stored as "workspace/repo-slug").
+
+Selection is org-scoped: one Bitbucket connector per org → one shared repo list.
+Any user in the org can read/modify the selection; the `user_id` column records
+who last wrote each row.
 """
 import logging
 
@@ -12,7 +16,7 @@ from flask import Blueprint, jsonify, request
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
-from utils.db.org_scope import resolve_org, org_read_predicate
+from utils.db.org_scope import resolve_org
 
 bitbucket_selection_bp = Blueprint("bitbucket_selection", __name__)
 logger = logging.getLogger(__name__)
@@ -21,19 +25,18 @@ logger = logging.getLogger(__name__)
 @bitbucket_selection_bp.route("/workspace-selection", methods=["GET"])
 @require_permission("connectors", "read")
 def get_workspace_selection(user_id):
-    """Return connected Bitbucket repos, deriving workspace from repo_full_name."""
+    """Return connected Bitbucket repos for the org."""
     try:
         org_id = resolve_org(user_id)
-        predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketSelection:get]")
                 cur.execute(
-                    f"""SELECT repo_full_name, default_branch, metadata_summary, metadata_status
+                    """SELECT repo_full_name, default_branch, metadata_summary, metadata_status
                        FROM connected_repos
-                       WHERE provider = 'bitbucket' AND {predicate}
+                       WHERE org_id = %s AND provider = 'bitbucket'
                        ORDER BY repo_full_name""",
-                    pred_params,
+                    (org_id,),
                 )
                 rows = cur.fetchall()
 
@@ -76,7 +79,11 @@ def get_workspace_selection(user_id):
 @bitbucket_selection_bp.route("/workspace-selection", methods=["POST", "PUT"])
 @require_permission("connectors", "write")
 def save_workspace_selection(user_id):
-    """Save the Bitbucket workspace selection into connected_repos."""
+    """Save the Bitbucket workspace selection for the org.
+
+    Replaces the org's selection for the given workspace — removes repos that
+    were deselected regardless of which user originally added them.
+    """
     try:
         data = request.get_json()
         if not data:
@@ -100,9 +107,10 @@ def save_workspace_selection(user_id):
             with conn.cursor() as cur:
                 org_id = set_rls_context(cur, conn, user_id, log_prefix="[BitbucketSelection:save]")
 
+                # Get ALL org-level repos for this workspace (regardless of who added them)
                 cur.execute(
-                    "SELECT repo_full_name FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket' AND repo_full_name LIKE %s",
-                    (user_id, f"{workspace}/%"),
+                    "SELECT repo_full_name FROM connected_repos WHERE org_id = %s AND provider = 'bitbucket' AND repo_full_name LIKE %s",
+                    (org_id, f"{workspace}/%"),
                 )
                 existing = {row[0] for row in cur.fetchall()}
 
@@ -131,12 +139,12 @@ def save_workspace_selection(user_id):
                     if full_name not in existing:
                         newly_added.append(full_name)
 
-                # Remove deselected repos
+                # Remove deselected repos org-wide (not just the current user's rows)
                 removed = existing - incoming
                 if removed:
                     cur.execute(
-                        "DELETE FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket' AND repo_full_name = ANY(%s)",
-                        (user_id, list(removed)),
+                        "DELETE FROM connected_repos WHERE org_id = %s AND provider = 'bitbucket' AND repo_full_name = ANY(%s)",
+                        (org_id, list(removed)),
                     )
 
                 conn.commit()
@@ -149,7 +157,7 @@ def save_workspace_selection(user_id):
             except Exception as e:
                 logger.warning(f"Failed to enqueue metadata gen for {repo_name}: {e}")
 
-        logger.info(f"Saved Bitbucket selection for user {user_id}: {workspace} / {len(incoming)} repos ({len(newly_added)} new)")
+        logger.info(f"Saved Bitbucket selection for org {org_id} (by user {user_id}): {workspace} / {len(incoming)} repos ({len(newly_added)} new)")
 
         return jsonify({
             "message": f"Saved {len(incoming)} repos, removed {len(removed)}",
@@ -167,18 +175,19 @@ def save_workspace_selection(user_id):
 @bitbucket_selection_bp.route("/workspace-selection", methods=["DELETE"])
 @require_permission("connectors", "write")
 def clear_workspace_selection(user_id):
-    """Clear all Bitbucket connected repos for the user."""
+    """Clear all Bitbucket connected repos for the org."""
     try:
+        org_id = resolve_org(user_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketSelection:clear]")
                 cur.execute(
-                    "DELETE FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket'",
-                    (user_id,),
+                    "DELETE FROM connected_repos WHERE org_id = %s AND provider = 'bitbucket'",
+                    (org_id,),
                 )
                 conn.commit()
 
-        logger.info(f"Cleared Bitbucket workspace selection for user {user_id}")
+        logger.info(f"Cleared Bitbucket workspace selection for org {org_id} (by user {user_id})")
         return jsonify({"message": "Workspace selection cleared successfully"})
 
     except Exception as e:
@@ -189,20 +198,21 @@ def clear_workspace_selection(user_id):
 @bitbucket_selection_bp.route("/repo-metadata/generate", methods=["POST"])
 @require_permission("connectors", "write")
 def trigger_metadata_generation(user_id):
-    """Trigger LLM metadata generation for a specific Bitbucket repo. (Only for the regenerate button in the workspace browser)"""
+    """Trigger LLM metadata generation for a specific Bitbucket repo."""
     try:
         data = request.get_json()
         repo_full_name = data.get("repo_full_name") if data else None
         if not repo_full_name:
             return jsonify({"error": "repo_full_name is required"}), 400
 
+        org_id = resolve_org(user_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketMetadata:generate]")
                 cur.execute(
                     """UPDATE connected_repos SET metadata_status = 'generating', updated_at = NOW()
-                       WHERE provider = 'bitbucket' AND repo_full_name = %s AND user_id = %s""",
-                    (repo_full_name, user_id),
+                       WHERE org_id = %s AND provider = 'bitbucket' AND repo_full_name = %s""",
+                    (org_id, repo_full_name),
                 )
                 conn.commit()
 
@@ -228,14 +238,15 @@ def update_repo_metadata(user_id, repo_full_name):
         if summary is None:
             return jsonify({"error": "metadata_summary is required"}), 400
 
+        org_id = resolve_org(user_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 set_rls_context(cur, conn, user_id, log_prefix="[BitbucketMetadata:update]")
                 cur.execute(
                     """UPDATE connected_repos
                        SET metadata_summary = %s, metadata_status = 'ready', updated_at = NOW()
-                       WHERE provider = 'bitbucket' AND repo_full_name = %s AND user_id = %s""",
-                    (summary, repo_full_name, user_id),
+                       WHERE org_id = %s AND provider = 'bitbucket' AND repo_full_name = %s""",
+                    (summary, org_id, repo_full_name),
                 )
                 conn.commit()
         return jsonify({"message": "Metadata updated"})
