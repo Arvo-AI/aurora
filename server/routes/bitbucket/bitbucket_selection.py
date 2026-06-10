@@ -72,7 +72,7 @@ def get_workspace_selection(user_id):
         })
 
     except Exception as e:
-        logger.error(f"Error getting workspace selection: {e}", exc_info=True)
+        logger.error("Error getting workspace selection: %s", e, exc_info=True)
         return jsonify({"error": "Failed to get workspace selection"}), 500
 
 
@@ -155,9 +155,9 @@ def save_workspace_selection(user_id):
                 from utils.repo_metadata import generate_repo_metadata
                 generate_repo_metadata.delay(user_id, "bitbucket", repo_name)
             except Exception as e:
-                logger.warning(f"Failed to enqueue metadata gen for {repo_name}: {e}")
+                logger.warning("Failed to enqueue metadata gen for %s: %s", repo_name, e)
 
-        logger.info(f"Saved Bitbucket selection for org {org_id} (by user {user_id}): {workspace} / {len(incoming)} repos ({len(newly_added)} new)")
+        logger.info("Saved Bitbucket selection for org %s (by user %s): %s / %d repos (%d new)", org_id, user_id, workspace, len(incoming), len(newly_added))
 
         return jsonify({
             "message": f"Saved {len(incoming)} repos, removed {len(removed)}",
@@ -168,7 +168,7 @@ def save_workspace_selection(user_id):
         })
 
     except Exception as e:
-        logger.error(f"Error saving workspace selection: {e}", exc_info=True)
+        logger.error("Error saving workspace selection: %s", e, exc_info=True)
         return jsonify({"error": "Failed to save workspace selection"}), 500
 
 
@@ -187,11 +187,11 @@ def clear_workspace_selection(user_id):
                 )
                 conn.commit()
 
-        logger.info(f"Cleared Bitbucket workspace selection for org {org_id} (by user {user_id})")
+        logger.info("Cleared Bitbucket workspace selection for org %s (by user %s)", org_id, user_id)
         return jsonify({"message": "Workspace selection cleared successfully"})
 
     except Exception as e:
-        logger.error(f"Error clearing workspace selection: {e}", exc_info=True)
+        logger.error("Error clearing workspace selection: %s", e, exc_info=True)
         return jsonify({"error": "Failed to clear workspace selection"}), 500
 
 
@@ -220,11 +220,11 @@ def trigger_metadata_generation(user_id):
         try:
             generate_repo_metadata.delay(user_id, "bitbucket", repo_full_name)
         except Exception as e:
-            logger.exception(f"Failed to enqueue metadata gen for {repo_full_name}")
+            logger.exception("Failed to enqueue metadata gen for %s", repo_full_name)
             return jsonify({"error": "Failed to start metadata generation"}), 500
         return jsonify({"message": "Metadata generation started"})
     except Exception as e:
-        logger.exception(f"Error triggering metadata generation for user={user_id}")
+        logger.exception("Error triggering metadata generation for user=%s", user_id)
         return jsonify({"error": "Failed to trigger metadata generation"}), 500
 
 
@@ -251,5 +251,5 @@ def update_repo_metadata(user_id, repo_full_name):
                 conn.commit()
         return jsonify({"message": "Metadata updated"})
     except Exception as e:
-        logger.exception(f"Error updating repo metadata for {repo_full_name}")
+        logger.exception("Error updating repo metadata for %s", repo_full_name)
         return jsonify({"error": "Failed to update metadata"}), 500
