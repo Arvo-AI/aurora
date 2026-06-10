@@ -143,15 +143,7 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6
 RCA_MODEL=anthropic/claude-haiku-4.5
 ```
 
-The multi-agent RCA orchestrator is **on by default** (`ORCHESTRATOR_ENABLED=true`) and bypasses `RCA_MODEL`. Both sub-model env vars are required — if you don't set them, RCAs gracefully degrade to the legacy single-agent path on each run:
-
-```bash
-ORCHESTRATOR_ENABLED=true                        # default; set false to opt out
-RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7 # triage + synthesis
-RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6   # sub-agent investigators
-```
-
-See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider, and [LLM Providers — Multi-agent orchestrator](/docs/integrations/llm-providers#multi-agent-orchestrator) for the orchestrator split.
+See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider. *Optional:* set `ORCHESTRATOR_ENABLED=true` to use the multi-agent RCA path — requires `RCA_ORCHESTRATOR_MODEL` and `RCA_SUBAGENT_MODEL` ([details](/docs/integrations/llm-providers#multi-agent-orchestrator)).
 
 **VM URLs** — replace `YOUR_VM_IP` with your VM's public IP (or internal/VPN IP — see note below):
 

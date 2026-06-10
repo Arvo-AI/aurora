@@ -90,7 +90,7 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `bedrock/us.anthropic.claude-haiku-4-5-v1:0` | Faster, cheaper Claude on Bedrock |
 | | Gateway: the model name your gateway expects | Gateway mode passes the suffix through to your OpenAI-compatible endpoint |
 
-Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`, `RCA_ORCHESTRATOR_MODEL`, `RCA_SUBAGENT_MODEL`) or select chat models in the UI.
+Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`) or select chat models in the UI.
 
 ## Provider Setup
 
@@ -244,12 +244,9 @@ Gateway and native are the **same** `bedrock` provider — set `BEDROCK_BASE_URL
 
 ## RCA Model Configuration
 
-Aurora ships two RCA paths and the env vars differ between them:
+Background RCA uses the single-agent path by default (`ORCHESTRATOR_ENABLED=false`), configured via `RCA_MODEL`. An opt-in multi-agent orchestrator is also available — see [Multi-agent orchestrator](#multi-agent-orchestrator) below.
 
-- **Multi-agent RCA orchestrator** (`ORCHESTRATOR_ENABLED=true`, default): a lead orchestrator triages each incident and may fan out parallel read-only sub-agents. Configured via `RCA_ORCHESTRATOR_MODEL` (triage + synthesis) and `RCA_SUBAGENT_MODEL` (sub-agents). When orchestration is enabled, `RCA_MODEL` is ignored.
-- **Legacy single-agent RCA** (`ORCHESTRATOR_ENABLED=false`): one ReAct loop drives the entire investigation. Configured via `RCA_MODEL`.
-
-### Single-agent RCA
+### Single-agent RCA (default)
 
 By default, Aurora uses `anthropic/claude-haiku-4.5` for background Root Cause Analysis. You can change this to any supported provider/model.
 
@@ -286,22 +283,15 @@ When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
 
 ### Multi-agent orchestrator
 
-When `ORCHESTRATOR_ENABLED=true` (default), the legacy `RCA_MODEL` is bypassed and the orchestrator splits work across two distinct models. Both env vars are **required** — there is no fallback, and unset values cause orchestrator nodes to fail loudly and the run gracefully degrades to single-agent mode.
+Opt-in via `ORCHESTRATOR_ENABLED=true`. A lead orchestrator triages each incident and may fan out parallel read-only sub-agents. When enabled, `RCA_MODEL` is bypassed and two additional models are required:
 
 ```bash
-ORCHESTRATOR_ENABLED=true                        # default
-
-# Brain: triage + synthesis. Needs reliable structured-output JSON.
-RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7
-
-# Investigator: sub-agents. Needs reliable tool-calling — must always
-# end its turn with a tool call (including the terminal `write_findings`).
-RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6
+ORCHESTRATOR_ENABLED=true
+RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7   # * triage + synthesis
+RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6     # * sub-agent investigators
 ```
 
-The split exists because the two workloads have independent requirements: triage/synthesis must emit valid JSON for downstream decisions, while sub-agents must call tools every turn until they finalize their findings. A single model rarely excels at both, so each is tuned independently.
-
-Per-role overrides are also supported — set `model:` in the frontmatter of `server/chat/backend/agent/orchestrator/roles/*.md` to override `RCA_SUBAGENT_MODEL` for a single role.
+The split exists because triage/synthesis needs reliable structured-output JSON while sub-agents need reliable tool-calling. Per-role overrides are supported — set `model:` in the frontmatter of `server/chat/backend/agent/orchestrator/roles/*.md`.
 
 ## Cost Considerations
 

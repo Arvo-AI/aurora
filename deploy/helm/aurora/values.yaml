@@ -225,17 +225,15 @@ config:
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
 
-  # --- Multi-agent RCA orchestrator ---
-  # When "true" (default), a lead orchestrator triages each background RCA and
-  # may fan out parallel read-only sub-agents. When "false", background RCA
-  # falls back to the legacy single-agent path. Operational kill-switch: set
-  # to "false" and restart celery workers to fully revert.
-  ORCHESTRATOR_ENABLED: "true"
-  # Triage + synthesis brain. Required when ORCHESTRATOR_ENABLED=true.
-  # Provider/model format (e.g. anthropic/claude-sonnet-4.6).
+  # --- Multi-agent RCA orchestrator (opt-in) ---
+  # When "false" (default), background RCA uses the legacy single-agent path.
+  # When "true", a lead orchestrator triages each RCA and may fan out parallel
+  # read-only sub-agents. Set RCA_ORCHESTRATOR_MODEL and RCA_SUBAGENT_MODEL
+  # when enabling.
+  ORCHESTRATOR_ENABLED: "false"
+  # * Only when ORCHESTRATOR_ENABLED=true — triage + synthesis brain.
   RCA_ORCHESTRATOR_MODEL: ""
-  # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
-  # Needs reliable tool-calling.
+  # * Only when ORCHESTRATOR_ENABLED=true — sub-agent investigator model.
   RCA_SUBAGENT_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
