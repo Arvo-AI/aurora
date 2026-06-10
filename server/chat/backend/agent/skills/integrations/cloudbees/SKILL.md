@@ -4,9 +4,9 @@ id: cloudbees
 description: "CloudBees CI integration for investigating builds, deployments, pipeline stages, and test results during RCA"
 category: cicd
 connection_check:
-  method: get_token_data
-  provider_key: cloudbees
-  required_field: base_url
+  method: is_connected_function
+  module: chat.backend.agent.tools.cloudbees_rca_tool
+  function: is_cloudbees_connected
 tools:
   - cloudbees_rca
 index: "CI/CD -- investigate CloudBees CI builds, deployments, pipeline stages, logs, test results"
