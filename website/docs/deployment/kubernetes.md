@@ -436,7 +436,9 @@ The MCP server runs on port 8811. By default it's reachable at `https://api.<dom
 kubectl port-forward svc/aurora-oss-mcp 8811:8811 -n aurora-oss
 ```
 
-For a dedicated hostname, set `ingress.hosts.mcp` in your values. Always pair with an auth proxy.
+:::warning Security - unauthenticated MCP = remote code execution
+Exposing the MCP server without authentication allows unauthenticated remote code execution through the MCP protocol. For a dedicated hostname, set `ingress.hosts.mcp` in your values but always place an auth proxy (e.g. OAuth2 Proxy, Keycloak Gatekeeper, or nginx `auth_request`) in front of any internet-facing MCP ingress.
+:::
 
 ## Local Kubernetes
 
