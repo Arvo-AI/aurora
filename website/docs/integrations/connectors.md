@@ -392,8 +392,9 @@ GITHUB_APP_SETUP_URL=https://<your-host>/github/app/install/callback
 GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
-The App's private key (PEM) goes into Vault at
-`aurora/system/github-app/private-key`, not into `.env`.
+The App's private key (PEM) goes into your configured secrets backend
+(Vault or AWS Secrets Manager) at `aurora/system/github-app/private-key`,
+not into `.env`.
 
 ##### On-prem deployment
 
@@ -411,7 +412,7 @@ their own Aurora hostname.
 | Valid TLS cert (Let's Encrypt or chained to a public root) | GitHub refuses webhook delivery to invalid certs. |
 | Outbound HTTPS to `api.github.com` | Aurora calls GitHub for installation token mint, repo metadata, etc. |
 | GitHub org admin role | Creating an App on an org requires owner. |
-| Aurora deployment shell + Vault access | You need to write App private key + webhook secret into Vault. |
+| Aurora deployment shell + secrets backend access (Vault or AWS Secrets Manager) | You need to write App private key + webhook secret into the configured backend. |
 
 **Step 1 — Create the App in the customer's org**:
 
@@ -426,7 +427,7 @@ https://github.com/organizations/<customer-org>/settings/apps/new
 | Callback URL | `<BASE_URL>/github/app/install/callback` |
 | Setup URL | Same as Callback URL |
 | Webhook URL | `<BASE_URL>/github/webhook` |
-| Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to Vault |
+| Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to your secrets backend |
 | Where can be installed? | **Only on this account** (locks the App to the customer org) |
 
 Permissions and events match the dev walkthrough — see
@@ -436,12 +437,33 @@ Permissions and events match the dev walkthrough — see
 creation, **Generate a private key** downloads a `.pem` file once. Back
 it up before closing the tab.
 
-**Step 3 — Write secrets to the customer's Vault**:
+**Step 3 — Write secrets to the customer's secrets backend**:
+
+These are read from whichever backend `SECRETS_BACKEND` selects, at the path
+`aurora/system/github-app/*`. Use the commands for your backend.
+
+Vault (`SECRETS_BACKEND=vault`, default):
 
 ```bash
 vault kv put aurora/system/github-app/webhook-secret value=<the secret>
 vault kv put aurora/system/github-app/private-key value=@<path-to-pem>
 ```
+
+AWS Secrets Manager (`SECRETS_BACKEND=aws_secrets_manager`) — create the
+secrets at the same logical path, in your `AWS_SM_REGION`. For the private
+key, `file://` + an **absolute** path makes the CLI read the multi-line PEM
+verbatim (an absolute path yields three slashes — `file:///…`); no manual
+newline handling needed.
+
+```bash
+aws secretsmanager create-secret --name aurora/system/github-app/webhook-secret \
+  --secret-string '<the secret>' --region "$AWS_SM_REGION"
+aws secretsmanager create-secret --name aurora/system/github-app/private-key \
+  --secret-string file:///absolute/path/to/app-private-key.pem --region "$AWS_SM_REGION"
+```
+
+To update a secret that already exists, swap `create-secret` for
+`put-secret-value --secret-id <name> --secret-string … --region "$AWS_SM_REGION"`.
 
 **Step 4 — Set Aurora env vars** in the customer's `.env` (same keys as
 the Quickstart block above), with `GITHUB_APP_*` URLs pointing at the
@@ -523,7 +545,7 @@ use the OAuth fallback above.
 | "Bad credentials" | Regenerate the OAuth Client secret and update `.env`. |
 | "GitHub App install URL is missing the required state parameter" | `GITHUB_APP_SETUP_URL` doesn't match what's registered on the App settings page. Update `.env` to match. |
 | "Failed to initiate GitHub OAuth" | `GH_OAUTH_CLIENT_ID`/`SECRET` empty when `GITHUB_AUTH_MODE=oauth` or `hybrid`. Set them and restart. |
-| Webhook deliveries fail with 4xx | Webhook secret in Vault doesn't match what's registered on the App. `vault kv put aurora/system/github-app/webhook-secret value=<secret>` and re-save the App secret. |
+| Webhook deliveries fail with 4xx | Webhook secret in your secrets backend doesn't match what's registered on the App. Rewrite it at `aurora/system/github-app/webhook-secret` (`vault kv put` or `aws secretsmanager put-secret-value`, per `SECRETS_BACKEND`) and re-save the App secret. |
 
 ---
 

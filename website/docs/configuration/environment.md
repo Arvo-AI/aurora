@@ -393,7 +393,7 @@ on-prem deployments that cannot expose a public webhook URL.
 | `NEXT_PUBLIC_GITHUB_APP_SLUG` | | The App's URL slug (e.g. `aurora-acme`). Used by the frontend to build install management URLs. |
 | `GITHUB_APP_WEBHOOK_URL` | | Public URL Aurora exposes for webhooks. Must match what's configured on the App. Example: `https://aurora.example.com/github/webhook`. |
 | `GITHUB_APP_SETUP_URL` | | Post-install redirect URL. Example: `https://aurora.example.com/github/app/install/callback`. |
-| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — Vault path `aurora/system/github-app/webhook-secret` takes precedence. |
+| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — the secrets backend path `aurora/system/github-app/webhook-secret` (Vault or AWS Secrets Manager) takes precedence. |
 | `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 | `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 
@@ -407,7 +407,8 @@ NEXT_PUBLIC_GITHUB_APP_SLUG=aurora-acme
 GITHUB_APP_WEBHOOK_URL=https://aurora.example.com/github/webhook
 GITHUB_APP_SETUP_URL=https://aurora.example.com/github/app/install/callback
 GITHUB_APP_WEBHOOK_SECRET=
-# (private key PEM lives in Vault at aurora/system/github-app/private-key)
+# (private key PEM lives in your secrets backend — Vault or AWS Secrets
+#  Manager — at aurora/system/github-app/private-key, not in .env)
 ```
 
 Hybrid (App + OAuth, e.g. for a migration window):
