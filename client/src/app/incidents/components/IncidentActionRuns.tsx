@@ -55,28 +55,54 @@ function formatTime(isoString: string): string {
 export default function IncidentActionRuns({ incidentId }: IncidentActionRunsProps) {
   const [runs, setRuns] = useState<ActionRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
     async function fetchRuns() {
       try {
         const res = await fetch(`/api/incidents/${incidentId}/action-runs`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (!cancelled) setError(true);
+          return;
+        }
         const data = await res.json();
-        if (!cancelled) setRuns(data.runs || []);
+        if (!cancelled) {
+          setRuns(data.runs || []);
+          setError(false);
+
+          // Poll every 5s while any run is still in progress
+          const hasInProgress = (data.runs || []).some(
+            (r: ActionRun) => r.status === 'pending' || r.status === 'running'
+          );
+          if (hasInProgress) {
+            pollTimer = setTimeout(fetchRuns, 5000);
+          }
+        }
       } catch {
-        // Silently fail
+        if (!cancelled) setError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
     fetchRuns();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [incidentId]);
 
   if (loading) {
     return (
       <div className="py-4 text-center text-xs text-zinc-500">Loading actions...</div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="py-4 text-center text-xs text-red-400">Failed to load action runs.</div>
     );
   }
 
