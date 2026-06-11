@@ -22,7 +22,10 @@ from utils.secrets.aws_sm_backend import AWSSecretsManagerBackend
 
 _PRIVATE_KEY_LOGICAL = "github-app/private-key"
 _WEBHOOK_LOGICAL = "github-app/webhook-secret"
-_FAKE_PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIfake\n-----END RSA PRIVATE KEY-----\n"
+# Opaque stand-in for the key material the backend returns. The backend is
+# mocked in these tests, so this is never parsed as a real PEM — kept
+# intentionally non-PEM-shaped so secret scanners (gitleaks) don't flag it.
+_FAKE_PEM = "test-github-app-private-key-material-0000"
 
 
 @pytest.fixture(autouse=True)
