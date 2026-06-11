@@ -2547,6 +2547,21 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add get_alert_field tool: {e}")
 
+        try:
+            from .recent_incidents_tool import get_recent_incidents, GetRecentIncidentsArgs, GET_RECENT_INCIDENTS_DESCRIPTION
+            _ctx = with_forced_context(get_recent_incidents)
+            _notif = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notif, "get_recent_incidents") if tool_capture else _notif
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name="get_recent_incidents",
+                description=GET_RECENT_INCIDENTS_DESCRIPTION,
+                args_schema=GetRecentIncidentsArgs,
+            ))
+            logging.info(f"Added get_recent_incidents tool for incident {incident_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add get_recent_incidents tool: {e}")
+
     logging.info(f"Created {len(tools)} Aurora native tools")
     
     # Add real MCP tools if available
