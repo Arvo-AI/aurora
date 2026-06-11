@@ -411,7 +411,7 @@ pre code {
   font-size: 0.85rem;
   line-height: 1.6;
   white-space: pre-wrap;
-  word-wrap: break-word;
+  overflow-wrap: break-word;
   color: #fafafa;
 }
 
