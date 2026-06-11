@@ -20,10 +20,14 @@ _SUMMARY_TRUNCATION_CHARS = 500
 class GetRecentIncidentsArgs(BaseModel):
     time_window_hours: int = Field(
         default=72,
+        ge=1,
+        le=168,
         description="How far back to look in hours (default: 72h / 3 days)",
     )
     limit: int = Field(
         default=20,
+        ge=1,
+        le=50,
         description="Maximum number of incidents to return",
     )
     service_filter: Optional[str] = Field(
