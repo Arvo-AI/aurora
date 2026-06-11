@@ -566,13 +566,13 @@ export const incidentsService = {
 export const postmortemService = {
   async getPostmortem(incidentId: string): Promise<{ data: PostmortemData | null; generating?: boolean; error?: string }> {
     try {
-      const data = await apiGet<{ postmortem: PostmortemData }>(`/api/incidents/${incidentId}/postmortem`);
+      const data = await apiGet<{ postmortem?: PostmortemData; status?: string; generationSessionId?: string }>(`/api/incidents/${incidentId}/postmortem`);
+      if (data.status === 'generating') {
+        return { data: null, generating: true };
+      }
       return { data: data.postmortem || null };
     } catch (error) {
       const apiErr = error as ApiError;
-      if (apiErr.status === 202) {
-        return { data: null, generating: true };
-      }
       if (apiErr.status === 404) {
         return { data: null };
       }

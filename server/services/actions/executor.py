@@ -117,11 +117,26 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
             )
             rows = cur.fetchall()
 
+            # Dedup: skip actions already running for this incident
+            action_ids = [str(r[0]) for r in rows]
+            already_running = set()
+            if action_ids:
+                cur.execute(
+                    """SELECT DISTINCT action_id FROM action_runs
+                       WHERE action_id = ANY(%s::uuid[]) AND incident_id = %s::uuid
+                         AND status IN ('pending', 'running')""",
+                    (action_ids, incident_id),
+                )
+                already_running = {str(r[0]) for r in cur.fetchall()}
+
     for action_id, trigger_config, system_key in rows:
         cfg = trigger_config or {}
         action_timing = cfg.get("timing", "immediate")
 
         if action_timing != timing:
+            continue
+
+        if str(action_id) in already_running:
             continue
 
         try:
