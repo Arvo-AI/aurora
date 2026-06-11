@@ -58,7 +58,11 @@ jobs:
     steps:
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /usr/local/graalvm /usr/local/.ghcup \
+            /usr/local/share/powershell /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/chromium /usr/local/lib/node_modules
+          sudo apt-get clean || true
           docker system prune -af
           df -h /
 
@@ -106,6 +110,11 @@ jobs:
             --cache-from type=gha,scope=airtight-frontend-${{ matrix.arch }} \
             --cache-to type=gha,mode=max,scope=airtight-frontend-${{ matrix.arch }} \
             ./client
+
+      - name: Reclaim build cache space
+        run: |
+          docker builder prune -af
+          df -h /
 
       - name: Pull third-party images
         run: |
