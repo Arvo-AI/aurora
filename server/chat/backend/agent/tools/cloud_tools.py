@@ -131,6 +131,20 @@ from .datadog_tool import (
     QueryDatadogArgs,
 )
 from .opsgenie_tool import query_opsgenie, is_opsgenie_connected, QueryOpsGenieArgs
+from .victorops_tool import (
+    get_victorops_incidents,
+    get_victorops_teams,
+    is_victorops_connected,
+    GetVictorOpsIncidentsArgs,
+    GetVictorOpsTeamsArgs,
+)
+from .opensearch_tool import (
+    search_opensearch,
+    list_opensearch_indices,
+    is_opensearch_connected,
+    OpenSearchSearchArgs,
+    OpenSearchListIndicesArgs,
+)
 from .newrelic_tool import (
     query_newrelic,
     is_newrelic_connected,
@@ -1917,6 +1931,42 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
 
+    # Add OpenSearch tools if connected
+    if user_id and is_opensearch_connected(user_id):
+        context_wrapped_os_search = with_user_context(search_opensearch)
+        notification_wrapped_os_search = with_completion_notification(context_wrapped_os_search)
+        final_os_search = (
+            wrap_func_with_capture(notification_wrapped_os_search, "search_opensearch")
+            if tool_capture else notification_wrapped_os_search
+        )
+        tools.append(StructuredTool.from_function(
+            func=final_os_search,
+            name="search_opensearch",
+            description=(
+                "Search logs in OpenSearch using a Lucene query string. "
+                "Use this to find error messages, stack traces, and log patterns during RCA. "
+                "Example: search_opensearch(query='error AND service:api', start_time='now-1h', size=50)"
+            ),
+            args_schema=OpenSearchSearchArgs,
+        ))
+
+        context_wrapped_os_indices = with_user_context(list_opensearch_indices)
+        notification_wrapped_os_indices = with_completion_notification(context_wrapped_os_indices)
+        final_os_indices = (
+            wrap_func_with_capture(notification_wrapped_os_indices, "list_opensearch_indices")
+            if tool_capture else notification_wrapped_os_indices
+        )
+        tools.append(StructuredTool.from_function(
+            func=final_os_indices,
+            name="list_opensearch_indices",
+            description="List available OpenSearch indices to discover what log data is available for searching.",
+            args_schema=OpenSearchListIndicesArgs,
+        ))
+
+        logging.info(f"Added 2 OpenSearch tools for user {user_id}")
+    else:
+        logging.debug(f"OpenSearch tools not added - user {user_id} not connected to OpenSearch")
+
     # Add incident.io tools if connected
     if is_incidentio_connected(user_id):
         context_wrapped_list = with_user_context(list_incidentio_incidents)
@@ -2092,6 +2142,35 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryOpsGenieArgs,
         ))
         logging.info(f"Added {_og_label} tool for user {user_id}")
+
+    # --- Splunk On-Call (VictorOps) tools ---
+    if user_id and is_victorops_connected(user_id):
+        context_wrapped_vo_inc = with_user_context(get_victorops_incidents)
+        notif_wrapped_vo_inc = with_completion_notification(context_wrapped_vo_inc)
+        final_vo_inc = wrap_func_with_capture(notif_wrapped_vo_inc, "get_victorops_incidents") if tool_capture else notif_wrapped_vo_inc
+        tools.append(StructuredTool.from_function(
+            func=final_vo_inc,
+            name="get_victorops_incidents",
+            description=(
+                "Retrieve recent incidents from Splunk On-Call (VictorOps). "
+                "Use during RCA to find related past incidents and identify recurring patterns."
+            ),
+            args_schema=GetVictorOpsIncidentsArgs,
+        ))
+
+        context_wrapped_vo_teams = with_user_context(get_victorops_teams)
+        notif_wrapped_vo_teams = with_completion_notification(context_wrapped_vo_teams)
+        final_vo_teams = wrap_func_with_capture(notif_wrapped_vo_teams, "get_victorops_teams") if tool_capture else notif_wrapped_vo_teams
+        tools.append(StructuredTool.from_function(
+            func=final_vo_teams,
+            name="get_victorops_teams",
+            description=(
+                "List teams and on-call schedules from Splunk On-Call (VictorOps). "
+                "Use to identify who was on-call when the incident triggered."
+            ),
+            args_schema=GetVictorOpsTeamsArgs,
+        ))
+        logging.info(f"Added Splunk On-Call (VictorOps) tools for user {user_id}")
 
     # Add Bitbucket tools if connected
     try:
