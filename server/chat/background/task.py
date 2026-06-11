@@ -455,16 +455,6 @@ def run_background_chat(
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
-    # Skip re-delivered tasks (acks_late means Redis can re-queue before completion)
-    try:
-        redis_client = get_redis_client()
-        lock_key = f"bgchat:lock:{session_id}"
-        acquired = redis_client.set(lock_key, self.request.id, nx=True, ex=1800)
-        if not acquired:
-            logger.warning("[BackgroundChat] DUPLICATE DELIVERY: session %s already running — skipping.", session_id)
-            return {"session_id": session_id, "status": "skipped", "skipped": "duplicate_delivery"}
-    except Exception:
-        pass
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
     if os.environ.get("DISPLAY__RCA_USER_MSG", "").lower() in ("1", "true", "yes"):
