@@ -314,6 +314,10 @@ helm upgrade aurora-oss ./deploy/helm/aurora \
 With manual unsealing, you must run `vault operator unseal` after every Vault pod restart. For production, use [KMS auto-unseal](./vault-kms-setup) to eliminate this.
 :::
 
+:::info Alternative: AWS Secrets Manager
+You can use AWS Secrets Manager instead of Vault by setting `SECRETS_BACKEND=aws_secrets_manager`. This requires no Vault initialization or unsealing. See the [AWS Secrets Manager guide](../configuration/aws-secrets-manager) for full setup.
+:::
+
 ### 7. Verify
 
 ```bash
