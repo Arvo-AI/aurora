@@ -8,9 +8,11 @@ enabling it to independently notice overlapping root causes.
 
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ def get_recent_incidents(
     service_filter: Optional[str] = None,
     user_id: Optional[str] = None,
     incident_id: Optional[str] = None,
-    **kwargs,
+    **kwargs: Any,  # Accepted for LangChain tool injection compatibility
 ) -> str:
     """Retrieve recent analyzed incidents for situational awareness."""
     if not user_id:
@@ -65,7 +67,9 @@ def get_recent_incidents(
             with conn.cursor() as cursor:
                 from utils.auth.stateless_auth import set_rls_context
 
-                set_rls_context(cursor, conn, user_id, log_prefix="[GetRecentIncidents]")
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[GetRecentIncidents]")
+                if not org_id:
+                    return json.dumps({"error": "Failed to resolve organization context."})
 
                 params = []
                 conditions = [
@@ -120,5 +124,5 @@ def get_recent_incidents(
                 return json.dumps({"incidents": incidents, "count": len(incidents)})
 
     except Exception as e:
-        logger.exception("[GetRecentIncidents] Error retrieving recent incidents: %s", e)
-        return json.dumps({"error": f"Error retrieving recent incidents: {e}"})
+        logger.exception("[GetRecentIncidents] Error retrieving recent incidents: %s", sanitize(e))
+        return json.dumps({"error": f"Error retrieving recent incidents: {sanitize(e)}"})
