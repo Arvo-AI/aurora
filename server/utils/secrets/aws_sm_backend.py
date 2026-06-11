@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 AWSSM_REF_PREFIX = "awssm:"
 
+# Path prefix for system-scoped (non per-user) secrets such as the GitHub App
+# private key. Kept separate from AWS_SM_PREFIX (the per-user prefix, default
+# "aurora/users") so system secrets live under their own "aurora/system/*"
+# namespace, mirroring the Vault "system/" base path.
+AWSSM_SYSTEM_PREFIX = "aurora/system"
+
 
 class AWSSecretsManagerBackend(SecretsBackend):
     """AWS Secrets Manager secrets backend.
@@ -123,6 +129,19 @@ class AWSSecretsManagerBackend(SecretsBackend):
     def can_handle_ref(self, secret_ref: str) -> bool:
         """Check if this is an AWS SM secret reference."""
         return secret_ref.startswith(AWSSM_REF_PREFIX)
+
+    def build_system_ref(self, logical_name: str) -> str:
+        """Build an AWS SM reference for a system-scoped secret.
+
+        Maps a logical name (e.g. ``github-app/private-key``) to
+        ``awssm:{region}:aurora/system/{logical_name}``, so the resolved
+        SecretId is ``aurora/system/github-app/private-key``. The region is
+        the configured ``AWS_SM_REGION`` (so ``get_secret()``'s region check
+        passes), and ``get_secret()`` reads the SecretId verbatim — no other
+        changes needed. Operators provision the secret at this exact name via
+        ``aws secretsmanager create-secret``.
+        """
+        return f"{AWSSM_REF_PREFIX}{self.region}:{AWSSM_SYSTEM_PREFIX}/{logical_name}"
 
     def _parse_ref(self, secret_ref: str) -> str:
         """Extract the secret name from an awssm: reference string."""
