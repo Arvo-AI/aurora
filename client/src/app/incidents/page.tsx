@@ -60,7 +60,6 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
     analyzedAt: inc.analyzedAt,
     createdAt: inc.createdAt,
     updatedAt: inc.updatedAt,
-    activeTab: inc.activeTab || 'thoughts',
   }));
 };
 
