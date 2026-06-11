@@ -13,6 +13,22 @@ logger = logging.getLogger(__name__)
 SLACK_API_BASE = "https://slack.com/api"
 
 
+class SlackChannelNotMemberError(ValueError):
+    """
+    Raised when the bot attempts to read a channel it has not joined.
+
+    This is a subclass of ValueError so existing callers that catch
+    ValueError continue to work, but callers in the sync path can
+    specifically catch this class to skip the channel gracefully rather
+    than aborting the entire sync run.
+
+    Slack error code: not_in_channel
+    """
+    def __init__(self, channel_id: str = ""):
+        self.channel_id = channel_id
+        super().__init__(f"Slack API error: not_in_channel (channel={channel_id!r})")
+
+
 class SlackClient:
     """
     Slack API client for Aurora integration.
@@ -44,9 +60,19 @@ class SlackClient:
                 # Expected errors are handled gracefully
                 if error == 'name_taken' and endpoint == 'conversations.create':
                     pass
+                elif error == 'not_in_channel':
+                    # Raise a specific, catchable error so the sync path can skip
+                    # this channel and continue rather than aborting the whole run.
+                    channel_id = (data or {}).get('channel', '')
+                    logger.warning(
+                        "Slack API error on %s: not_in_channel (channel=%r). "
+                        "The bot must be invited to this channel before its history can be read.",
+                        endpoint, channel_id
+                    )
+                    raise SlackChannelNotMemberError(channel_id)
                 else:
                     logger.error(f"Slack API error on {endpoint}: {error}")
-                raise ValueError(f"Slack API error: {error}")
+                    raise ValueError(f"Slack API error: {error}")
             
             return result
             
@@ -93,7 +119,18 @@ class SlackClient:
             if not cursor:
                 break
         return all_channels
-    
+
+    def get_member_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
+        """
+        Return only channels that the bot has joined (is_member=True).
+
+        Use this in sync/ingestion paths instead of list_channels() to avoid
+        calling conversations.history on channels the bot cannot read.
+        Slack returns not_in_channel for those, which would otherwise abort
+        the entire sync run.
+        """
+        return [ch for ch in self.list_channels(types=types) if ch.get("is_member", False)]
+
     def create_channel(self, name: str, is_private: bool = False) -> Dict[str, Any]:
         """Create a new channel."""
         result = self._make_request("POST", "conversations.create", {"name": name, "is_private": is_private})
@@ -233,4 +270,3 @@ def get_slack_client_for_user(user_id: str) -> Optional[SlackClient]:
     except Exception as e:
         logger.error(f"Failed to get Slack client for user {user_id}: {e}", exc_info=True)
         return None
-
