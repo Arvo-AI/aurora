@@ -1,4 +1,5 @@
 """Actions executor -- dispatches action runs as background chat sessions."""
+import hashlib
 import json
 import logging
 import os
@@ -121,18 +122,41 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
         cfg = trigger_config or {}
         action_timing = cfg.get("timing", "immediate")
 
+        # Wrong timing for this dispatch cycle
         if action_timing != timing:
             continue
 
+        # Atomic dedup: advisory lock serializes concurrent dispatchers for the
+        # same (action, incident) pair so the SELECT+INSERT is race-free.
+        lock_key = int.from_bytes(
+            hashlib.sha256(f"{action_id}:{incident_id}".encode()).digest()[:7],
+            byteorder="big", signed=False,
+        ) & 0x7FFFFFFFFFFFFFFF  # pg_advisory_xact_lock takes a bigint
+
         try:
-            if system_key == "generate_postmortem":
-                _dispatch_postmortem_via_action(user_id, incident_id)
-            else:
-                dispatch_action(
-                    action_id=str(action_id),
-                    user_id=user_id,
-                    trigger_context={"source": "on_incident", "incident_id": incident_id},
-                )
+            with db_pool.get_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[Actions:dedup]")
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+                    cur.execute(
+                        """SELECT 1 FROM action_runs
+                           WHERE action_id = %s::uuid AND incident_id = %s::uuid
+                             AND status IN ('pending', 'running')
+                           LIMIT 1""",
+                        (str(action_id), incident_id),
+                    )
+                    # Already has a pending/running run — skip
+                    if cur.fetchone():
+                        continue
+
+                    if system_key == "generate_postmortem":
+                        _dispatch_postmortem_via_action(user_id, incident_id)
+                    else:
+                        dispatch_action(
+                            action_id=str(action_id),
+                            user_id=user_id,
+                            trigger_context={"source": "on_incident", "incident_id": incident_id},
+                        )
         except Exception:
             logger.debug("[Actions] Failed to dispatch on_incident action %s", action_id)
 

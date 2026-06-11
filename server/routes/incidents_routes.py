@@ -2027,6 +2027,46 @@ def get_recent_unlinked_incidents(user_id):
 _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
 
 
+@incidents_bp.route("/api/incidents/<incident_id>/action-runs", methods=["GET"])
+@require_permission("incidents", "read")
+def get_incident_action_runs(user_id, incident_id: str):
+    """Return action runs linked to a specific incident."""
+    if not _validate_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID"}), 400
+
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+            cursor.execute(
+                """SELECT r.id, r.action_id, r.status, r.chat_session_id,
+                          r.started_at, r.completed_at, r.error,
+                          a.name AS action_name
+                   FROM action_runs r
+                   JOIN actions a ON a.id = r.action_id
+                   WHERE r.incident_id = %s AND r.org_id = %s
+                   ORDER BY r.started_at DESC""",
+                (incident_id, org_id),
+            )
+            cols = [d[0] for d in cursor.description]
+            rows = [dict(zip(cols, row, strict=False)) for row in cursor.fetchall()]
+
+        for r in rows:
+            r["id"] = str(r["id"])
+            r["action_id"] = str(r["action_id"])
+            r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
+            if r["started_at"] and r["completed_at"]:
+                r["duration_ms"] = max(0, int((r["completed_at"] - r["started_at"]).total_seconds() * 1000))
+            r["started_at"] = _format_timestamp(r["started_at"])
+            r["completed_at"] = _format_timestamp(r["completed_at"])
+
+        return jsonify({"runs": rows})
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to get action runs for incident %s", sanitize(incident_id))
+        return jsonify({"error": "Failed to retrieve action runs"}), 500
+
+
 @incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])
 @require_permission("incidents", "write")
 def trigger_rca_from_chat(user_id):

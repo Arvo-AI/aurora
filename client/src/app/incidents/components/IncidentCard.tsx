@@ -35,6 +35,7 @@ import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
+import IncidentActionRuns from './IncidentActionRuns';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
@@ -114,6 +115,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showPostmortem, setShowPostmortem] = useState(false);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [showWaterfall, setShowWaterfall] = useState(false);
+  const [showActions, setShowActions] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
@@ -744,6 +746,20 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             </button>
           )}
 
+          {/* Actions button */}
+          <button
+            onClick={() => setShowActions(!showActions)}
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+              showActions
+                ? 'text-orange-300 bg-orange-500/10'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            }`}
+          >
+            <Play className="w-3 h-3" />
+            Actions
+            <ChevronRight className={`w-3 h-3 transition-transform ${showActions ? 'rotate-90' : ''}`} />
+          </button>
+
       </div>
 
       {/* Feedback Section - only show when analysis is complete */}
@@ -752,6 +768,16 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           <IncidentFeedback incidentId={incident.id} readOnly={!canWrite} />
         </div>
       )}
+
+      {/* Action Runs linked to this incident (collapsible, lazy-loaded) */}
+      <div className="collapsible-panel" data-open={showActions}>
+        <div>
+          <div className="border-t border-zinc-800 mt-4" />
+          <div className="mt-4">
+            {showActions && <IncidentActionRuns incidentId={incident.id} />}
+          </div>
+        </div>
+      </div>
 
       {/* Token Usage Panel (collapsible) */}
       {incident.tokenUsage && (
