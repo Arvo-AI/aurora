@@ -274,6 +274,7 @@ def _build_sends(state: State) -> list:
             "parent_user_id": user_id,
             "parent_org_id": org_id,
             "parent_session_id": parent_session_id,
+            "parent_tool_denylist": getattr(state, "tool_denylist", None),
             "wave": wave,
         }
         sends.append(Send("sub_agent", payload))
