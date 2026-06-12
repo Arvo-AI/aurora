@@ -192,6 +192,32 @@ def _clear_progress_comment(adapter, comment_id: Optional[int], log_ctx: str) ->
         )
 
 
+def _live_fingerprints(comments: list, aurora_review_ids: set) -> set[str]:
+    """Fingerprints of findings Aurora has ALREADY commented on.
+
+    Built from inline comments that (a) belong to one of Aurora's own prior
+    reviews — ``pull_request_review_id`` in ``aurora_review_ids``, which
+    ``find_aurora_reviews`` already vetted as bot-authored + marker-bearing —
+    and (b) carry the ``aurora-finding`` marker. Tying identity to a confirmed
+    Aurora review (not bare ``user.type == "Bot"``) stops another bot, or a
+    human pasting our marker, from suppressing a real finding. Used only to
+    avoid re-posting a finding that already has a live comment — never to
+    delete anything.
+    """
+    from services.change_gating.verdict import extract_inline_fingerprint
+
+    fingerprints: set[str] = set()
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+        if comment.get("pull_request_review_id") not in aurora_review_ids:
+            continue
+        fingerprint = extract_inline_fingerprint(comment.get("body"))
+        if fingerprint:
+            fingerprints.add(fingerprint)
+    return fingerprints
+
+
 def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str]:
     """Read the final assistant message from ``chat_sessions.messages``.
 
@@ -369,7 +395,7 @@ def _run_investigation(
     from services.change_gating.github_adapter import (
         GitHubPRAdapter,
         decode_marker,
-        find_latest_aurora_review,
+        find_aurora_reviews,
     )
 
     adapter = GitHubPRAdapter(installation_id, repo_full_name)
@@ -389,7 +415,8 @@ def _run_investigation(
     # 4. Prior Aurora review (re-review context for synchronize pushes).
     # ------------------------------------------------------------------
     reviews = _gh("list_reviews", lambda: adapter.list_reviews(pr_number))
-    prior = find_latest_aurora_review(reviews)
+    prior_aurora_reviews = find_aurora_reviews(reviews)
+    prior = prior_aurora_reviews[-1] if prior_aurora_reviews else None
     prior_findings = None
     if prior:
         marker = decode_marker(prior.get("body") or "")
@@ -410,6 +437,7 @@ def _run_investigation(
         CHANGE_GATING_TOOL_DENYLIST,
         build_review_prompt,
         extract_verdict_with_llm,
+        finding_fingerprint,
         parse_verdict,
         render_inline_comment,
         render_review_body,
@@ -547,12 +575,35 @@ def _run_investigation(
             return _skip("superseded_skip")
 
         # --------------------------------------------------------------
-        # 10. Anchor findings to diff lines and render the review. ALL
-        #     findings go in the body table; only anchored ones get inline
-        #     comments.
+        # 10. Render the review and reconcile inline comments against what
+        #     Aurora already posted (CodeRabbit-style incremental review):
+        #     ALL findings go in the body table; for inline comments we POST
+        #     only net-new findings and KEEP everything already there. We
+        #     never delete — a fixed finding's comment stays as history
+        #     (GitHub auto-marks it outdated when its line changes, and the
+        #     reviewer can resolve the thread), exactly like CodeRabbit.
         # --------------------------------------------------------------
         hunks = parse_diff_hunks(diff) if verdict["findings"] else {}
         anchored, unanchored = anchor_findings(verdict["findings"], hunks)
+
+        # Only fetch existing comments when there's something to reconcile:
+        # no anchored findings (SAFE/APPROVE) or no prior Aurora reviews
+        # (first review) means live_fingerprints is provably empty, so skip
+        # the paginated /comments GET entirely.
+        aurora_review_ids = {
+            r["id"] for r in prior_aurora_reviews if r.get("id") is not None
+        }
+        live_fingerprints: set = set()
+        if anchored and aurora_review_ids:
+            existing_comments = _gh(
+                "list_review_comments", lambda: adapter.list_review_comments(pr_number)
+            )
+            live_fingerprints = _live_fingerprints(existing_comments, aurora_review_ids)
+
+        # Net-new inline comments: anchored findings without a live comment.
+        new_findings = [
+            f for f in anchored if finding_fingerprint(f) not in live_fingerprints
+        ]
         comments = [
             {
                 "path": f["file_path"],
@@ -560,21 +611,26 @@ def _run_investigation(
                 "side": "RIGHT",
                 "body": render_inline_comment(f),
             }
-            for f in anchored
+            for f in new_findings
         ]
+        kept = len(anchored) - len(new_findings)
+
         body = render_review_body(
             verdict["verdict"], verdict.get("summary", ""), verdict["findings"], head_sha
         )
         event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
 
-        # Dry run exits BEFORE any GitHub write — including the supersede of
-        # the prior review (calibration mode must be strictly read-only).
+        # Dry run exits BEFORE any GitHub write (the reads above are
+        # read-only); calibration logs the would-be incremental diff.
         if _is_dry_run():
             logger.info(
                 "change_gating=investigate_pr %s session_id=%s status=dry_run "
+                "would_post_inline=%d would_keep_inline=%d "
                 "would_supersede_review_id=%s review=%s",
                 log_ctx,
                 session_id,
+                len(comments),
+                kept,
                 prior.get("id") if prior else None,
                 json.dumps(
                     {"event": event, "body": body, "comments": comments, "verdict": verdict}
@@ -583,11 +639,10 @@ def _run_investigation(
             return {"status": "dry_run", "session_id": session_id}
 
         # --------------------------------------------------------------
-        # 11. Post the new review FIRST, then supersede the prior one. Doc
-        #     section 4.3 wants only one active Aurora review; posting first
-        #     means a supersede failure leaves two visible reviews (recovered
-        #     on the next push) instead of destroying the prior verdict with
-        #     nothing to replace it.
+        # 11. Post the new review (body = full current verdict; inline
+        #     comments = net-new findings only), then supersede the prior
+        #     review BODIES (their summary tables are stale). Inline
+        #     comments are never deleted — fixed findings stay as history.
         # --------------------------------------------------------------
         _gh(
             "post_review",
@@ -596,15 +651,29 @@ def _run_investigation(
             ),
         )
 
-        if prior:
-            try:
-                adapter.supersede_review(pr_number, prior, "Superseded by updated review")
-            except Exception as exc:
-                logger.warning(
-                    "change_gating=investigate_pr %s status=supersede_failed "
-                    "prior_review_id=%s error_class=%s",
-                    log_ctx, prior.get("id"), type(exc).__name__,
-                )
+        if prior_aurora_reviews:
+            # Supersede the prior review BODIES (their tables are stale).
+            # Inline comments are NOT touched — a finding that still holds
+            # keeps its thread; a fixed one goes outdated on its own.
+            # Per-review isolation: a transient failure on one review must
+            # not skip superseding the rest (each is independent best-effort).
+            superseded = 0
+            for prior_review in prior_aurora_reviews:
+                try:
+                    adapter.supersede_review(
+                        pr_number, prior_review, "Superseded by updated review"
+                    )
+                    superseded += 1
+                except Exception as exc:
+                    logger.warning(
+                        "change_gating=investigate_pr %s status=supersede_failed "
+                        "review_id=%s error_class=%s",
+                        log_ctx, prior_review.get("id"), type(exc).__name__,
+                    )
+            logger.info(
+                "change_gating=investigate_pr %s status=superseded superseded=%d prior_reviews=%d",
+                log_ctx, superseded, len(prior_aurora_reviews),
+            )
 
         if redis_client is not None:
             try:
@@ -622,13 +691,16 @@ def _run_investigation(
         duration_seconds = round(time.monotonic() - start, 2)
         logger.info(
             "change_gating=investigate_pr %s session_id=%s status=completed verdict=%s "
-            "findings=%d anchored=%d unanchored=%d duration_seconds=%.2f",
+            "findings=%d anchored=%d unanchored=%d inline_posted=%d inline_kept=%d "
+            "duration_seconds=%.2f",
             log_ctx,
             session_id,
             verdict["verdict"],
             len(verdict["findings"]),
             len(anchored),
             len(unanchored),
+            len(comments),
+            kept,
             duration_seconds,
         )
         return {

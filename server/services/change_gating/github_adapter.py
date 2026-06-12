@@ -88,8 +88,8 @@ def decode_marker(body: Optional[str]) -> Optional[Dict[str, Any]]:
     return decoded
 
 
-def find_latest_aurora_review(reviews: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Return the LAST review that is genuinely Aurora's.
+def find_aurora_reviews(reviews: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return ALL of Aurora's own reviews, in chronological order.
 
     A review qualifies only when BOTH hold:
 
@@ -99,20 +99,23 @@ def find_latest_aurora_review(reviews: List[Dict[str, Any]]) -> Optional[Dict[st
       copy-pasting or crafting a marker into their own review must not
       be able to hijack the prior-review context (prompt-injection
       surface) or redirect the supersede step.
-
-    ``list_reviews`` returns reviews in chronological order, so the last
-    qualifying one is Aurora's most recent review. Returns None if none
-    qualify.
     """
-    for review in reversed(reviews or []):
+    out: List[Dict[str, Any]] = []
+    for review in reviews or []:
         if not isinstance(review, dict):
             continue
         if not has_aurora_marker(review.get("body")):
             continue
         user = review.get("user") or {}
         if isinstance(user, dict) and user.get("type") == "Bot":
-            return review
-    return None
+            out.append(review)
+    return out
+
+
+def find_latest_aurora_review(reviews: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return Aurora's most recent review (``list_reviews`` is chronological)."""
+    aurora = find_aurora_reviews(reviews)
+    return aurora[-1] if aurora else None
 
 
 class GitHubPRAdapter:
@@ -225,6 +228,14 @@ class GitHubPRAdapter:
     def list_reviews(self, pr_number: int) -> List[Dict[str, Any]]:
         """GET all reviews on the PR in chronological order (paginated)."""
         return self._get_paginated(f"/pulls/{pr_number}/reviews")
+
+    def list_review_comments(self, pr_number: int) -> List[Dict[str, Any]]:
+        """GET all inline review comments on the PR (paginated).
+
+        Each comment carries ``pull_request_review_id`` linking it to the
+        review it belongs to.
+        """
+        return self._get_paginated(f"/pulls/{pr_number}/comments")
 
     # ------------------------------------------------------------------
     # Writes

@@ -8,6 +8,7 @@ inline comments using the design doc's templates verbatim.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -535,7 +536,52 @@ def render_review_body(
     return body + "\n\n" + marker
 
 
+# Hidden per-comment marker carrying a finding's stable fingerprint. It lets a
+# re-review tell which findings it has ALREADY commented on (so it posts only
+# net-new ones and leaves the rest in place) — CodeRabbit-style incremental
+# reconciliation instead of re-posting the whole set on every push. We never
+# delete; fixed findings stay as history.
+_INLINE_MARKER_PREFIX = "aurora-finding"
+_INLINE_MARKER_RE = re.compile(rf"<!-- {_INLINE_MARKER_PREFIX}:([0-9a-f]+) -->")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def finding_fingerprint(finding: Dict[str, Any]) -> str:
+    """Stable identity for a finding across re-reviews.
+
+    Keyed on file path + a case/whitespace-normalized title so the SAME
+    underlying issue keeps the SAME id even as line numbers shift between
+    commits (line is deliberately excluded). Distinct titles in one file
+    stay distinct. A materially reworded title yields a new id — the old
+    comment is then treated as resolved and the new one posted, acceptable
+    churn for that rare case.
+    """
+    path = str(finding.get("file_path") or "")
+    title = _WHITESPACE_RE.sub(" ", str(finding.get("title") or "").strip().lower())
+    return hashlib.sha256(f"{path}\n{title}".encode("utf-8")).hexdigest()[:16]
+
+
+def extract_inline_fingerprint(body: Optional[str]) -> Optional[str]:
+    """Return the finding fingerprint embedded in an inline comment body, if any.
+
+    Reads the LAST marker, not the first: ``render_inline_comment`` always
+    appends the genuine marker at the very end, so a marker-shaped string
+    inside the finding's ``explanation`` (e.g. when reviewing a diff that
+    itself contains an ``aurora-finding`` marker) cannot shadow it. None for
+    comments without any marker (human comments, or pre-fingerprint ones).
+    """
+    if not body:
+        return None
+    matches = _INLINE_MARKER_RE.findall(body)
+    return matches[-1] if matches else None
+
+
 def render_inline_comment(finding: Dict[str, Any]) -> str:
     """Render one inline review comment: bold severity + title, then the
-    concrete incident scenario (doc section 4.1)."""
-    return f"**[{finding['severity']}] {finding['title']}**\n\n{finding['explanation']}"
+    concrete incident scenario (doc section 4.1), ending with the hidden
+    fingerprint marker used for incremental reconciliation."""
+    marker = f"<!-- {_INLINE_MARKER_PREFIX}:{finding_fingerprint(finding)} -->"
+    return (
+        f"**[{finding['severity']}] {finding['title']}**\n\n"
+        f"{finding['explanation']}\n\n{marker}"
+    )

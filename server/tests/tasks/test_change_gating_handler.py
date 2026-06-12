@@ -317,6 +317,62 @@ class TestProgressComment:
         _clear_progress_comment(adapter, 4242, "ctx")  # must not raise
 
 
+class TestLiveFingerprints:
+    """``_live_fingerprints`` collects the fingerprints Aurora has already
+    commented on — from inline comments belonging to a CONFIRMED Aurora review
+    (review id in the vetted set) AND carrying the marker — so the task posts
+    ONLY net-new findings and never re-posts or deletes."""
+
+    _FP1 = "deadbeefdeadbeef"
+    _FP2 = "0123456789abcdef"
+    _FP3 = "abcabcabcabcabca"
+
+    def test_collects_only_confirmed_review_marker_fingerprints(self):
+        from tasks.change_gating import _live_fingerprints
+
+        comments = [
+            # belongs to an Aurora review AND has a marker → counted
+            {"id": 1, "pull_request_review_id": 555,
+             "body": f"x\n\n<!-- aurora-finding:{self._FP1} -->"},
+            {"id": 2, "pull_request_review_id": 777,
+             "body": f"y\n\n<!-- aurora-finding:{self._FP2} -->"},
+            # Aurora review but legacy (no marker) → ignored (no fp to add)
+            {"id": 3, "pull_request_review_id": 555, "body": "old finding, no marker"},
+            # marker present but review id NOT ours (another bot / unconfirmed)
+            # → ignored, cannot suppress a real finding
+            {"id": 4, "pull_request_review_id": 999,
+             "body": f"<!-- aurora-finding:{self._FP3} -->"},
+            # human inline comment (no review id) → ignored
+            {"id": 5, "pull_request_review_id": None, "body": "LGTM"},
+            # malformed → skipped
+            "not a dict",
+        ]
+
+        assert _live_fingerprints(comments, {555, 777}) == {self._FP1, self._FP2}
+
+    def test_reads_last_marker_not_a_decoy_in_the_body(self):
+        from tasks.change_gating import _live_fingerprints
+
+        # An explanation echoing a marker must not shadow the real trailing one.
+        body = (
+            f"the diff contained <!-- aurora-finding:{self._FP3} -->\n\n"
+            f"<!-- aurora-finding:{self._FP1} -->"
+        )
+        comments = [{"id": 1, "pull_request_review_id": 555, "body": body}]
+        assert _live_fingerprints(comments, {555}) == {self._FP1}
+
+    def test_empty_inputs(self):
+        from tasks.change_gating import _live_fingerprints
+
+        assert _live_fingerprints([], set()) == set()
+        assert _live_fingerprints(None, {555}) == set()
+        # No confirmed Aurora reviews → nothing is live even with markers.
+        assert _live_fingerprints(
+            [{"id": 1, "pull_request_review_id": 1, "body": f"<!-- aurora-finding:{self._FP1} -->"}],
+            set(),
+        ) == set()
+
+
 class TestSpinnakerTriggerPipelineBackgroundBlock:
     """trigger_pipeline must self-block when the agent runs in background mode."""
 

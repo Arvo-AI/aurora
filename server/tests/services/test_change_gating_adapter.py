@@ -11,6 +11,7 @@ from services.change_gating.github_adapter import (
     GitHubPRAdapter,
     decode_marker,
     encode_marker,
+    find_aurora_reviews,
     find_latest_aurora_review,
     has_aurora_marker,
 )
@@ -256,6 +257,22 @@ class TestGitHubPRAdapter:
         http.put.assert_not_called()
 
     # ------------------------------------------------------------------
+    # inline review comment reads (for incremental reconciliation)
+    # ------------------------------------------------------------------
+
+    def test_list_review_comments_paginates(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(json_data=[
+            {"id": 1, "pull_request_review_id": 555},
+            {"id": 2, "pull_request_review_id": 555},
+        ])
+        comments = adapter.list_review_comments(7)
+        assert [c["id"] for c in comments] == [1, 2]
+        assert http.get.call_args.args[0].endswith(
+            "/repos/acme/widgets/pulls/7/comments"
+        )
+
+    # ------------------------------------------------------------------
     # progress comment (issue comment)
     # ------------------------------------------------------------------
 
@@ -389,3 +406,12 @@ class TestMarkerHelpers:
         assert find_latest_aurora_review([]) is None
         assert find_latest_aurora_review([{"id": 1, "body": "hi"}]) is None
         assert find_latest_aurora_review(None) is None
+
+    def test_find_aurora_reviews_returns_all_in_order(self):
+        a1 = {"id": 1, "user": _BOT_USER, "body": "r\n\n" + encode_marker([], "s1")}
+        human = {"id": 2, "user": {"login": "x", "type": "User"}, "body": "lgtm"}
+        a2 = {"id": 3, "user": _BOT_USER, "body": "r\n\n" + encode_marker([], "s2")}
+        result = find_aurora_reviews([a1, human, a2])
+        assert [r["id"] for r in result] == [1, 3]  # both Aurora, human excluded
+        assert find_aurora_reviews([]) == []
+        assert find_aurora_reviews(None) == []

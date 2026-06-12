@@ -7,7 +7,9 @@ from services.change_gating.github_adapter import decode_marker
 from services.change_gating.verdict import (
     CHANGE_GATING_TOOL_DENYLIST,
     build_review_prompt,
+    extract_inline_fingerprint,
     extract_verdict_with_llm,
+    finding_fingerprint,
     parse_verdict,
     render_inline_comment,
     render_review_body,
@@ -200,7 +202,7 @@ class TestRenderReviewBody:
 
 
 class TestRenderInlineComment:
-    def test_severity_and_title_bolded_then_explanation(self):
+    def test_severity_and_title_bolded_then_explanation_then_marker(self):
         finding = {
             "severity": "HIGH",
             "file_path": "a.py",
@@ -208,9 +210,50 @@ class TestRenderInlineComment:
             "title": "Drops a live column",
             "explanation": "Writes will fail until redeploy.",
         }
-        assert render_inline_comment(finding) == (
-            "**[HIGH] Drops a live column**\n\nWrites will fail until redeploy."
+        rendered = render_inline_comment(finding)
+        assert rendered.startswith(
+            "**[HIGH] Drops a live column**\n\nWrites will fail until redeploy.\n\n"
         )
+        # The hidden fingerprint marker is appended and round-trips.
+        assert extract_inline_fingerprint(rendered) == finding_fingerprint(finding)
+
+
+class TestFindingFingerprint:
+    def test_stable_across_line_shifts(self):
+        # Same issue, same file, line moved by a commit above it → same id.
+        a = {"file_path": "a.py", "line": 3, "title": "Drops a live column"}
+        b = {"file_path": "a.py", "line": 47, "title": "Drops a live column"}
+        assert finding_fingerprint(a) == finding_fingerprint(b)
+
+    def test_title_normalized_for_case_and_whitespace(self):
+        a = {"file_path": "a.py", "title": "Drops a live column"}
+        b = {"file_path": "a.py", "title": "  drops   a  LIVE column  "}
+        assert finding_fingerprint(a) == finding_fingerprint(b)
+
+    def test_distinct_for_different_titles_or_paths(self):
+        base = {"file_path": "a.py", "title": "Drops a live column"}
+        other_title = {"file_path": "a.py", "title": "Missing index"}
+        other_path = {"file_path": "b.py", "title": "Drops a live column"}
+        assert finding_fingerprint(base) != finding_fingerprint(other_title)
+        assert finding_fingerprint(base) != finding_fingerprint(other_path)
+
+    def test_extract_returns_none_without_marker(self):
+        assert extract_inline_fingerprint("just a human comment") is None
+        assert extract_inline_fingerprint("") is None
+        assert extract_inline_fingerprint(None) is None
+
+    def test_extract_reads_the_last_marker_not_a_decoy(self):
+        # render_inline_comment appends the genuine marker LAST; a marker-shaped
+        # string inside the explanation must not shadow it (poisoning guard).
+        finding = {
+            "severity": "HIGH",
+            "file_path": "a.py",
+            "title": "Real finding",
+            "explanation": "the diff itself contained <!-- aurora-finding:deadbeefdeadbeef -->",
+        }
+        rendered = render_inline_comment(finding)
+        assert extract_inline_fingerprint(rendered) == finding_fingerprint(finding)
+        assert extract_inline_fingerprint(rendered) != "deadbeefdeadbeef"
 
 
 class TestBuildReviewPrompt:
