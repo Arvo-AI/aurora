@@ -171,6 +171,10 @@ _MARK_DELIVERY_PROCESSED_SQL = (
     "WHERE delivery_id = %s"
 )
 
+# Clears the per-connection RLS GUCs before a pooled admin connection is
+# handed back / reused. Referenced from every place we set RLS context manually.
+_RESET_RLS_SQL = "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+
 
 def _handle_installation_event(
     payload: dict[str, Any],
@@ -314,7 +318,7 @@ def _handle_installation_event(
                     connected_repos_unbound += cur.rowcount
 
                 cur.execute(
-                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    _RESET_RLS_SQL
                 )
                 cur.execute(
                     _MARK_DELIVERY_PROCESSED_SQL,
@@ -522,7 +526,7 @@ def _handle_installation_repositories_event(
                 # is not RLS-protected but leaving stale per-user vars on
                 # the connection just hides bugs in adjacent code.
                 cur.execute(
-                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    _RESET_RLS_SQL
                 )
                 cur.execute(
                     _MARK_DELIVERY_PROCESSED_SQL,
@@ -692,7 +696,7 @@ def _resolve_change_gating_owner(installation_id: int, repo_full_name: str) -> t
                     break
             if linked_users:
                 cur.execute(
-                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    _RESET_RLS_SQL
                 )
     return ("ok", owner) if owner else ("not_enrolled", None)
 

@@ -556,7 +556,7 @@ export default function GitHubProviderIntegration() {
       setSavedRepos(prev => prev.map(r =>
         r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: enabled } : r
       ));
-      window.dispatchEvent(new CustomEvent('providerStateChanged'));
+      globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
     } catch (error: unknown) {
       const err = error as Error;
       setSavedRepos(prev => prev.map(r =>

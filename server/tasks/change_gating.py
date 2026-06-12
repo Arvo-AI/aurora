@@ -344,7 +344,11 @@ def _run_investigation(
                     log_ctx, status_code,
                 )
             else:
-                logger.error(
+                # logging.exception adds the traceback; the GitHub errors that
+                # reach here are requests.HTTPError whose str is "<status> ...
+                # for url: <api path>" — token-free (the token is a header, and
+                # tracebacks don't dump locals), so this stays log-safe.
+                logger.exception(
                     "change_gating=investigate_pr %s phase=%s status=github_error "
                     "code=%s error_class=%s",
                     log_ctx, phase, status_code, type(exc).__name__,
@@ -534,16 +538,16 @@ def _run_investigation(
             # task!"; .result returns the eager return value directly (or the
             # exception instance, which fails the dict check below safely).
             result = run_background_chat.apply(
-                kwargs=dict(
-                    user_id=user_id,
-                    session_id=session_id,
-                    initial_message=prompt,
-                    trigger_metadata=trigger_metadata,
-                    send_notifications=False,
-                    mode="ask",
-                    rail_text=rail_text,
-                    tool_denylist=list(CHANGE_GATING_TOOL_DENYLIST),
-                )
+                kwargs={
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "initial_message": prompt,
+                    "trigger_metadata": trigger_metadata,
+                    "send_notifications": False,
+                    "mode": "ask",
+                    "rail_text": rail_text,
+                    "tool_denylist": list(CHANGE_GATING_TOOL_DENYLIST),
+                }
             ).result
 
             if not isinstance(result, dict) or result.get("status") != "completed":
