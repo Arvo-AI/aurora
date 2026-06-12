@@ -10,7 +10,6 @@ import requests
 import socket
 from datetime import datetime, timezone
 from flask import Blueprint, jsonify
-import psycopg2
 import redis
 from celery_config import celery_app
 
@@ -21,33 +20,19 @@ logger = logging.getLogger(__name__)
 health_bp = Blueprint('health', __name__)
 
 def check_database_health():
-    """Check PostgreSQL database connectivity."""
+    """Check PostgreSQL database connectivity using the shared connection pool."""
     try:
-        # Connect using unified POSTGRES_* variables
         user = os.getenv('POSTGRES_USER')
         password = os.getenv('POSTGRES_PASSWORD')
-        host = os.getenv('POSTGRES_HOST')
-        port = os.getenv('POSTGRES_PORT')
-        dbname = os.getenv('POSTGRES_DB')
 
         if not user or not password:
             return {"status": "unhealthy", "error": "Database credentials not configured"}
 
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=user,
-            password=password,
-            sslmode=os.getenv('POSTGRES_SSLMODE', 'prefer') or None,
-            sslrootcert=os.getenv('POSTGRES_SSLROOTCERT') or None,
-        )
-
-        cursor = conn.cursor()
-        # No RLS needed — infrastructure health check
-        cursor.execute("SELECT 1")
-        cursor.close()
-        conn.close()
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # No RLS needed — infrastructure health check
+                cursor.execute("SELECT 1")
 
         return {"status": "healthy", "message": "Database connection successful"}
     except Exception as e:
