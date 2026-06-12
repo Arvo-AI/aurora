@@ -1,0 +1,586 @@
+"""Celery task for PR Change Gating: agentic pre-merge risk review.
+
+When ``_handle_pull_request_event`` (``tasks/github_webhook_tasks.py``) sees
+a qualifying ``pull_request`` webhook for an enrolled repo's default branch,
+it enqueues :func:`investigate_pr`. The task:
+
+1. Dedupes against Redis (``change_gating:posted:`` / ``change_gating:run:``
+   keys) so Celery retries and double-deliveries never double-post.
+2. Re-verifies enrollment + installation suspension (the user may have
+   toggled the repo off while the task sat in the queue).
+3. Fetches the PR, prior Aurora review, file list and diff via
+   ``services.change_gating.github_adapter.GitHubPRAdapter``.
+4. Runs a full agentic investigation through the existing
+   ``run_background_chat`` task — SYNCHRONOUSLY via ``.apply()`` so this
+   task owns the whole review lifecycle — with write/exec tools denylisted.
+5. Parses the agent's final message as a verdict JSON and posts a GitHub
+   PR review: APPROVE when SAFE, COMMENT with inline findings when RISKY.
+
+Provider-specific calls stay behind the adapter so GitLab/Bitbucket can be
+added later without rewriting the task (design doc ``pr-change-gating.md``
+section 11). Deliberately NO rate limiting (design section 12).
+
+Logging follows the structured ``key=value`` convention of
+``tasks.github_webhook_tasks`` on the canonical key
+``change_gating=investigate_pr``. Token values are NEVER logged.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from typing import Any, Callable, Optional
+
+from celery_config import celery_app
+
+logger = logging.getLogger(__name__)
+
+_SEEN_KEY_TTL_SECONDS = 86400
+_POSTED_KEY_TTL_SECONDS = 86400
+_RUN_KEY_TTL_SECONDS = 3600
+_VERDICT_KEY_TTL_SECONDS = 3600
+# Matches the codebase's truthy-env idiom (chat/background/task.py,
+# utils/storage/storage.py, etc.).
+_TRUTHY = ("1", "true", "yes")
+
+
+def change_gating_keys(repo_full_name: str, pr_number: int, head_sha: str) -> dict[str, str]:
+    """Build the Redis idempotency keys for one (repo, pr, head) triple.
+
+    Single source of truth shared with ``_maybe_enqueue_change_gating``
+    in ``tasks/github_webhook_tasks.py`` so the key shapes can never drift:
+
+    - ``seen``   — webhook-side delivery dedupe (set by the handler)
+    - ``run``    — task-side concurrency lock (holder = Celery request id)
+    - ``posted`` — review successfully posted for this head
+    - ``verdict``— parsed verdict cache so a transient failure AFTER the
+      agent run retries the post without re-running the investigation
+    """
+    suffix = f"{repo_full_name}:{pr_number}:{head_sha}"
+    return {
+        "seen": f"change_gating:seen:{suffix}",
+        "run": f"change_gating:run:{suffix}",
+        "posted": f"change_gating:posted:{suffix}",
+        "verdict": f"change_gating:verdict:{suffix}",
+    }
+
+
+class _PermanentGitHubError(Exception):
+    """Raised for non-retryable (4xx) GitHub API failures.
+
+    Converted by :func:`investigate_pr` into a ``{"status": "github_error"}``
+    return so Celery does not burn retries on a permanent failure.
+    """
+
+
+def _is_dry_run() -> bool:
+    """True when ``CHANGE_GATING_DRY_RUN`` is set to a truthy value."""
+    return os.getenv("CHANGE_GATING_DRY_RUN", "").strip().lower() in _TRUTHY
+
+
+def _classify_github_exc(exc: Exception) -> tuple[str, Optional[int]]:
+    """Classify an adapter exception as ``("transient"|"permanent", status_code)``.
+
+    Connection-level errors (requests exceptions subclass OSError) and 5xx
+    responses are transient (worth a Celery retry), as are 429s and the
+    secondary-rate-limit 403s GitHub sends with a rate-limit message.
+    Remaining 4xx responses are permanent. Exceptions with no HTTP response
+    and no connection-ish type default to permanent so a coding bug in the
+    adapter doesn't loop through the retry budget.
+    """
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code is not None:
+        if status_code >= 500 or status_code == 429:
+            return ("transient", status_code)
+        if status_code == 403:
+            remaining = (getattr(response, "headers", None) or {}).get(
+                "X-RateLimit-Remaining"
+            )
+            body_text = (getattr(response, "text", None) or "").lower()
+            if remaining == "0" or "rate limit" in body_text:
+                return ("transient", status_code)
+        return ("permanent", status_code)
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return ("transient", None)
+    return ("permanent", None)
+
+
+def _verify_enrollment(user_id: str, installation_id: int, repo_full_name: str) -> str:
+    """Re-check suspension + enrollment; returns ``ok | suspended | not_enrolled``.
+
+    ``github_installations`` is NOT RLS-protected; ``connected_repos`` IS
+    (FORCE RLS), so the enrollment probe runs under ``set_rls_context``.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT suspended_at FROM github_installations WHERE installation_id = %s",
+                (installation_id,),
+            )
+            row = cur.fetchone()
+            if row is not None and row[0] is not None:
+                return "suspended"
+
+            if not set_rls_context(cur, conn, user_id, log_prefix="[ChangeGating]"):
+                # Org resolution failing is a (likely transient) error, NOT
+                # proof of non-enrollment — raise so the task retries instead
+                # of silently skipping the review.
+                raise RuntimeError(
+                    f"RLS context unavailable for user {user_id} — cannot "
+                    "verify change-gating enrollment"
+                )
+            cur.execute(
+                """SELECT 1
+                     FROM connected_repos
+                    WHERE repo_full_name = %s
+                      AND installation_id = %s
+                      AND change_gating_enabled = TRUE
+                    LIMIT 1""",
+                (repo_full_name, installation_id),
+            )
+            enrolled = cur.fetchone() is not None
+            cur.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
+    return "ok" if enrolled else "not_enrolled"
+
+
+def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str]:
+    """Read the final assistant message from ``chat_sessions.messages``.
+
+    Mirrors the read-back pattern in ``chat/background/task.py``
+    (``_send_response_to_slack``, ~L2216-2243): RLS context first, then a
+    reversed scan for the last bot/assistant message.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, user_id, log_prefix="[ChangeGating:ReadBack]"):
+                return None
+            cursor.execute(
+                "SELECT messages FROM chat_sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            cursor.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
+            if not row or not row[0]:
+                return None
+            messages = row[0]
+            if isinstance(messages, str):
+                messages = json.loads(messages)
+            if not isinstance(messages, list):
+                return None
+            for msg in reversed(messages):
+                if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
+                    return msg.get("text") or msg.get("content")
+    return None
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.change_gating.investigate_pr",
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=2700,
+    soft_time_limit=2640,
+)
+def investigate_pr(
+    self,
+    user_id: str,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    action: str,
+    delivery_id: str,
+) -> dict[str, Any]:
+    """Run an agentic risk review on a PR and post a GitHub review."""
+    from billiard.exceptions import SoftTimeLimitExceeded
+    from celery.exceptions import Retry
+
+    start = time.monotonic()
+    try:
+        return _run_investigation(
+            self, start, user_id, installation_id, repo_full_name,
+            pr_number, head_sha, action, delivery_id,
+        )
+    except _PermanentGitHubError:
+        return {"status": "github_error"}
+    except Retry:
+        raise  # task.retry() raised inside _gh — let Celery handle it
+    except SoftTimeLimitExceeded:
+        logger.error(
+            "change_gating=investigate_pr repo=%s pr=%s head_sha=%s status=timeout",
+            repo_full_name, pr_number, head_sha,
+        )
+        return {"status": "timeout"}
+    except Exception as exc:
+        # Transient infrastructure failures (DB blips during enrollment
+        # checks / session creation, Redis hiccups) deserve the declared
+        # retry budget rather than an immediate hard failure.
+        logger.exception(
+            "change_gating=investigate_pr repo=%s pr=%s head_sha=%s "
+            "status=unexpected_error error_class=%s — retrying",
+            repo_full_name, pr_number, head_sha, type(exc).__name__,
+        )
+        raise self.retry(exc=exc)
+
+
+def _run_investigation(
+    task,
+    start: float,
+    user_id: str,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    action: str,
+    delivery_id: str,
+) -> dict[str, Any]:
+    """Full investigation flow; see module docstring for the step list."""
+    log_ctx = (
+        f"repo={repo_full_name} pr={pr_number} head_sha={head_sha} "
+        f"action={action} delivery_id={delivery_id}"
+    )
+
+    def _skip(reason: str) -> dict[str, Any]:
+        logger.info("change_gating=investigate_pr %s status=%s", log_ctx, reason)
+        return {"status": reason}
+
+    def _gh(phase: str, fn: Callable[[], Any]) -> Any:
+        """Run a GitHub adapter call with retry/permanent classification."""
+        try:
+            return fn()
+        except Exception as exc:
+            kind, status_code = _classify_github_exc(exc)
+            if kind == "transient":
+                logger.warning(
+                    "change_gating=investigate_pr %s phase=%s status=transient_github_error "
+                    "code=%s error_class=%s — retrying",
+                    log_ctx, phase, status_code, type(exc).__name__,
+                )
+                raise task.retry(exc=exc)
+            if status_code in (403, 422) and phase == "post_review":
+                logger.error(
+                    "change_gating=investigate_pr %s phase=post_review status=rejected "
+                    "code=%s — common causes: the GitHub App lacks the "
+                    "'Pull requests: write' permission (upgrade in App settings, "
+                    "org admin must accept), or APPROVE was attempted on a PR "
+                    "authored by the App itself.",
+                    log_ctx, status_code,
+                )
+            logger.error(
+                "change_gating=investigate_pr %s phase=%s status=github_error "
+                "code=%s error_class=%s",
+                log_ctx, phase, status_code, type(exc).__name__,
+            )
+            raise _PermanentGitHubError() from exc
+
+    # ------------------------------------------------------------------
+    # 1. Idempotency (Redis). Celery retries reuse the same request id, so
+    #    a retry passes the run-lock check; a concurrent duplicate doesn't.
+    #    A cached verdict (set after a completed agent run) lets retries
+    #    of a late-phase failure re-post WITHOUT re-running the agent.
+    # ------------------------------------------------------------------
+    from utils.cache.redis_client import get_redis_client
+
+    redis_client = get_redis_client()
+    keys = change_gating_keys(repo_full_name, pr_number, head_sha)
+    task_request_id = str(getattr(task.request, "id", None))
+    cached_verdict: Optional[dict[str, Any]] = None
+    if redis_client is not None:
+        if redis_client.exists(keys["posted"]):
+            return _skip("already_posted")
+        if not redis_client.set(keys["run"], task_request_id, nx=True, ex=_RUN_KEY_TTL_SECONDS):
+            holder = redis_client.get(keys["run"])
+            if holder != task_request_id:
+                return _skip("duplicate_run")
+        try:
+            cached_raw = redis_client.get(keys["verdict"])
+            if cached_raw:
+                cached_verdict = json.loads(cached_raw)
+        except Exception:
+            cached_verdict = None
+    else:
+        logger.warning(
+            "change_gating=investigate_pr %s status=redis_unavailable — "
+            "proceeding without idempotency keys", log_ctx,
+        )
+
+    # ------------------------------------------------------------------
+    # 2. Re-verify enrollment + suspension (may have changed while queued).
+    # ------------------------------------------------------------------
+    enrollment = _verify_enrollment(user_id, installation_id, repo_full_name)
+    if enrollment != "ok":
+        return _skip(enrollment)
+
+    # ------------------------------------------------------------------
+    # 3. Fetch + re-validate the PR.
+    # ------------------------------------------------------------------
+    from services.change_gating.github_adapter import (
+        GitHubPRAdapter,
+        decode_marker,
+        find_latest_aurora_review,
+    )
+
+    adapter = GitHubPRAdapter(installation_id, repo_full_name)
+    pr = _gh("get_pull_request", lambda: adapter.get_pull_request(pr_number))
+
+    if ((pr.get("head") or {}).get("sha")) != head_sha:
+        return _skip("stale_head")
+    if pr.get("draft"):
+        return _skip("draft")
+    if pr.get("state") != "open":
+        return _skip("not_open")
+    default_branch = ((pr.get("base") or {}).get("repo") or {}).get("default_branch")
+    if not default_branch or ((pr.get("base") or {}).get("ref")) != default_branch:
+        return _skip("non_default_base")
+
+    # ------------------------------------------------------------------
+    # 4. Prior Aurora review (re-review context for synchronize pushes).
+    # ------------------------------------------------------------------
+    reviews = _gh("list_reviews", lambda: adapter.list_reviews(pr_number))
+    prior = find_latest_aurora_review(reviews)
+    prior_findings = None
+    if prior:
+        marker = decode_marker(prior.get("body") or "")
+        if marker:
+            prior_findings = marker.get("findings")
+
+    # ------------------------------------------------------------------
+    # 5. Diff context. ``get_diff`` returns None when GitHub refuses the
+    #    diff media type for oversized PRs (406) — downstream helpers
+    #    degrade to the changed-file summary / no inline anchoring.
+    # ------------------------------------------------------------------
+    from services.change_gating.diff_utils import (
+        anchor_findings,
+        parse_diff_hunks,
+        truncate_diff_for_prompt,
+    )
+    from services.change_gating.verdict import (
+        CHANGE_GATING_TOOL_DENYLIST,
+        build_review_prompt,
+        extract_verdict_with_llm,
+        parse_verdict,
+        render_inline_comment,
+        render_review_body,
+    )
+
+    diff = _gh("get_diff", lambda: adapter.get_diff(pr_number))
+
+    # ------------------------------------------------------------------
+    # 6-8. Agent run + verdict — skipped entirely when a prior attempt of
+    # this same head already produced a verdict (cached in Redis): a
+    # transient failure AFTER the investigation must not re-spend a full
+    # agent run (and risk a different verdict) just to retry the post.
+    # ------------------------------------------------------------------
+    if cached_verdict is not None and cached_verdict.get("verdict"):
+        verdict = cached_verdict["verdict"]
+        session_id = cached_verdict.get("session_id")
+        logger.info(
+            "change_gating=investigate_pr %s session_id=%s status=verdict_cache_hit",
+            log_ctx, session_id,
+        )
+    else:
+        files = _gh("list_files", lambda: adapter.list_files(pr_number))
+        diff_excerpt = truncate_diff_for_prompt(diff, files)
+        prompt = build_review_prompt(
+            repo_full_name, pr, files, diff_excerpt, prior_findings
+        )
+
+        # Session + synchronous agent run. rail_text carries only the
+        # externally-authored fields (prompt-injection guardrail surface).
+        # Deliberately no is_background_chat_allowed call (design sec. 12).
+        from chat.background.task import create_background_chat_session, run_background_chat
+
+        trigger_metadata = {
+            "source": "change_gating",
+            "repo": repo_full_name,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "delivery_id": delivery_id,
+        }
+        session_id = create_background_chat_session(
+            user_id=user_id,
+            title=f"PR Risk Review: {repo_full_name}#{pr_number}",
+            trigger_metadata=trigger_metadata,
+        )
+        rail_text = (pr.get("title") or "") + "\n\n" + (pr.get("body") or "")
+
+        # NOTE: .result, NOT .get() — inside a prefork worker Celery's
+        # EagerResult.get() raises "Never call result.get() within a
+        # task!"; .result returns the eager return value directly (or the
+        # exception instance, which fails the dict check below safely).
+        result = run_background_chat.apply(
+            kwargs=dict(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=prompt,
+                trigger_metadata=trigger_metadata,
+                send_notifications=False,
+                mode="ask",
+                rail_text=rail_text,
+                tool_denylist=list(CHANGE_GATING_TOOL_DENYLIST),
+            )
+        ).result
+
+        if not isinstance(result, dict) or result.get("status") != "completed":
+            logger.error(
+                "change_gating=investigate_pr %s session_id=%s status=agent_failed agent_status=%s",
+                log_ctx,
+                session_id,
+                (result or {}).get("status") if isinstance(result, dict) else type(result).__name__,
+            )
+            return {"status": "agent_failed", "session_id": session_id}
+        if result.get("guardrail_blocked"):
+            # The input rail blocked the (attacker-controllable) PR
+            # title/body. The session's final message is just the block
+            # notice — there was NO investigation, so posting any verdict
+            # (especially an APPROVE) would be wrong. Post nothing.
+            logger.warning(
+                "change_gating=investigate_pr %s session_id=%s status=guardrail_blocked",
+                log_ctx, session_id,
+            )
+            return {"status": "guardrail_blocked", "session_id": session_id}
+
+        final_text = _read_final_assistant_message(user_id, session_id)
+        verdict = None
+        if final_text:
+            verdict = parse_verdict(final_text) or extract_verdict_with_llm(final_text)
+        if not verdict:
+            logger.error(
+                "change_gating=investigate_pr %s session_id=%s status=verdict_parse_failed "
+                "has_final_text=%s",
+                log_ctx, session_id, bool(final_text),
+            )
+            return {"status": "verdict_parse_failed", "session_id": session_id}
+
+        # Normalize: SAFE never carries findings; RISKY without findings is
+        # demoted to SAFE (nothing actionable to anchor or list).
+        if verdict.get("verdict") == "SAFE":
+            verdict["findings"] = []
+        elif verdict.get("verdict") == "RISKY" and not verdict.get("findings"):
+            logger.info(
+                "change_gating=investigate_pr %s session_id=%s status=demoted_risky_no_findings",
+                log_ctx, session_id,
+            )
+            verdict["verdict"] = "SAFE"
+            verdict["findings"] = []
+
+        if redis_client is not None:
+            try:
+                redis_client.set(
+                    keys["verdict"],
+                    json.dumps({"verdict": verdict, "session_id": session_id}),
+                    ex=_VERDICT_KEY_TTL_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "change_gating=investigate_pr %s status=verdict_cache_set_failed "
+                    "error_class=%s", log_ctx, type(exc).__name__,
+                )
+
+    # ------------------------------------------------------------------
+    # 9. Race check: a newer push owns the review for the new head.
+    # ------------------------------------------------------------------
+    pr_now = _gh("refetch_pull_request", lambda: adapter.get_pull_request(pr_number))
+    if ((pr_now.get("head") or {}).get("sha")) != head_sha:
+        return _skip("superseded_skip")
+
+    # ------------------------------------------------------------------
+    # 10. Anchor findings to diff lines and render the review. ALL
+    #     findings go in the body table; only anchored ones get inline
+    #     comments.
+    # ------------------------------------------------------------------
+    hunks = parse_diff_hunks(diff) if verdict["findings"] else {}
+    anchored, unanchored = anchor_findings(verdict["findings"], hunks)
+    comments = [
+        {
+            "path": f["file_path"],
+            "line": f["line"],
+            "side": "RIGHT",
+            "body": render_inline_comment(f),
+        }
+        for f in anchored
+    ]
+    body = render_review_body(
+        verdict["verdict"], verdict.get("summary", ""), verdict["findings"], head_sha
+    )
+    event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
+
+    # Dry run exits BEFORE any GitHub write — including the supersede of
+    # the prior review (calibration mode must be strictly read-only).
+    if _is_dry_run():
+        logger.info(
+            "change_gating=investigate_pr %s session_id=%s status=dry_run "
+            "would_supersede_review_id=%s review=%s",
+            log_ctx,
+            session_id,
+            prior.get("id") if prior else None,
+            json.dumps(
+                {"event": event, "body": body, "comments": comments, "verdict": verdict}
+            ),
+        )
+        return {"status": "dry_run", "session_id": session_id}
+
+    # ------------------------------------------------------------------
+    # 11. Post the new review FIRST, then supersede the prior one. Doc
+    #     section 4.3 wants only one active Aurora review; posting first
+    #     means a supersede failure leaves two visible reviews (recovered
+    #     on the next push) instead of destroying the prior verdict with
+    #     nothing to replace it.
+    # ------------------------------------------------------------------
+    _gh(
+        "post_review",
+        lambda: adapter.post_review(
+            pr_number, commit_id=head_sha, event=event, body=body, comments=comments
+        ),
+    )
+
+    if prior:
+        try:
+            adapter.supersede_review(pr_number, prior, "Superseded by updated review")
+        except Exception as exc:
+            logger.warning(
+                "change_gating=investigate_pr %s status=supersede_failed "
+                "prior_review_id=%s error_class=%s",
+                log_ctx, prior.get("id"), type(exc).__name__,
+            )
+
+    if redis_client is not None:
+        try:
+            redis_client.set(keys["posted"], "1", ex=_POSTED_KEY_TTL_SECONDS)
+            redis_client.delete(keys["verdict"])
+        except Exception as exc:
+            logger.warning(
+                "change_gating=investigate_pr %s status=posted_key_set_failed error_class=%s",
+                log_ctx, type(exc).__name__,
+            )
+
+    # ------------------------------------------------------------------
+    # 12. Completion.
+    # ------------------------------------------------------------------
+    duration_seconds = round(time.monotonic() - start, 2)
+    logger.info(
+        "change_gating=investigate_pr %s session_id=%s status=completed verdict=%s "
+        "findings=%d anchored=%d unanchored=%d duration_seconds=%.2f",
+        log_ctx,
+        session_id,
+        verdict["verdict"],
+        len(verdict["findings"]),
+        len(anchored),
+        len(unanchored),
+        duration_seconds,
+    )
+    return {
+        "status": "completed",
+        "verdict": verdict["verdict"],
+        "findings": len(verdict["findings"]),
+        "session_id": session_id,
+    }
