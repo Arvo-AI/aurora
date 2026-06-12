@@ -256,6 +256,38 @@ class TestGitHubPRAdapter:
         http.put.assert_not_called()
 
     # ------------------------------------------------------------------
+    # progress comment (issue comment)
+    # ------------------------------------------------------------------
+
+    def test_post_issue_comment(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.post.return_value = _response(json_data={"id": 4242})
+        result = adapter.post_issue_comment(7, "reviewing…")
+        assert result == {"id": 4242}
+        call = http.post.call_args
+        assert call.args[0].endswith("/repos/acme/widgets/issues/7/comments")
+        assert call.kwargs["json"] == {"body": "reviewing…"}
+
+    def test_delete_issue_comment(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.delete.return_value = _response(status=204)
+        adapter.delete_issue_comment(4242)
+        call = http.delete.call_args
+        assert call.args[0].endswith("/repos/acme/widgets/issues/comments/4242")
+
+    def test_delete_issue_comment_tolerates_404(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        # Already deleted (e.g. by a human) — idempotent, must NOT raise.
+        http.delete.return_value = _response(status=404, text="Not Found")
+        adapter.delete_issue_comment(4242)  # no exception
+
+    def test_delete_issue_comment_raises_on_500(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.delete.return_value = _response(status=500, text="boom")
+        with pytest.raises(_HTTPError):
+            adapter.delete_issue_comment(4242)
+
+    # ------------------------------------------------------------------
     # Token hygiene
     # ------------------------------------------------------------------
 

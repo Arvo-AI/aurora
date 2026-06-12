@@ -307,6 +307,38 @@ class GitHubPRAdapter:
         self._raise_for_status(response, path)
         return response.json()
 
+    def post_issue_comment(self, pr_number: int, body: str) -> Dict[str, Any]:
+        """POST a PR conversation comment (a GitHub *issue* comment).
+
+        Used for the transient "Aurora is reviewing…" progress indicator.
+        Returns the created comment dict (carries ``id``).
+        """
+        path = f"/issues/{pr_number}/comments"
+        response = self._session.post(
+            self._url(path),
+            headers=self._headers(),
+            json={"body": body},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        self._raise_for_status(response, path)
+        return response.json()
+
+    def delete_issue_comment(self, comment_id: int) -> None:
+        """DELETE a PR conversation comment by id (204, no body).
+
+        Idempotent: a 404 (comment already gone — e.g. deleted by a human)
+        is treated as success, not an error.
+        """
+        path = f"/issues/comments/{comment_id}"
+        response = self._session.delete(
+            self._url(path),
+            headers=self._headers(),
+            timeout=_TIMEOUT_SECONDS,
+        )
+        if response.status_code == 404:
+            return
+        self._raise_for_status(response, path)
+
     def supersede_review(
         self, pr_number: int, prior_review: Dict[str, Any], message: str
     ) -> None:

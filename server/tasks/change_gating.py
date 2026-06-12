@@ -45,6 +45,18 @@ _VERDICT_KEY_TTL_SECONDS = 3600
 # utils/storage/storage.py, etc.).
 _TRUTHY = ("1", "true", "yes")
 
+# Transient "Aurora is reviewing…" conversation comment, deleted in a finally
+# block the moment the run leaves the review phase (review posted, skipped, or
+# failed). Gives the PR the live signal CodeRabbit shows. The id lives only in
+# a local for the duration of one attempt — a Celery retry simply posts a fresh
+# one — so there is no cross-attempt state to leak. The marker aids debugging.
+_PROGRESS_MARKER = "<!-- aurora-change-gating:progress -->"
+_PROGRESS_BODY = (
+    f"{_PROGRESS_MARKER}\n"
+    "🔍 **Aurora** is reviewing this PR for incident risk. This usually takes "
+    "a minute or two — findings will appear as a review when it's done."
+)
+
 
 def change_gating_keys(repo_full_name: str, pr_number: int, head_sha: str) -> dict[str, str]:
     """Build the Redis idempotency keys for one (repo, pr, head) triple.
@@ -147,6 +159,37 @@ def _verify_enrollment(user_id: str, installation_id: int, repo_full_name: str) 
             enrolled = cur.fetchone() is not None
             cur.execute("RESET myapp.current_user_id; RESET myapp.current_org_id;")
     return "ok" if enrolled else "not_enrolled"
+
+
+def _post_progress_comment(adapter, pr_number: int, log_ctx: str) -> Optional[int]:
+    """Post the transient 'Aurora is reviewing…' comment; return its id.
+
+    Best-effort: any failure returns None and the review proceeds without
+    a progress indicator. The id is held in a local by the caller and
+    cleared in a finally block, so there is no cross-attempt state.
+    """
+    try:
+        comment = adapter.post_issue_comment(pr_number, _PROGRESS_BODY)
+        return comment.get("id")
+    except Exception as exc:
+        logger.warning(
+            "change_gating=investigate_pr %s status=progress_post_failed error_class=%s",
+            log_ctx, type(exc).__name__,
+        )
+        return None
+
+
+def _clear_progress_comment(adapter, comment_id: Optional[int], log_ctx: str) -> None:
+    """Delete the progress comment (best-effort). No-op when never posted."""
+    if comment_id is None:
+        return
+    try:
+        adapter.delete_issue_comment(comment_id)
+    except Exception as exc:
+        logger.warning(
+            "change_gating=investigate_pr %s status=progress_clear_failed error_class=%s",
+            log_ctx, type(exc).__name__,
+        )
 
 
 def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str]:
@@ -374,213 +417,227 @@ def _run_investigation(
 
     diff = _gh("get_diff", lambda: adapter.get_diff(pr_number))
 
-    # ------------------------------------------------------------------
-    # 6-8. Agent run + verdict — skipped entirely when a prior attempt of
-    # this same head already produced a verdict (cached in Redis): a
-    # transient failure AFTER the investigation must not re-spend a full
-    # agent run (and risk a different verdict) just to retry the post.
-    # ------------------------------------------------------------------
-    if cached_verdict is not None and cached_verdict.get("verdict"):
-        verdict = cached_verdict["verdict"]
-        session_id = cached_verdict.get("session_id")
-        logger.info(
-            "change_gating=investigate_pr %s session_id=%s status=verdict_cache_hit",
-            log_ctx, session_id,
-        )
-    else:
-        files = _gh("list_files", lambda: adapter.list_files(pr_number))
-        diff_excerpt = truncate_diff_for_prompt(diff, files)
-        prompt = build_review_prompt(
-            repo_full_name, pr, files, diff_excerpt, prior_findings
-        )
+    # Transient progress indicator (CodeRabbit-style), shown during the slow
+    # first-pass agent run. Skipped in dry-run (read-only calibration) and on
+    # the fast cached-verdict retry path. Its id lives only in this local and
+    # is cleared in the finally below on EVERY exit (return, skip, retry, or
+    # failure) — so it can never leak; a Celery retry just posts a fresh one.
+    progress_comment_id = None
+    if not _is_dry_run() and cached_verdict is None:
+        progress_comment_id = _post_progress_comment(adapter, pr_number, log_ctx)
 
-        # Session + synchronous agent run. rail_text carries only the
-        # externally-authored fields (prompt-injection guardrail surface).
-        # Deliberately no is_background_chat_allowed call (design sec. 12).
-        from chat.background.task import create_background_chat_session, run_background_chat
-
-        trigger_metadata = {
-            "source": "change_gating",
-            "repo": repo_full_name,
-            "pr_number": pr_number,
-            "head_sha": head_sha,
-            "delivery_id": delivery_id,
-        }
-        session_id = create_background_chat_session(
-            user_id=user_id,
-            title=f"PR Risk Review: {repo_full_name}#{pr_number}",
-            trigger_metadata=trigger_metadata,
-        )
-        rail_text = (pr.get("title") or "") + "\n\n" + (pr.get("body") or "")
-
-        # NOTE: .result, NOT .get() — inside a prefork worker Celery's
-        # EagerResult.get() raises "Never call result.get() within a
-        # task!"; .result returns the eager return value directly (or the
-        # exception instance, which fails the dict check below safely).
-        result = run_background_chat.apply(
-            kwargs=dict(
-                user_id=user_id,
-                session_id=session_id,
-                initial_message=prompt,
-                trigger_metadata=trigger_metadata,
-                send_notifications=False,
-                mode="ask",
-                rail_text=rail_text,
-                tool_denylist=list(CHANGE_GATING_TOOL_DENYLIST),
+    try:
+        # --------------------------------------------------------------
+        # 6-8. Agent run + verdict — skipped entirely when a prior attempt
+        # of this same head already produced a verdict (cached in Redis): a
+        # transient failure AFTER the investigation must not re-spend a full
+        # agent run (and risk a different verdict) just to retry the post.
+        # --------------------------------------------------------------
+        if cached_verdict is not None and cached_verdict.get("verdict"):
+            verdict = cached_verdict["verdict"]
+            session_id = cached_verdict.get("session_id")
+            logger.info(
+                "change_gating=investigate_pr %s session_id=%s status=verdict_cache_hit",
+                log_ctx, session_id,
             )
-        ).result
+        else:
+            files = _gh("list_files", lambda: adapter.list_files(pr_number))
+            diff_excerpt = truncate_diff_for_prompt(diff, files)
+            prompt = build_review_prompt(
+                repo_full_name, pr, files, diff_excerpt, prior_findings
+            )
 
-        if not isinstance(result, dict) or result.get("status") != "completed":
-            logger.error(
-                "change_gating=investigate_pr %s session_id=%s status=agent_failed agent_status=%s",
+            # Session + synchronous agent run. rail_text carries only the
+            # externally-authored fields (prompt-injection guardrail surface).
+            # Deliberately no is_background_chat_allowed call (design sec. 12).
+            from chat.background.task import create_background_chat_session, run_background_chat
+
+            trigger_metadata = {
+                "source": "change_gating",
+                "repo": repo_full_name,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "delivery_id": delivery_id,
+            }
+            session_id = create_background_chat_session(
+                user_id=user_id,
+                title=f"PR Risk Review: {repo_full_name}#{pr_number}",
+                trigger_metadata=trigger_metadata,
+            )
+            rail_text = (pr.get("title") or "") + "\n\n" + (pr.get("body") or "")
+
+            # NOTE: .result, NOT .get() — inside a prefork worker Celery's
+            # EagerResult.get() raises "Never call result.get() within a
+            # task!"; .result returns the eager return value directly (or the
+            # exception instance, which fails the dict check below safely).
+            result = run_background_chat.apply(
+                kwargs=dict(
+                    user_id=user_id,
+                    session_id=session_id,
+                    initial_message=prompt,
+                    trigger_metadata=trigger_metadata,
+                    send_notifications=False,
+                    mode="ask",
+                    rail_text=rail_text,
+                    tool_denylist=list(CHANGE_GATING_TOOL_DENYLIST),
+                )
+            ).result
+
+            if not isinstance(result, dict) or result.get("status") != "completed":
+                logger.error(
+                    "change_gating=investigate_pr %s session_id=%s status=agent_failed agent_status=%s",
+                    log_ctx,
+                    session_id,
+                    (result or {}).get("status") if isinstance(result, dict) else type(result).__name__,
+                )
+                return {"status": "agent_failed", "session_id": session_id}
+            if result.get("guardrail_blocked"):
+                # The input rail blocked the (attacker-controllable) PR
+                # title/body. The session's final message is just the block
+                # notice — there was NO investigation, so posting any verdict
+                # (especially an APPROVE) would be wrong. Post nothing.
+                logger.warning(
+                    "change_gating=investigate_pr %s session_id=%s status=guardrail_blocked",
+                    log_ctx, session_id,
+                )
+                return {"status": "guardrail_blocked", "session_id": session_id}
+
+            final_text = _read_final_assistant_message(user_id, session_id)
+            verdict = None
+            if final_text:
+                verdict = parse_verdict(final_text) or extract_verdict_with_llm(final_text)
+            if not verdict:
+                logger.error(
+                    "change_gating=investigate_pr %s session_id=%s status=verdict_parse_failed "
+                    "has_final_text=%s",
+                    log_ctx, session_id, bool(final_text),
+                )
+                return {"status": "verdict_parse_failed", "session_id": session_id}
+
+            # Normalize: SAFE never carries findings; RISKY without findings is
+            # demoted to SAFE (nothing actionable to anchor or list).
+            if verdict.get("verdict") == "SAFE":
+                verdict["findings"] = []
+            elif verdict.get("verdict") == "RISKY" and not verdict.get("findings"):
+                logger.info(
+                    "change_gating=investigate_pr %s session_id=%s status=demoted_risky_no_findings",
+                    log_ctx, session_id,
+                )
+                verdict["verdict"] = "SAFE"
+                verdict["findings"] = []
+
+            if redis_client is not None:
+                try:
+                    redis_client.set(
+                        keys["verdict"],
+                        json.dumps({"verdict": verdict, "session_id": session_id}),
+                        ex=_VERDICT_KEY_TTL_SECONDS,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "change_gating=investigate_pr %s status=verdict_cache_set_failed "
+                        "error_class=%s", log_ctx, type(exc).__name__,
+                    )
+
+        # --------------------------------------------------------------
+        # 9. Race check: a newer push owns the review for the new head.
+        # --------------------------------------------------------------
+        pr_now = _gh("refetch_pull_request", lambda: adapter.get_pull_request(pr_number))
+        if ((pr_now.get("head") or {}).get("sha")) != head_sha:
+            return _skip("superseded_skip")
+
+        # --------------------------------------------------------------
+        # 10. Anchor findings to diff lines and render the review. ALL
+        #     findings go in the body table; only anchored ones get inline
+        #     comments.
+        # --------------------------------------------------------------
+        hunks = parse_diff_hunks(diff) if verdict["findings"] else {}
+        anchored, unanchored = anchor_findings(verdict["findings"], hunks)
+        comments = [
+            {
+                "path": f["file_path"],
+                "line": f["line"],
+                "side": "RIGHT",
+                "body": render_inline_comment(f),
+            }
+            for f in anchored
+        ]
+        body = render_review_body(
+            verdict["verdict"], verdict.get("summary", ""), verdict["findings"], head_sha
+        )
+        event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
+
+        # Dry run exits BEFORE any GitHub write — including the supersede of
+        # the prior review (calibration mode must be strictly read-only).
+        if _is_dry_run():
+            logger.info(
+                "change_gating=investigate_pr %s session_id=%s status=dry_run "
+                "would_supersede_review_id=%s review=%s",
                 log_ctx,
                 session_id,
-                (result or {}).get("status") if isinstance(result, dict) else type(result).__name__,
+                prior.get("id") if prior else None,
+                json.dumps(
+                    {"event": event, "body": body, "comments": comments, "verdict": verdict}
+                ),
             )
-            return {"status": "agent_failed", "session_id": session_id}
-        if result.get("guardrail_blocked"):
-            # The input rail blocked the (attacker-controllable) PR
-            # title/body. The session's final message is just the block
-            # notice — there was NO investigation, so posting any verdict
-            # (especially an APPROVE) would be wrong. Post nothing.
-            logger.warning(
-                "change_gating=investigate_pr %s session_id=%s status=guardrail_blocked",
-                log_ctx, session_id,
-            )
-            return {"status": "guardrail_blocked", "session_id": session_id}
+            return {"status": "dry_run", "session_id": session_id}
 
-        final_text = _read_final_assistant_message(user_id, session_id)
-        verdict = None
-        if final_text:
-            verdict = parse_verdict(final_text) or extract_verdict_with_llm(final_text)
-        if not verdict:
-            logger.error(
-                "change_gating=investigate_pr %s session_id=%s status=verdict_parse_failed "
-                "has_final_text=%s",
-                log_ctx, session_id, bool(final_text),
-            )
-            return {"status": "verdict_parse_failed", "session_id": session_id}
+        # --------------------------------------------------------------
+        # 11. Post the new review FIRST, then supersede the prior one. Doc
+        #     section 4.3 wants only one active Aurora review; posting first
+        #     means a supersede failure leaves two visible reviews (recovered
+        #     on the next push) instead of destroying the prior verdict with
+        #     nothing to replace it.
+        # --------------------------------------------------------------
+        _gh(
+            "post_review",
+            lambda: adapter.post_review(
+                pr_number, commit_id=head_sha, event=event, body=body, comments=comments
+            ),
+        )
 
-        # Normalize: SAFE never carries findings; RISKY without findings is
-        # demoted to SAFE (nothing actionable to anchor or list).
-        if verdict.get("verdict") == "SAFE":
-            verdict["findings"] = []
-        elif verdict.get("verdict") == "RISKY" and not verdict.get("findings"):
-            logger.info(
-                "change_gating=investigate_pr %s session_id=%s status=demoted_risky_no_findings",
-                log_ctx, session_id,
-            )
-            verdict["verdict"] = "SAFE"
-            verdict["findings"] = []
+        if prior:
+            try:
+                adapter.supersede_review(pr_number, prior, "Superseded by updated review")
+            except Exception as exc:
+                logger.warning(
+                    "change_gating=investigate_pr %s status=supersede_failed "
+                    "prior_review_id=%s error_class=%s",
+                    log_ctx, prior.get("id"), type(exc).__name__,
+                )
 
         if redis_client is not None:
             try:
-                redis_client.set(
-                    keys["verdict"],
-                    json.dumps({"verdict": verdict, "session_id": session_id}),
-                    ex=_VERDICT_KEY_TTL_SECONDS,
-                )
+                redis_client.set(keys["posted"], "1", ex=_POSTED_KEY_TTL_SECONDS)
+                redis_client.delete(keys["verdict"])
             except Exception as exc:
                 logger.warning(
-                    "change_gating=investigate_pr %s status=verdict_cache_set_failed "
-                    "error_class=%s", log_ctx, type(exc).__name__,
+                    "change_gating=investigate_pr %s status=posted_key_set_failed error_class=%s",
+                    log_ctx, type(exc).__name__,
                 )
 
-    # ------------------------------------------------------------------
-    # 9. Race check: a newer push owns the review for the new head.
-    # ------------------------------------------------------------------
-    pr_now = _gh("refetch_pull_request", lambda: adapter.get_pull_request(pr_number))
-    if ((pr_now.get("head") or {}).get("sha")) != head_sha:
-        return _skip("superseded_skip")
-
-    # ------------------------------------------------------------------
-    # 10. Anchor findings to diff lines and render the review. ALL
-    #     findings go in the body table; only anchored ones get inline
-    #     comments.
-    # ------------------------------------------------------------------
-    hunks = parse_diff_hunks(diff) if verdict["findings"] else {}
-    anchored, unanchored = anchor_findings(verdict["findings"], hunks)
-    comments = [
-        {
-            "path": f["file_path"],
-            "line": f["line"],
-            "side": "RIGHT",
-            "body": render_inline_comment(f),
-        }
-        for f in anchored
-    ]
-    body = render_review_body(
-        verdict["verdict"], verdict.get("summary", ""), verdict["findings"], head_sha
-    )
-    event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
-
-    # Dry run exits BEFORE any GitHub write — including the supersede of
-    # the prior review (calibration mode must be strictly read-only).
-    if _is_dry_run():
+        # --------------------------------------------------------------
+        # 12. Completion.
+        # --------------------------------------------------------------
+        duration_seconds = round(time.monotonic() - start, 2)
         logger.info(
-            "change_gating=investigate_pr %s session_id=%s status=dry_run "
-            "would_supersede_review_id=%s review=%s",
+            "change_gating=investigate_pr %s session_id=%s status=completed verdict=%s "
+            "findings=%d anchored=%d unanchored=%d duration_seconds=%.2f",
             log_ctx,
             session_id,
-            prior.get("id") if prior else None,
-            json.dumps(
-                {"event": event, "body": body, "comments": comments, "verdict": verdict}
-            ),
+            verdict["verdict"],
+            len(verdict["findings"]),
+            len(anchored),
+            len(unanchored),
+            duration_seconds,
         )
-        return {"status": "dry_run", "session_id": session_id}
-
-    # ------------------------------------------------------------------
-    # 11. Post the new review FIRST, then supersede the prior one. Doc
-    #     section 4.3 wants only one active Aurora review; posting first
-    #     means a supersede failure leaves two visible reviews (recovered
-    #     on the next push) instead of destroying the prior verdict with
-    #     nothing to replace it.
-    # ------------------------------------------------------------------
-    _gh(
-        "post_review",
-        lambda: adapter.post_review(
-            pr_number, commit_id=head_sha, event=event, body=body, comments=comments
-        ),
-    )
-
-    if prior:
-        try:
-            adapter.supersede_review(pr_number, prior, "Superseded by updated review")
-        except Exception as exc:
-            logger.warning(
-                "change_gating=investigate_pr %s status=supersede_failed "
-                "prior_review_id=%s error_class=%s",
-                log_ctx, prior.get("id"), type(exc).__name__,
-            )
-
-    if redis_client is not None:
-        try:
-            redis_client.set(keys["posted"], "1", ex=_POSTED_KEY_TTL_SECONDS)
-            redis_client.delete(keys["verdict"])
-        except Exception as exc:
-            logger.warning(
-                "change_gating=investigate_pr %s status=posted_key_set_failed error_class=%s",
-                log_ctx, type(exc).__name__,
-            )
-
-    # ------------------------------------------------------------------
-    # 12. Completion.
-    # ------------------------------------------------------------------
-    duration_seconds = round(time.monotonic() - start, 2)
-    logger.info(
-        "change_gating=investigate_pr %s session_id=%s status=completed verdict=%s "
-        "findings=%d anchored=%d unanchored=%d duration_seconds=%.2f",
-        log_ctx,
-        session_id,
-        verdict["verdict"],
-        len(verdict["findings"]),
-        len(anchored),
-        len(unanchored),
-        duration_seconds,
-    )
-    return {
-        "status": "completed",
-        "verdict": verdict["verdict"],
-        "findings": len(verdict["findings"]),
-        "session_id": session_id,
-    }
+        return {
+            "status": "completed",
+            "verdict": verdict["verdict"],
+            "findings": len(verdict["findings"]),
+            "session_id": session_id,
+        }
+    finally:
+        # Always remove this attempt's progress comment, on any exit path —
+        # return, skip, _PermanentGitHubError, or a retry raised by _gh.
+        _clear_progress_comment(adapter, progress_comment_id, log_ctx)

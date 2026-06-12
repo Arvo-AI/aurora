@@ -144,7 +144,7 @@ def gating_env(monkeypatch):
         "run": f"change_gating:run:{repo}:{pr}:{sha}",
         "posted": f"change_gating:posted:{repo}:{pr}:{sha}",
         "verdict": f"change_gating:verdict:{repo}:{pr}:{sha}",
-    }
+    }  # NOTE: mirror tasks.change_gating.change_gating_keys exactly.
     monkeypatch.setitem(sys.modules, "tasks.change_gating", change_gating_stub)
 
     update_status = MagicMock()
@@ -259,6 +259,62 @@ class TestPullRequestChangeGatingFilterMatrix:
         gating_env.redis.delete.assert_called_once_with(
             f"change_gating:seen:{_REPO}:{_PR_NUMBER}:{_HEAD_SHA}"
         )
+
+
+class TestProgressComment:
+    """The transient 'Aurora is reviewing…' comment is tracked in a local
+    id and cleared in a finally on every exit — no cross-attempt state."""
+
+    def test_change_gating_keys_has_no_progress_key(self):
+        # The progress comment is local-only; it must NOT add a Redis key.
+        from tasks.change_gating import change_gating_keys
+        keys = change_gating_keys(_REPO, _PR_NUMBER, _HEAD_SHA)
+        assert set(keys) == {"seen", "run", "posted", "verdict"}
+
+    def test_post_returns_comment_id(self):
+        from tasks.change_gating import _post_progress_comment
+
+        adapter = MagicMock()
+        adapter.post_issue_comment.return_value = {"id": 4242}
+        cid = _post_progress_comment(adapter, _PR_NUMBER, "ctx")
+        assert cid == 4242
+        adapter.post_issue_comment.assert_called_once()
+        assert adapter.post_issue_comment.call_args.args[0] == _PR_NUMBER
+
+    def test_post_failure_is_swallowed(self):
+        from tasks.change_gating import _post_progress_comment
+
+        adapter = MagicMock()
+        adapter.post_issue_comment.side_effect = RuntimeError("403")
+        assert _post_progress_comment(adapter, _PR_NUMBER, "ctx") is None
+
+    def test_post_missing_id_returns_none(self):
+        from tasks.change_gating import _post_progress_comment
+
+        adapter = MagicMock()
+        adapter.post_issue_comment.return_value = {}  # no 'id'
+        assert _post_progress_comment(adapter, _PR_NUMBER, "ctx") is None
+
+    def test_clear_deletes_by_id(self):
+        from tasks.change_gating import _clear_progress_comment
+
+        adapter = MagicMock()
+        _clear_progress_comment(adapter, 4242, "ctx")
+        adapter.delete_issue_comment.assert_called_once_with(4242)
+
+    def test_clear_noop_when_id_none(self):
+        from tasks.change_gating import _clear_progress_comment
+
+        adapter = MagicMock()
+        _clear_progress_comment(adapter, None, "ctx")
+        adapter.delete_issue_comment.assert_not_called()
+
+    def test_clear_swallows_delete_failure(self):
+        from tasks.change_gating import _clear_progress_comment
+
+        adapter = MagicMock()
+        adapter.delete_issue_comment.side_effect = RuntimeError("500")
+        _clear_progress_comment(adapter, 4242, "ctx")  # must not raise
 
 
 class TestSpinnakerTriggerPipelineBackgroundBlock:
