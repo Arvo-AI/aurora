@@ -1598,6 +1598,22 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: Add change_gating_enabled to connected_repos so
+            # existing deployments can enroll repos in PR change gating.
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS change_gating_enabled BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured change_gating_enabled column exists on connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding change_gating_enabled column to connected_repos: {e}"
+                )
+                conn.rollback()
+
             # Migration: Add disconnected_at to user_github_installations so
             # Aurora-side disconnect can soft-delete the link instead of
             # dropping the row. Reconnects (which often don't re-fire GitHub's
