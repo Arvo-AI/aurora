@@ -422,6 +422,7 @@ def run_background_chat(
     send_notifications: bool = True,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    tool_denylist: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run a chat session in the background without WebSocket.
 
@@ -446,6 +447,8 @@ def run_background_chat(
             only the externally-controlled fields should be checked for prompt
             injection; the internal instruction scaffolding should not. When
             omitted, falls back to initial_message (legacy behavior).
+        tool_denylist: Optional list of tool names to remove from the agent's
+            tool set for this run (e.g. write/exec tools for PR change gating).
 
     Returns:
         Dict with session_id, status, and any error information
@@ -663,6 +666,7 @@ def run_background_chat(
                 incident_id=incident_id,
                 mode=mode,
                 rail_text=rail_text,
+                tool_denylist=tool_denylist,
             ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
@@ -1144,6 +1148,7 @@ async def _run_jira_action(
     mode: str,
     wf,
     background_ws,
+    tool_denylist: Optional[List[str]] = None,
 ) -> None:
     """Run the Jira filing step after the RCA investigation completes.
 
@@ -1194,6 +1199,7 @@ async def _run_jira_action(
         mode=mode,
         is_background=True,
         rca_context=rca_context,
+        tool_denylist=tool_denylist,
     )
     logger.info(f"[JiraAction] Starting Jira step for {session_id} (jira_mode={jira_mode})")
 
@@ -1239,6 +1245,7 @@ async def _execute_background_chat(
     incident_id: Optional[str] = None,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    tool_denylist: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1370,6 +1377,7 @@ async def _execute_background_chat(
             is_postmortem_action=_is_postmortem_action,
             rca_context=rca_context,
             permitted_tools=_resolve_permitted_tools(user_id),
+            tool_denylist=tool_denylist,
         )
         logger.info(
             f"[BackgroundChat] Created state with is_background=True, is_postmortem_action={_is_postmortem_action}, "
@@ -1420,6 +1428,7 @@ async def _execute_background_chat(
                 mode=mode,
                 wf=wf,
                 background_ws=background_ws,
+                tool_denylist=tool_denylist,
             )
         
         if incident_id:

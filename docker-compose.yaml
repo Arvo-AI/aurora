@@ -84,6 +84,8 @@ x-common-env: &common-env
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
   GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
   GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+  # Log PR change-gating reviews instead of posting to GitHub (calibration mode)
+  CHANGE_GATING_DRY_RUN: ${CHANGE_GATING_DRY_RUN:-false}
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}

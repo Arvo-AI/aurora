@@ -546,6 +546,10 @@ async def _run(input_dict: dict) -> FindingRef:
             is_background=True,
             mode="ask",
             model=sub_agent_model,
+            # A parent run's denylist must survive the sub-agent boundary,
+            # or denied write/exec tools would silently reappear here
+            # (agentic_tool_flow filters by sub_state.tool_denylist).
+            tool_denylist=input_dict.get("parent_tool_denylist"),
         )
 
         postgres_client = PostgreSQLClient()

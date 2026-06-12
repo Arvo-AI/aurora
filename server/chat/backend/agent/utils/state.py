@@ -4,6 +4,21 @@ from langchain_core.messages import AnyMessage
 from pydantic import BaseModel, ConfigDict
 
 
+def filter_denied_tools(tools: List[Any], tool_denylist: Optional[List[str]]) -> List[Any]:
+    """Return ``tools`` minus those whose ``.name`` is in ``tool_denylist``.
+
+    For a non-empty denylist, returns a NEW filtered list (the input may be
+    the cached ``get_cloud_tools()`` list, which must never be mutated). For
+    an empty/None denylist, returns the input list object unchanged (callers
+    must not mutate it). Single source of truth for ``State.tool_denylist``
+    semantics — used by ``agentic_tool_flow`` and unit-tested directly.
+    """
+    if not tool_denylist:
+        return tools
+    denied = set(tool_denylist)
+    return [t for t in tools if getattr(t, "name", None) not in denied]
+
+
 class State(BaseModel):
     messages: List[AnyMessage] = []
     question: str
@@ -41,6 +56,7 @@ class State(BaseModel):
     )
     guardrail_blocked: bool = False  # Set by workflow when input rail blocks the message
     permitted_tools: Optional[set] = None
+    tool_denylist: Optional[List[str]] = None  # Tool names removed from the tool set for this run
 
     # --- Multi-agent orchestrator fields (defaults preserve single-agent behavior) ---
     triage_decision: Optional[Dict[str, Any]] = None

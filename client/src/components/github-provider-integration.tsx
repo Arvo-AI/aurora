@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -76,6 +77,9 @@ export interface ConnectedRepo {
   metadata_status: string;
   repo_data: Repository | null;
   created_at: string | null;
+  // PR change gating (incident prevention) — only settable on App-linked repos.
+  change_gating_enabled?: boolean;
+  installation_id?: number | null;
 }
 
 export interface GitHubAuthConfig {
@@ -188,6 +192,18 @@ export class GitHubIntegrationService {
     if (!response.ok) throw new Error('Failed to update metadata');
   }
 
+  static async setChangeGating(repoFullName: string, enabled: boolean): Promise<void> {
+    const response = await fetch(`/api/proxy/github/repo-selections/${encodeURIComponent(repoFullName)}/change-gating`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || 'Failed to update incident prevention setting');
+    }
+  }
+
   static async generateRepoMetadata(repoFullName: string): Promise<void> {
     const response = await fetch('/api/proxy/github/repo-metadata/generate', {
       method: 'POST',
@@ -230,6 +246,7 @@ export default function GitHubProviderIntegration() {
   const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
   const [savedReposLoaded, setSavedReposLoaded] = useState(false);
   const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
+  const [gatingUpdating, setGatingUpdating] = useState<Set<string>>(new Set());
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const popupCleanupsRef = useRef<Array<() => void>>([]);
 
@@ -523,6 +540,39 @@ export default function GitHubProviderIntegration() {
       toast({ title: "Description updated" });
     } catch {
       toast({ title: "Error", description: "Failed to update description", variant: "destructive" });
+    }
+  };
+
+  const handleChangeGatingToggle = async (repoFullName: string, enabled: boolean) => {
+    setGatingUpdating(prev => new Set(prev).add(repoFullName));
+    setSavedRepos(prev => prev.map(r =>
+      r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: enabled } : r
+    ));
+    try {
+      await GitHubIntegrationService.setChangeGating(repoFullName, enabled);
+      // Re-assert the confirmed value: a loadSavedRepos poll snapshotted
+      // before the PUT committed can land after the optimistic update and
+      // clobber it with the stale flag.
+      setSavedRepos(prev => prev.map(r =>
+        r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: enabled } : r
+      ));
+      globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
+    } catch (error: unknown) {
+      const err = error as Error;
+      setSavedRepos(prev => prev.map(r =>
+        r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: !enabled } : r
+      ));
+      toast({
+        title: "Error",
+        description: err.message || "Failed to update incident prevention setting",
+        variant: "destructive",
+      });
+    } finally {
+      setGatingUpdating(prev => {
+        const next = new Set(prev);
+        next.delete(repoFullName);
+        return next;
+      });
     }
   };
 
@@ -1134,6 +1184,22 @@ export default function GitHubProviderIntegration() {
                     )}
                     {isReady && !isEditing && repo.metadata_summary && (
                       <p className="text-xs text-muted-foreground">{repo.metadata_summary.replace(/\*\*/g, '')}</p>
+                    )}
+                    {repo.installation_id != null && (
+                      <div
+                        className="flex items-center justify-between gap-2 pt-1"
+                        title="Incident Prevention — Aurora reviews PRs for incident risk"
+                      >
+                        <span className="text-xs text-muted-foreground">Incident Prevention</span>
+                        <Switch
+                          checked={!!repo.change_gating_enabled}
+                          disabled={gatingUpdating.has(repo.repo_full_name)}
+                          onCheckedChange={(checked) => handleChangeGatingToggle(repo.repo_full_name, checked)}
+                          className="scale-75 origin-right"
+                          aria-label={`Incident Prevention for ${repo.repo_full_name}`}
+                          data-testid={`repo-change-gating-${repo.repo_full_name}`}
+                        />
+                      </div>
                     )}
                   </div>
                 );
