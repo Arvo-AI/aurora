@@ -124,19 +124,8 @@ def slack_callback():
             logging.error(f"No access token in Slack response (keys: {list(token_data.keys())})")
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=no_token")
         
-        # Create incidents channel first (blocking - OAuth fails if channel can't be created)
+        # Store token immediately so a valid OAuth grant is never lost
         installer_slack_user_id = authed_user.get('id')
-        channel_result = create_incidents_channel(
-            access_token, 
-            team_info.get('name', 'Unknown'),
-            installer_slack_user_id
-        )
-        if not channel_result.get('ok'):
-            error_msg = channel_result.get('error', 'Unknown error')
-            logging.error(f"Failed to create incidents channel: {error_msg}")
-            return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=channel_creation_failed")
-        
-        # Store the token in the database (including channel info)
         try:
             slack_token_data = {
                 "access_token": access_token,
@@ -144,16 +133,28 @@ def slack_callback():
                 "team_id": team_info.get('id'),
                 "user_id": authed_user.get('id'),
                 "connected_at": int(time.time()),
-                "incidents_channel_id": channel_result.get('channel_id'),
-                "incidents_channel_name": channel_result.get('channel_name'),
             }
-            
             store_tokens_in_db(user_id, slack_token_data, "slack")
-            logging.info(f"Incidents channel ready in {team_info.get('name')} workspace, channel: #{channel_result.get('channel_name')}")
-            
         except Exception as e:
             logging.error(f"Failed to store Slack credentials: {e}", exc_info=True)
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=storage_failed")
+        
+        # Try to create incidents channel (best-effort, non-fatal)
+        try:
+            channel_result = create_incidents_channel(
+                access_token, 
+                team_info.get('name', 'Unknown'),
+                installer_slack_user_id
+            )
+            if channel_result.get('ok'):
+                slack_token_data["incidents_channel_id"] = channel_result.get('channel_id')
+                slack_token_data["incidents_channel_name"] = channel_result.get('channel_name')
+                store_tokens_in_db(user_id, slack_token_data, "slack")
+                logging.info(f"Incidents channel ready in {team_info.get('name')} workspace, channel: #{channel_result.get('channel_name')}")
+            else:
+                logging.warning(f"Channel creation failed for {team_info.get('name')} workspace, Slack is connected but incidents channel not set up: {channel_result.get('error')}")
+        except Exception as e:
+            logging.warning(f"Channel creation deferred for user {user_id}: {e}")
         
         # Redirect to frontend with success
         return redirect(f"{FRONTEND_URL}?slack_auth=success&team={team_info.get('name', 'Unknown')}")

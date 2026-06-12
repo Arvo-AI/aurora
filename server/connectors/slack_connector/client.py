@@ -4,6 +4,7 @@ Uses the stored access_token from OAuth to interact with Slack workspace.
 """
 
 import logging
+import time
 import requests
 from typing import Dict, Any, List, Optional
 import traceback
@@ -26,33 +27,46 @@ class SlackClient:
             "Content-Type": "application/json"
         }
     
-    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30) -> Dict[str, Any]:
-        """Make a request to Slack API."""
+    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
+        """Make a request to Slack API with retry on 429 rate limits."""
         url = f"{SLACK_API_BASE}/{endpoint}"
         
-        try:
-            if method == "GET":
-                response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
-            else:
-                response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            if not result.get('ok', False):
-                error = result.get('error', 'unknown_error')
-                # Expected errors are handled gracefully
-                if error == 'name_taken' and endpoint == 'conversations.create':
-                    pass
+        for attempt in range(max_retries + 1):
+            try:
+                if method == "GET":
+                    response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
                 else:
-                    logger.error(f"Slack API error on {endpoint}: {error}")
-                raise ValueError(f"Slack API error: {error}")
-            
-            return result
-            
-        except requests.RequestException as e:
-            logger.error(f"Request to Slack API failed: {e}")
-            raise ValueError(f"Failed to communicate with Slack: {str(e)}")
+                    response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
+                
+                if response.status_code == 429 and attempt < max_retries:
+                    retry_after = int(response.headers.get("Retry-After", 2 * (attempt + 1)))
+                    logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+
+                response.raise_for_status()
+                result = response.json()
+                
+                if not result.get('ok', False):
+                    error = result.get('error', 'unknown_error')
+                    if error == 'name_taken' and endpoint == 'conversations.create':
+                        pass
+                    else:
+                        logger.error(f"Slack API error on {endpoint}: {error}")
+                    raise ValueError(f"Slack API error: {error}")
+                
+                return result
+                
+            except requests.RequestException as e:
+                if attempt < max_retries and "429" in str(e):
+                    retry_after = 2 * (attempt + 1)
+                    logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+                logger.error(f"Request to Slack API failed: {e}")
+                raise ValueError(f"Failed to communicate with Slack: {str(e)}")
+        
+        raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
     
     def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None, 
                      blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
