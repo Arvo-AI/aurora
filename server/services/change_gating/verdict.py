@@ -480,7 +480,13 @@ _MAX_MARKER_EXPLANATION_CHARS = 300
 
 def _md_cell(text: str) -> str:
     """Make LLM-produced text safe inside a one-line markdown table cell."""
-    return str(text).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    return (
+        str(text)
+        .replace("|", "\\|")
+        .replace("`", "\\`")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
 
 
 def _marker_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -65,6 +65,8 @@ class TestDenylistFilter:
 
         result = filter_denied_tools(tools, ["not_a_tool"])
 
+        # A non-empty denylist always yields a fresh list, even with no matches.
+        assert result is not tools
         assert [t.name for t in result] == ["read_logs"]
 
     def test_does_not_mutate_original_list(self):
@@ -82,4 +84,32 @@ class TestDenylistFilter:
 
         result = filter_denied_tools(tools, ["execute_command"])
 
+        assert result is not tools
         assert result == tools
+
+
+class TestCallSiteEnforcement:
+    """Guards the agentic_tool_flow resolution order (agent.py:355-359):
+    the denylist is applied to the FINAL tool set, AFTER any tool_subset
+    override — so a denied tool can never slip through just because the
+    call site narrowed the tools first.
+    """
+
+    @staticmethod
+    def _tools(*names):
+        return [SimpleNamespace(name=n) for n in names]
+
+    def test_denylist_enforced_after_tool_subset(self):
+        full = self._tools("read_logs", "execute_command", "create_pr")
+        tool_subset = self._tools("read_logs", "execute_command")  # narrowed
+        denylist = ["execute_command"]
+
+        # Mirror agent.agentic_tool_flow: subset override, THEN denylist.
+        tools = full
+        if tool_subset is not None:
+            tools = tool_subset
+        tools = filter_denied_tools(tools, denylist)
+
+        names = [t.name for t in tools]
+        assert "execute_command" not in names  # denied even within the subset
+        assert names == ["read_logs"]

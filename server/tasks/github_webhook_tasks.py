@@ -793,6 +793,10 @@ def _maybe_enqueue_change_gating(
         status, owner_user_id = _resolve_change_gating_owner(installation_id, repo)
         if status != "ok" or not owner_user_id:
             _skip(status if status != "ok" else "not_enrolled")
+            # No task enqueued — free the seen-key so a later redelivery
+            # (e.g. after the repo is enrolled or the install unsuspended)
+            # isn't swallowed as duplicate_delivery for the next 24h.
+            _release_dedupe_key()
             return
 
         investigate_pr.delay(

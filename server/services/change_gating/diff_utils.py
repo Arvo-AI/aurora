@@ -101,6 +101,7 @@ def anchor_findings(
         line = finding.get("line")
         if (
             isinstance(line, int)
+            # bool is a subclass of int in Python — exclude True/False lines
             and not isinstance(line, bool)
             and file_path in hunks
             and line in hunks[file_path]

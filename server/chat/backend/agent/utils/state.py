@@ -7,11 +7,11 @@ from pydantic import BaseModel, ConfigDict
 def filter_denied_tools(tools: List[Any], tool_denylist: Optional[List[str]]) -> List[Any]:
     """Return ``tools`` minus those whose ``.name`` is in ``tool_denylist``.
 
-    Always builds a NEW list (the input may be the cached
-    ``get_cloud_tools()`` list, which must never be mutated). An empty or
-    None denylist returns the input unchanged. Single source of truth for
-    ``State.tool_denylist`` semantics — used by ``agentic_tool_flow`` and
-    unit-tested directly.
+    For a non-empty denylist, returns a NEW filtered list (the input may be
+    the cached ``get_cloud_tools()`` list, which must never be mutated). For
+    an empty/None denylist, returns the input list object unchanged (callers
+    must not mutate it). Single source of truth for ``State.tool_denylist``
+    semantics — used by ``agentic_tool_flow`` and unit-tested directly.
     """
     if not tool_denylist:
         return tools

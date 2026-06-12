@@ -344,11 +344,12 @@ def _run_investigation(
                     "authored by the App itself.",
                     log_ctx, status_code,
                 )
-            logger.error(
-                "change_gating=investigate_pr %s phase=%s status=github_error "
-                "code=%s error_class=%s",
-                log_ctx, phase, status_code, type(exc).__name__,
-            )
+            else:
+                logger.error(
+                    "change_gating=investigate_pr %s phase=%s status=github_error "
+                    "code=%s error_class=%s",
+                    log_ctx, phase, status_code, type(exc).__name__,
+                )
             raise _PermanentGitHubError() from exc
 
     # ------------------------------------------------------------------

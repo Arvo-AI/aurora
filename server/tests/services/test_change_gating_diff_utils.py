@@ -194,3 +194,14 @@ class TestTruncateDiffForPrompt:
         assert "b/c.yaml (added, +20/-0)" in result
         assert "github_rca" in result
         assert "too large to inline" in result
+
+    def test_none_diff_replaced_with_file_summary(self):
+        # GitHub returns 406 (None diff) for very large PRs -> file summary
+        # with the "declined" note instead of the "too large to inline" one.
+        result = truncate_diff_for_prompt(None, self.FILES)
+
+        assert "a.py (modified, +3/-1)" in result
+        assert "b/c.yaml (added, +20/-0)" in result
+        assert "github_rca" in result
+        assert "GitHub declined to serve the full diff" in result
+        assert "too large to inline" not in result
