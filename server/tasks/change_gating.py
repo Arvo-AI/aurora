@@ -37,7 +37,6 @@ from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
 
-_SEEN_KEY_TTL_SECONDS = 86400
 _POSTED_KEY_TTL_SECONDS = 86400
 _RUN_KEY_TTL_SECONDS = 3600
 _VERDICT_KEY_TTL_SECONDS = 3600
@@ -192,7 +191,7 @@ def _clear_progress_comment(adapter, comment_id: Optional[int], log_ctx: str) ->
         )
 
 
-def _live_fingerprints(comments: list, aurora_review_ids: set) -> set[str]:
+def _live_fingerprints(comments: Optional[list], aurora_review_ids: set) -> set[str]:
     """Fingerprints of findings Aurora has ALREADY commented on.
 
     Built from inline comments that (a) belong to one of Aurora's own prior

@@ -98,7 +98,7 @@ class _FakeConn:
         return _FakeCursor(self._state)
 
     def commit(self):
-        pass
+        pass  # No-op: test double doesn't persist anything.
 
     def __enter__(self):
         return self

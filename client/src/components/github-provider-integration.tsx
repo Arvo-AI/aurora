@@ -1196,6 +1196,7 @@ export default function GitHubProviderIntegration() {
                           disabled={gatingUpdating.has(repo.repo_full_name)}
                           onCheckedChange={(checked) => handleChangeGatingToggle(repo.repo_full_name, checked)}
                           className="scale-75 origin-right"
+                          aria-label={`Incident Prevention for ${repo.repo_full_name}`}
                           data-testid={`repo-change-gating-${repo.repo_full_name}`}
                         />
                       </div>

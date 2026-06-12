@@ -293,7 +293,7 @@ def update_change_gating(user_id, repo_full_name):
                     # installations can't deliver webhooks, so enabling
                     # would be a silent no-op — reject those too.
                     cur.execute(
-                        f"""SELECT r.installation_id, i.suspended_at
+                        f"""SELECT r.installation_id, i.installation_id, i.suspended_at
                              FROM connected_repos r
                              LEFT JOIN github_installations i
                                     ON i.installation_id = r.installation_id
@@ -311,7 +311,14 @@ def update_change_gating(user_id, repo_full_name):
                         return jsonify({
                             "error": "GitHub App installation is required for Incident Prevention. Install the Aurora GitHub App on this repository to enable it."
                         }), 409
-                    if row[1] is not None:
+                    # r.installation_id is set but no github_installations row
+                    # matched (orphaned id, e.g. the App was removed): enabling
+                    # would never deliver webhooks — a silent no-op. Reject it.
+                    if row[1] is None:
+                        return jsonify({
+                            "error": "The GitHub App installation for this repository is no longer registered. Reinstall the Aurora GitHub App to enable Incident Prevention."
+                        }), 409
+                    if row[2] is not None:
                         return jsonify({
                             "error": "The GitHub App installation for this repository is suspended. Unsuspend it on GitHub to enable Incident Prevention."
                         }), 409
@@ -329,8 +336,8 @@ def update_change_gating(user_id, repo_full_name):
             "repo_full_name": repo_full_name,
             "change_gating_enabled": enabled,
         })
-    except Exception as e:
-        logger.error(f"Error updating change gating: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error updating change gating")
         return jsonify({"error": "Failed to update change gating"}), 500
 
 

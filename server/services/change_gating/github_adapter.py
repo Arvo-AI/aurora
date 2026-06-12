@@ -17,7 +17,6 @@ Security
 from __future__ import annotations
 
 import base64
-import binascii
 import json
 import logging
 import re
@@ -81,7 +80,9 @@ def decode_marker(body: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     try:
         decoded = json.loads(base64.b64decode(match.group(1)).decode("utf-8"))
-    except (ValueError, binascii.Error, UnicodeDecodeError):
+    except ValueError:
+        # binascii.Error, UnicodeDecodeError and JSONDecodeError all subclass
+        # ValueError, so this catches bad base64, bad UTF-8 and bad JSON alike.
         return None
     if not isinstance(decoded, dict):
         return None
