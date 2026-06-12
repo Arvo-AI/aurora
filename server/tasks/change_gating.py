@@ -418,15 +418,21 @@ def _run_investigation(
     prior_aurora_reviews = find_aurora_reviews(reviews)
     prior = prior_aurora_reviews[-1] if prior_aurora_reviews else None
     prior_findings = None
+    prior_head_sha = None
     if prior:
         marker = decode_marker(prior.get("body") or "")
         if marker:
             prior_findings = marker.get("findings")
+            prior_head_sha = marker.get("head_sha")
 
     # ------------------------------------------------------------------
-    # 5. Diff context. ``get_diff`` returns None when GitHub refuses the
-    #    diff media type for oversized PRs (406) — downstream helpers
-    #    degrade to the changed-file summary / no inline anchoring.
+    # 5. Diff context. Incremental review (CodeRabbit-style): when a prior
+    #    Aurora review exists for an earlier head, review ONLY the commits
+    #    pushed since then (the compare diff prior_head...head), so unchanged
+    #    code is never re-examined. The first review (no prior) — and the
+    #    fallback when the compare is unavailable (force-push / too large) —
+    #    reviews the full PR diff. ``get_diff``/``get_compare_diff`` return
+    #    None when GitHub refuses the diff media type (406 oversized).
     # ------------------------------------------------------------------
     from services.change_gating.diff_utils import (
         anchor_findings,
@@ -443,7 +449,28 @@ def _run_investigation(
         render_review_body,
     )
 
-    diff = _gh("get_diff", lambda: adapter.get_diff(pr_number))
+    incremental = bool(prior_head_sha) and prior_head_sha != head_sha
+    compare_files: Optional[list] = None
+    if incremental:
+        compare = _gh(
+            "get_compare", lambda: adapter.get_compare(prior_head_sha, head_sha)
+        )
+        # Only a clean linear advance ("ahead") is a true incremental delta.
+        # "diverged" (force-push/rebase) and "behind" (out-of-order delivery)
+        # would make the three-dot compare diff against an old merge-base —
+        # re-reviewing already-seen code — so those revert to a full-PR review.
+        if compare and compare.get("status") == "ahead":
+            compare_files = compare.get("files") or []
+            diff = _gh(
+                "get_compare_diff",
+                lambda: adapter.get_compare_diff(prior_head_sha, head_sha),
+            )
+            if not (diff and diff.strip()):
+                incremental = False  # diff unavailable → full-PR fallback below
+        else:
+            incremental = False
+    if not incremental:
+        diff = _gh("get_diff", lambda: adapter.get_diff(pr_number))
 
     # Transient progress indicator (CodeRabbit-style), shown during the slow
     # first-pass agent run. Skipped in dry-run (read-only calibration) and on
@@ -469,10 +496,18 @@ def _run_investigation(
                 log_ctx, session_id,
             )
         else:
-            files = _gh("list_files", lambda: adapter.list_files(pr_number))
+            # Incremental mode reuses the file list already returned by the
+            # get_compare call (no second round-trip); full mode lists PR files.
+            if incremental:
+                files = compare_files or []
+            else:
+                files = _gh("list_files", lambda: adapter.list_files(pr_number))
             diff_excerpt = truncate_diff_for_prompt(diff, files)
+            # build_review_prompt suppresses the prior-findings appendix
+            # whenever incremental=True, so prior_findings is passed as-is.
             prompt = build_review_prompt(
-                repo_full_name, pr, files, diff_excerpt, prior_findings
+                repo_full_name, pr, files, diff_excerpt,
+                prior_findings=prior_findings, incremental=incremental,
             )
 
             # Session + synchronous agent run. rail_text carries only the
@@ -583,7 +618,32 @@ def _run_investigation(
         #     (GitHub auto-marks it outdated when its line changes, and the
         #     reviewer can resolve the thread), exactly like CodeRabbit.
         # --------------------------------------------------------------
-        hunks = parse_diff_hunks(diff) if verdict["findings"] else {}
+        if incremental and verdict["findings"]:
+            # The compare diff carries context lines from already-reviewed
+            # code; the agent sometimes re-flags an issue it sees there. Keep
+            # only findings anchored to lines the new commits ADDED/MODIFIED so
+            # pre-existing issues aren't re-reported as duplicates. If that
+            # empties the set, the delta has no NEW risk → demote to SAFE.
+            hunks = parse_diff_hunks(diff, added_only=True)
+            new_line_findings = [
+                f
+                for f in verdict["findings"]
+                if isinstance(f.get("line"), int)
+                and not isinstance(f.get("line"), bool)
+                and f.get("file_path") in hunks
+                and f["line"] in hunks[f["file_path"]]
+            ]
+            if len(new_line_findings) != len(verdict["findings"]):
+                logger.info(
+                    "change_gating=investigate_pr %s status=incremental_context_findings_dropped "
+                    "kept=%d of=%d",
+                    log_ctx, len(new_line_findings), len(verdict["findings"]),
+                )
+                verdict = {**verdict, "findings": new_line_findings}
+                if not new_line_findings:
+                    verdict["verdict"] = "SAFE"
+        else:
+            hunks = parse_diff_hunks(diff) if verdict["findings"] else {}
         anchored, unanchored = anchor_findings(verdict["findings"], hunks)
 
         # Only fetch existing comments when there's something to reconcile:
@@ -616,19 +676,28 @@ def _run_investigation(
         kept = len(anchored) - len(new_findings)
 
         body = render_review_body(
-            verdict["verdict"], verdict.get("summary", ""), verdict["findings"], head_sha
+            verdict["verdict"], verdict.get("summary", ""), verdict["findings"],
+            head_sha, incremental=incremental,
         )
-        event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
+        # Incremental reviews never APPROVE: they assessed only the latest
+        # commits, so a clean delta must not post a whole-PR green sign-off
+        # while earlier findings may still be open. Only a full-PR review
+        # (first pass / fallback) approves on SAFE.
+        if incremental:
+            event = "COMMENT"
+        else:
+            event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
 
         # Dry run exits BEFORE any GitHub write (the reads above are
         # read-only); calibration logs the would-be incremental diff.
         if _is_dry_run():
             logger.info(
                 "change_gating=investigate_pr %s session_id=%s status=dry_run "
-                "would_post_inline=%d would_keep_inline=%d "
+                "incremental=%s would_post_inline=%d would_keep_inline=%d "
                 "would_supersede_review_id=%s review=%s",
                 log_ctx,
                 session_id,
+                incremental,
                 len(comments),
                 kept,
                 prior.get("id") if prior else None,
@@ -639,10 +708,13 @@ def _run_investigation(
             return {"status": "dry_run", "session_id": session_id}
 
         # --------------------------------------------------------------
-        # 11. Post the new review (body = full current verdict; inline
-        #     comments = net-new findings only), then supersede the prior
-        #     review BODIES (their summary tables are stale). Inline
-        #     comments are never deleted — fixed findings stay as history.
+        # 11. Post the new review. Inline comments = net-new findings only;
+        #     prior comments are never touched (fixed findings go outdated
+        #     on their own). In INCREMENTAL mode each review covers a
+        #     distinct slice of commits, so prior reviews are a valid
+        #     history and are NOT superseded. Only a full-PR review
+        #     (first pass / fallback) supersedes prior stale whole-PR
+        #     tables.
         # --------------------------------------------------------------
         _gh(
             "post_review",
@@ -651,12 +723,10 @@ def _run_investigation(
             ),
         )
 
-        if prior_aurora_reviews:
-            # Supersede the prior review BODIES (their tables are stale).
-            # Inline comments are NOT touched — a finding that still holds
-            # keeps its thread; a fixed one goes outdated on its own.
-            # Per-review isolation: a transient failure on one review must
-            # not skip superseding the rest (each is independent best-effort).
+        if prior_aurora_reviews and not incremental:
+            # Full-PR re-review replaces prior whole-PR verdicts: supersede
+            # their stale tables. Per-review isolation — a transient failure
+            # on one must not skip the rest (each is best-effort).
             superseded = 0
             for prior_review in prior_aurora_reviews:
                 try:
@@ -674,6 +744,33 @@ def _run_investigation(
                 "change_gating=investigate_pr %s status=superseded superseded=%d prior_reviews=%d",
                 log_ctx, superseded, len(prior_aurora_reviews),
             )
+        elif incremental and verdict["verdict"] == "RISKY":
+            # An incremental review found NEW risk: retract any stale whole-PR
+            # APPROVE (from an earlier full review) so the PR does not show a
+            # false "Aurora approved" green check while risk is open. COMMENT
+            # reviews are valid per-slice history and are left intact.
+            dismissed = 0
+            for prior_review in prior_aurora_reviews:
+                if prior_review.get("state") != "APPROVED":
+                    continue
+                try:
+                    adapter.dismiss_review(
+                        pr_number,
+                        prior_review.get("id"),
+                        "Later changes introduce incident risk — see the latest review.",
+                    )
+                    dismissed += 1
+                except Exception as exc:
+                    logger.warning(
+                        "change_gating=investigate_pr %s status=dismiss_stale_approve_failed "
+                        "review_id=%s error_class=%s",
+                        log_ctx, prior_review.get("id"), type(exc).__name__,
+                    )
+            if dismissed:
+                logger.info(
+                    "change_gating=investigate_pr %s status=dismissed_stale_approvals dismissed=%d",
+                    log_ctx, dismissed,
+                )
 
         if redis_client is not None:
             try:
@@ -691,11 +788,12 @@ def _run_investigation(
         duration_seconds = round(time.monotonic() - start, 2)
         logger.info(
             "change_gating=investigate_pr %s session_id=%s status=completed verdict=%s "
-            "findings=%d anchored=%d unanchored=%d inline_posted=%d inline_kept=%d "
-            "duration_seconds=%.2f",
+            "incremental=%s findings=%d anchored=%d unanchored=%d inline_posted=%d "
+            "inline_kept=%d duration_seconds=%.2f",
             log_ctx,
             session_id,
             verdict["verdict"],
+            incremental,
             len(verdict["findings"]),
             len(anchored),
             len(unanchored),
@@ -706,6 +804,7 @@ def _run_investigation(
         return {
             "status": "completed",
             "verdict": verdict["verdict"],
+            "incremental": incremental,
             "findings": len(verdict["findings"]),
             "session_id": session_id,
         }

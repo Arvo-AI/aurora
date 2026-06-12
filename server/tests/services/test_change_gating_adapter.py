@@ -273,6 +273,49 @@ class TestGitHubPRAdapter:
         )
 
     # ------------------------------------------------------------------
+    # incremental review: compare diff + files
+    # ------------------------------------------------------------------
+
+    def test_get_compare_diff_three_dot_url_and_diff_accept(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(text="diff --git a/x b/x")
+        diff = adapter.get_compare_diff("oldsha", "newsha")
+        assert diff == "diff --git a/x b/x"
+        call = http.get.call_args
+        assert call.args[0].endswith("/repos/acme/widgets/compare/oldsha...newsha")
+        assert call.kwargs["headers"]["Accept"] == "application/vnd.github.v3.diff"
+
+    def test_get_compare_diff_returns_none_on_404_or_406(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(status=404, text="No common ancestor")
+        assert adapter.get_compare_diff("oldsha", "newsha") is None  # force-push fallback
+        http.get.return_value = _response(status=406, text="too large")
+        assert adapter.get_compare_diff("oldsha", "newsha") is None
+
+    def test_get_compare_returns_status_and_files(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(json_data={
+            "status": "ahead",
+            "files": [{"filename": "a.py", "status": "modified", "additions": 3, "deletions": 1}],
+        })
+        compare = adapter.get_compare("oldsha", "newsha")
+        assert compare["status"] == "ahead"
+        assert compare["files"][0]["filename"] == "a.py"
+        assert http.get.call_args.args[0].endswith("/repos/acme/widgets/compare/oldsha...newsha")
+
+    def test_get_compare_none_on_404_or_406(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(status=404)
+        assert adapter.get_compare("oldsha", "newsha") is None
+        http.get.return_value = _response(status=406)
+        assert adapter.get_compare("oldsha", "newsha") is None
+
+    def test_get_compare_none_when_payload_not_dict(self, mock_requests, _mock_token):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(json_data=[1, 2, 3])  # unexpected list shape
+        assert adapter.get_compare("oldsha", "newsha") is None
+
+    # ------------------------------------------------------------------
     # progress comment (issue comment)
     # ------------------------------------------------------------------
 

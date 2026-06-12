@@ -198,6 +198,24 @@ class GitHubPRAdapter:
         self._raise_for_status(response, path)
         return response.json()
 
+    def _get_diff_text(self, path: str, swallow_statuses: tuple) -> Optional[str]:
+        """GET a unified diff (diff media type) at ``path``.
+
+        Returns None when the response status is in ``swallow_statuses`` —
+        GitHub's way of saying the diff is unavailable (406 oversized, 404
+        unknown ref). Callers log their own context. Shared by
+        :meth:`get_diff` and :meth:`get_compare_diff`.
+        """
+        response = self._session.get(
+            self._url(path),
+            headers=self._headers(accept="application/vnd.github.v3.diff"),
+            timeout=_TIMEOUT_SECONDS,
+        )
+        if response.status_code in swallow_statuses:
+            return None
+        self._raise_for_status(response, path)
+        return response.text
+
     def get_diff(self, pr_number: int) -> Optional[str]:
         """GET the PR's unified diff (Accept: application/vnd.github.v3.diff).
 
@@ -205,21 +223,14 @@ class GitHubPRAdapter:
         for PRs too large to serve as a diff (>20k lines / 300 files /
         1MB). Callers fall back to the changed-file summary in that case.
         """
-        path = f"/pulls/{pr_number}"
-        response = self._session.get(
-            self._url(path),
-            headers=self._headers(accept="application/vnd.github.v3.diff"),
-            timeout=_TIMEOUT_SECONDS,
-        )
-        if response.status_code == 406:
+        diff = self._get_diff_text(f"/pulls/{pr_number}", (406,))
+        if diff is None:
             logger.info(
                 "[ChangeGating] diff too large for the GitHub diff media type "
                 "(406): repo=%s pr=%s — falling back to file summary",
                 self.repo_full_name, pr_number,
             )
-            return None
-        self._raise_for_status(response, path)
-        return response.text
+        return diff
 
     def list_files(self, pr_number: int) -> List[Dict[str, Any]]:
         """GET all changed files for the PR (paginated)."""
@@ -236,6 +247,45 @@ class GitHubPRAdapter:
         review it belongs to.
         """
         return self._get_paginated(f"/pulls/{pr_number}/comments")
+
+    def get_compare_diff(self, base_sha: str, head_sha: str) -> Optional[str]:
+        """GET the unified diff of what ``head_sha`` adds on top of ``base_sha``.
+
+        Uses GitHub's three-dot compare (``base...head``). Returns None on 404
+        (a sha GitHub can't find) or 406 (range too large); callers fall back
+        to the full PR diff. Pair with :meth:`get_compare` to first confirm the
+        range is a clean linear advance (``status == "ahead"``) before trusting
+        the diff as a true incremental delta.
+        """
+        diff = self._get_diff_text(f"/compare/{base_sha}...{head_sha}", (404, 406))
+        if diff is None:
+            logger.info(
+                "[ChangeGating] compare diff unavailable (404/406): repo=%s "
+                "%s..%s — falling back to full diff",
+                self.repo_full_name, base_sha[:7], head_sha[:7],
+            )
+        return diff
+
+    def get_compare(self, base_sha: str, head_sha: str) -> Optional[Dict[str, Any]]:
+        """GET the compare JSON for ``base_sha...head_sha``.
+
+        Carries ``status`` (``ahead`` / ``behind`` / ``diverged`` /
+        ``identical``) and the changed-file list (``files``: same shape as
+        :meth:`list_files`). ``status == "ahead"`` is the only case where head
+        is a clean linear advance over base, i.e. a genuine incremental delta;
+        the others mean a force-push / out-of-order / no-op push and the caller
+        must fall back to a full-PR review. Returns None when the compare is
+        unavailable (404/406).
+        """
+        path = f"/compare/{base_sha}...{head_sha}"
+        response = self._session.get(
+            self._url(path), headers=self._headers(), timeout=_TIMEOUT_SECONDS,
+        )
+        if response.status_code in (404, 406):
+            return None
+        self._raise_for_status(response, path)
+        data = response.json()
+        return data if isinstance(data, dict) else None
 
     # ------------------------------------------------------------------
     # Writes

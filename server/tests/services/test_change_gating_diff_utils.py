@@ -87,6 +87,17 @@ class TestParseDiffHunks:
         )
         assert parse_diff_hunks(diff) == {"y.txt": {7}}
 
+    def test_added_only_excludes_context_lines(self):
+        # Incremental mode: only ADDED (+) right-side lines, not context.
+        # app/main.py: +A=11, +B=12 (hunk1), +new=42 (hunk2); 10/13/14/41/43/44
+        # are context and must be excluded. new_file.txt is all-added.
+        hunks = parse_diff_hunks(MULTI_FILE_DIFF, added_only=True)
+        assert hunks["app/main.py"] == {11, 12, 42}
+        assert hunks["new_file.txt"] == {1, 2}
+        # Sanity: the default (context-inclusive) set is a strict superset.
+        full = parse_diff_hunks(MULTI_FILE_DIFF)
+        assert hunks["app/main.py"] < full["app/main.py"]
+
     def test_empty_diff(self):
         assert parse_diff_hunks("") == {}
 

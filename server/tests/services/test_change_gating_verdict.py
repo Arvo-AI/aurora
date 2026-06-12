@@ -200,6 +200,20 @@ class TestRenderReviewBody:
         decoded = decode_marker(body)
         assert decoded["findings"] == findings
 
+    def test_incremental_heading_and_safe_message_scope_to_latest_changes(self):
+        risky = render_review_body("RISKY", "s", self.FINDINGS, "sha", incremental=True)
+        assert "## Aurora Risk Review — Latest changes" in risky
+        safe = render_review_body("SAFE", "s", [], "sha", incremental=True)
+        assert "## Aurora Risk Review — Latest changes" in safe
+        assert "No new incident risk in the latest changes." in safe
+        # The whole-PR sign-off wording must NOT appear on an incremental review.
+        assert "looks safe to ship" not in safe
+
+    def test_non_incremental_heading_unchanged(self):
+        body = render_review_body("SAFE", "s", [], "sha")
+        assert body.startswith("## Aurora Risk Review\n")
+        assert "Latest changes" not in body
+
 
 class TestRenderInlineComment:
     def test_severity_and_title_bolded_then_explanation_then_marker(self):
@@ -322,6 +336,23 @@ class TestBuildReviewPrompt:
         )
         assert json.dumps(prior, indent=2) in prompt
         assert "Drop findings that have been\nfixed." in prompt
+
+    def test_incremental_note_present_and_appendix_suppressed(self):
+        prior = [{"severity": "HIGH", "file_path": "a.py", "title": "t"}]
+        prompt = build_review_prompt(
+            "acme/widgets", self.PR, self.FILES, "+x",
+            prior_findings=prior, incremental=True,
+        )
+        # The incremental note appears...
+        assert "INCREMENTAL REVIEW:" in prompt
+        assert "ONLY the changes pushed since your last review" in prompt
+        # ...and the full-diff re-review appendix is suppressed even when
+        # prior_findings is passed (the agent does not re-evaluate them).
+        assert "PRIOR REVIEW CONTEXT:" not in prompt
+
+    def test_incremental_note_absent_by_default(self):
+        prompt = build_review_prompt("acme/widgets", self.PR, self.FILES, "+x")
+        assert "INCREMENTAL REVIEW:" not in prompt
 
 
 class TestToolDenylist:

@@ -17,13 +17,21 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DEFAULT_MAX_DIFF_CHARS = 60_000
 
 
-def parse_diff_hunks(diff_text: Optional[str]) -> Dict[str, Set[int]]:
+def parse_diff_hunks(
+    diff_text: Optional[str], added_only: bool = False
+) -> Dict[str, Set[int]]:
     """Map file path -> set of RIGHT-side line numbers visible in diff hunks.
 
     Both context (`` ``) and added (``+``) lines are commentable on
     GitHub's RIGHT side; ``-`` lines exist only on the left and do not
     advance the right-side counter. Files deleted entirely
     (``+++ /dev/null``) have no right side and are skipped.
+
+    When ``added_only`` is True, only ADDED (``+``) lines are recorded —
+    context lines advance the counter but are excluded. Incremental reviews
+    use this so a finding the agent raised on an unchanged context line of
+    the compare diff (pre-existing code already reviewed) is NOT mistaken
+    for a risk in the new commits.
 
     Hunk content is consumed by the ``-a,b +c,d`` line counts BEFORE any
     header detection runs, so added/removed lines whose content begins
@@ -45,13 +53,14 @@ def parse_diff_hunks(diff_text: Optional[str]) -> Dict[str, Set[int]]:
             if line.startswith("-"):
                 left_remaining -= 1
                 continue  # left-side only; right counter does not advance
-            if line.startswith("+"):
+            is_added = line.startswith("+")
+            if is_added:
                 right_remaining -= 1
             else:
                 # Context line (" " prefixed, or bare "" from some generators).
                 left_remaining -= 1
                 right_remaining -= 1
-            if current_file is not None:
+            if current_file is not None and (is_added or not added_only):
                 hunks[current_file].add(right_line)
             right_line += 1
             continue

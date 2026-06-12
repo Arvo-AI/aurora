@@ -121,13 +121,26 @@ OUTPUT FORMAT (respond with this JSON as your final message):
 If verdict is SAFE, findings should be an empty array."""
 
 # Re-review appendix (design doc section 5.3 — verbatim, with
-# {prior_findings_json} substituted at build time).
+# {prior_findings_json} substituted at build time). Used only in the
+# full-diff re-review fallback, NOT in incremental mode.
 _RE_REVIEW_APPENDIX = """PRIOR REVIEW CONTEXT:
 Your previous review of this PR (before the latest commits) found these issues:
 {prior_findings_json}
 
 Assess whether the new commits address these issues. Drop findings that have been
 fixed. Keep findings that remain. Add any new findings from the new code."""
+
+# Prepended in incremental mode: the diff below is ONLY the commits pushed
+# since the last review, not the whole PR. The agent must scope its verdict to
+# those new changes (issues elsewhere in the PR already have their own comments).
+_INCREMENTAL_NOTE = """INCREMENTAL REVIEW:
+The diff below contains ONLY the changes pushed since your last review of this
+PR — not the entire PR. Flag risk ONLY in the lines this diff ADDS or MODIFIES
+(lines beginning with "+"). Do NOT report issues on unchanged context lines
+(lines beginning with a space) — that code was already reviewed and is tracked
+by prior review comments; re-flagging it creates duplicate comments. Begin your
+summary with "Reviewed the latest changes". If the new (added/modified) lines
+introduce no incident risk, return verdict SAFE with an empty findings array."""
 
 
 def build_review_prompt(
@@ -136,14 +149,19 @@ def build_review_prompt(
     files: List[Dict[str, Any]],
     diff_excerpt: str,
     prior_findings: Optional[List[Dict[str, Any]]] = None,
+    incremental: bool = False,
 ) -> str:
     """Compose the full agent prompt for a PR risk review.
 
     ``pr`` is the GitHub PR API dict. The PR title/body are wrapped in
     explicit delimiters and flagged as author-provided DATA (prompt-
     injection surface — the caller separately passes them as rail_text
-    for guardrail evaluation). The re-review appendix is included only
-    when ``prior_findings`` is non-empty.
+    for guardrail evaluation).
+
+    In incremental mode (``incremental=True``) the diff is just the new
+    commits since the last review: an incremental note is prepended and the
+    full-diff re-review appendix is suppressed. Otherwise the re-review
+    appendix is included when ``prior_findings`` is non-empty.
     """
     base = pr.get("base") or {}
     head = pr.get("head") or {}
@@ -173,8 +191,11 @@ def build_review_prompt(
 
     diff_block = "DIFF:\n```diff\n" + (diff_excerpt or "") + "\n```"
 
-    sections = [_REVIEW_PROMPT, metadata, description, files_block, diff_block]
-    if prior_findings:
+    sections = [_REVIEW_PROMPT]
+    if incremental:
+        sections.append(_INCREMENTAL_NOTE)
+    sections += [metadata, description, files_block, diff_block]
+    if prior_findings and not incremental:
         sections.append(
             _RE_REVIEW_APPENDIX.format(
                 prior_findings_json=json.dumps(prior_findings, indent=2)
@@ -482,8 +503,18 @@ def render_review_body(
     summary: str,
     findings: List[Dict[str, Any]],
     head_sha: str,
+    incremental: bool = False,
 ) -> str:
-    """Render the top-level review body, ending with the hidden marker."""
+    """Render the top-level review body, ending with the hidden marker.
+
+    In incremental mode the heading and SAFE message scope the verdict to
+    the latest changes (the review only looked at the new commits), so a
+    clean delta does not read as a whole-PR sign-off.
+    """
+    heading = (
+        "## Aurora Risk Review — Latest changes" if incremental
+        else "## Aurora Risk Review"
+    )
     if verdict == "RISKY":
         rows = []
         for index, finding in enumerate(findings[:_MAX_TABLE_ROWS], start=1):
@@ -500,7 +531,7 @@ def render_review_body(
                 f"| … | | | …and {len(findings) - _MAX_TABLE_ROWS} more findings |"
             )
         body = (
-            "## Aurora Risk Review\n"
+            f"{heading}\n"
             "\n"
             "**Verdict: RISKY**\n"
             "\n"
@@ -517,12 +548,16 @@ def render_review_body(
             f"{_RISKY_FOOTER}"
         )
     else:
+        safe_message = (
+            "No new incident risk in the latest changes." if incremental
+            else "No risks identified. This change looks safe to ship."
+        )
         body = (
-            "## Aurora Risk Review\n"
+            f"{heading}\n"
             "\n"
             "**Verdict: SAFE**\n"
             "\n"
-            "No risks identified. This change looks safe to ship.\n"
+            f"{safe_message}\n"
             "\n"
             "---\n"
             f"{_SAFE_FOOTER}"
