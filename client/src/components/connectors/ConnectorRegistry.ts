@@ -115,6 +115,20 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "prometheus",
+      name: "Prometheus",
+      description: "Query metrics via PromQL, receive Alertmanager alerts, and check target health for automated root cause analysis. Supports Prometheus, Thanos, Mimir, and VictoriaMetrics.",
+      iconPath: "/prometheus.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/prometheus/auth",
+      storageKey: "isPrometheusConnected",
+      alertsPath: "/prometheus/alerts",
+      alertsLabel: "View Alerts",
+      useCustomConnection: true,
+    });
+
+    this.register({
       id: "sentry",
       name: "Sentry",
       description: "Connect Sentry to ingest issue and error alerts and query full stacktraces and breadcrumbs for automated root cause analysis.",

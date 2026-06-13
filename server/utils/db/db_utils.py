@@ -634,6 +634,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_state ON newrelic_events(state);
                     CREATE INDEX IF NOT EXISTS idx_newrelic_events_received_at ON newrelic_events(received_at DESC);
                 """,
+                "prometheus_events": """
+                    CREATE TABLE IF NOT EXISTS prometheus_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alert_name VARCHAR(255),
+                        alert_status VARCHAR(50),
+                        severity VARCHAR(50),
+                        service VARCHAR(255),
+                        labels JSONB,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_events_user_id ON prometheus_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_events_status ON prometheus_events(alert_status);
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_events_alert_name ON prometheus_events(alert_name);
+                    CREATE INDEX IF NOT EXISTS idx_prometheus_events_received_at ON prometheus_events(received_at DESC);
+                """,
                 "sentry_events": """
                     CREATE TABLE IF NOT EXISTS sentry_events (
                         id SERIAL PRIMARY KEY,
@@ -1432,6 +1452,7 @@ def initialize_tables():
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
             rls_tables.append("newrelic_events")
+            rls_tables.append("prometheus_events")
             rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
 

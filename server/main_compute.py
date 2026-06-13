@@ -457,6 +457,11 @@ from routes.newrelic import bp as newrelic_bp  # noqa: F401
 app.register_blueprint(newrelic_bp, url_prefix="/newrelic")
 import routes.newrelic.tasks  # noqa: F401
 
+# --- Prometheus Integration Routes ---
+from routes.prometheus import bp as prometheus_bp  # noqa: F401
+app.register_blueprint(prometheus_bp, url_prefix="/prometheus")
+import routes.prometheus.tasks  # noqa: F401
+
 # --- Sentry Integration Routes ---
 from routes.sentry import bp as sentry_bp  # noqa: F401
 app.register_blueprint(sentry_bp, url_prefix="/sentry")
