@@ -196,7 +196,7 @@ Generate suggestions as a JSON array. Each suggestion MUST have:
 GUIDELINES:
 - For diagnostic suggestions, use read-only commands (get, describe, logs, list, search)
 - For mitigation suggestions, include the actual remediation command but mark appropriately by risk
-- Commands should be complete and executable (include namespaces, resource names from the investigation)
+- Commands MUST use real values from the investigation evidence — NEVER use placeholders like <bucket-name> or <timestamp>. If you don't have the real value, set command to null.
 - Reference specific resources mentioned in the investigation evidence
 - Prefer kubectl, gcloud, aws, az commands based on what tools were used in the investigation
 
@@ -274,11 +274,15 @@ Return ONLY a valid JSON array, no markdown formatting, no explanation:
 
             risk = item.get("risk", "safe")
 
-            if command and not is_command_safe(command):
-                logger.warning(
-                    f"[SuggestionExtractor] Flagged dangerous command as high risk: {command[:100]}"
-                )
-                risk = "high"
+            if command:
+                if re.search(r'<[a-zA-Z][a-zA-Z0-9_-]*>', command):
+                    logger.info("[SuggestionExtractor] Stripped command with placeholders: %s", command[:100])
+                    command = None
+                elif not is_command_safe(command):
+                    logger.warning(
+                        f"[SuggestionExtractor] Flagged dangerous command as high risk: {command[:100]}"
+                    )
+                    risk = "high"
 
             suggestions.append(
                 Suggestion(

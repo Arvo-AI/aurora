@@ -435,6 +435,7 @@ CONSTRAINTS:
 - Medium/high risk items MUST have an "undo" command showing how to reverse the action
 - 1-5 suggestions. Fewer is better. Never pad.
 - For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, python3 (available in sandbox)
+- Commands MUST use real values from the investigation evidence — NEVER use placeholders like <bucket-name> or <timestamp>. If you don't have the real value, set command to null.
 - Do NOT use type "fix" — code fixes are generated during investigation with full file access. Use "remediate" for code/config changes and describe what to change in the description.
 
 Return a JSON array where each item has:
@@ -541,9 +542,13 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
             risk = "safe"
 
         command = item.get("command")
-        if command and not is_command_safe(command):
-            logger.warning("[Recommender] Dangerous command flagged: %s", command[:100])
-            risk = "high"
+        if command:
+            if re.search(r'<[a-zA-Z][a-zA-Z0-9_-]*>', command):
+                logger.info("[Recommender] Stripped command with placeholders: %s", command[:100])
+                command = None
+            elif not is_command_safe(command):
+                logger.warning("[Recommender] Dangerous command flagged: %s", command[:100])
+                risk = "high"
 
         undo = item.get("undo")
         if risk in ("medium", "high") and not undo:
