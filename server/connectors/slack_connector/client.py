@@ -7,7 +7,6 @@ import logging
 import time
 import requests
 from typing import Dict, Any, List, Optional
-import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,11 @@ class SlackClient:
                     response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
                 
                 if response.status_code == 429 and attempt < max_retries:
-                    retry_after = int(response.headers.get("Retry-After", 2 * (attempt + 1)))
+                    try:
+                        retry_after = int(response.headers.get("Retry-After", 2 * (attempt + 1)))
+                    except (TypeError, ValueError):
+                        retry_after = 2 * (attempt + 1)
+                    retry_after = min(retry_after, 30)
                     logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_after)
                     continue
@@ -59,7 +62,7 @@ class SlackClient:
                 
             except requests.RequestException as e:
                 if attempt < max_retries and "429" in str(e):
-                    retry_after = 2 * (attempt + 1)
+                    retry_after = min(2 * (attempt + 1), 30)
                     logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_after)
                     continue
@@ -90,19 +93,40 @@ class SlackClient:
     def list_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
         """List channels the bot can see (may include channels the bot is not a member of)."""
         all_channels = []
-        cursor = None  # Start with no cursor (first page)
+        cursor = None
         
-        # Extract all channels by calling the API repeatedly until all channels are extracted through slack pagination
         while True:
             data = {"types": types, "exclude_archived": True, "limit": 200}
-            if cursor:  # On subsequent iterations, cursor will have a value from previous response
+            if cursor:
                 data["cursor"] = cursor
             
             result = self._make_request("GET", "conversations.list", data)
             channels = result.get('channels', [])
             all_channels.extend(channels)
             
-            # Update cursor for next iteration (will be None if no more pages)
+            cursor = result.get('response_metadata', {}).get('next_cursor')
+            if not cursor:
+                break
+        return all_channels
+    
+    def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
+        """List channels the bot is a member of (much smaller set than all visible channels).
+        
+        Uses users.conversations (Tier 3, 50+ req/min) instead of conversations.list (Tier 2, 20+ req/min).
+        For large workspaces this avoids paginating through thousands of public channels.
+        """
+        all_channels = []
+        cursor = None
+        
+        while True:
+            data = {"types": types, "exclude_archived": True, "limit": 200}
+            if cursor:
+                data["cursor"] = cursor
+            
+            result = self._make_request("GET", "users.conversations", data)
+            channels = result.get('channels', [])
+            all_channels.extend(channels)
+            
             cursor = result.get('response_metadata', {}).get('next_cursor')
             if not cursor:
                 break
@@ -130,12 +154,6 @@ class SlackClient:
         """Set channel topic/description."""
         return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
     
-    def find_channel_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Find a channel by name from channels the bot can see (may not be a member)."""
-        for channel in self.list_channels():
-            if channel.get('name') == name:
-                return channel
-        return None
 
 
 def create_incidents_channel(access_token: str, team_name: str, installer_user_id: str) -> Dict[str, Any]:
@@ -144,10 +162,10 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
     
     Logic:
     1. Try to create 'incidents'
-    2. If name_taken, check if Aurora is already a member
-    3. If member of 'incidents', use it
-    4. If not member of 'incidents', try to create 'aurora_incidents'
-    5. If 'aurora_incidents' name_taken, join it
+    2. If name_taken, check bot's own channels (via users.conversations) for 'incidents'
+    3. If bot is a member of 'incidents', use it
+    4. If not, try to create 'aurora_incidents'
+    5. If 'aurora_incidents' name_taken, check bot's channels for it and join
     """
     try:
         client = SlackClient(access_token)
@@ -166,16 +184,17 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
             if "name_taken" not in str(e).lower():
                 raise
             
-            # 2 & 3. If name_taken, check membership
-            all_channels = client.list_channels()
-            channel_map = {ch.get('name'): ch for ch in all_channels}
+            # 2 & 3. Name taken -- check if bot is already a member via users.conversations
+            # (Tier 3, returns only bot's channels -- typically 1 page even for large workspaces)
+            bot_channels = client.list_bot_channels()
+            channel_map = {ch.get('name'): ch for ch in bot_channels}
             incidents_ch = channel_map.get("incidents")
             
-            if incidents_ch and incidents_ch.get("is_member"):
+            if incidents_ch:
                 channel_id = incidents_ch['id']
                 message = f"Using existing channel #{channel_name}"
             else:
-                # 4. Not member of incidents, try 'aurora_incidents'
+                # 4. Bot is not in #incidents, try to create 'aurora_incidents'
                 channel_name = "aurora_incidents"
                 try:
                     channel = client.create_channel(channel_name, is_private=False)
@@ -186,20 +205,23 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                     if "name_taken" not in str(e2).lower():
                         raise
                     
-                    # 5. Join 'aurora_incidents'
+                    # 5. 'aurora_incidents' also taken -- check bot's channels
                     aurora_ch = channel_map.get("aurora_incidents")
                     if aurora_ch:
                         channel_id = aurora_ch['id']
-                        # 6. Try to join (catch error if already in)
                         try:
                             client._make_request("POST", "conversations.join", {"channel": channel_id})
                             message = f"Joined existing channel #{channel_name}"
                         except Exception:
                             message = f"Using existing channel #{channel_name}"
                     else:
-                        raise Exception("Channel #aurora_incidents exists but could not be found")
+                        logger.warning(
+                            f"Both #incidents and #aurora_incidents exist in {team_name} "
+                            f"but bot is not a member of either. Channel setup deferred."
+                        )
+                        return {"ok": False, "error": "Bot is not a member of any incidents channel"}
         
-        # 7. Final setup
+        # Final setup
         if channel_id:
             try:
                 client.invite_to_channel(channel_id, [installer_user_id])
