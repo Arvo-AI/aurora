@@ -10,7 +10,7 @@ from urllib.parse import quote
 from flask import Blueprint, request, jsonify, redirect
 import requests
 from connectors.slack_connector.oauth import get_auth_url, exchange_code_for_token
-from connectors.slack_connector.client import create_incidents_channel, get_slack_client_for_user
+from connectors.slack_connector.client import create_incidents_channel
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import store_tokens_in_db
@@ -136,8 +136,8 @@ def slack_callback():
             error_msg = channel_result.get('error', 'Unknown error')
             logging.error(f"Failed to create incidents channel: {error_msg}")
             user_hint = (
-                "Aurora could not find or create an incidents channel. "
-                "Please invite the Aurora bot to #incidents or #aurora_incidents in your workspace, then retry."
+                "Aurora could not create an incidents channel in your workspace. "
+                "Please check the bot's permissions and retry."
             )
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error={quote(user_hint)}")
         
@@ -164,31 +164,4 @@ def slack_callback():
     except Exception as e:
         logging.error(f"Error during Slack callback: {e}", exc_info=True)
         return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=unexpected_error")
-
-
-@slack_bp.route("/channels", methods=["GET"])
-@require_permission("connectors", "read")
-def list_channels(user_id):
-    """List Slack channels the bot can see (may include channels the bot is not a member of)."""
-    try:
-        client = get_slack_client_for_user(user_id)
-        if not client:
-            return jsonify({"error": "Slack not connected"}), 401
-        
-        channels = client.list_channels()
-        
-        # Format channel list for frontend
-        formatted_channels = [{
-            "id": ch.get("id"),
-            "name": ch.get("name"),
-            "is_member": ch.get("is_member"),
-            "is_private": ch.get("is_private"),
-            "num_members": ch.get("num_members")
-        } for ch in channels]
-        
-        return jsonify({"channels": formatted_channels})
-        
-    except Exception as e:
-        logging.error(f"Error listing Slack channels: {e}", exc_info=True)
-        return jsonify({"error": "Failed to list Slack channels"}), 500
 

@@ -98,28 +98,12 @@ class SlackClient:
             data["blocks"] = blocks
         return self._make_request("POST", "chat.update", data)
     
-    def list_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
-        """List channels the bot can see (may include channels the bot is not a member of)."""
-        all_channels = []
-        cursor = None
-        
-        while True:
-            data = {"types": types, "exclude_archived": True, "limit": 200}
-            if cursor:
-                data["cursor"] = cursor
-            
-            result = self._make_request("GET", "conversations.list", data)
-            channels = result.get('channels', [])
-            all_channels.extend(channels)
-            
-            cursor = result.get('response_metadata', {}).get('next_cursor')
-            if not cursor:
-                break
-        return all_channels
+    def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
+        """Set channel topic/description."""
+        return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
     
     def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
-        """List channels the bot is a member of (much smaller set than all visible channels).
-        """
+        """List channels the bot is a member of (much smaller set than all visible channels)."""
         all_channels = []
         cursor = None
         
@@ -155,100 +139,73 @@ class SlackClient:
             logger.warning(f"Could not add users to channel {channel}: {e}")
             return None
     
-    def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
-        """Set channel topic/description."""
-        return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
-    
+
+
+def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, Any]]:
+    """Attempt to create a channel. Returns channel dict on success, None if name is taken."""
+    try:
+        return client.create_channel(name, is_private=False)
+    except ValueError as e:
+        if "name_taken" in str(e).lower():
+            return None
+        raise
 
 
 def create_incidents_channel(access_token: str, team_name: str, installer_user_id: str) -> Dict[str, Any]:
     """
-    Find or create the incidents channel for Aurora notifications.
+    Create an incidents channel for Aurora notifications.
     
-    Logic:
-    1. Try to create 'incidents'
-    2. If name_taken, check bot's own channels (via users.conversations) for 'incidents'
-    3. If bot is a member of 'incidents', use it
-    4. If not, try to create 'aurora_incidents'
-    5. If 'aurora_incidents' name_taken, check bot's channels for it and join
+    Tries channel names in order until one succeeds:
+    1. 'incidents'
+    2. 'aurora_incidents'
+    3. 'aurora_incidents_<random_suffix>'
     """
+    import secrets
+
     try:
         client = SlackClient(access_token)
-        channel_name = "incidents"
-        channel_id = None
-        created = False
-        message = ""
         
-        # 1. Try to create 'incidents'
+        candidates = [
+            "incidents",
+            "aurora_incidents",
+            f"aurora_incidents_{secrets.token_hex(4)}",
+        ]
+        
+        channel = None
+        channel_name = None
+        for name in candidates:
+            channel = _try_create_channel(client, name)
+            if channel:
+                channel_name = name
+                break
+        
+        if not channel or not channel_name:
+            logger.error(f"[{team_name}] Failed to create any incidents channel variant")
+            return {"ok": False, "error": "Could not create an incidents channel"}
+        
+        channel_id = channel['id']
+        logger.info(f"[{team_name}] Created incidents channel: #{channel_name} ({channel_id})")
+        
         try:
-            channel = client.create_channel(channel_name, is_private=False)
-            channel_id = channel['id']
-            created = True
-            message = f"Created channel #{channel_name}"
-        except ValueError as e:
-            if "name_taken" not in str(e).lower():
-                raise
-            
-            # 2 & 3. Name taken -- check if bot is already a member via users.conversations
-            bot_channels = client.list_bot_channels()
-            channel_map = {ch.get('name'): ch for ch in bot_channels}
-            logger.info(f"[{team_name}] #incidents exists, bot is in {len(bot_channels)} channels")
-            incidents_ch = channel_map.get("incidents")
-            
-            if incidents_ch:
-                channel_id = incidents_ch['id']
-                message = f"Using existing channel #{channel_name}"
-            else:
-                # 4. Bot is not in #incidents, try to create 'aurora_incidents'
-                channel_name = "aurora_incidents"
-                try:
-                    channel = client.create_channel(channel_name, is_private=False)
-                    channel_id = channel['id']
-                    created = True
-                    message = f"Created channel #{channel_name}"
-                except ValueError as e2:
-                    if "name_taken" not in str(e2).lower():
-                        raise
-                    
-                    # 5. 'aurora_incidents' also taken -- check if bot is a member
-                    aurora_ch = channel_map.get("aurora_incidents")
-                    if aurora_ch:
-                        channel_id = aurora_ch['id']
-                        message = f"Using existing channel #{channel_name}"
-                    else:
-                        logger.error(
-                            f"[{team_name}] Both #incidents and #aurora_incidents exist "
-                            f"but bot is not a member of either. "
-                            f"User must invite the bot to one of these channels."
-                        )
-                        return {"ok": False, "error": "Bot is not a member of any incidents channel"}
+            client.invite_to_channel(channel_id, [installer_user_id])
+            client.set_channel_topic(channel_id, "Aurora incident alerts notifications")
+            client.send_message(channel_id, (
+                f"Welcome to #{channel_name}!\n\n"
+                f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
+                "• Real-time incident alerts and notifications\n"
+                "• Automated root cause analysis updates\n\n"
+                "Tag @Aurora in any channel to start a conversation!"
+            ))
+        except Exception as setup_e:
+            logger.warning(f"[{team_name}] Non-critical error during channel setup: {setup_e}")
         
-        # Final setup
-        if channel_id:
-            try:
-                client.invite_to_channel(channel_id, [installer_user_id])
-                if created:
-                    client.set_channel_topic(channel_id, "Aurora incident alerts notifications")
-                    client.send_message(channel_id, (
-                        f"Welcome to #{channel_name}!\n\n"
-                        f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
-                        "• Real-time incident alerts and notifications\n"
-                        "• Automated root cause analysis updates\n\n"
-                        "Tag @Aurora in any channel to start a conversation!"
-                    ))
-            except Exception as setup_e:
-                logger.warning(f"[{team_name}] Non-critical error during channel setup: {setup_e}")
-                
-            logger.info(f"[{team_name}] Incidents channel ready: #{channel_name} ({channel_id})")
-            return {
-                "ok": True, 
-                "channel_id": channel_id, 
-                "channel_name": channel_name, 
-                "created": created, 
-                "message": message
-            }
-            
-        return {"ok": False, "error": "Failed to resolve incidents channel"}
+        return {
+            "ok": True,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "created": True,
+            "message": f"Created channel #{channel_name}",
+        }
 
     except Exception as e:
         logger.exception(f"[{team_name}] Failed to create incidents channel")
