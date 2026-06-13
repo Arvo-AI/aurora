@@ -74,7 +74,7 @@ class SlackClient:
                     logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_after)
                     continue
-                logger.error(f"Request to Slack API failed: {e}")
+                logger.exception("Request to Slack API failed")
                 raise ValueError(f"Failed to communicate with Slack: {e}") from e
         
         raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
@@ -254,7 +254,7 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
         return {"ok": False, "error": "Failed to resolve incidents channel"}
 
     except Exception as e:
-        logger.exception(f"[{team_name}] Failed to create incidents channel: {e}")
+        logger.exception(f"[{team_name}] Failed to create incidents channel")
         return {"ok": False, "error": str(e)}
 
 
