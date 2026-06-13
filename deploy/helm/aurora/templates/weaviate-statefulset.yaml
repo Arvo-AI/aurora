@@ -23,6 +23,27 @@ spec:
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "weaviate" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
       {{- include "aurora.scheduling" (dict "service" "weaviate" "global" $) | nindent 6 }}
+      initContainers:
+        - name: wait-for-t2v-transformers
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            runAsUser: 1000
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for t2v-transformers to be ready..."
+              until wget -qO- http://{{ include "aurora.fullname" . }}-t2v-transformers:8080/.well-known/ready > /dev/null 2>&1; do
+                echo "t2v-transformers not ready yet, retrying in 5s..."
+                sleep 5
+              done
+              echo "t2v-transformers is ready."
       containers:
         - name: weaviate
           image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
