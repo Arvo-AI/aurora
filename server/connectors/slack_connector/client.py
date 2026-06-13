@@ -4,9 +4,9 @@ Uses the stored access_token from OAuth to interact with Slack workspace.
 """
 
 import logging
+import time
 import requests
 from typing import Dict, Any, List, Optional
-import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -26,33 +26,58 @@ class SlackClient:
             "Content-Type": "application/json"
         }
     
-    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30) -> Dict[str, Any]:
-        """Make a request to Slack API."""
+    @staticmethod
+    def _get_retry_delay(attempt: int, response=None) -> int:
+        """Parse Retry-After header or compute exponential backoff, capped at 30s."""
+        fallback = 2 * (attempt + 1)
+        if response is not None:
+            try:
+                delay = int(response.headers.get("Retry-After", fallback))
+            except (TypeError, ValueError):
+                delay = fallback
+        else:
+            delay = fallback
+        return min(delay, 30)
+
+    def _validate_response(self, result: Dict[str, Any], endpoint: str) -> Dict[str, Any]:
+        """Check Slack's ok field; raise ValueError on API-level errors."""
+        if result.get('ok', False):
+            return result
+        error = result.get('error', 'unknown_error')
+        if not (error == 'name_taken' and endpoint == 'conversations.create'):
+            logger.error(f"Slack API error on {endpoint}: {error}")
+        raise ValueError(f"Slack API error: {error}")
+
+    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
+        """Make a request to Slack API with retry on 429 rate limits."""
         url = f"{SLACK_API_BASE}/{endpoint}"
         
-        try:
-            if method == "GET":
-                response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
-            else:
-                response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            if not result.get('ok', False):
-                error = result.get('error', 'unknown_error')
-                # Expected errors are handled gracefully
-                if error == 'name_taken' and endpoint == 'conversations.create':
-                    pass
+        for attempt in range(max_retries + 1):
+            try:
+                if method == "GET":
+                    response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
                 else:
-                    logger.error(f"Slack API error on {endpoint}: {error}")
-                raise ValueError(f"Slack API error: {error}")
-            
-            return result
-            
-        except requests.RequestException as e:
-            logger.error(f"Request to Slack API failed: {e}")
-            raise ValueError(f"Failed to communicate with Slack: {str(e)}")
+                    response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
+                
+                if response.status_code == 429 and attempt < max_retries:
+                    retry_after = self._get_retry_delay(attempt, response)
+                    logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+
+                response.raise_for_status()
+                return self._validate_response(response.json(), endpoint)
+                
+            except requests.RequestException as e:
+                if attempt < max_retries and "429" in str(e):
+                    retry_after = self._get_retry_delay(attempt)
+                    logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+                logger.exception("Request to Slack API failed")
+                raise ValueError(f"Failed to communicate with Slack: {e}") from e
+        
+        raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
     
     def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None, 
                      blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
@@ -73,22 +98,24 @@ class SlackClient:
             data["blocks"] = blocks
         return self._make_request("POST", "chat.update", data)
     
-    def list_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
-        """List channels the bot can see (may include channels the bot is not a member of)."""
+    def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
+        """Set channel topic/description."""
+        return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
+    
+    def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
+        """List channels the bot is a member of (much smaller set than all visible channels)."""
         all_channels = []
-        cursor = None  # Start with no cursor (first page)
+        cursor = None
         
-        # Extract all channels by calling the API repeatedly until all channels are extracted through slack pagination
         while True:
             data = {"types": types, "exclude_archived": True, "limit": 200}
-            if cursor:  # On subsequent iterations, cursor will have a value from previous response
+            if cursor:
                 data["cursor"] = cursor
             
-            result = self._make_request("GET", "conversations.list", data)
+            result = self._make_request("GET", "users.conversations", data)
             channels = result.get('channels', [])
             all_channels.extend(channels)
             
-            # Update cursor for next iteration (will be None if no more pages)
             cursor = result.get('response_metadata', {}).get('next_cursor')
             if not cursor:
                 break
@@ -112,107 +139,76 @@ class SlackClient:
             logger.warning(f"Could not add users to channel {channel}: {e}")
             return None
     
-    def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
-        """Set channel topic/description."""
-        return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
-    
-    def find_channel_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Find a channel by name from channels the bot can see (may not be a member)."""
-        for channel in self.list_channels():
-            if channel.get('name') == name:
-                return channel
-        return None
+
+
+def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, Any]]:
+    """Attempt to create a channel. Returns channel dict on success, None if name is taken."""
+    try:
+        return client.create_channel(name, is_private=False)
+    except ValueError as e:
+        if "name_taken" in str(e).lower():
+            return None
+        raise
 
 
 def create_incidents_channel(access_token: str, team_name: str, installer_user_id: str) -> Dict[str, Any]:
     """
-    Find or create the incidents channel for Aurora notifications.
+    Create an incidents channel for Aurora notifications.
     
-    Logic:
-    1. Try to create 'incidents'
-    2. If name_taken, check if Aurora is already a member
-    3. If member of 'incidents', use it
-    4. If not member of 'incidents', try to create 'aurora_incidents'
-    5. If 'aurora_incidents' name_taken, join it
+    Tries channel names in order until one succeeds:
+    1. 'incidents'
+    2. 'aurora_incidents'
+    3. 'aurora_incidents_<random_suffix>'
     """
+    import secrets
+
     try:
         client = SlackClient(access_token)
-        channel_name = "incidents"
-        channel_id = None
-        created = False
-        message = ""
         
-        # 1. Try to create 'incidents'
+        candidates = [
+            "incidents",
+            "aurora_incidents",
+            f"aurora_incidents_{secrets.token_hex(4)}",
+        ]
+        
+        channel = None
+        channel_name = None
+        for name in candidates:
+            channel = _try_create_channel(client, name)
+            if channel:
+                channel_name = name
+                break
+        
+        if not channel or not channel_name:
+            logger.error(f"[{team_name}] Failed to create any incidents channel variant")
+            return {"ok": False, "error": "Could not create an incidents channel"}
+        
+        channel_id = channel['id']
+        logger.info(f"[{team_name}] Created incidents channel: #{channel_name} ({channel_id})")
+        
         try:
-            channel = client.create_channel(channel_name, is_private=False)
-            channel_id = channel['id']
-            created = True
-            message = f"Created channel #{channel_name}"
-        except ValueError as e:
-            if "name_taken" not in str(e).lower():
-                raise
-            
-            # 2 & 3. If name_taken, check membership
-            all_channels = client.list_channels()
-            channel_map = {ch.get('name'): ch for ch in all_channels}
-            incidents_ch = channel_map.get("incidents")
-            
-            if incidents_ch and incidents_ch.get("is_member"):
-                channel_id = incidents_ch['id']
-                message = f"Using existing channel #{channel_name}"
-            else:
-                # 4. Not member of incidents, try 'aurora_incidents'
-                channel_name = "aurora_incidents"
-                try:
-                    channel = client.create_channel(channel_name, is_private=False)
-                    channel_id = channel['id']
-                    created = True
-                    message = f"Created channel #{channel_name}"
-                except ValueError as e2:
-                    if "name_taken" not in str(e2).lower():
-                        raise
-                    
-                    # 5. Join 'aurora_incidents'
-                    aurora_ch = channel_map.get("aurora_incidents")
-                    if aurora_ch:
-                        channel_id = aurora_ch['id']
-                        # 6. Try to join (catch error if already in)
-                        try:
-                            client._make_request("POST", "conversations.join", {"channel": channel_id})
-                            message = f"Joined existing channel #{channel_name}"
-                        except Exception:
-                            message = f"Using existing channel #{channel_name}"
-                    else:
-                        raise Exception("Channel #aurora_incidents exists but could not be found")
+            client.invite_to_channel(channel_id, [installer_user_id])
+            client.set_channel_topic(channel_id, "Aurora incident alerts notifications")
+            client.send_message(channel_id, (
+                f"Welcome to #{channel_name}!\n\n"
+                f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
+                "• Real-time incident alerts and notifications\n"
+                "• Automated root cause analysis updates\n\n"
+                "Tag @Aurora in any channel to start a conversation!"
+            ))
+        except Exception as setup_e:
+            logger.warning(f"[{team_name}] Non-critical error during channel setup: {setup_e}")
         
-        # 7. Final setup
-        if channel_id:
-            try:
-                client.invite_to_channel(channel_id, [installer_user_id])
-                if created:
-                    client.set_channel_topic(channel_id, "Aurora incident alerts notifications")
-                    client.send_message(channel_id, (
-                        f"Welcome to #{channel_name}!\n\n"
-                        f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
-                        "• Real-time incident alerts and notifications\n"
-                        "• Automated root cause analysis updates\n\n"
-                        "Tag @Aurora in any channel to start a conversation!"
-                    ))
-            except Exception as setup_e:
-                logger.warning(f"Error during channel setup: {setup_e}")
-                
-            return {
-                "ok": True, 
-                "channel_id": channel_id, 
-                "channel_name": channel_name, 
-                "created": created, 
-                "message": message
-            }
-            
-        return {"ok": False, "error": "Failed to resolve incidents channel"}
+        return {
+            "ok": True,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "created": True,
+            "message": f"Created channel #{channel_name}",
+        }
 
     except Exception as e:
-        logger.error(f"Failed to create incidents channel: {e}", exc_info=True)
+        logger.exception(f"[{team_name}] Failed to create incidents channel")
         return {"ok": False, "error": str(e)}
 
 
