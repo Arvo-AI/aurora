@@ -119,9 +119,6 @@ class SlackClient:
     
     def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
         """List channels the bot is a member of (much smaller set than all visible channels).
-        
-        Uses users.conversations (Tier 3, 50+ req/min) instead of conversations.list (Tier 2, 20+ req/min).
-        For large workspaces this avoids paginating through thousands of public channels.
         """
         all_channels = []
         cursor = None
