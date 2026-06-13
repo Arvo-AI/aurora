@@ -20,6 +20,7 @@ import {
   Copy,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useRouter } from 'next/navigation';
@@ -113,8 +114,7 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
   readonly citations: Citation[];
   readonly onCitationClick: (c: Citation) => void;
 }) {
-  const [showRuledOut, setShowRuledOut] = useState(false);
-  const [showNotChecked, setShowNotChecked] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   // Parse sections from the markdown text
   const sections = useMemo(() => {
@@ -128,7 +128,6 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
         .filter(s => s.trim())
         .map(item => {
           const cleaned = item.replace(/^\*\*/, '').trim();
-          // Split on first em dash or — to get title vs explanation
           const dashSplit = cleaned.match(/^(.+?)\s*[—–]\s*(.+)$/s);
           if (dashSplit) {
             const title = dashSplit[1].replace(/\*\*/g, '').trim();
@@ -146,7 +145,6 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
   }, [text]);
 
   const renderItemText = (str: string) => {
-    // Render code pills and citation badges inline
     const parts = str.split(/(`[^`]+`|\[\d+(?:,\s*\d+)*\])/g);
     return parts.map((part, i) => {
       if (!part) return null;
@@ -168,56 +166,66 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
 
   if (sections.ruledOut.length === 0 && sections.notChecked.length === 0) return null;
 
+  const totalCount = sections.ruledOut.length + sections.notChecked.length;
+
   return (
-    <div className="mt-4 flex gap-2">
-      {sections.ruledOut.length > 0 && (
-        <div className="flex-1 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
-          <button
-            onClick={() => setShowRuledOut(!showRuledOut)}
-            className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
+    <div className="mt-4 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 px-4 py-3 bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+        <span className="text-[13px] font-semibold text-zinc-400 flex-1 text-left">
+          Ruled Out & Not Checked
+          <span className="ml-2 text-[11px] font-normal text-zinc-500">
+            {sections.ruledOut.length} eliminated · {sections.notChecked.length} skipped
+          </span>
+        </span>
+        <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.2 }}>
+          <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
+        </motion.span>
+      </button>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="ruled-out-content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ height: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }, opacity: { duration: 0.2, delay: 0.05 } }}
+            className="overflow-hidden"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
-            <span className="text-[11px] tracking-[.04em] text-zinc-500 font-mono flex-1 text-left">
-              ruled-out &middot; {sections.ruledOut.length} eliminated
-            </span>
-            <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${showRuledOut ? '' : '-rotate-90'}`} />
-          </button>
-          {showRuledOut && (
             <div className="border-t border-white/[.07]">
-              {sections.ruledOut.map((item, idx) => (
-                <div key={idx} className={`px-4 py-3 ${idx > 0 ? 'border-t border-white/[.045]' : ''}`}>
-                  <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
-                  {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
-                </div>
-              ))}
+              {sections.ruledOut.length > 0 && (
+                <>
+                  <div className="px-4 pt-3 pb-1.5">
+                    <span className="text-[10.5px] tracking-[.05em] uppercase text-zinc-600 font-medium">Ruled Out</span>
+                  </div>
+                  {sections.ruledOut.map((item, idx) => (
+                    <div key={idx} className={`px-4 py-2.5 ${idx > 0 ? 'border-t border-white/[.035]' : ''}`}>
+                      <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
+                      {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
+                    </div>
+                  ))}
+                </>
+              )}
+              {sections.notChecked.length > 0 && (
+                <>
+                  <div className={`px-4 pt-3 pb-1.5 ${sections.ruledOut.length > 0 ? 'border-t border-white/[.07]' : ''}`}>
+                    <span className="text-[10.5px] tracking-[.05em] uppercase text-amber-500/70 font-medium">Not Checked</span>
+                  </div>
+                  {sections.notChecked.map((item, idx) => (
+                    <div key={idx} className={`px-4 py-2.5 ${idx > 0 ? 'border-t border-white/[.035]' : ''}`}>
+                      <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
+                      {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
-          )}
-        </div>
-      )}
-      {sections.notChecked.length > 0 && (
-        <div className="flex-1 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
-          <button
-            onClick={() => setShowNotChecked(!showNotChecked)}
-            className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500/70" />
-            <span className="text-[11px] tracking-[.04em] text-zinc-500 font-mono flex-1 text-left">
-              not-checked &middot; {sections.notChecked.length} skipped
-            </span>
-            <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${showNotChecked ? '' : '-rotate-90'}`} />
-          </button>
-          {showNotChecked && (
-            <div className="border-t border-white/[.07]">
-              {sections.notChecked.map((item, idx) => (
-                <div key={idx} className={`px-4 py-3 ${idx > 0 ? 'border-t border-white/[.045]' : ''}`}>
-                  <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
-                  {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -266,22 +274,49 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
   readonly onCitationClick: (c: Citation) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const blockingCount = suggestions.filter(s => s.risk === 'high' || s.risk === 'medium').length;
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const pendingCount = suggestions.filter(s => !s.executedAt).length;
+  const doneCount = suggestions.filter(s => s.executedAt && s.executionStatus === 'completed').length;
+
+  const toggleItem = (id: string) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="mt-5 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-4 py-2.5 border-b border-white/[.07] bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-3 border-b border-white/[.07] bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
       >
         <span className="w-2 h-2 rounded-sm bg-emerald-400 shadow-[0_0_8px_theme(colors.emerald.400)]" />
-        <span className="text-[11px] tracking-[.04em] text-zinc-500 font-mono flex-1 text-left">
-          next-steps &middot; {suggestions.length} action{suggestions.length !== 1 ? 's' : ''}
-          {blockingCount > 0 && <> &middot; {blockingCount} blocking</>}
+        <span className="text-[13px] font-semibold text-zinc-200 flex-1 text-left">
+          Next Steps
+          <span className="ml-2 text-[11px] font-normal text-zinc-500">
+            {pendingCount > 0 && <>{pendingCount} pending</>}
+            {doneCount > 0 && pendingCount > 0 && ' · '}
+            {doneCount > 0 && <>{doneCount} done</>}
+          </span>
         </span>
-        <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.2 }}>
+          <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
+        </motion.span>
       </button>
-      {expanded && suggestions.map((suggestion, idx) => {
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="next-steps-content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ height: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }, opacity: { duration: 0.2, delay: 0.05 } }}
+            className="overflow-hidden"
+          >
+            {suggestions.map((suggestion, idx) => {
         const isFixType = suggestion.type === 'fix';
         const wasExecuted = Boolean(suggestion.executedAt);
         const execStatus = suggestion.executionStatus;
@@ -316,7 +351,49 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
             </div>
             <div className="py-3.5 pr-2">
               <p className="text-[13px] font-semibold text-zinc-100 tracking-[-0.01em] mb-1">{formatDescriptionWithCode(suggestion.title)}</p>
-              <p className="text-[12.5px] text-zinc-400 leading-[1.55]">{formatDescriptionWithCode(suggestion.description)}</p>
+              {!expandedItems.has(suggestion.id) && (
+                <p className="text-[12.5px] text-zinc-400 leading-[1.55]">
+                  {formatDescriptionWithCode(suggestion.summary || suggestion.description)}
+                  {' '}
+                  <button onClick={() => toggleItem(suggestion.id)} className="text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors">more</button>
+                </p>
+              )}
+              <AnimatePresence initial={false}>
+                {expandedItems.has(suggestion.id) && (
+                  <motion.div
+                    key="expanded"
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ height: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }, opacity: { duration: 0.15 } }}
+                    className="overflow-hidden"
+                  >
+                    {(() => {
+                      const desc = suggestion.description || '';
+                      const rootCauseSplit = desc.split(/\s*\*?\*?Root Cause:\*?\*?\s*/);
+                      const actionText = rootCauseSplit[0];
+                      const rootCauseText = rootCauseSplit.length > 1 ? rootCauseSplit.slice(1).join(' ') : null;
+                      return (
+                        <>
+                          <p className="text-[12.5px] text-zinc-400 leading-[1.55]">{formatDescriptionWithCode(actionText)}</p>
+                          {(rootCauseText || suggestion.rationale) && (
+                            <p className="text-[11.5px] text-zinc-500 mt-1.5 leading-[1.5]">{formatDescriptionWithCode(rootCauseText || suggestion.rationale || '')}</p>
+                          )}
+                          {rootCauseText && suggestion.rationale && (
+                            <p className="text-[11.5px] text-zinc-500 mt-1.5 leading-[1.5]">{formatDescriptionWithCode(suggestion.rationale)}</p>
+                          )}
+                        </>
+                      );
+                    })()}
+                    {suggestion.undo && (suggestion.risk === 'high' || suggestion.risk === 'medium') && (
+                      <p className="text-[11px] text-zinc-500 mt-1.5 font-mono">
+                        <span className="text-zinc-600">undo:</span> {suggestion.undo}
+                      </p>
+                    )}
+                    <button onClick={() => toggleItem(suggestion.id)} className="text-[11px] text-zinc-600 hover:text-zinc-400 mt-1.5 transition-colors">less</button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               {(suggestion.filePath || relatedCitations.length > 0) && (
                 <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
                   {suggestion.filePath && (
@@ -367,22 +444,14 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
                 </button>
               ) : actionLabel && !canWrite ? (
                 <span className="text-[12.5px] text-zinc-500">{actionLabel}</span>
-              ) : (
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onRunSuggestion(suggestion);
-                  }}
-                  className="text-[12.5px] text-zinc-400 hover:text-zinc-200 transition-colors whitespace-nowrap"
-                >
-                  Docs &rarr;
-                </button>
-              )}
+              ) : null}
             </div>
           </div>
         );
       })}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

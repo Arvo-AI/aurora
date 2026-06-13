@@ -1,13 +1,21 @@
-"""Next Steps v3: generate suggestions from the investigation trace, not the summary.
+"""Next Steps v3: generate suggestions from the investigation trace.
 
 The Recommender consumes raw investigation evidence (tool calls + outputs + agent
-reasoning) and optionally executes safe read-only diagnostics before generating
-suggestions that actually require a human.
+reasoning), optionally executes safe read-only diagnostics, then generates
+suggestions that actually require a human — following the Three-Class Invariant:
+
+  1. Privilege gap — Aurora lacks tooling/access the human has
+  2. Non-trivial risk — requires human judgment/authorization
+  3. Human knowledge — requires org context or a decision
+
+If a suggestion is risk=safe AND Aurora has the tooling, it must not appear as
+a suggestion. Aurora must have run it (or run it in the self-execution round).
 """
 
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from langchain_core.messages import HumanMessage
@@ -27,11 +35,40 @@ _MAX_REASONING_CHARS = 6_000
 _RECENT_OUTPUT_CHARS = 600
 _OLDER_OUTPUT_CHARS = 200
 
-_VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent", "fix"})
+_VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
+# Max self-execution round tool calls
+_MAX_SELF_EXEC_CALLS = 5
+_SELF_EXEC_TIMEOUT = 30  # seconds per command
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis ledger — extracted from agent reasoning
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Hypothesis:
+    statement: str
+    probability: str  # "high" | "medium" | "low"
+    supporting_evidence: List[str] = field(default_factory=list)
+    contradicting_evidence: List[str] = field(default_factory=list)
+    mitigation_class: str = "unknown"  # rollback | restart | scale | config_revert | code_fix | unknown
+    status: str = "open"  # confirmed | open | ruled_out
+
+
+@dataclass
+class InvestigationState:
+    hypotheses: List[Hypothesis] = field(default_factory=list)
+    ruled_out: List[Hypothesis] = field(default_factory=list)
+    unexplored: List[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _friendly_tool_name(raw_name: str) -> str:
     """Map internal tool names to display-friendly names."""
@@ -47,11 +84,7 @@ def _build_trace_context(
     citations: List[Citation],
     agent_reasoning: str,
 ) -> str:
-    """Build the investigation trace from citations and agent reasoning.
-
-    Structure: agent reasoning first (the "why"), then chronological evidence.
-    Recent tool outputs get more space since they're closest to the conclusion.
-    """
+    """Build the investigation trace from citations and agent reasoning."""
     parts = []
 
     if agent_reasoning:
@@ -64,7 +97,6 @@ def _build_trace_context(
     if citations:
         parts.append("\nINVESTIGATION EVIDENCE (tool calls in chronological order):")
         n = len(citations)
-        # Last 5 citations get more output space (most relevant to conclusion)
         recent_start = max(0, n - 5)
 
         for i, c in enumerate(citations):
@@ -84,62 +116,347 @@ def _build_trace_context(
     return trace
 
 
+# ---------------------------------------------------------------------------
+# Hypothesis extraction — parse structured state from agent reasoning
+# ---------------------------------------------------------------------------
+
+def _extract_hypotheses(agent_reasoning: str, citations: List[Citation]) -> InvestigationState:
+    """Extract hypothesis ledger from agent reasoning using an LLM call.
+
+    This converts the unstructured agent thoughts into the structured
+    InvestigationState that the recommender prompt consumes.
+    """
+    from chat.backend.agent.llm import ModelConfig
+    from chat.backend.agent.providers import create_chat_model
+
+    if not agent_reasoning or len(agent_reasoning.strip()) < 100:
+        return InvestigationState()
+
+    # Truncate reasoning for extraction (use less budget than full recommender)
+    reasoning_input = agent_reasoning[-4000:] if len(agent_reasoning) > 4000 else agent_reasoning
+
+    prompt = f"""Extract the hypothesis state from this investigation reasoning. Return JSON only.
+
+REASONING:
+{reasoning_input}
+
+Return a JSON object with:
+- "hypotheses": array of open/confirmed hypotheses, each with:
+  - "statement": what it claims
+  - "probability": "high" | "medium" | "low"
+  - "supporting_evidence": citation numbers as strings, e.g. ["3", "7"]
+  - "contradicting_evidence": citation numbers as strings
+  - "mitigation_class": "rollback" | "restart" | "scale" | "config_revert" | "code_fix" | "unknown"
+  - "status": "confirmed" | "open"
+- "ruled_out": array of ruled-out hypotheses (same shape, status="ruled_out")
+- "unexplored": array of strings describing paths not investigated and why
+
+If root cause is confirmed, there should be exactly one hypothesis with status="confirmed" and probability="high".
+Return ONLY the JSON object."""
+
+    try:
+        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
+        response = llm.invoke([HumanMessage(content=prompt)])
+        text = str(response.content).strip()
+
+        if text.startswith("```"):
+            lines = text.split("\n")
+            end_index = -1 if lines[-1].strip() == "```" else len(lines)
+            text = "\n".join(lines[1:end_index]).strip()
+
+        data = json.loads(text)
+
+        state = InvestigationState()
+
+        for h in data.get("hypotheses", []):
+            state.hypotheses.append(Hypothesis(
+                statement=h.get("statement", ""),
+                probability=h.get("probability", "medium"),
+                supporting_evidence=h.get("supporting_evidence", []),
+                contradicting_evidence=h.get("contradicting_evidence", []),
+                mitigation_class=h.get("mitigation_class", "unknown"),
+                status=h.get("status", "open"),
+            ))
+
+        for h in data.get("ruled_out", []):
+            state.ruled_out.append(Hypothesis(
+                statement=h.get("statement", ""),
+                probability="low",
+                supporting_evidence=h.get("supporting_evidence", []),
+                contradicting_evidence=h.get("contradicting_evidence", []),
+                mitigation_class=h.get("mitigation_class", "unknown"),
+                status="ruled_out",
+            ))
+
+        state.unexplored = data.get("unexplored", [])
+
+        logger.info(
+            "[Recommender] Extracted hypothesis ledger: %d open, %d ruled_out, %d unexplored",
+            len(state.hypotheses), len(state.ruled_out), len(state.unexplored),
+        )
+        return state
+
+    except Exception as e:
+        logger.warning("[Recommender] Hypothesis extraction failed: %s", e)
+        return InvestigationState()
+
+
+def _format_hypothesis_ledger(state: InvestigationState) -> str:
+    """Format the hypothesis ledger for the recommender prompt."""
+    if not state.hypotheses and not state.ruled_out:
+        return ""
+
+    parts = ["HYPOTHESIS LEDGER:"]
+
+    confirmed = [h for h in state.hypotheses if h.status == "confirmed"]
+    open_h = [h for h in state.hypotheses if h.status == "open"]
+
+    if confirmed:
+        parts.append("\nCONFIRMED ROOT CAUSE:")
+        for h in confirmed:
+            evidence = ", ".join(f"[{e}]" for e in h.supporting_evidence)
+            parts.append(f"  • {h.statement} (evidence: {evidence}, mitigation: {h.mitigation_class})")
+
+    if open_h:
+        parts.append("\nOPEN HYPOTHESES:")
+        for h in open_h:
+            evidence = ", ".join(f"[{e}]" for e in h.supporting_evidence)
+            contra = ", ".join(f"[{e}]" for e in h.contradicting_evidence)
+            line = f"  • [{h.probability}] {h.statement} (supports: {evidence}"
+            if contra:
+                line += f", contradicts: {contra}"
+            line += f", mitigation: {h.mitigation_class})"
+            parts.append(line)
+
+    if state.ruled_out:
+        parts.append("\nRULED OUT:")
+        for h in state.ruled_out:
+            contra = ", ".join(f"[{e}]" for e in h.contradicting_evidence)
+            parts.append(f"  • {h.statement} (killed by: {contra})")
+
+    if state.unexplored:
+        parts.append("\nNOT INVESTIGATED:")
+        for u in state.unexplored:
+            parts.append(f"  • {u}")
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Self-execution round — run safe diagnostics before suggesting
+# ---------------------------------------------------------------------------
+
+def _self_execute_safe_diagnostics(
+    citations: List[Citation],
+    user_id: str,
+    session_id: str,
+) -> List[dict]:
+    """Execute safe diagnostic commands that the recommender would otherwise suggest.
+
+    Returns a list of execution results that get folded into the recommender's
+    context so it can use the new evidence when generating suggestions.
+
+    Only runs commands that are:
+    - Read-only (risk=safe)
+    - Executable with Aurora's existing tooling
+    - Not already run during the investigation
+    """
+    from chat.backend.agent.llm import ModelConfig
+    from chat.backend.agent.providers import create_chat_model
+
+    # Build a compact list of what was already run
+    executed_commands = set()
+    for c in citations:
+        if c.command:
+            executed_commands.add(c.command.strip().lower())
+
+    # Ask the LLM what safe diagnostics it would run if it could
+    trace_summary = []
+    for c in citations[-10:]:
+        tool_display = _friendly_tool_name(c.tool_name)
+        output_preview = (c.output or "")[:100]
+        trace_summary.append(f"[{c.index}] {tool_display}: {c.command} → {output_preview}")
+
+    prompt = f"""You are reviewing an investigation's evidence to identify safe read-only diagnostic commands that would add useful context. The investigation already ran these commands:
+
+{chr(10).join(trace_summary)}
+
+What additional SAFE, READ-ONLY commands would help clarify the situation? These must be:
+- Purely observational (kubectl get, aws logs, curl, gcloud describe, etc.)
+- Executable without elevated privileges
+- Not duplicates of what was already run
+- Likely to produce actionable evidence
+
+Return a JSON array of objects with:
+- "command": the exact command to run
+- "provider": "aws" | "gcp" | "azure" | "kubectl" | "general"
+- "rationale": one sentence on what this would reveal
+
+Return [] if the investigation is already thorough. Max {_MAX_SELF_EXEC_CALLS} commands.
+Return ONLY the JSON array."""
+
+    try:
+        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
+        response = llm.invoke([HumanMessage(content=prompt)])
+        text = str(response.content).strip()
+
+        if text.startswith("```"):
+            lines = text.split("\n")
+            end_index = -1 if lines[-1].strip() == "```" else len(lines)
+            text = "\n".join(lines[1:end_index]).strip()
+
+        commands_to_run = json.loads(text)
+        if not isinstance(commands_to_run, list):
+            return []
+
+    except Exception as e:
+        logger.warning("[Recommender] Self-exec planning failed: %s", e)
+        return []
+
+    # Execute each command
+    results = []
+    for cmd_spec in commands_to_run[:_MAX_SELF_EXEC_CALLS]:
+        command = cmd_spec.get("command", "").strip()
+        provider = cmd_spec.get("provider", "general")
+
+        if not command:
+            continue
+
+        # Safety check — reject anything that looks mutating
+        if not is_command_safe(command):
+            logger.warning("[Recommender] Self-exec rejected unsafe command: %s", command[:100])
+            continue
+
+        # Skip if already executed
+        if command.strip().lower() in executed_commands:
+            continue
+
+        try:
+            from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
+
+            result_json = cloud_exec(
+                provider=provider,
+                command=command,
+                user_id=user_id,
+                session_id=session_id,
+                timeout=_SELF_EXEC_TIMEOUT,
+            )
+            result = json.loads(result_json) if isinstance(result_json, str) else result_json
+            output = result.get("stdout", result.get("output", ""))[:500]
+
+            results.append({
+                "command": command,
+                "provider": provider,
+                "output": output,
+                "success": result.get("success", result.get("returncode", 1) == 0),
+                "rationale": cmd_spec.get("rationale", ""),
+            })
+
+            logger.info("[Recommender] Self-executed: %s → %s", command[:80], "ok" if results[-1]["success"] else "failed")
+
+        except Exception as e:
+            logger.warning("[Recommender] Self-exec failed for '%s': %s", command[:80], e)
+            results.append({
+                "command": command,
+                "provider": provider,
+                "output": f"Error: {e}",
+                "success": False,
+                "rationale": cmd_spec.get("rationale", ""),
+            })
+
+    return results
+
+
+def _format_self_exec_results(results: List[dict]) -> str:
+    """Format self-execution results for inclusion in the recommender prompt."""
+    if not results:
+        return ""
+
+    parts = ["\nADDITIONAL DIAGNOSTICS (Aurora ran these just now):"]
+    for r in results:
+        status = "✓" if r["success"] else "✗"
+        parts.append(f"  {status} {r['command']}")
+        if r["output"]:
+            # Indent output
+            for line in r["output"].split("\n")[:5]:
+                parts.append(f"      {line}")
+            if r["output"].count("\n") > 5:
+                parts.append("      ...")
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Recommender prompt — Three-Class Invariant
+# ---------------------------------------------------------------------------
+
 def _build_recommender_prompt(
     service: str,
     alert_title: str,
     severity: str,
     trace_context: str,
-    tools_available: List[str],
+    hypothesis_ledger: str,
+    self_exec_results: str,
 ) -> str:
-    """Build the recommendation prompt that consumes the raw trace."""
-    tools_note = ""
-    if tools_available:
-        tools_note = (
-            f"\nTOOLS AURORA HAS ACCESS TO: {', '.join(tools_available)}\n"
-            "Do NOT suggest read-only actions using these tools. Aurora already ran them "
-            "or could run them. Only suggest actions requiring human judgment, "
-            "elevated privileges, or tooling Aurora lacks.\n"
-        )
+    """Build the recommendation prompt following the Three-Class Invariant."""
 
     return f"""You are an SRE generating the next actions an engineer should take after an incident investigation.
 
 INCIDENT: {alert_title}
 SERVICE: {service} | SEVERITY: {severity}
-{tools_note}
-INVESTIGATION TRACE:
+
 {trace_context}
 
-Based on what the investigation found, what should the engineer DO next? Think like an experienced SRE who just finished reading the investigation and is handing off to the person who will fix it.
+{hypothesis_ledger}
+{self_exec_results}
 
-Constraints:
-- Only suggest actions the investigation didn't already do
+THE THREE-CLASS INVARIANT:
+Aurora already executed every safe, automated diagnostic it could. The suggestions you generate must fall into exactly one of three classes:
+
+1. PRIVILEGE GAP — Aurora lacks the tooling, access, or credentials to do this. The engineer has access Aurora doesn't.
+   Example: "Check Cloudflare dashboard — no connector available"
+
+2. NON-TRIVIAL RISK — Requires human judgment or authorization before execution. The action could make things worse if the diagnosis is wrong.
+   Example: "Roll back deploy v2.3.1 (undo: redeploy v2.3.1)"
+
+3. HUMAN KNOWLEDGE — Requires organizational context, a decision between tradeoffs, or contacting a specific person.
+   Example: "Contact jsmith (authored suspect change abc123, 4h before alert)"
+
+If a suggestion doesn't fit one of these three classes, DON'T generate it — Aurora should have done it already.
+
+ACTION-EQUIVALENCE RULE:
+For each pair of leading hypotheses, determine whether they require the same or different immediate action. Only generate diagnostic steps that discriminate between hypotheses requiring DIFFERENT mitigations. If all leading hypotheses share the same mitigation, suggest that mitigation directly — do not waste time diagnosing which specific cause is active.
+
+CONSTRAINTS:
 - If root cause is confirmed, skip diagnostics — go straight to the fix
 - If all hypotheses lead to the same fix, just suggest that fix
 - If the alert is invalid/phantom (no real service or resource), return []
 - No project management (tickets, status updates, notifications) — technical actions only
-- Medium/high risk items need an "undo" command
+- Medium/high risk items MUST have an "undo" command showing how to reverse the action
 - 1-5 suggestions. Fewer is better. Never pad.
-
-EXECUTION ENVIRONMENT:
-Commands run in a sandboxed container with: kubectl, aws, gcloud, az, terraform, helm, curl, jq, python3.
-Git is NOT available — for code changes, use type "fix" (Aurora applies via GitHub API).
-Diagnostic commands (kubectl get, aws logs, curl) can be executed directly.
-Multi-step git workflows (clone, edit, commit, push, PR) should be a single "fix" type suggestion with the file path and description of the change — Aurora handles the rest.
+- For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, python3 (available in sandbox)
+- Do NOT use type "fix" — code fixes are generated during investigation with full file access. Use "remediate" for code/config changes and describe what to change in the description.
 
 Return a JSON array where each item has:
-- "title": what to do (action verb + specific target). Use backticks around code terms.
-- "description": why this helps + how to verify it worked. Use backticks around code terms (function names, config keys, file paths, CLI commands, values).
-- "type": "mitigation" | "diagnostic" | "remediate" | "prevent" | "fix"
-  - Use "fix" when the action is a code/config change in a repository. Provide file_path and change_description instead of command.
+- "title": action verb + specific target. Use backticks for code terms.
+- "description": why this helps + how to verify success. Use backticks for code terms, file paths, values.
+- "type": "mitigation" | "diagnostic" | "remediate" | "prevent"
 - "risk": "safe" | "low" | "medium" | "high"
-- "command": exact CLI command for diagnostic/mitigation/remediate/prevent types. Must be executable in the sandbox (kubectl, aws, curl, terraform, helm, etc.). null for "fix" type.
-- "file_path": (fix type only) path to the file to change, e.g. "cache/redis.go"
-- "change_description": (fix type only) what to change in the file
-- "rationale": one sentence on what evidence supports this. Include citation numbers like [15] if referencing investigation evidence.
+- "class": "privilege_gap" | "non_trivial_risk" | "human_knowledge" (which invariant class)
+- "command": exact CLI command. Must be directly executable. For code changes, use sed/patch or describe the edit.
+- "rationale": one sentence tying this to specific evidence. Include citation numbers like [15].
 - "undo": reversal command for medium/high risk, null otherwise
+- "expected_outcome": (optional, for diagnostics) object with:
+  - "if_true": what it means if the command confirms the hypothesis
+  - "if_false": what it means if it doesn't
+  - "then": what action to take based on the result
 
 Return ONLY the JSON array."""
 
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
 
 def _extract_commands_from_trace(citations: List[Citation]) -> set:
     """Extract commands already run during investigation for redundancy filtering."""
@@ -159,9 +476,7 @@ def _is_redundant(suggestion: Suggestion, executed_commands: set) -> bool:
     for executed in executed_commands:
         if normalized == executed:
             return True
-        # Fuzzy: if the core command (minus flags/args differences) matches
         if len(normalized) > 20 and len(executed) > 20:
-            # Compare first 80% of the shorter string
             shorter = min(normalized, executed, key=len)
             prefix_len = int(len(shorter) * 0.8)
             if normalized[:prefix_len] == executed[:prefix_len]:
@@ -216,8 +531,9 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
         if not title:
             continue
 
-        # Validate and clamp type/risk to allowed values
         stype = item.get("type", "diagnostic")
+        if stype == "fix":
+            stype = "remediate"
         if stype not in _VALID_TYPES:
             stype = "diagnostic"
         risk = item.get("risk", "safe")
@@ -230,11 +546,24 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
             risk = "high"
 
         undo = item.get("undo")
-        # Enforce: undo required for medium/high, null for safe/low
         if risk in ("medium", "high") and not undo:
             logger.debug("[Recommender] Missing undo for %s-risk suggestion: %s", risk, title)
         if risk in ("safe", "low"):
             undo = None
+
+        # Build rationale with expected_outcome if present
+        rationale = item.get("rationale", "")
+        expected_outcome = item.get("expected_outcome")
+        if expected_outcome and isinstance(expected_outcome, dict):
+            outcome_parts = []
+            if expected_outcome.get("if_true"):
+                outcome_parts.append(f"If confirmed: {expected_outcome['if_true']}")
+            if expected_outcome.get("if_false"):
+                outcome_parts.append(f"If not: {expected_outcome['if_false']}")
+            if expected_outcome.get("then"):
+                outcome_parts.append(f"Then: {expected_outcome['then']}")
+            if outcome_parts:
+                rationale = rationale + " | " + " / ".join(outcome_parts) if rationale else " / ".join(outcome_parts)
 
         suggestion = Suggestion(
             title=title,
@@ -242,34 +571,79 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
             type=stype,
             risk=risk,
             command=command,
-            rationale=item.get("rationale"),
+            rationale=rationale,
             undo=undo,
         )
 
-        # Filter redundant suggestions
         if _is_redundant(suggestion, executed_commands):
             logger.info("[Recommender] Filtered redundant suggestion: %s", title)
             continue
 
         suggestions.append(suggestion)
 
-    # Sort: mitigation → diagnostic → remediate → prevent → communication
+    # Sort: mitigation → diagnostic → fix → remediate → prevent
     suggestions.sort(key=lambda s: _TYPE_SORT_ORDER.get(s.type, 99))
 
     return suggestions
 
 
-def _get_available_tool_names(citations: List[Citation]) -> List[str]:
-    """Extract unique display-friendly tool names from the investigation."""
-    seen = set()
-    names = []
-    for c in citations:
-        display = _friendly_tool_name(c.tool_name)
-        if display not in seen:
-            seen.add(display)
-            names.append(display)
-    return names
+# ---------------------------------------------------------------------------
+# Summary generation (cheap model, one-line per suggestion)
+# ---------------------------------------------------------------------------
 
+def _generate_summaries(suggestions: List[Suggestion], user_id: str, session_id: str) -> None:
+    """Generate concise one-line summaries for each suggestion using a cheap model."""
+    if not suggestions:
+        return
+
+    from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+
+    items = []
+    for i, s in enumerate(suggestions):
+        full_text = s.description
+        if s.rationale:
+            full_text += " " + s.rationale
+        items.append(f"{i+1}. TITLE: {s.title}\n   DETAIL: {full_text}")
+
+    prompt = f"""For each suggestion, write a ONE-LINE explanation of the mechanism or root cause — the "why" that isn't obvious from the title. Max 15 words. Do NOT repeat the action from the title.
+
+Good examples (title → summary):
+- "Fix batch_writer.go race condition" → "slice[:0] reuse shares backing array across concurrent workers"
+- "Re-process corrupted S3 batches" → "$4,200/day revenue gap from duplicate event_ids since v2.15.0 deploy"
+- "Block deploys when CI fails" → "race condition shipped because ADS-7 test failures were bypassed"
+
+{chr(10).join(items)}
+
+Return one summary per line, numbered:"""
+
+    try:
+        llm = create_chat_model("anthropic/claude-haiku-4.5", temperature=0)
+        response = tracked_invoke(
+            llm,
+            [HumanMessage(content=prompt)],
+            user_id=user_id,
+            session_id=session_id or None,
+            model_name="anthropic/claude-haiku-4.5",
+            request_type="suggestion_summary",
+        )
+        text = str(response.content).strip()
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+        for line in lines:
+            import re
+            m = re.match(r"^(\d+)\.\s*(.+)$", line)
+            if m:
+                idx = int(m.group(1)) - 1
+                if 0 <= idx < len(suggestions):
+                    suggestions[idx].summary = m.group(2)
+    except Exception as e:
+        logger.warning("[Recommender] Summary generation failed (non-fatal): %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def generate_recommendations(
     incident_id: str,
@@ -280,26 +654,54 @@ def generate_recommendations(
     severity: str = "unknown",
     user_id: str = "",
     session_id: str = "",
+    existing_fixes: Optional[List[dict]] = None,  # kept for API compat, unused
 ) -> List[Suggestion]:
     """Generate next steps from the investigation trace.
 
-    This is the v3 replacement for SuggestionExtractor.extract_suggestions().
-    It consumes the raw trace (citations + reasoning) rather than the prose summary.
+    Pipeline:
+    1. Extract hypothesis ledger from agent reasoning
+    2. Run self-execution round (safe diagnostics)
+    3. Generate suggestions for human-required actions only
+    4. Filter out fix-type suggestions that duplicate existing fixes
     """
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
+    # Step 1: Extract hypothesis ledger
+    hypothesis_state = _extract_hypotheses(agent_reasoning, citations)
+    hypothesis_ledger = _format_hypothesis_ledger(hypothesis_state)
+
+    # Step 2: Self-execution round — run safe diagnostics before suggesting
+    self_exec_results_raw = []
+    if user_id and session_id:
+        try:
+            self_exec_results_raw = _self_execute_safe_diagnostics(
+                citations=citations,
+                user_id=user_id,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.warning("[Recommender] Self-execution round failed: %s", e)
+
+    self_exec_context = _format_self_exec_results(self_exec_results_raw)
+
+    # Step 3: Build trace and generate suggestions
     trace_context = _build_trace_context(citations, agent_reasoning)
-    tools_available = _get_available_tool_names(citations)
     executed_commands = _extract_commands_from_trace(citations)
+
+    # Also add self-executed commands to the "already done" set
+    for r in self_exec_results_raw:
+        if r.get("success") and r.get("command"):
+            executed_commands.add(r["command"].strip().lower())
 
     prompt = _build_recommender_prompt(
         service=service,
         alert_title=alert_title,
         severity=severity,
         trace_context=trace_context,
-        tools_available=tools_available,
+        hypothesis_ledger=hypothesis_ledger,
+        self_exec_results=self_exec_context,
     )
 
     try:
@@ -313,9 +715,17 @@ def generate_recommendations(
             request_type="recommendation",
         )
         suggestions = _parse_recommendations(response.content, executed_commands)
+
+        # Generate one-line summaries with a cheap model
+        _generate_summaries(suggestions, user_id, session_id)
+
         logger.info(
-            "[Recommender] Generated %d recommendations for incident %s",
+            "[Recommender] Generated %d recommendations for incident %s "
+            "(hypotheses: %d confirmed, %d open | self-exec: %d commands)",
             len(suggestions), incident_id,
+            len([h for h in hypothesis_state.hypotheses if h.status == "confirmed"]),
+            len([h for h in hypothesis_state.hypotheses if h.status == "open"]),
+            len(self_exec_results_raw),
         )
         return suggestions
 

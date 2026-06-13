@@ -90,6 +90,7 @@ export interface Suggestion {
   command?: string;
   rationale?: string;
   undo?: string;
+  summary?: string;
   // Execution tracking
   executedAt?: string;
   executionSessionId?: string;
@@ -344,6 +345,9 @@ export const incidentsService = {
           type: s.type || 'diagnostic',
           risk: s.risk || 'safe',
           command: s.command,
+          rationale: s.rationale,
+          undo: s.undo,
+          summary: s.summary,
           filePath: s.filePath,
           originalContent: s.originalContent,
           suggestedContent: s.suggestedContent,

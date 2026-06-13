@@ -701,9 +701,7 @@ def _save_fix_suggestion(
 
 def _build_title(file_path: str, fix_description: str) -> str:
     filename = file_path.split('/')[-1]
-    truncated_desc = fix_description[:50]
-    suffix = "..." if len(fix_description) > 50 else ""
-    return f"Fix {filename}: {truncated_desc}{suffix}"
+    return f"Fix `{filename}`: {fix_description}"
 
 
 def github_fix(

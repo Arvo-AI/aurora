@@ -662,7 +662,7 @@ def get_incident(user_id, incident_id: str):
                            file_path, original_content, suggested_content, user_edited_content,
                            repository, pr_url, pr_number, created_branch, applied_at,
                            executed_at, execution_session_id, execution_status,
-                           rationale, undo
+                           rationale, undo, summary
                     FROM incident_suggestions
                     WHERE incident_id = %s
                     ORDER BY created_at ASC
@@ -678,6 +678,7 @@ def get_incident(user_id, incident_id: str):
                 S_REPO, S_PR_URL, S_PR_NUM, S_BRANCH, S_APPLIED = 12, 13, 14, 15, 16
                 S_EXECUTED_AT, S_EXEC_SESSION, S_EXEC_STATUS = 17, 18, 19
                 S_RATIONALE, S_UNDO = 20, 21
+                S_SUMMARY = 22
 
                 suggestions = []
                 for srow in suggestion_rows:
@@ -690,6 +691,8 @@ def get_incident(user_id, incident_id: str):
                         "command": srow[S_CMD],
                         "rationale": srow[S_RATIONALE],
                         "undo": srow[S_UNDO],
+                        "summary": srow[S_SUMMARY],
+                        "filePath": srow[S_FILE_PATH],
                         "createdAt": _format_timestamp(srow[S_CREATED]),
                         "executedAt": _format_timestamp(srow[S_EXECUTED_AT]),
                         "executionSessionId": str(srow[S_EXEC_SESSION]) if srow[S_EXEC_SESSION] else None,
@@ -699,7 +702,6 @@ def get_incident(user_id, incident_id: str):
                     if srow[S_TYPE] == "fix":
                         suggestion.update(
                             {
-                                "filePath": srow[S_FILE_PATH],
                                 "originalContent": srow[S_ORIG],
                                 "suggestedContent": srow[S_SUGGESTED],
                                 "userEditedContent": srow[S_USER_EDITED],
