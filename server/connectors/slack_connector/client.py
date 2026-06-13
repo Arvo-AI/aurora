@@ -185,9 +185,9 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                 raise
             
             # 2 & 3. Name taken -- check if bot is already a member via users.conversations
-            # (Tier 3, returns only bot's channels -- typically 1 page even for large workspaces)
             bot_channels = client.list_bot_channels()
             channel_map = {ch.get('name'): ch for ch in bot_channels}
+            logger.info(f"[{team_name}] #incidents exists, bot is in {len(bot_channels)} channels")
             incidents_ch = channel_map.get("incidents")
             
             if incidents_ch:
@@ -215,9 +215,10 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                         except Exception:
                             message = f"Using existing channel #{channel_name}"
                     else:
-                        logger.warning(
-                            f"Both #incidents and #aurora_incidents exist in {team_name} "
-                            f"but bot is not a member of either. Channel setup deferred."
+                        logger.error(
+                            f"[{team_name}] Both #incidents and #aurora_incidents exist "
+                            f"but bot is not a member of either. "
+                            f"User must invite the bot to one of these channels."
                         )
                         return {"ok": False, "error": "Bot is not a member of any incidents channel"}
         
@@ -235,8 +236,9 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                         "Tag @Aurora in any channel to start a conversation!"
                     ))
             except Exception as setup_e:
-                logger.warning(f"Error during channel setup: {setup_e}")
+                logger.warning(f"[{team_name}] Non-critical error during channel setup: {setup_e}")
                 
+            logger.info(f"[{team_name}] Incidents channel ready: #{channel_name} ({channel_id})")
             return {
                 "ok": True, 
                 "channel_id": channel_id, 
@@ -248,7 +250,7 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
         return {"ok": False, "error": "Failed to resolve incidents channel"}
 
     except Exception as e:
-        logger.error(f"Failed to create incidents channel: {e}", exc_info=True)
+        logger.error(f"[{team_name}] Failed to create incidents channel: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 
