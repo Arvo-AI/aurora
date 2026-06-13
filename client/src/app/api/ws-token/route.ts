@@ -3,6 +3,7 @@ import { SignJWT } from 'jose';
 import { auth } from '@/auth';
 
 const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || '';
+const AURORA_ENV = process.env.AURORA_ENV || 'production';
 
 export async function GET() {
   const session = await auth();
@@ -12,6 +13,9 @@ export async function GET() {
   }
 
   if (!INTERNAL_API_SECRET) {
+    if (AURORA_ENV === 'dev') {
+      return NextResponse.json({ token: null });
+    }
     return NextResponse.json(
       { error: 'Server misconfiguration: INTERNAL_API_SECRET not set' },
       { status: 500 },
