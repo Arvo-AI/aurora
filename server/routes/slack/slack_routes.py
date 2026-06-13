@@ -6,6 +6,7 @@ Handles OAuth flow, connection status, and disconnection.
 import logging
 import os
 import time
+from urllib.parse import quote
 from flask import Blueprint, request, jsonify, redirect
 import requests
 from connectors.slack_connector.oauth import get_auth_url, exchange_code_for_token
@@ -134,7 +135,11 @@ def slack_callback():
         if not channel_result.get('ok'):
             error_msg = channel_result.get('error', 'Unknown error')
             logging.error(f"Failed to create incidents channel: {error_msg}")
-            return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=channel_creation_failed")
+            user_hint = (
+                "Aurora could not find or create an incidents channel. "
+                "Please invite the Aurora bot to #incidents or #aurora_incidents in your workspace, then retry."
+            )
+            return redirect(f"{FRONTEND_URL}?slack_auth=failed&error={quote(user_hint)}")
         
         # Store the token in the database (including channel info)
         try:

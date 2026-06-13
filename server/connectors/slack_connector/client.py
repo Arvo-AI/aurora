@@ -205,15 +205,12 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                     if "name_taken" not in str(e2).lower():
                         raise
                     
-                    # 5. 'aurora_incidents' also taken -- check bot's channels
+                    # 5. 'aurora_incidents' also taken -- bot is already a member
+                    #    (list_bot_channels only returns channels the bot is in)
                     aurora_ch = channel_map.get("aurora_incidents")
                     if aurora_ch:
                         channel_id = aurora_ch['id']
-                        try:
-                            client._make_request("POST", "conversations.join", {"channel": channel_id})
-                            message = f"Joined existing channel #{channel_name}"
-                        except Exception:
-                            message = f"Using existing channel #{channel_name}"
+                        message = f"Using existing channel #{channel_name}"
                     else:
                         logger.error(
                             f"[{team_name}] Both #incidents and #aurora_incidents exist "
