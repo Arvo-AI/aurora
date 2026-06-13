@@ -80,6 +80,135 @@ _INTERNAL_REF_RE = re.compile(
 )
 
 
+def _extract_resource_inventory(citations: List[Citation]) -> str:
+    """Extract concrete resource identifiers from citation commands and outputs.
+
+    Scans all citations for real values (namespaces, pod names, ARNs, repos,
+    file paths, commit SHAs, endpoints, etc.) and returns a formatted inventory
+    the recommender can reference when building commands.
+    """
+    resources: dict[str, set] = {
+        "repositories": set(),
+        "files": set(),
+        "commits": set(),
+        "k8s_namespaces": set(),
+        "k8s_pods": set(),
+        "k8s_deployments": set(),
+        "aws_region": set(),
+        "aws_arns": set(),
+        "aws_resources": set(),
+        "gcp_projects": set(),
+        "endpoints": set(),
+        "jira_keys": set(),
+        "services": set(),
+    }
+
+    # Track which repos were actively accessed (not just search results)
+    accessed_repos = set()
+    repo_access_tools = {"MCP: Get File Contents", "MCP: Get Commit", "MCP: List Commits",
+                         "MCP: Create Or Update File", "GitHub RCA"}
+
+    for c in citations:
+        text = (c.command or "") + " " + (c.output or "")[:2000]
+        tool = c.tool_name or ""
+
+        # GitHub repos — only from tools that actually accessed content
+        if any(t in tool for t in repo_access_tools):
+            for m in re.finditer(r'"owner":\s*"([^"]+)".*?"repo":\s*"([^"]+)"', text):
+                accessed_repos.add(f"{m.group(1)}/{m.group(2)}")
+            for m in re.finditer(r'"repository":\s*"([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)"', text):
+                accessed_repos.add(m.group(1))
+        # curl to raw.githubusercontent — only from the command part
+        cmd = c.command or ""
+        for m in re.finditer(r'raw\.githubusercontent\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)', cmd):
+            accessed_repos.add(m.group(1))
+
+        # File paths from code (*.go, *.py, *.ts, *.yaml, etc.)
+        for m in re.finditer(r'(?:^|[\s"/])([a-zA-Z][\w./]*\.(?:go|py|ts|js|yaml|yml|json|toml|tf|sh))\b', text):
+            resources["files"].add(m.group(1))
+
+        # Git commit SHAs (7+ hex chars, exclude things that look like AWS resource IDs)
+        for m in re.finditer(r'(?:sha|commit|"sha")["\s:]*([0-9a-f]{7,40})\b', text):
+            resources["commits"].add(m.group(1)[:12])
+
+        # Kubernetes namespaces
+        for m in re.finditer(r'(?:-n|--namespace)[=\s]+([a-z][a-z0-9-]*)', text):
+            resources["k8s_namespaces"].add(m.group(1))
+        for m in re.finditer(r'"namespace":\s*"([^"]+)"', text):
+            resources["k8s_namespaces"].add(m.group(1))
+
+        # Kubernetes pods/deployments
+        for m in re.finditer(r'(?:pod|pods)/([a-z][a-z0-9-]+)', text):
+            resources["k8s_pods"].add(m.group(1))
+        for m in re.finditer(r'(?:deployment|deploy)/([a-z][a-z0-9-]+)', text):
+            resources["k8s_deployments"].add(m.group(1))
+
+        # AWS region
+        for m in re.finditer(r'(?:--region|us-(?:east|west)-[12]|eu-(?:west|central)-[123]|ap-(?:southeast|northeast|south)-[12])', text):
+            region = m.group(0).replace("--region", "").strip()
+            if region:
+                resources["aws_region"].add(region)
+
+        # AWS ARNs (exclude wildcard and assumed-role session ARNs)
+        for m in re.finditer(r'arn:aws:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^\s"]+', text):
+            arn = m.group(0).rstrip(",.")
+            if "*" not in arn and ":assumed-role/" not in arn:
+                resources["aws_arns"].add(arn)
+
+        # AWS resource identifiers (cluster IDs, instance IDs, etc.)
+        for m in re.finditer(r'\b(i-[0-9a-f]{8,17}|sg-[0-9a-f]+|vpc-[0-9a-f]+|subnet-[0-9a-f]+)\b', text):
+            resources["aws_resources"].add(m.group(1))
+
+        # ElastiCache / RDS endpoints
+        for m in re.finditer(r'([a-z][a-z0-9-]+\.(?:[a-z0-9]+\.)?(?:use[12]|usw[12]|euw[123])\.cache\.amazonaws\.com)', text):
+            resources["endpoints"].add(m.group(1))
+        for m in re.finditer(r'([a-z][a-z0-9-]+\.[a-z0-9]+\.[a-z]{2}-[a-z]+-\d\.rds\.amazonaws\.com)', text):
+            resources["endpoints"].add(m.group(1))
+
+        # GCP projects
+        for m in re.finditer(r'(?:project[=\s/]+|projects/)([a-z][a-z0-9-]{4,28}[a-z0-9])', text):
+            resources["gcp_projects"].add(m.group(1))
+
+        # Jira issue keys
+        for m in re.finditer(r'\b([A-Z]{2,10}-\d+)\b', text):
+            resources["jira_keys"].add(m.group(1))
+
+        # Service names from tool outputs
+        for m in re.finditer(r'"(?:service|serviceName)":\s*"([^"]+)"', text):
+            resources["services"].add(m.group(1))
+
+    resources["repositories"] = accessed_repos
+
+    # Format non-empty categories
+    lines = []
+    labels = {
+        "repositories": "Repositories",
+        "files": "Files",
+        "commits": "Commits",
+        "k8s_namespaces": "K8s Namespaces",
+        "k8s_pods": "K8s Pods",
+        "k8s_deployments": "K8s Deployments",
+        "aws_region": "AWS Region",
+        "aws_arns": "AWS ARNs",
+        "aws_resources": "AWS Resources",
+        "gcp_projects": "GCP Projects",
+        "endpoints": "Endpoints",
+        "jira_keys": "Jira Issues",
+        "services": "Services",
+    }
+    for key, label in labels.items():
+        vals = resources[key]
+        if vals:
+            # Limit to 10 per category to keep prompt manageable
+            items = sorted(vals)[:10]
+            lines.append(f"  {label}: {', '.join(items)}")
+
+    if not lines:
+        return ""
+
+    return "RESOURCE INVENTORY (real values from investigation — use these in commands):\n" + "\n".join(lines)
+
+
 def _build_trace_context(
     citations: List[Citation],
     agent_reasoning: str,
@@ -397,6 +526,7 @@ def _build_recommender_prompt(
     trace_context: str,
     hypothesis_ledger: str,
     self_exec_results: str,
+    resource_inventory: str = "",
 ) -> str:
     """Build the recommendation prompt following the Three-Class Invariant."""
 
@@ -409,6 +539,7 @@ SERVICE: {service} | SEVERITY: {severity}
 
 {hypothesis_ledger}
 {self_exec_results}
+{resource_inventory}
 
 THE THREE-CLASS INVARIANT:
 Aurora already executed every safe, automated diagnostic it could. The suggestions you generate must fall into exactly one of three classes:
@@ -435,7 +566,8 @@ CONSTRAINTS:
 - Medium/high risk items MUST have an "undo" command showing how to reverse the action
 - 1-5 suggestions. Fewer is better. Never pad.
 - For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, python3 (available in sandbox)
-- Commands MUST use real values from the investigation evidence — NEVER use placeholders like <bucket-name> or <timestamp>. If you don't have the real value, set command to null.
+- Commands MUST use real values from the RESOURCE INVENTORY above — NEVER use placeholders like <bucket-name> or <timestamp>. If the inventory doesn't contain the value you need, set command to null.
+- Prefer commands the engineer can paste and run immediately. Include --region, --namespace, --output flags as needed.
 - Do NOT use type "fix" — code fixes are generated during investigation with full file access. Use "remediate" for code/config changes and describe what to change in the description.
 
 Return a JSON array where each item has:
@@ -694,6 +826,7 @@ def generate_recommendations(
     # Step 3: Build trace and generate suggestions
     trace_context = _build_trace_context(citations, agent_reasoning)
     executed_commands = _extract_commands_from_trace(citations)
+    resource_inventory = _extract_resource_inventory(citations)
 
     # Also add self-executed commands to the "already done" set
     for r in self_exec_results_raw:
@@ -707,6 +840,7 @@ def generate_recommendations(
         trace_context=trace_context,
         hypothesis_ledger=hypothesis_ledger,
         self_exec_results=self_exec_context,
+        resource_inventory=resource_inventory,
     )
 
     try:
