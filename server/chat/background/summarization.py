@@ -54,6 +54,7 @@ from chat.background.citation_extractor import (
     CitationExtractor,
     save_incident_citations,
 )
+from chat.background.recommender import generate_recommendations
 from chat.background.suggestion_extractor import (
     SuggestionExtractor,
     save_incident_suggestions,
@@ -302,7 +303,9 @@ WRITING RULES:
 - Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
 - Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-After the report, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions (specific logs/metrics/configs/components). When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
+After the report, add a "## Suggested Next Steps" section with concrete actions. Include only as many steps as the situation warrants — a simple confirmed issue may need one; a complex undetermined one may need several. When the root cause is confirmed, state the fix and any preventive measures. When undetermined, list the precise checks an engineer would run to determine it — not generic advice.
+
+Then add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Finally add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.).
 {fix_suggestions_block}"""
     else:
         # Transcript fallback — same anti-hallucination contract.
@@ -336,7 +339,7 @@ ANTI-HALLUCINATION RULES (non-negotiable):
 
 Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
-After the summary, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions. When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
+After the summary, add a "## Suggested Next Steps" section with concrete actions. Include only as many steps as the situation warrants. When the root cause is confirmed, state the fix. When undetermined, list the precise checks an engineer would run to determine it — not generic advice.
 {fix_suggestions_block}"""
     return prompt
 
@@ -815,18 +818,37 @@ def generate_incident_summary_from_chat(
                     f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
                 )
 
-        # Extract and save structured suggestions with commands
+        # Generate next steps from the investigation trace (v3 recommender).
+        # Falls back to summary-based extraction if the trace is empty.
         try:
-            suggestion_extractor = SuggestionExtractor()
-            suggestions = suggestion_extractor.extract_suggestions(
-                incident_id=incident_id,
-                summary=summary,
-                citations=used_citations if used_citations else all_citations,
-                service=basics["service"],
-                alert_title=basics["alert_title"],
-                user_id=user_id,
-                session_id=session_id,
-            )
+            trace_citations = used_citations if used_citations else all_citations
+            if trace_citations:
+                suggestions = generate_recommendations(
+                    incident_id=incident_id,
+                    citations=trace_citations,
+                    agent_reasoning=agent_reasoning or "",
+                    service=basics["service"],
+                    alert_title=basics["alert_title"],
+                    severity=basics.get("severity", "unknown"),
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+            else:
+                suggestions = []
+
+            # Fallback: if recommender returned nothing, use legacy extractor
+            if not suggestions:
+                suggestion_extractor = SuggestionExtractor()
+                suggestions = suggestion_extractor.extract_suggestions(
+                    incident_id=incident_id,
+                    summary=summary,
+                    citations=trace_citations,
+                    service=basics["service"],
+                    alert_title=basics["alert_title"],
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)
                 logger.info(
@@ -834,7 +856,7 @@ def generate_incident_summary_from_chat(
                 )
         except Exception as e:
             logger.exception(
-                f"{_LOG_PREFIX} Failed to extract suggestions for incident {incident_id}: {e}"
+                f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
             )
 
         _update_incident_summary(incident_id, summary, user_id=user_id)

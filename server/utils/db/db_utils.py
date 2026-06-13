@@ -2265,9 +2265,28 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Add rationale and undo columns to incident_suggestions (Next Steps v3)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS rationale TEXT,
+                    ADD COLUMN IF NOT EXISTS undo TEXT;
+                    """
+                )
+                logging.info(
+                    "Added rationale/undo columns to incident_suggestions table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding rationale/undo columns to incident_suggestions: {e}"
+                )
+                conn.rollback()
+
             # Migration: Create postmortems table if it doesn't exist
             # Note: 'resolved' is now a valid incident status value.
-            # The incidents.status column is VARCHAR so no ALTER TABLE is needed.
+            # The incidents.status column is VARCHAR so no ALTER Table is needed.
             try:
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS postmortems (

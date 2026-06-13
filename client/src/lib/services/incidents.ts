@@ -25,7 +25,7 @@ export function getSourceIconBgColor(source: string): string {
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'summarizing' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
-export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
+export type SuggestionType = 'diagnostic' | 'mitigation' | 'remediate' | 'prevent' | 'communication' | 'fix';
 
 export interface AlertMetadata {
   // Common fields
@@ -87,7 +87,9 @@ export interface Suggestion {
   description: string;
   type: SuggestionType;
   risk: SuggestionRisk;
-  command?: string; // Optional command to run
+  command?: string;
+  rationale?: string;
+  undo?: string;
   // Execution tracking
   executedAt?: string;
   executionSessionId?: string;

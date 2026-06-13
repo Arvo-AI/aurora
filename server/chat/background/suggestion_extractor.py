@@ -72,9 +72,11 @@ class Suggestion:
 
     title: str
     description: str
-    type: str  # 'diagnostic', 'mitigation', 'communication'
+    type: str  # 'diagnostic', 'mitigation', 'remediate', 'prevent', 'communication'
     risk: str  # 'safe', 'low', 'medium', 'high'
     command: Optional[str]
+    rationale: Optional[str] = None
+    undo: Optional[str] = None
 
 
 class SuggestionExtractor:
@@ -317,8 +319,8 @@ def save_incident_suggestions(incident_id: str, suggestions: List[Suggestion]) -
                 cursor.executemany(
                     """
                     INSERT INTO incident_suggestions
-                    (incident_id, title, description, type, risk, command)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (incident_id, title, description, type, risk, command, rationale, undo)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     [
                         (
@@ -328,6 +330,8 @@ def save_incident_suggestions(incident_id: str, suggestions: List[Suggestion]) -
                             s.type,
                             s.risk,
                             s.command,
+                            getattr(s, "rationale", None),
+                            getattr(s, "undo", None),
                         )
                         for s in suggestions
                     ],

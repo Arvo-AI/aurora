@@ -17,9 +17,11 @@ import {
   Coins,
   Activity,
   Check,
+  Copy,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { useUser } from '@/hooks/useAuthHooks';
@@ -104,6 +106,285 @@ function isSafeUrl(url: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+function RuledOutConsole({ text, citations, onCitationClick }: {
+  readonly text: string;
+  readonly citations: Citation[];
+  readonly onCitationClick: (c: Citation) => void;
+}) {
+  const [showRuledOut, setShowRuledOut] = useState(false);
+  const [showNotChecked, setShowNotChecked] = useState(false);
+
+  // Parse sections from the markdown text
+  const sections = useMemo(() => {
+    const ruledOutMatch = text.match(/##\s*Ruled Out\s*\n([\s\S]*?)(?=##\s*Not Checked|$)/);
+    const notCheckedMatch = text.match(/##\s*Not Checked\s*\n([\s\S]*?)$/);
+
+    const parseItems = (content: string | undefined) => {
+      if (!content) return [];
+      return content
+        .split(/\n[-*]\s+/)
+        .filter(s => s.trim())
+        .map(item => {
+          const cleaned = item.replace(/^\*\*/, '').trim();
+          // Split on first em dash or — to get title vs explanation
+          const dashSplit = cleaned.match(/^(.+?)\s*[—–]\s*(.+)$/s);
+          if (dashSplit) {
+            const title = dashSplit[1].replace(/\*\*/g, '').trim();
+            const explanation = dashSplit[2].trim();
+            return { title, explanation };
+          }
+          return { title: cleaned.replace(/\*\*/g, ''), explanation: '' };
+        });
+    };
+
+    return {
+      ruledOut: parseItems(ruledOutMatch?.[1]),
+      notChecked: parseItems(notCheckedMatch?.[1]),
+    };
+  }, [text]);
+
+  const renderItemText = (str: string) => {
+    // Render code pills and citation badges inline
+    const parts = str.split(/(`[^`]+`|\[\d+(?:,\s*\d+)*\])/g);
+    return parts.map((part, i) => {
+      if (!part) return null;
+      const codeMatch = part.match(/^`([^`]+)`$/);
+      if (codeMatch) return <code key={i} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap">{codeMatch[1]}</code>;
+      const citeMatch = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
+      if (citeMatch) {
+        const keys = citeMatch[1].split(/,\s*/);
+        return keys.map(key => {
+          const citation = citations.find(c => c.key === key);
+          return citation ? (
+            <button key={`${i}-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
+          ) : <span key={`${i}-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
+        });
+      }
+      return part;
+    });
+  };
+
+  if (sections.ruledOut.length === 0 && sections.notChecked.length === 0) return null;
+
+  return (
+    <div className="mt-4 flex gap-2">
+      {sections.ruledOut.length > 0 && (
+        <div className="flex-1 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
+          <button
+            onClick={() => setShowRuledOut(!showRuledOut)}
+            className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+            <span className="text-[11px] tracking-[.04em] text-zinc-500 font-mono flex-1 text-left">
+              ruled-out &middot; {sections.ruledOut.length} eliminated
+            </span>
+            <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${showRuledOut ? '' : '-rotate-90'}`} />
+          </button>
+          {showRuledOut && (
+            <div className="border-t border-white/[.07]">
+              {sections.ruledOut.map((item, idx) => (
+                <div key={idx} className={`px-4 py-3 ${idx > 0 ? 'border-t border-white/[.045]' : ''}`}>
+                  <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
+                  {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {sections.notChecked.length > 0 && (
+        <div className="flex-1 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
+          <button
+            onClick={() => setShowNotChecked(!showNotChecked)}
+            className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500/70" />
+            <span className="text-[11px] tracking-[.04em] text-zinc-500 font-mono flex-1 text-left">
+              not-checked &middot; {sections.notChecked.length} skipped
+            </span>
+            <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${showNotChecked ? '' : '-rotate-90'}`} />
+          </button>
+          {showNotChecked && (
+            <div className="border-t border-white/[.07]">
+              {sections.notChecked.map((item, idx) => (
+                <div key={idx} className={`px-4 py-3 ${idx > 0 ? 'border-t border-white/[.045]' : ''}`}>
+                  <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
+                  {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const CODE_PILL = "font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap";
+
+function formatDescriptionWithCode(text: string): React.ReactNode {
+  // First pass: handle backticks, **bold**, citation refs [N], and auto-detect code terms
+  // Pattern matches: `code`, **bold**, [N] citations, and code-like tokens
+  const TOKEN_RE = /(`[^`]+`|\*\*[^*]+\*\*|\[\d+(?:,\s*\d+)*\]|(?<!\w)(?:[A-Z][a-z]+[A-Z]\w*|[a-z]+[A-Z]\w*|[\w./]+\.(?:go|py|ts|js|yml|yaml|json|toml|md)|(?:\d+(?:\.\d+)?(?:ms|s|m|MB|GB|Ki|Mi|Gi|%))|\b[0-9a-f]{7,40}\b)(?!\w))/g;
+
+  const parts = text.split(TOKEN_RE);
+  return parts.map((part, i) => {
+    if (!part) return null;
+    // Backtick code
+    const codeMatch = part.match(/^`([^`]+)`$/);
+    if (codeMatch) return <code key={i} className={CODE_PILL}>{codeMatch[1]}</code>;
+    // Bold markdown
+    const boldMatch = part.match(/^\*\*([^*]+)\*\*$/);
+    if (boldMatch) return <strong key={i} className="text-zinc-200 font-semibold">{boldMatch[1]}</strong>;
+    // Citation refs — strip (shown as badges below)
+    if (/^\[\d+(?:,\s*\d+)*\]$/.test(part)) return null;
+    // Auto-detected code terms (camelCase, file paths, durations, hashes)
+    if (/^[A-Z][a-z]+[A-Z]\w*$/.test(part) || /^[a-z]+[A-Z]\w*$/.test(part)) {
+      return <code key={i} className={CODE_PILL}>{part}</code>;
+    }
+    if (/^[\w./]+\.(?:go|py|ts|js|yml|yaml|json|toml|md)$/.test(part)) {
+      return <code key={i} className={CODE_PILL}>{part}</code>;
+    }
+    if (/^\d+(?:\.\d+)?(?:ms|s|m|MB|GB|Ki|Mi|Gi|%)$/.test(part)) {
+      return <code key={i} className={CODE_PILL}>{part}</code>;
+    }
+    if (/^[0-9a-f]{7,40}$/.test(part)) {
+      return <code key={i} className={CODE_PILL}>{part}</code>;
+    }
+    return part;
+  });
+}
+
+function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, onFixSuggestion, onCitationClick }: {
+  readonly suggestions: Suggestion[];
+  readonly citations: Citation[];
+  readonly canWrite: boolean;
+  readonly onRunSuggestion: (s: Suggestion) => void;
+  readonly onFixSuggestion: (s: Suggestion) => void;
+  readonly onCitationClick: (c: Citation) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const blockingCount = suggestions.filter(s => s.risk === 'high' || s.risk === 'medium').length;
+
+  return (
+    <div className="mt-5 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-4 py-2.5 border-b border-white/[.07] bg-[#0D0F13] hover:bg-[#10131a] transition-colors"
+      >
+        <span className="w-2 h-2 rounded-sm bg-emerald-400 shadow-[0_0_8px_theme(colors.emerald.400)]" />
+        <span className="text-[11px] tracking-[.04em] text-zinc-500 font-mono flex-1 text-left">
+          next-steps &middot; {suggestions.length} action{suggestions.length !== 1 ? 's' : ''}
+          {blockingCount > 0 && <> &middot; {blockingCount} blocking</>}
+        </span>
+        <ChevronDown className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+      </button>
+      {expanded && suggestions.map((suggestion, idx) => {
+        const isFixType = suggestion.type === 'fix';
+        const wasExecuted = Boolean(suggestion.executedAt);
+        const execStatus = suggestion.executionStatus;
+        const isFirst = idx === 0;
+
+        const sevGlyph = suggestion.risk === 'high' ? '!!' : suggestion.risk === 'medium' ? '!' : suggestion.type === 'prevent' ? '~' : '·';
+        const sevColor = suggestion.risk === 'high' ? 'text-rose-400' : suggestion.risk === 'medium' ? 'text-amber-400' : suggestion.type === 'prevent' ? 'text-blue-400' : 'text-zinc-500';
+
+        // Detect if command is mutating (can't run in sandbox)
+        const isMutating = suggestion.command ? /\b(git\s+(push|commit|add|checkout|clone)|sed\s+-i|rm\s|mv\s|cp\s|chmod|chown|kubectl\s+(apply|delete|patch|edit)|terraform\s+(apply|destroy)|helm\s+(install|upgrade|delete))\b/.test(suggestion.command) : false;
+
+        const actionLabel = isFixType
+          ? suggestion.prUrl ? 'View PR' : 'Create PR'
+          : wasExecuted
+            ? execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : 'View output'
+            : suggestion.command ? (isMutating ? 'Copy' : 'Run') : null;
+
+        const isPrimary = !wasExecuted && suggestion.command && !isFixType && isFirst && !isMutating;
+
+        // Find citation keys referenced in description or rationale
+        const descText = (suggestion.description || '') + ' ' + (suggestion.rationale || '');
+        const citationKeys = [...descText.matchAll(/\[(\d+)\]/g)].map(m => m[1]);
+        const relatedCitations = citations.filter(c => citationKeys.includes(c.key));
+
+        return (
+          <div
+            key={suggestion.id}
+            className={`grid grid-cols-[34px_1fr_auto] items-start transition-colors hover:bg-white/[.022] ${idx > 0 ? 'border-t border-white/[.045]' : ''}`}
+          >
+            <div className={`pt-3.5 pb-3.5 pl-3 pr-2.5 text-right font-mono text-[11px] select-none ${sevColor}`}>
+              {sevGlyph}
+            </div>
+            <div className="py-3.5 pr-2">
+              <p className="text-[13px] font-semibold text-zinc-100 tracking-[-0.01em] mb-1">{formatDescriptionWithCode(suggestion.title)}</p>
+              <p className="text-[12.5px] text-zinc-400 leading-[1.55]">{formatDescriptionWithCode(suggestion.description)}</p>
+              {(suggestion.filePath || relatedCitations.length > 0) && (
+                <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                  {suggestion.filePath && (
+                    <span className="font-mono text-[10.5px] text-zinc-400 border border-white/[.06] rounded-[5px] px-1.5 py-px">{suggestion.filePath}</span>
+                  )}
+                  {relatedCitations.map(c => (
+                    <button
+                      key={c.key}
+                      onClick={(e) => { e.stopPropagation(); onCitationClick(c); }}
+                      className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px hover:text-emerald-400 hover:border-emerald-400/30 transition-colors"
+                    >
+                      {c.key}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center py-3.5 pr-3.5 pl-1.5">
+              {actionLabel && canWrite ? (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (isFixType) {
+                      onFixSuggestion(suggestion);
+                    } else {
+                      onRunSuggestion(suggestion);
+                    }
+                  }}
+                  className={`inline-flex items-center gap-[7px] px-3.5 py-2 rounded-[9px] text-[12.5px] font-semibold tracking-[.005em] whitespace-nowrap transition-all active:translate-y-px ${
+                    wasExecuted && execStatus === 'completed'
+                      ? 'bg-[#14171C] text-emerald-400 border border-white/[.07]'
+                      : wasExecuted && execStatus === 'failed'
+                        ? 'bg-[#14171C] text-rose-400 border border-white/[.07]'
+                        : isPrimary
+                          ? 'bg-gradient-to-b from-emerald-300 to-emerald-400 text-[#04140F] border border-transparent shadow-[0_1px_0_rgba(255,255,255,.25)_inset,0_6px_18px_-8px_rgba(63,224,182,.7)] hover:shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_8px_22px_-8px_rgba(63,224,182,.9)]'
+                          : 'bg-[#14171C] text-zinc-100 border border-white/[.07] hover:border-white/[.18] hover:bg-[#181b21]'
+                  }`}
+                >
+                  {isFixType ? (
+                    <GitBranch className="w-[13px] h-[13px]" />
+                  ) : wasExecuted ? (
+                    execStatus === 'completed' ? <CheckCircle2 className="w-[13px] h-[13px]" /> : execStatus === 'failed' ? <AlertCircle className="w-[13px] h-[13px]" /> : <Play className="w-[13px] h-[13px]" />
+                  ) : (
+                    <Play className="w-[13px] h-[13px]" />
+                  )}
+                  {actionLabel}
+                </button>
+              ) : actionLabel && !canWrite ? (
+                <span className="text-[12.5px] text-zinc-500">{actionLabel}</span>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onRunSuggestion(suggestion);
+                  }}
+                  className="text-[12.5px] text-zinc-400 hover:text-zinc-200 transition-colors whitespace-nowrap"
+                >
+                  Docs &rarr;
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
@@ -233,29 +514,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       // Match suggestion marker [S:id] — always consume to avoid showing raw tokens
       const suggestionMatch = part.match(/^\[S:(\d+)\]$/);
       if (suggestionMatch) {
-        const suggestion = findFixSuggestionById(suggestionMatch[1]);
-        if (suggestion) {
-          const hasPR = Boolean(suggestion.prUrl);
-          return (
-            <button
-              key={`suggestion-marker-${index}`}
-              disabled={!canWrite}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (canWrite) setSelectedFixSuggestion(suggestion);
-              }}
-              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${
-                hasPR
-                  ? canWrite ? 'bg-green-500/30 hover:bg-green-500/50 text-green-300 cursor-pointer' : 'bg-green-500/20 text-green-300/50 cursor-not-allowed'
-                  : canWrite ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400 cursor-pointer' : 'bg-green-500/10 text-green-400/50 cursor-not-allowed'
-              }`}
-              title={hasPR ? 'View PR' : canWrite ? `Create PR: ${suggestion.filePath || 'Fix suggestion'}` : 'Editors and admins can create PRs'}
-            >
-              {hasPR ? <Check className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
-            </button>
-          );
-        }
         return null;
       }
 
@@ -311,15 +569,30 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
 
   // Preprocess summary to prevent ReactMarkdown from interpreting consecutive
   // citations like [5][6][7] as markdown link references
-  const preprocessedSummary = useMemo(() => {
-    if (!incident.summary) return '';
-    // Add space between consecutive brackets: [5][6] → [5] [6]
-    return incident.summary.replace(/\](\[)/g, '] $1');
+  const { summaryMain, summaryTrailing } = useMemo(() => {
+    if (!incident.summary) return { summaryMain: '', summaryTrailing: '' };
+    let text = incident.summary.replace(/\](\[)/g, '] $1');
+    // Strip "Suggested Next Steps" section (and its --- separator) — rendered separately as console
+    text = text.replace(/---[\s]*\n##\s*Suggested Next Steps[\s\S]*?(?=---[\s]*\n##|\s*$)/, '');
+    // Also handle without leading ---
+    text = text.replace(/##\s*Suggested Next Steps[\s\S]*?(?=---[\s]*\n##|\n##|\s*$)/, '');
+    // Split: everything before "Ruled Out" is main, rest is trailing
+    const trailingMatch = text.match(/(---[\s]*\n##\s*Ruled Out[\s\S]*)$/m);
+    if (trailingMatch && trailingMatch.index !== undefined) {
+      return { summaryMain: text.slice(0, trailingMatch.index).trim(), summaryTrailing: trailingMatch[1].trim() };
+    }
+    // Try without the --- prefix
+    const trailingMatch2 = text.match(/(##\s*Ruled Out[\s\S]*)$/m);
+    if (trailingMatch2 && trailingMatch2.index !== undefined) {
+      return { summaryMain: text.slice(0, trailingMatch2.index).trim(), summaryTrailing: trailingMatch2[1].trim() };
+    }
+    return { summaryMain: text.trim(), summaryTrailing: '' };
   }, [incident.summary]);
 
   // Memoize markdown rendering to prevent re-parsing on every render
   const renderedSummary = useMemo(() => (
     <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
       components={{
         h1: ({ children }) => (
           <h1 className="text-base font-semibold text-white mb-1">{processChildren(children)}</h1>
@@ -333,86 +606,44 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         p: ({ children }) => (
           <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(children)}</p>
         ),
-        ul: ({ children }) => (
-          <ul className="list-disc list-outside ml-4 mb-2 space-y-1">{children}</ul>
+        ol: ({ children }) => (
+          <ol className="list-decimal list-outside ml-4 mb-2 space-y-2">{children}</ol>
         ),
-        li: ({ children }) => {
-          const textContent = extractTextFromNode(children);
-          // Skip word-matching fallback if text has a [S:id] marker (already rendered inline)
-          const hasSuggestionMarker = /\[S:\d+\]/.test(textContent);
-          const matchingSuggestion = hasSuggestionMarker ? null : findMatchingSuggestion(textContent);
-          const isFixType = matchingSuggestion?.type === 'fix';
-          const canExecute = Boolean(matchingSuggestion?.command);
-          const canShowAction = canWrite && (canExecute || isFixType);
-          const wasExecuted = Boolean(matchingSuggestion?.executedAt);
-          const execStatus = matchingSuggestion?.executionStatus;
-
-          return (
-            <li className="text-zinc-300 text-sm">
-              {processChildren(children)}
-              {canShowAction && matchingSuggestion && (
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isFixType) {
-                      setSelectedFixSuggestion(matchingSuggestion);
-                    } else {
-                      setSelectedSuggestion(matchingSuggestion);
-                    }
-                  }}
-                  className={`inline-flex items-center justify-center rounded transition-colors align-middle ml-1.5 ${
-                    isFixType
-                      ? matchingSuggestion.prUrl
-                        ? 'w-5 h-5 bg-green-500/30 hover:bg-green-500/50 text-green-300'
-                        : 'w-5 h-5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                      : wasExecuted
-                        ? execStatus === 'completed'
-                          ? 'h-5 gap-1 px-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                          : execStatus === 'failed'
-                            ? 'h-5 gap-1 px-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-400'
-                            : 'h-5 gap-1 px-1.5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
-                        : 'w-5 h-5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
-                  }`}
-                  title={isFixType
-                    ? matchingSuggestion.prUrl
-                      ? 'View PR'
-                      : `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
-                    : wasExecuted
-                      ? `View output (${execStatus || 'executed'})`
-                      : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
-                  }
-                >
-                  {isFixType ? (
-                    matchingSuggestion.prUrl ? <Check className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />
-                  ) : wasExecuted ? (
-                    <>
-                      {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
-                      {execStatus === 'failed' && <AlertCircle className="w-3 h-3" />}
-                      {execStatus === 'in_progress' && <span className="w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
-                      {(execStatus === 'executed' || !execStatus) && <Play className="w-3 h-3" />}
-                      <span className="text-[10px] font-medium">
-                        {execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : execStatus === 'in_progress' ? 'Running' : 'Ran'}
-                      </span>
-                    </>
-                  ) : (
-                    <Play className="w-3 h-3" />
-                  )}
-                </button>
-              )}
-            </li>
-          );
-        },
+        ul: ({ children }) => (
+          <ul className="list-disc list-outside ml-4 mb-2 space-y-2">{children}</ul>
+        ),
+        li: ({ children }) => (
+          <li className="text-zinc-300 text-sm [&>p]:inline [&>p]:mb-0">
+            {processChildren(children)}
+          </li>
+        ),
         code: ({ children }) => (
           <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">
             {children}
           </code>
         ),
+        table: ({ children }) => (
+          <table className="w-full text-sm border-collapse my-3">{children}</table>
+        ),
+        thead: ({ children }) => (
+          <thead className="border-b border-zinc-700">{children}</thead>
+        ),
+        tbody: ({ children }) => <tbody>{children}</tbody>,
+        tr: ({ children }) => (
+          <tr className="border-b border-zinc-800/50">{children}</tr>
+        ),
+        th: ({ children }) => (
+          <th className="text-left text-xs font-semibold text-zinc-400 py-1.5 pr-4">{processChildren(children)}</th>
+        ),
+        td: ({ children }) => (
+          <td className="text-zinc-300 text-sm py-1.5 pr-4">{processChildren(children)}</td>
+        ),
       }}
     >
-      {preprocessedSummary}
+      {summaryMain}
     </ReactMarkdown>
-  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, canWrite]);
+  ), [summaryMain, processChildren, extractTextFromNode]);
+
 
   return (
     <div className="space-y-8">
@@ -627,13 +858,30 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             {renderedSummary}
           </div>
 
+          {/* Next Steps — right after summary findings */}
+          {incident.suggestions && incident.suggestions.length > 0 && incident.auroraStatus === 'complete' && (
+            <NextStepsConsole
+              suggestions={incident.suggestions}
+              citations={citations}
+              canWrite={canWrite}
+              onRunSuggestion={setSelectedSuggestion}
+              onFixSuggestion={setSelectedFixSuggestion}
+              onCitationClick={setSelectedCitation}
+            />
+          )}
+
+          {/* Ruled Out / Not Checked — collapsible console style */}
+          {summaryTrailing && (
+            <RuledOutConsole text={summaryTrailing} citations={citations} onCitationClick={setSelectedCitation} />
+          )}
+
           {/* Correlated Alerts Section */}
           {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
             <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
           )}
 
           {/* Other Recent Alerts - for manual correlation */}
-          <RecentAlertsSection 
+          <RecentAlertsSection
             currentIncidentId={incident.id}
             auroraStatus={incident.auroraStatus}
             onAlertMerged={onRefresh}

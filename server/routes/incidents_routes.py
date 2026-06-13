@@ -661,7 +661,8 @@ def get_incident(user_id, incident_id: str):
                     SELECT id, incident_id, title, description, type, risk, command, created_at,
                            file_path, original_content, suggested_content, user_edited_content,
                            repository, pr_url, pr_number, created_branch, applied_at,
-                           executed_at, execution_session_id, execution_status
+                           executed_at, execution_session_id, execution_status,
+                           rationale, undo
                     FROM incident_suggestions
                     WHERE incident_id = %s
                     ORDER BY created_at ASC
@@ -676,6 +677,7 @@ def get_incident(user_id, incident_id: str):
                 S_FILE_PATH, S_ORIG, S_SUGGESTED, S_USER_EDITED = 8, 9, 10, 11
                 S_REPO, S_PR_URL, S_PR_NUM, S_BRANCH, S_APPLIED = 12, 13, 14, 15, 16
                 S_EXECUTED_AT, S_EXEC_SESSION, S_EXEC_STATUS = 17, 18, 19
+                S_RATIONALE, S_UNDO = 20, 21
 
                 suggestions = []
                 for srow in suggestion_rows:
@@ -686,6 +688,8 @@ def get_incident(user_id, incident_id: str):
                         "type": srow[S_TYPE] or "diagnostic",
                         "risk": srow[S_RISK] or "safe",
                         "command": srow[S_CMD],
+                        "rationale": srow[S_RATIONALE],
+                        "undo": srow[S_UNDO],
                         "createdAt": _format_timestamp(srow[S_CREATED]),
                         "executedAt": _format_timestamp(srow[S_EXECUTED_AT]),
                         "executionSessionId": str(srow[S_EXEC_SESSION]) if srow[S_EXEC_SESSION] else None,
