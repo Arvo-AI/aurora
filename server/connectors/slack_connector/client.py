@@ -26,6 +26,28 @@ class SlackClient:
             "Content-Type": "application/json"
         }
     
+    @staticmethod
+    def _get_retry_delay(attempt: int, response=None) -> int:
+        """Parse Retry-After header or compute exponential backoff, capped at 30s."""
+        fallback = 2 * (attempt + 1)
+        if response is not None:
+            try:
+                delay = int(response.headers.get("Retry-After", fallback))
+            except (TypeError, ValueError):
+                delay = fallback
+        else:
+            delay = fallback
+        return min(delay, 30)
+
+    def _validate_response(self, result: Dict[str, Any], endpoint: str) -> Dict[str, Any]:
+        """Check Slack's ok field; raise ValueError on API-level errors."""
+        if result.get('ok', False):
+            return result
+        error = result.get('error', 'unknown_error')
+        if not (error == 'name_taken' and endpoint == 'conversations.create'):
+            logger.error(f"Slack API error on {endpoint}: {error}")
+        raise ValueError(f"Slack API error: {error}")
+
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
         """Make a request to Slack API with retry on 429 rate limits."""
         url = f"{SLACK_API_BASE}/{endpoint}"
@@ -38,36 +60,22 @@ class SlackClient:
                     response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
                 
                 if response.status_code == 429 and attempt < max_retries:
-                    try:
-                        retry_after = int(response.headers.get("Retry-After", 2 * (attempt + 1)))
-                    except (TypeError, ValueError):
-                        retry_after = 2 * (attempt + 1)
-                    retry_after = min(retry_after, 30)
+                    retry_after = self._get_retry_delay(attempt, response)
                     logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_after)
                     continue
 
                 response.raise_for_status()
-                result = response.json()
-                
-                if not result.get('ok', False):
-                    error = result.get('error', 'unknown_error')
-                    if error == 'name_taken' and endpoint == 'conversations.create':
-                        pass
-                    else:
-                        logger.error(f"Slack API error on {endpoint}: {error}")
-                    raise ValueError(f"Slack API error: {error}")
-                
-                return result
+                return self._validate_response(response.json(), endpoint)
                 
             except requests.RequestException as e:
                 if attempt < max_retries and "429" in str(e):
-                    retry_after = min(2 * (attempt + 1), 30)
+                    retry_after = self._get_retry_delay(attempt)
                     logger.warning(f"Rate limited on {endpoint}, retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_after)
                     continue
                 logger.error(f"Request to Slack API failed: {e}")
-                raise ValueError(f"Failed to communicate with Slack: {str(e)}")
+                raise ValueError(f"Failed to communicate with Slack: {e}") from e
         
         raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
     
@@ -205,8 +213,7 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                     if "name_taken" not in str(e2).lower():
                         raise
                     
-                    # 5. 'aurora_incidents' also taken -- bot is already a member
-                    #    (list_bot_channels only returns channels the bot is in)
+                    # 5. 'aurora_incidents' also taken -- check if bot is a member
                     aurora_ch = channel_map.get("aurora_incidents")
                     if aurora_ch:
                         channel_id = aurora_ch['id']
@@ -247,7 +254,7 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
         return {"ok": False, "error": "Failed to resolve incidents channel"}
 
     except Exception as e:
-        logger.error(f"[{team_name}] Failed to create incidents channel: {e}", exc_info=True)
+        logger.exception(f"[{team_name}] Failed to create incidents channel: {e}")
         return {"ok": False, "error": str(e)}
 
 
