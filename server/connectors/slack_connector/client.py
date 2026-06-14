@@ -139,6 +139,15 @@ class SlackClient:
             logger.warning(f"Could not add users to channel {channel}: {e}")
             return None
     
+    def join_channel(self, channel: str) -> Optional[Dict[str, Any]]:
+        """Join a public channel by ID. Returns channel info or None on failure."""
+        try:
+            result = self._make_request("POST", "conversations.join", {"channel": channel})
+            return result.get('channel')
+        except Exception as e:
+            logger.warning(f"Could not join channel {channel}: {e}")
+            return None
+    
 
 
 def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, Any]]:
@@ -149,6 +158,27 @@ def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, An
         if "name_taken" in str(e).lower():
             return None
         raise
+
+
+def join_existing_incidents_channel(access_token: str, channel_id: str, team_name: str) -> Dict[str, Any]:
+    """
+    Rejoin a previously-stored incidents channel on reconnect.
+    Returns ok=True with channel info if the bot can access the channel,
+    or ok=False if the channel no longer exists or is inaccessible.
+    """
+    try:
+        client = SlackClient(access_token)
+        channel = client.join_channel(channel_id)
+        if channel:
+            channel_name = channel.get('name', 'unknown')
+            logger.info(f"[{team_name}] Rejoined existing incidents channel: #{channel_name} ({channel_id})")
+            return {"ok": True, "channel_id": channel_id, "channel_name": channel_name, "created": False}
+
+        logger.info(f"[{team_name}] Could not rejoin channel {channel_id}, will create a new one")
+        return {"ok": False}
+    except Exception as e:
+        logger.warning(f"[{team_name}] Failed to rejoin channel {channel_id}: {e}")
+        return {"ok": False}
 
 
 def create_incidents_channel(access_token: str, team_name: str, installer_user_id: str) -> Dict[str, Any]:

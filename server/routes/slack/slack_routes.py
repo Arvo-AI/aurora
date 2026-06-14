@@ -10,7 +10,7 @@ from urllib.parse import quote
 from flask import Blueprint, request, jsonify, redirect
 import requests
 from connectors.slack_connector.oauth import get_auth_url, exchange_code_for_token
-from connectors.slack_connector.client import create_incidents_channel
+from connectors.slack_connector.client import create_incidents_channel, join_existing_incidents_channel
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import store_tokens_in_db
@@ -127,11 +127,20 @@ def slack_callback():
         
         # Create incidents channel first — connection is only valid with a working channel
         installer_slack_user_id = authed_user.get('id')
-        channel_result = create_incidents_channel(
-            access_token, 
-            team_info.get('name', 'Unknown'),
-            installer_slack_user_id
-        )
+        team_name = team_info.get('name', 'Unknown')
+        
+        # On reconnect, reuse the previously-stored channel if available
+        channel_result = None
+        existing_creds = get_credentials_from_db(user_id, "slack")
+        existing_channel_id = (existing_creds or {}).get('incidents_channel_id')
+        
+        if existing_channel_id:
+            channel_result = join_existing_incidents_channel(access_token, existing_channel_id, team_name)
+            if not channel_result.get('ok'):
+                channel_result = None
+        
+        if not channel_result:
+            channel_result = create_incidents_channel(access_token, team_name, installer_slack_user_id)
         if not channel_result.get('ok'):
             error_msg = channel_result.get('error', 'Unknown error')
             logging.error(f"Failed to create incidents channel: {error_msg}")
@@ -145,7 +154,7 @@ def slack_callback():
         try:
             slack_token_data = {
                 "access_token": access_token,
-                "team_name": team_info.get('name', 'Unknown'),
+                "team_name": team_name,
                 "team_id": team_info.get('id'),
                 "user_id": authed_user.get('id'),
                 "connected_at": int(time.time()),
@@ -153,13 +162,13 @@ def slack_callback():
                 "incidents_channel_name": channel_result.get('channel_name'),
             }
             store_tokens_in_db(user_id, slack_token_data, "slack")
-            logging.info(f"Incidents channel ready in {team_info.get('name')} workspace, channel: #{channel_result.get('channel_name')}")
+            logging.info(f"Incidents channel ready in {team_name} workspace, channel: #{channel_result.get('channel_name')}")
         except Exception as e:
             logging.error(f"Failed to store Slack credentials: {e}", exc_info=True)
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=storage_failed")
         
         # Redirect to frontend with success
-        return redirect(f"{FRONTEND_URL}?slack_auth=success&team={team_info.get('name', 'Unknown')}")
+        return redirect(f"{FRONTEND_URL}?slack_auth=success&team={quote(team_name)}")
     
     except Exception as e:
         logging.error(f"Error during Slack callback: {e}", exc_info=True)
