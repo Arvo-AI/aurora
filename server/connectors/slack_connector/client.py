@@ -144,8 +144,8 @@ class SlackClient:
         try:
             result = self._make_request("POST", "conversations.join", {"channel": channel})
             return result.get('channel')
-        except Exception as e:
-            logger.warning(f"Could not join channel {channel}: {e}")
+        except Exception:
+            logger.warning("Could not join channel via conversations.join", exc_info=True)
             return None
     
 
@@ -171,13 +171,13 @@ def join_existing_incidents_channel(access_token: str, channel_id: str, team_nam
         channel = client.join_channel(channel_id)
         if channel:
             channel_name = channel.get('name', 'unknown')
-            logger.info(f"[{team_name}] Rejoined existing incidents channel: #{channel_name} ({channel_id})")
+            logger.info("Rejoined existing incidents channel on reconnect")
             return {"ok": True, "channel_id": channel_id, "channel_name": channel_name, "created": False}
 
-        logger.info(f"[{team_name}] Could not rejoin channel {channel_id}, will create a new one")
+        logger.info("Could not rejoin stored channel, will create a new one")
         return {"ok": False}
-    except Exception as e:
-        logger.warning(f"[{team_name}] Failed to rejoin channel {channel_id}: {e}")
+    except Exception:
+        logger.warning("Failed to rejoin stored incidents channel", exc_info=True)
         return {"ok": False}
 
 
