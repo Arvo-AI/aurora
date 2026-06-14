@@ -160,7 +160,7 @@ def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, An
         raise
 
 
-def join_existing_incidents_channel(access_token: str, channel_id: str, team_name: str) -> Dict[str, Any]:
+def join_existing_incidents_channel(access_token: str, channel_id: str) -> Dict[str, Any]:
     """
     Rejoin a previously-stored incidents channel on reconnect.
     Returns ok=True with channel info if the bot can access the channel,

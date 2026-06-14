@@ -135,7 +135,7 @@ def slack_callback():
         existing_channel_id = (existing_creds or {}).get('incidents_channel_id')
         
         if existing_channel_id:
-            channel_result = join_existing_incidents_channel(access_token, existing_channel_id, team_name)
+            channel_result = join_existing_incidents_channel(access_token, existing_channel_id)
             if not channel_result.get('ok'):
                 channel_result = None
         
