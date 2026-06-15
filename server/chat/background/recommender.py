@@ -564,11 +564,13 @@ CONSTRAINTS:
 - If the alert is invalid/phantom (no real service or resource), return []
 - No project management (tickets, status updates, notifications) — technical actions only
 - Medium/high risk items MUST have an "undo" command showing how to reverse the action
-- 1-5 suggestions. Fewer is better. Never pad.
-- For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, python3 (available in sandbox)
+- 1-4 suggestions. Fewer is better. Never pad. Every suggestion must move the incident closer to resolution.
+- STRONG PREFERENCE for suggestions with runnable commands. Only omit the command for class "human_knowledge" (decisions, conversations, org context). If you can't write a command for a diagnostic/mitigation/remediate suggestion, drop it.
+- For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, gh, docker, sed, grep, python3 (available in sandbox)
 - Commands MUST use real values from the RESOURCE INVENTORY above — NEVER use placeholders like <bucket-name> or <timestamp>. If the inventory doesn't contain the value you need, set command to null.
 - Prefer commands the engineer can paste and run immediately. Include --region, --namespace, --output flags as needed.
 - Do NOT use type "fix" — code fixes are generated during investigation with full file access. Use "remediate" for code/config changes and describe what to change in the description.
+- Do NOT suggest "prevent" unless it's a concrete one-liner (e.g., adding a CI step). Vague "add monitoring" or "add validation" is useless.
 
 Return a JSON array where each item has:
 - "title": action verb + specific target. Use backticks for code terms.
