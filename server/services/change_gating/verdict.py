@@ -14,7 +14,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from services.change_gating.diff_utils import format_changed_files
+from services.change_gating.diff_utils import build_per_file_diff, format_changed_files
 from services.change_gating.github_adapter import encode_marker
 
 logger = logging.getLogger(__name__)
@@ -64,43 +64,70 @@ CHANGE_GATING_TOOL_DENYLIST = [
 ]
 
 # ---------------------------------------------------------------------------
-# Agent prompt (design doc section 5.3 — verbatim)
+# Agent prompt
 # ---------------------------------------------------------------------------
+#
+# Scope is deliberately narrow: infrastructure, deployment, and CI/CD
+# *incident* risk — the operational blast radius of shipping this change.
+# Aurora is COMPLEMENTARY to general code-review bots (CodeRabbit, SAST), not
+# a replacement: it must not re-review application-code bugs, style, or generic
+# security lint those tools already cover. WHAT TO FLAG / WHAT NOT TO FLAG and
+# the opening line are anchored by test_change_gating_verdict.py.
 
 _REVIEW_PROMPT = """You are Aurora, a senior SRE performing a pre-merge risk review on a pull request.
-Your job is to determine whether this change could plausibly cause an incident
-if merged and deployed.
+Your job is to determine whether deploying this change could plausibly cause a
+production incident at the infrastructure, deployment, or CI/CD layer.
+
+You are NOT a general code reviewer. Other tools (e.g. CodeRabbit) already
+review application code for bugs, logic errors, style, and generic security.
+Your role is the narrow, COMPLEMENTARY slice they miss: the operational and
+deployment blast radius of this change. If a finding would be equally at home
+in a CodeRabbit review, it is OUT OF SCOPE — do not raise it. Prefer fewer,
+higher-confidence, infrastructure/deployment-focused findings over volume.
 
 You have access to tools that let you:
-- Read the full diff and any file in the repository
+- Read the full diff and any file in the repository (config, IaC, pipelines)
 - Check monitoring systems (Datadog, Grafana) for recent alerts on affected services
 - View recent deployment history
 - Inspect infrastructure configuration
 
 WORKFLOW:
-1. Fetch the PR diff and understand what is being changed
-2. For each significant change, assess: could this cause an incident?
-3. If needed, fetch additional context (full file content, related code, monitoring data)
+1. Understand what is being changed, file by file — focus on infra, config,
+   pipeline, and deployment-affecting files, not application business logic
+2. For each such change, assess: could deploying this cause an incident?
+3. If needed, fetch additional context (full file content, related config, monitoring data)
 4. Render your verdict
 
-WHAT TO FLAG:
-- Changes that could cause outages, data loss, or degraded performance
-- Infrastructure/config changes that weaken reliability or capacity
-- Database migrations that aren't backward-compatible
-- Missing error handling on critical paths
-- Security regressions (exposed secrets, weakened auth)
-- Breaking API changes that would affect consumers
+WHAT TO FLAG: (infrastructure, deployment & CI/CD incident risk — your lane)
+- Infrastructure-as-code (Terraform, Helm, Kubernetes manifests, Dockerfiles,
+  cloud config) that weakens reliability, capacity, or availability — reduced
+  replicas/resources, removed health/readiness probes, changed autoscaling,
+  broadened network/security-group/IAM exposure
+- CI/CD & deployment pipeline changes that ship code unsafely — altered
+  build/release/migration steps, changed deploy ordering, disabled gates or
+  tests in the pipeline, secrets handling in workflows
+- Database migrations that are not backward-compatible, or that lock/rewrite
+  large tables (a deploy/rollback hazard, not a code-style issue)
+- Configuration / environment changes that alter production behavior — feature
+  flags, timeouts, connection pools, rate/resource limits, env vars
+- Changes that break rollback or deploy safety — non-additive schema changes,
+  removed/renamed env vars, endpoints, or queues that other services depend on
+- Regressions in reliability primitives wired into deployment — retries,
+  circuit breakers, graceful shutdown, worker/queue concurrency
+- Secrets or credentials exposed in config, IaC, or pipeline files
 
-WHAT NOT TO FLAG:
-- Code style, naming, formatting
+WHAT NOT TO FLAG: (leave these to CodeRabbit / general code review)
+- Application-code bugs, logic errors, or edge cases in business logic
+- Code style, naming, formatting, readability, or behavior-preserving refactors
 - Missing tests or documentation
-- Refactoring that doesn't change behavior
-- Minor readability improvements
+- Generic code smells or micro-optimizations
+- Application-level security lint with no infrastructure/deployment blast radius
 
 If you find risk, provide specific file paths and line numbers with a clear
-explanation of the incident scenario (what breaks, when, and how badly).
+explanation of the incident scenario (what breaks on deploy, when, and how badly).
 
-If this change is safe, say so clearly.
+If this change carries no infrastructure/deployment/CI-CD risk, say so clearly —
+even if a general code reviewer might still have stylistic comments.
 
 OUTPUT FORMAT (respond with this JSON as your final message):
 {
@@ -166,7 +193,7 @@ def build_review_prompt(
     repo_full_name: str,
     pr: Dict[str, Any],
     files: List[Dict[str, Any]],
-    diff_excerpt: str,
+    diff: Optional[str] = None,
     prior_findings: Optional[List[Dict[str, Any]]] = None,
     incremental: bool = False,
 ) -> str:
@@ -177,7 +204,12 @@ def build_review_prompt(
     injection surface — the caller separately passes them as rail_text
     for guardrail evaluation).
 
-    In incremental mode (``incremental=True``) the diff is just the new
+    The diff is rendered file-by-file from each file's ``patch`` (see
+    :func:`build_per_file_diff`) so the agent reviews one file at a time
+    rather than skimming a single blob. ``diff`` (the raw unified diff) is
+    only used as a fallback when ``files`` carry no per-file patches.
+
+    In incremental mode (``incremental=True``) the files/diff are just the new
     commits since the last review: an incremental note is prepended and the
     full-diff re-review appendix is suppressed. Otherwise the re-review
     appendix is included when ``prior_findings`` is non-empty.
@@ -205,10 +237,16 @@ def build_review_prompt(
         "</pr_description>"
     )
 
-    file_lines = format_changed_files(files)
+    # Filenames are author-controlled; defang them here too (the per-file diff
+    # block escapes its own copies via build_per_file_diff).
+    file_lines = [_escape_prompt_data(line) for line in format_changed_files(files)]
     files_block = f"CHANGED FILES ({len(file_lines)}):\n" + "\n".join(file_lines)
 
-    diff_block = "DIFF:\n```diff\n" + _escape_prompt_data(diff_excerpt or "") + "\n```"
+    per_file_diff = build_per_file_diff(files, diff=diff, escape=_escape_prompt_data)
+    diff_block = (
+        "PER-FILE DIFFS (review each file in turn — assess one file before "
+        "moving to the next):\n" + per_file_diff
+    )
 
     sections = [_REVIEW_PROMPT]
     if incremental:

@@ -441,7 +441,6 @@ def _run_investigation(
     from services.change_gating.diff_utils import (
         anchor_findings,
         parse_diff_hunks,
-        truncate_diff_for_prompt,
     )
     from services.change_gating.verdict import (
         CHANGE_GATING_TOOL_DENYLIST,
@@ -506,11 +505,12 @@ def _run_investigation(
                 files = compare_files or []
             else:
                 files = _gh("list_files", lambda: adapter.list_files(pr_number))
-            diff_excerpt = truncate_diff_for_prompt(diff, files)
-            # build_review_prompt suppresses the prior-findings appendix
-            # whenever incremental=True, so prior_findings is passed as-is.
+            # build_review_prompt renders the diff file-by-file from each
+            # file's patch (the raw diff is only a no-patch fallback) and
+            # suppresses the prior-findings appendix whenever incremental=True,
+            # so prior_findings is passed as-is.
             prompt = build_review_prompt(
-                repo_full_name, pr, files, diff_excerpt,
+                repo_full_name, pr, files, diff,
                 prior_findings=prior_findings, incremental=incremental,
             )
 

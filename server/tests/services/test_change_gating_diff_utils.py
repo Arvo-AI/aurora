@@ -2,8 +2,8 @@
 
 from services.change_gating.diff_utils import (
     anchor_findings,
+    build_per_file_diff,
     parse_diff_hunks,
-    truncate_diff_for_prompt,
 )
 
 # Right-side line math, hand-computed:
@@ -171,37 +171,89 @@ class TestAnchorFindings:
         assert unanchored == []
 
 
-class TestTruncateDiffForPrompt:
+class TestBuildPerFileDiff:
     FILES = [
-        {"filename": "a.py", "status": "modified", "additions": 3, "deletions": 1},
-        {"filename": "b/c.yaml", "status": "added", "additions": 20, "deletions": 0},
+        {
+            "filename": "a.py", "status": "modified", "additions": 3, "deletions": 1,
+            "patch": "@@ -1,2 +1,4 @@\n context\n+added a.py line\n",
+        },
+        {
+            "filename": "b/c.yaml", "status": "added", "additions": 20, "deletions": 0,
+            "patch": "@@ -0,0 +1,2 @@\n+replicas: 1\n+image: app:latest\n",
+        },
     ]
 
-    def test_small_diff_returned_unchanged(self):
-        diff = "diff --git a/a.py b/a.py\n+x\n"
-        assert truncate_diff_for_prompt(diff, self.FILES) == diff
+    def test_renders_one_labelled_section_per_file(self):
+        result = build_per_file_diff(self.FILES)
+        # Each file gets its own heading and fenced diff block.
+        assert "### a.py (modified, +3/-1)" in result
+        assert "### b/c.yaml (added, +20/-0)" in result
+        assert "+added a.py line" in result
+        assert "+replicas: 1" in result
+        assert result.count("```diff") == 2
 
-    def test_diff_at_exact_limit_returned_unchanged(self):
-        diff = "x" * 50
-        assert truncate_diff_for_prompt(diff, self.FILES, max_chars=50) == diff
+    def test_no_deprecated_github_rca_pointer(self):
+        # The oversized-diff fallback must not steer the agent to github_rca.
+        files = [{"filename": "big.py", "status": "modified", "additions": 9, "deletions": 0}]
+        result = build_per_file_diff(files)
+        assert "github_rca" not in result
+        # File served without a patch is flagged, pointing at PR-reading tools.
+        assert "### big.py" in result
+        assert "GitHub PR-reading tools" in result
 
-    def test_large_diff_replaced_with_file_summary(self):
-        diff = "x" * 100
-        result = truncate_diff_for_prompt(diff, self.FILES, max_chars=50)
+    def test_per_file_cap_truncates_one_huge_file(self):
+        files = [{
+            "filename": "huge.py", "status": "modified", "additions": 999, "deletions": 0,
+            "patch": "@@ -1 +1 @@\n" + "+x\n" * 5000,
+        }]
+        result = build_per_file_diff(files, max_file_chars=200)
+        assert "truncated at 200 chars" in result
+        assert "GitHub PR-reading tools" in result
 
-        assert result != diff
-        assert "a.py (modified, +3/-1)" in result
-        assert "b/c.yaml (added, +20/-0)" in result
-        assert "github_rca" in result
-        assert "too large to inline" in result
+    def test_total_budget_omits_later_files(self):
+        files = [
+            {"filename": f"f{i}.py", "status": "modified", "additions": 1, "deletions": 0,
+             "patch": "@@ -1 +1 @@\n" + "+y\n" * 200}
+            for i in range(5)
+        ]
+        result = build_per_file_diff(files, max_total_chars=900, max_file_chars=800)
+        # At least the first file rendered; later ones flagged as omitted.
+        assert "### f0.py" in result
+        assert "omitted to stay within the diff budget" in result
 
-    def test_none_diff_replaced_with_file_summary(self):
-        # GitHub returns 406 (None diff) for very large PRs -> file summary
-        # with the "declined" note instead of the "too large to inline" one.
-        result = truncate_diff_for_prompt(None, self.FILES)
+    def test_escape_applied_to_patch_not_scaffolding(self):
+        files = [{
+            "filename": "x.py", "status": "modified", "additions": 1, "deletions": 0,
+            "patch": "@@ -1 +1 @@\n+```malicious fence```\n",
+        }]
+        result = build_per_file_diff(files, escape=lambda s: s.replace("```", "X"))
+        # Our own ```diff fence survives; the author's backticks are defanged.
+        assert "```diff" in result
+        assert "Xmalicious fenceX" in result
 
-        assert "a.py (modified, +3/-1)" in result
-        assert "b/c.yaml (added, +20/-0)" in result
-        assert "github_rca" in result
-        assert "GitHub declined to serve the full diff" in result
-        assert "too large to inline" not in result
+    def test_escape_applied_to_author_controlled_filename(self):
+        # A crafted filename must be defanged too — it lands in the header,
+        # truncation note, and omitted footer, all outside the ```diff fence.
+        files = [{
+            "filename": "evil```name.py", "status": "modified",
+            "additions": 1, "deletions": 0,
+            "patch": "@@ -1 +1 @@\n+x\n",
+        }]
+        result = build_per_file_diff(files, escape=lambda s: s.replace("```", "X"))
+        assert "evil```name.py" not in result  # raw backticks gone
+        assert "evilXname.py" in result
+
+    def test_all_no_patch_falls_back_to_raw_diff(self):
+        # Every file is binary/over-limit (no patch) but GitHub served the diff:
+        # the agent still gets real content, not only "no inline diff" notes.
+        files = [{"filename": "a.bin", "status": "modified", "additions": 0, "deletions": 0}]
+        result = build_per_file_diff(files, diff="@@ real diff content @@")
+        assert "no per-file patches available" in result
+        assert "real diff content" in result
+        assert "```diff" in result
+
+    def test_empty_files_falls_back_to_fenced_raw_diff(self):
+        result = build_per_file_diff([], diff="raw diff text")
+        assert "raw diff text" in result
+        assert "```diff" in result  # fenced, not bare (structural separation)
+        assert "No file-level changes" in build_per_file_diff([], diff=None)

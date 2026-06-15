@@ -9,12 +9,15 @@ diff text included in the agent prompt.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 # "@@ -a,b +c,d @@ optional section" — b and d default to 1 when omitted.
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
+# Total budget for the per-file diff block in the prompt, and the per-file cap
+# that stops one huge file from crowding out every other changed file.
 DEFAULT_MAX_DIFF_CHARS = 60_000
+DEFAULT_MAX_FILE_DIFF_CHARS = 15_000
 
 
 def parse_diff_hunks(
@@ -129,30 +132,106 @@ def format_changed_files(files: List[Dict[str, Any]]) -> List[str]:
     ]
 
 
-def truncate_diff_for_prompt(
-    diff: Optional[str],
+def build_per_file_diff(
     files: List[Dict[str, Any]],
-    max_chars: int = DEFAULT_MAX_DIFF_CHARS,
+    diff: Optional[str] = None,
+    max_total_chars: int = DEFAULT_MAX_DIFF_CHARS,
+    max_file_chars: int = DEFAULT_MAX_FILE_DIFF_CHARS,
+    escape: Optional[Callable[[str], str]] = None,
 ) -> str:
-    """Return the diff unchanged if small enough, else a file summary.
+    """Render the changed files as one labelled diff section per file.
 
-    ``diff=None`` (GitHub refuses the diff media type for very large PRs
-    with a 406) is treated like an oversized diff. The summary is built
-    from the GitHub ``list_files`` dicts and tells the agent to fetch
-    targeted per-file diffs via its ``github_rca`` tool instead.
+    Presents the diff file-by-file (each file's ``patch`` under a
+    ``### path (status, +adds/-dels)`` heading) instead of one
+    undifferentiated blob, so the review agent attends to each file in turn
+    rather than skimming a single giant diff.
+
+    ``files`` are GitHub ``list_files`` / compare ``files`` dicts; GitHub
+    serves a per-file unified ``patch`` for each (omitted only for binary,
+    over-limit, or rename-only files). Because those per-file patches survive
+    even when the whole-PR diff media type 406s, an oversized PR degrades
+    gracefully here instead of collapsing to a filename-only summary.
+
+    A per-file cap (``max_file_chars``) keeps one huge file from crowding out
+    the rest; a total cap (``max_total_chars``) bounds the whole block — every
+    section (patch, no-patch notice, omitted footer) counts against it. Files
+    without a servable patch — and any trimmed by the budget — are flagged so
+    the agent knows to read them with its GitHub PR-reading tools if they look
+    risky (no dependency on any one tool). When NO file carries a per-file
+    patch but GitHub served the whole-PR ``diff``, that diff is included
+    (budget-bounded) so the agent still sees real content.
+
+    ``escape`` is applied to every piece of author-controlled text that reaches
+    the prompt — the per-file patch AND the filename (which appears in the
+    section header, truncation note, and omitted footer) — never to the trusted
+    scaffolding, so prompt-injection defanging cannot break the section fences.
     """
-    if diff is not None and len(diff) <= max_chars:
-        return diff
+    esc = escape or (lambda s: s)
+    file_list = files or []
 
-    size_note = (
-        f"The full diff is {len(diff):,} characters — too large to inline "
-        f"(limit {max_chars:,})."
-        if diff is not None
-        else "GitHub declined to serve the full diff (the PR is too large)."
-    )
-    return (
-        f"[{size_note} It has been replaced with the changed-file "
-        "summary below. Use the github_rca tool to fetch targeted per-file "
-        "diffs for the files you need to inspect.]\n\n"
-        "Changed files:\n" + "\n".join(format_changed_files(files))
-    )
+    def _fenced_raw_diff(budget: int) -> str:
+        """Whole-PR diff, escaped + fenced + capped — the no-per-file fallback."""
+        return "```diff\n" + esc((diff or "")[:budget]) + "\n```"
+
+    if not file_list:
+        # No file-level data at all (rare). Fall back to the raw diff if any.
+        if diff:
+            return _fenced_raw_diff(max_total_chars)
+        return "[No file-level changes available to review.]"
+
+    sections: List[str] = []
+    omitted: List[str] = []
+    total = 0
+    for f in file_list:
+        # filename is author-controlled (a PR can add/rename a file to any
+        # name) and lands outside the ```diff fence, so it must be defanged too.
+        filename = esc(f.get("filename", "<unknown>"))
+        header = "### {} ({}, +{}/-{})".format(
+            filename,
+            f.get("status", "modified"),
+            f.get("additions", 0),
+            f.get("deletions", 0),
+        )
+        patch = f.get("patch")
+        if not patch:
+            block = (
+                f"{header}\n[No inline diff served by GitHub for this file "
+                "(binary, too large, or rename-only). Read its changes with "
+                "your GitHub PR-reading tools if it looks risky.]"
+            )
+        else:
+            note = ""
+            if len(patch) > max_file_chars:
+                patch = patch[:max_file_chars]
+                note = (
+                    f"\n[Diff for {filename} truncated at {max_file_chars:,} chars; "
+                    "read the full file with your GitHub PR-reading tools if needed.]"
+                )
+            block = f"{header}\n```diff\n{esc(patch)}\n```{note}"
+        # Budget applies to every block; the first is always kept so a single
+        # over-cap file still yields content.
+        if sections and total + len(block) > max_total_chars:
+            omitted.append(filename)
+            continue
+        sections.append(block)
+        total += len(block)
+
+    if omitted:
+        sections.append(
+            f"[{len(omitted)} further changed file(s) omitted to stay within the "
+            f"diff budget: {', '.join(omitted)}. Review them with your GitHub "
+            "PR-reading tools if the changes above suggest risk.]"
+        )
+
+    # All files were binary / over-limit / rename-only (no per-file patch), but
+    # GitHub served the whole-PR diff — include it (bounded by remaining budget)
+    # rather than handing the agent only "no inline diff" notes.
+    if diff and not any(f.get("patch") for f in file_list):
+        remaining = max_total_chars - total
+        if remaining > 0:
+            sections.append(
+                "Full PR diff (no per-file patches available):\n"
+                + _fenced_raw_diff(remaining)
+            )
+
+    return "\n\n".join(sections)
