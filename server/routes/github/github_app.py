@@ -47,7 +47,8 @@ from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth.github_auth_mode import (
     get_auth_mode,
     is_app_enabled,
-    is_oauth_enabled,
+    is_oauth_login_enabled,
+    is_oauth_token_honored,
     oauth_credentials_configured,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -512,6 +513,22 @@ def github_app_install_callback():
         setup_action or "unknown",
     )
 
+    # Auto-import the repos the user already granted on GitHub so they don't
+    # have to re-select them inside Aurora. Best-effort + async: a failure here
+    # must never break the install (the manual picker remains as a fallback).
+    try:
+        from routes.github.github_repo_metadata import import_installation_repos
+
+        import_installation_repos.delay(user_id, installation_id)
+    except Exception:
+        # Best-effort: the manual repo picker remains a fallback. Log with a
+        # trace so a persistent broker/import failure is visible in ops.
+        logger.warning(
+            "[GITHUB-APP-CALLBACK] failed to enqueue repo auto-import installation_id=%d",
+            installation_id,
+            exc_info=True,
+        )
+
     # Reuse the OAuth success template. App-mode has no user token to relay,
     # so token is empty; account_login takes the github_username slot so the
     # postMessage to the parent window still carries a useful identifier.
@@ -914,7 +931,9 @@ def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorat
         {
             "mode": get_auth_mode(),
             "app_enabled": is_app_enabled() and app_runtime_ready,
-            "oauth_enabled": is_oauth_enabled(),
+            # oauth_enabled drives the "Connect via OAuth" CTA — gate it on
+            # NEW-connection enablement (off by default; OAuth is deprecated).
+            "oauth_enabled": is_oauth_login_enabled(),
             "oauth_configured": oauth_credentials_configured(),
         }
     )
@@ -960,7 +979,9 @@ def github_status(user_id):
     if app_username:
         return jsonify({"connected": True, "username": app_username, "auth_method": "app"})
 
-    if is_oauth_enabled():
+    # Existing OAuth connections stay valid even in App-only mode (deprecation
+    # keeps them working until the user disconnects).
+    if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
         except Exception as exc:

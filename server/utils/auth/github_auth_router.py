@@ -53,7 +53,7 @@ from utils.auth.github_app_token import (
     GitHubAppInstallationSuspended,
     get_installation_token,
 )
-from utils.auth.github_auth_mode import is_oauth_enabled
+from utils.auth.github_auth_mode import is_oauth_token_honored
 from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
@@ -157,7 +157,7 @@ def _try_oauth_fallback(user_id: str) -> AuthResult | None:
     lookup failures degrade to "no auth available", letting the caller
     surface a single ``NoGitHubAuthError``.
     """
-    if not is_oauth_enabled():
+    if not is_oauth_token_honored():
         return None
     try:
         creds = get_credentials_from_db(user_id, "github")
@@ -431,7 +431,7 @@ def is_github_connected(user_id: str) -> bool:
             exc_info=True,
         )
 
-    if is_oauth_enabled():
+    if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
             if creds and creds.get("access_token"):

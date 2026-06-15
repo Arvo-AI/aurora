@@ -276,7 +276,7 @@ def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str,
     Accepts either a credentials dict (with ``_user_id``) for generic
     PROVIDER_CHECKERS dispatch, or a plain user_id string for direct callers.
     """
-    from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
+    from utils.auth.github_auth_mode import is_app_enabled, is_oauth_token_honored
 
     if isinstance(creds_or_user_id, dict):
         user_id = creds_or_user_id.get("_user_id", "")
@@ -304,7 +304,7 @@ def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str,
         except Exception as exc:
             logger.debug("[STATUS] github App check failed: %s", exc)
 
-    if is_oauth_enabled():
+    if is_oauth_token_honored():
         try:
             from utils.auth.token_management import get_token_data
             creds = get_token_data(user_id, "github")

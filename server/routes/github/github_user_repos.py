@@ -45,7 +45,7 @@ from utils.auth.github_app_token import (
     GitHubAppTokenError,
     get_installation_token,
 )
-from utils.auth.github_auth_mode import is_oauth_enabled
+from utils.auth.github_auth_mode import is_oauth_token_honored
 from utils.auth.github_auth_router import (
     NoGitHubAuthError,
     get_auth_for_user_repo,
@@ -238,9 +238,9 @@ def _list_repos_for_user(user_id: str) -> list[dict[str, Any]]:
 
     # OAuth fallback / additional source. App entries already loaded above
     # win on collision per the module docstring (finer permissions, isolated
-    # rate limits). Only runs when OAuth is enabled in the deployment AND
-    # the user has a stored token.
-    if is_oauth_enabled():
+    # rate limits). Only runs when the user's existing OAuth token is still
+    # honored AND a token is stored.
+    if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
         except Exception:

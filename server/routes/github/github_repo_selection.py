@@ -48,7 +48,7 @@ def get_repo_selections(user_id):
     - ``None`` when neither path can resolve.
     """
     try:
-        from utils.auth.github_auth_mode import is_oauth_enabled
+        from utils.auth.github_auth_mode import is_oauth_token_honored
         from utils.auth.token_management import get_token_data
 
         org_id = resolve_org(user_id)
@@ -85,7 +85,7 @@ def get_repo_selections(user_id):
                 )
                 rows = cur.fetchall()
 
-        oauth_enabled = is_oauth_enabled()
+        oauth_enabled = is_oauth_token_honored()
         oauth_owner_cache: dict[str, bool] = {}
 
         def _owner_has_oauth(owner_id: str) -> bool:
