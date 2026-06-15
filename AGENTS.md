@@ -76,6 +76,8 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 - [ ] Tokens stored via `store_tokens_in_db(user_id, payload, "<name>")`
 - [ ] Token retrieval via `get_token_data(user_id, "<name>")`
 - [ ] Disconnect deletes via `delete_user_secret(user_id, "<name>")`
+- [ ] Provider added to `SUPPORTED_SECRET_PROVIDERS` in `server/utils/secrets/secret_ref_utils.py` (without this, `get_token_data` silently returns `None`)
+- [ ] Provider added to `SUPPORTED_SECRET_PROVIDERS` in `server/utils/secrets/secret_ref_utils.py` (without this, `get_token_data` silently returns `None`)
 
 ### Blueprint Registration
 - [ ] Blueprint registered in `server/main_compute.py` with appropriate `url_prefix`
