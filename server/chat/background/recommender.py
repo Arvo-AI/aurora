@@ -372,6 +372,117 @@ def _format_hypothesis_ledger(state: InvestigationState) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Extract validated fixes from investigation agent's remediation phase
+# ---------------------------------------------------------------------------
+
+def _extract_validated_fixes(agent_reasoning: str, incident_id: str) -> List[Suggestion]:
+    """Parse VALIDATED FIXES block from the investigation agent's final output.
+
+    The remediation phase (rca_sections/remediation.md) instructs the agent to
+    output fixes in a structured format after running validation queries.
+    """
+    if not agent_reasoning or "VALIDATED FIXES:" not in agent_reasoning:
+        return []
+
+    start = agent_reasoning.find("VALIDATED FIXES:")
+    if start == -1:
+        return []
+
+    section = agent_reasoning[start:]
+    # Cut off at code fence closure, markdown heading, or end-of-section marker
+    end_markers = ["\n```", "\n---", "\n# ", "\n### ", "\nLet me"]
+    for marker in end_markers:
+        end = section.find(marker, 20)
+        if end > 0:
+            section = section[:end]
+            break
+
+    # Split into individual entries by numbered prefix
+    entry_splits = re.split(r'\n\d+\.\s+', section)
+    # First split is "VALIDATED FIXES:\n..." header, skip it
+    raw_entries = entry_splits[1:] if len(entry_splits) > 1 else []
+
+    if not raw_entries:
+        return []
+
+    suggestions = []
+    for entry in raw_entries:
+        lines = entry.strip().split('\n')
+        if not lines:
+            continue
+
+        # First line: TITLE: command (or TITLE: description)
+        first_line = lines[0].strip()
+        title_match = re.match(r'(.+?):\s*(.+)', first_line)
+        if not title_match:
+            continue
+
+        title = title_match.group(1).strip()
+        # Strip markdown formatting from title: [brackets], **bold**
+        title = re.sub(r'^\[(.+)\]$', r'\1', title)
+        title = re.sub(r'\*\*(.+?)\*\*', r'\1', title)
+        command_or_desc = title_match.group(2).strip()
+
+        # Determine if first line value is an executable command or description
+        command = None
+        description = ""
+        cli_prefixes = ("aws ", "kubectl ", "gcloud ", "az ", "terraform ", "helm ",
+                        "curl ", "gh ", "docker ", "sed ", "grep ", "python3 ")
+        if any(command_or_desc.startswith(p) for p in cli_prefixes):
+            command = command_or_desc
+        else:
+            description = command_or_desc
+
+        # Parse remaining lines for Validated by, Risk, Undo, Note
+        validated_by = ""
+        risk = "medium"
+        undo = None
+        note = ""
+        for line in lines[1:]:
+            line = line.strip()
+            if line.startswith("Validated by:"):
+                validated_by = line[len("Validated by:"):].strip()
+            elif line.startswith("Risk:"):
+                risk_undo = line[len("Risk:"):].strip()
+                risk_match = re.match(r'(\w+)', risk_undo)
+                if risk_match:
+                    risk = risk_match.group(1).lower()
+                undo_match = re.search(r'Undo:\s*(.+)', risk_undo)
+                if undo_match:
+                    undo = undo_match.group(1).strip()
+            elif line.startswith("Note:"):
+                note = line[len("Note:"):].strip()
+
+        if risk not in _VALID_RISKS:
+            risk = "medium"
+
+        # Skip code fixes that are handled by github_fix_tool
+        if not command and ("handler.py" in title.lower() or "code fix" in description.lower()):
+            continue
+
+        rationale = f"Validated: {validated_by}" if validated_by else "Pre-validated during investigation"
+
+        # Build description: use note for context when command has placeholders
+        if not description:
+            description = note if note else "Validated fix from investigation"
+        elif note:
+            description = f"{description}\n\n{note}"
+
+        suggestions.append(Suggestion(
+            title=title[:200],
+            description=description,
+            type="mitigation",
+            risk=risk,
+            command=command,
+            rationale=rationale,
+            undo=undo,
+        ))
+
+    logger.info("[Recommender] Parsed %d validated fixes from investigation agent", len(suggestions))
+    return suggestions
+
+
+# ---------------------------------------------------------------------------
 # Self-execution round — run safe diagnostics before suggesting
 # ---------------------------------------------------------------------------
 
@@ -527,14 +638,28 @@ def _build_recommender_prompt(
     hypothesis_ledger: str,
     self_exec_results: str,
     resource_inventory: str = "",
+    rca_summary: str = "",
 ) -> str:
     """Build the recommendation prompt following the Three-Class Invariant."""
+
+    summary_section = ""
+    if rca_summary:
+        truncated = rca_summary[:3000]
+        summary_section = f"""
+ROOT CAUSE IS CONFIRMED — the investigation already determined the cause:
+{truncated}
+
+Because root cause is confirmed:
+- Do NOT generate diagnostic suggestions. The diagnosis is complete.
+- Generate ONLY mitigations and remediations that directly fix this root cause.
+- SIMPLEST FIX FIRST: What is the minimum change to restore service RIGHT NOW? Lead with that. The ideal architecture fix can come second.
+"""
 
     return f"""You are an SRE generating the next actions an engineer should take after an incident investigation.
 
 INCIDENT: {alert_title}
 SERVICE: {service} | SEVERITY: {severity}
-
+{summary_section}
 {trace_context}
 
 {hypothesis_ledger}
@@ -559,7 +684,7 @@ ACTION-EQUIVALENCE RULE:
 For each pair of leading hypotheses, determine whether they require the same or different immediate action. Only generate diagnostic steps that discriminate between hypotheses requiring DIFFERENT mitigations. If all leading hypotheses share the same mitigation, suggest that mitigation directly — do not waste time diagnosing which specific cause is active.
 
 CONSTRAINTS:
-- If root cause is confirmed, skip diagnostics — go straight to the fix
+- If root cause is confirmed (see CONFIRMED ROOT CAUSE above), you MUST NOT generate any diagnostic suggestions. Go straight to the fix. This is a hard rule.
 - If all hypotheses lead to the same fix, just suggest that fix
 - If the alert is invalid/phantom (no real service or resource), return []
 - No project management (tickets, status updates, notifications) — technical actions only
@@ -568,6 +693,11 @@ CONSTRAINTS:
 - STRONG PREFERENCE for suggestions with runnable commands. Only omit the command for class "human_knowledge" (decisions, conversations, org context). If you can't write a command for a diagnostic/mitigation/remediate suggestion, drop it.
 - For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, gh, docker, sed, grep, python3 (available in sandbox)
 - Commands MUST use real values from the RESOURCE INVENTORY above — NEVER use placeholders like <bucket-name> or <timestamp>. If the inventory doesn't contain the value you need, set command to null.
+- CAUSATION CHECK: Trace the path from command → system state change → incident resolution. If any link is broken (command succeeds but nothing changes, or change happens but doesn't fix the incident, or the change depends on something outside the engineer's control like a third party receiving an email), DROP the suggestion. Only include suggestions where you can explain the full causal chain from "engineer runs this" to "problem is fixed or meaningfully advanced."
+- ROLLBACK RULE: Never suggest a rollback/revert unless the RESOURCE INVENTORY contains evidence that a previous version actually exists (e.g., a list of published Lambda versions, a kubectl rollout history, a deploy log showing a prior version). If the only version is $LATEST or there's a single revision, rollback is impossible — suggest fix-forward instead.
+- NO INVESTIGATION-AS-A-FIX: If your "fix" command only LISTS or DESCRIBES something (list-versions, describe-instances, get-function-configuration), that's a diagnostic, not a fix. Either provide the actual mutation command or don't include it.
+- TYPE COMPATIBILITY: If the fix requires pointing service A at resource B, verify from the RESOURCE INVENTORY that B has the correct type/engine. Never point a PostgreSQL client at a MySQL endpoint, a gRPC service at an HTTP endpoint, etc. If no compatible resource exists, the fix is "create one" — not "use the wrong one."
+- CAUSAL RELEVANCE: Only suggest fixes in the causal chain of THIS incident. If the investigation discovered an unrelated misconfiguration (e.g., a missing event source mapping that isn't causing the reported symptoms), do NOT include it. Every suggestion must connect to the root cause stated in the summary.
 - Prefer commands the engineer can paste and run immediately. Include --region, --namespace, --output flags as needed.
 - Do NOT use type "fix" — code fixes are generated during investigation with full file access. Use "remediate" for code/config changes and describe what to change in the description.
 - Do NOT suggest "prevent" unless it's a concrete one-liner (e.g., adding a CI step). Vague "add monitoring" or "add validation" is useless.
@@ -795,6 +925,73 @@ Return one summary per line, numbered:"""
 
 
 # ---------------------------------------------------------------------------
+# Post-generation validation — cross-check commands against resource inventory
+# ---------------------------------------------------------------------------
+
+def _validate_suggestion_commands(
+    suggestions: List[Suggestion],
+    resource_inventory: str,
+    user_id: str,
+    session_id: str,
+) -> List[Suggestion]:
+    """Validate commands in suggestions against known resource names.
+
+    Catches cases where the LLM uses a guessed resource name that doesn't
+    match what the investigation actually found. Fixes or drops bad ones.
+    """
+    if not suggestions:
+        return suggestions
+
+    # Extract known resource identifiers from the inventory
+    inventory_lower = resource_inventory.lower()
+
+    validated = []
+    for s in suggestions:
+        if not s.command:
+            validated.append(s)
+            continue
+
+        cmd = s.command
+
+        # Check: DynamoDB table names in commands should match inventory
+        table_match = re.search(r'--table-name\s+(\S+)', cmd)
+        if table_match:
+            table_name = table_match.group(1).strip("'\"")
+            if table_name.lower() not in inventory_lower:
+                # Table name not in inventory — check if a similar name exists
+                # Look for dynamodb table references in inventory
+                dynamo_refs = re.findall(r'notification-dedup-\w+|[\w-]+-dedup[\w-]*', inventory_lower)
+                if dynamo_refs:
+                    correct_name = dynamo_refs[0]
+                    s.command = cmd.replace(table_name, correct_name)
+                    logger.info("[Recommender:Validate] Fixed table name: %s → %s", table_name, correct_name)
+                else:
+                    # Can't find correct name, add note to rationale
+                    s.rationale = (s.rationale or "") + " [WARNING: table name not confirmed in investigation evidence]"
+                    logger.warning("[Recommender:Validate] Unconfirmed table name: %s", table_name)
+
+        # Check: Lambda function names should exist in inventory
+        fn_match = re.search(r'--function-name\s+(\S+)', cmd)
+        if fn_match:
+            fn_name = fn_match.group(1).strip("'\"")
+            if fn_name.lower() not in inventory_lower and fn_name not in cmd:
+                logger.warning("[Recommender:Validate] Function name %s not found in inventory", fn_name)
+
+        # Check: rollback commands without evidence of previous versions
+        if any(word in cmd.lower() for word in ['rollback', 'roll-back', 'previous-version', 'revert']):
+            if '$LATEST' not in resource_inventory and 'Version' not in resource_inventory:
+                logger.info("[Recommender:Validate] Dropping rollback suggestion — no version evidence")
+                continue
+
+        validated.append(s)
+
+    if len(validated) < len(suggestions):
+        logger.info("[Recommender:Validate] Dropped %d suggestions that failed validation", len(suggestions) - len(validated))
+
+    return validated
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -808,6 +1005,7 @@ def generate_recommendations(
     user_id: str = "",
     session_id: str = "",
     existing_fixes: Optional[List[dict]] = None,
+    rca_summary: str = "",
 ) -> List[Suggestion]:
     """Generate next steps from the investigation trace.
 
@@ -820,6 +1018,12 @@ def generate_recommendations(
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+
+    # Step 0: Check if the investigation agent already validated fixes
+    validated_fixes = _extract_validated_fixes(agent_reasoning, incident_id)
+    if validated_fixes:
+        logger.info("[Recommender] Found %d pre-validated fixes from investigation agent", len(validated_fixes))
+        return validated_fixes
 
     # Step 1: Extract hypothesis ledger
     hypothesis_state = _extract_hypotheses(agent_reasoning, citations)
@@ -863,6 +1067,7 @@ def generate_recommendations(
         hypothesis_ledger=hypothesis_ledger,
         self_exec_results=self_exec_context,
         resource_inventory=resource_inventory + ("\n\n" + fix_context if fix_context else ""),
+        rca_summary=rca_summary,
     )
 
     try:
@@ -888,6 +1093,12 @@ def generate_recommendations(
             if len(suggestions) < pre_dedup:
                 logger.info("[Recommender] Deduped %d suggestions covered by existing fixes", pre_dedup - len(suggestions))
 
+        # Post-generation validation: verify resource names in commands
+        if user_id and session_id:
+            suggestions = _validate_suggestion_commands(
+                suggestions, resource_inventory, user_id, session_id
+            )
+
         # Generate one-line summaries with a cheap model
         _generate_summaries(suggestions, user_id, session_id)
 
@@ -903,4 +1114,226 @@ def generate_recommendations(
 
     except Exception as e:
         logger.exception("[Recommender] Failed for incident %s: %s", incident_id, e)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Option B: Agentic fix generation (tool-validated)
+# ---------------------------------------------------------------------------
+
+def generate_agentic_fixes(
+    incident_id: str,
+    citations: List[Citation],
+    agent_reasoning: str,
+    service: str,
+    alert_title: str,
+    rca_summary: str,
+    user_id: str = "",
+    session_id: str = "",
+) -> List[Suggestion]:
+    """Generate fixes using tool calls to validate before suggesting.
+
+    Unlike the one-shot recommender, this:
+    1. Asks LLM what fix it would suggest + what validation query would confirm it
+    2. Runs the validation query via cloud_exec
+    3. Re-prompts LLM with validation results to produce final, verified suggestion
+    """
+    from chat.backend.agent.llm import ModelConfig
+    from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+    from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
+
+    if not rca_summary:
+        logger.info("[AgenticFix] No RCA summary, skipping agentic fix generation")
+        return []
+
+    # Set up cloud provider context so cloud_exec can use user's credentials
+    if user_id:
+        try:
+            from utils.auth.stateless_auth import get_connected_providers
+            from utils.cloud.cloud_utils import set_user_context
+            providers = get_connected_providers(user_id)
+            if providers:
+                set_user_context(
+                    user_id=user_id,
+                    session_id=session_id,
+                    provider_preference=providers,
+                    mode="ask",
+                )
+                logger.info("[AgenticFix] Set provider context: %s", providers)
+            else:
+                logger.warning("[AgenticFix] No connected providers for user %s", user_id)
+        except Exception as e:
+            logger.warning("[AgenticFix] Failed to set provider context: %s", e)
+
+    resource_inventory = _extract_resource_inventory(citations)
+    trace_context = _build_trace_context(citations, agent_reasoning)
+
+    # Step 1: Ask LLM for a fix plan + validation queries
+    plan_prompt = f"""You are an SRE fixing a production incident. Root cause is CONFIRMED.
+
+INCIDENT: {alert_title}
+SERVICE: {service}
+
+CONFIRMED ROOT CAUSE:
+{rca_summary[:3000]}
+
+RESOURCE INVENTORY (real values from investigation):
+{resource_inventory}
+
+INVESTIGATION CONTEXT:
+{trace_context[:8000]}
+
+Your job: produce 1-2 fix commands that will resolve this incident.
+
+For EACH fix you want to suggest, also provide a VALIDATION QUERY — a read-only command that will confirm the fix is correct before we suggest it to the engineer. For example:
+- If you want to update a Lambda env var to point to an RDS instance, first validate that the RDS instance exists AND has the right engine type
+- If you want to add a Lambda layer, validate the runtime version first
+
+Return JSON:
+[
+  {{
+    "title": "short title",
+    "fix_command": "the actual fix command to suggest to the engineer",
+    "validation_query": "a read-only AWS/kubectl/etc command to run NOW to confirm the fix makes sense",
+    "what_to_check": "what the validation output must show for this fix to be valid",
+    "description": "why this fixes the root cause",
+    "risk": "low|medium|high",
+    "undo": "command to reverse this if it makes things worse"
+  }}
+]
+
+RULES:
+- Use REAL values from the resource inventory. No placeholders.
+- validation_query must be read-only (describe, get, list, etc.)
+- fix_command must be directly executable
+- 1-2 fixes max. The minimum change to restore service.
+
+Return ONLY the JSON array."""
+
+    try:
+        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.2)
+
+        # Get fix plan with validation queries
+        response = tracked_invoke(
+            llm,
+            [HumanMessage(content=plan_prompt)],
+            user_id=user_id,
+            session_id=session_id or None,
+            model_name=ModelConfig.SUGGESTION_MODEL,
+            request_type="agentic_fix_plan",
+        )
+
+        plan_text = response.content if isinstance(response.content, str) else str(response.content)
+        json_match = re.search(r"\[.*\]", plan_text, re.DOTALL)
+        if not json_match:
+            logger.warning("[AgenticFix] Could not parse plan JSON")
+            return []
+
+        plans = json.loads(json_match.group())
+        if not plans:
+            return []
+
+        # Step 2: Run validation queries
+        validated_fixes = []
+        for plan in plans[:2]:  # Max 2
+            validation_query = plan.get("validation_query")
+            if not validation_query:
+                continue
+
+            logger.info("[AgenticFix] Running validation: %s", validation_query[:100])
+            try:
+                validation_result = cloud_exec(
+                    provider="aws",
+                    command=validation_query,
+                    user_id=user_id,
+                    session_id=session_id,
+                    timeout=30,
+                )
+            except Exception as e:
+                validation_result = f"ERROR: {e}"
+
+            validated_fixes.append({
+                **plan,
+                "validation_result": str(validation_result)[:2000],
+            })
+
+        if not validated_fixes:
+            return []
+
+        # Step 3: Re-prompt with validation results to produce final suggestions
+        validation_context = "\n\n".join([
+            f"FIX: {v['title']}\nVALIDATION QUERY: {v['validation_query']}\nVALIDATION RESULT:\n{v['validation_result']}\nWHAT TO CHECK: {v['what_to_check']}"
+            for v in validated_fixes
+        ])
+
+        refine_prompt = f"""You proposed fixes for this incident. I ran your validation queries. Based on the results, produce the FINAL fix suggestions.
+
+INCIDENT: {alert_title}
+SERVICE: {service}
+ROOT CAUSE: {rca_summary[:1000]}
+
+VALIDATION RESULTS:
+{validation_context}
+
+For each fix:
+- If validation CONFIRMS the fix is correct: output it with the exact command
+- If validation shows the fix would FAIL (wrong resource type, doesn't exist, etc.): either fix the command based on what validation revealed, or DROP IT entirely
+
+Return JSON array:
+[
+  {{
+    "title": "action verb + specific target",
+    "description": "why this helps + how to verify success",
+    "type": "mitigation",
+    "risk": "low|medium|high",
+    "command": "exact CLI command, directly executable",
+    "rationale": "tied to validation evidence",
+    "undo": "reversal command or null"
+  }}
+]
+
+If NO fixes survived validation, return []. An empty array is better than a wrong command.
+Return ONLY the JSON array."""
+
+        response2 = tracked_invoke(
+            llm,
+            [HumanMessage(content=refine_prompt)],
+            user_id=user_id,
+            session_id=session_id or None,
+            model_name=ModelConfig.SUGGESTION_MODEL,
+            request_type="agentic_fix_refine",
+        )
+
+        refine_text = response2.content if isinstance(response2.content, str) else str(response2.content)
+        json_match2 = re.search(r"\[.*\]", refine_text, re.DOTALL)
+        if not json_match2:
+            logger.warning("[AgenticFix] Could not parse refined JSON")
+            return []
+
+        refined = json.loads(json_match2.group())
+        suggestions = []
+        for item in refined:
+            stype = item.get("type", "mitigation")
+            if stype not in _VALID_TYPES:
+                stype = "mitigation"
+            risk = item.get("risk", "medium")
+            if risk not in _VALID_RISKS:
+                risk = "medium"
+
+            suggestions.append(Suggestion(
+                title=item.get("title", "")[:200],
+                description=item.get("description", ""),
+                type=stype,
+                risk=risk,
+                command=item.get("command"),
+                rationale=item.get("rationale", ""),
+                undo=item.get("undo"),
+            ))
+
+        logger.info("[AgenticFix] Generated %d validated fixes for incident %s", len(suggestions), incident_id)
+        return suggestions
+
+    except Exception as e:
+        logger.exception("[AgenticFix] Failed for incident %s: %s", incident_id, e)
         return []

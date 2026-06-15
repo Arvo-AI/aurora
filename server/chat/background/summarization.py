@@ -344,6 +344,54 @@ After the summary, add a "## Suggested Next Steps" section with concrete actions
     return prompt
 
 
+_TYPE_SWITCH_PATTERNS = [
+    (r"replace.*postgres.*with.*mysql", "PostgreSQL→MySQL switch"),
+    (r"replace.*psycopg2.*with.*mysql", "psycopg2→mysql-connector switch"),
+    (r"replace.*mysql.*with.*postgres", "MySQL→PostgreSQL switch"),
+    (r"switch.*from.*postgres.*to.*mysql", "PostgreSQL→MySQL switch"),
+    (r"switch.*from.*mysql.*to.*postgres", "MySQL→PostgreSQL switch"),
+    (r"update.*DB_PORT.*to.*3306.*mysql", "Port change to MySQL"),
+    (r"update.*DB_PORT.*to.*5432.*postgres", "Port change to PostgreSQL"),
+]
+
+
+def _filter_type_incompatible_fixes(fixes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove code fixes that switch database/protocol types.
+
+    The investigation agent sometimes suggests rewriting an app from one DB type
+    to another (e.g., PostgreSQL→MySQL) because only the other type exists. This
+    is never correct — the fix should be provisioning the correct resource type.
+    """
+    filtered = []
+    ids_to_remove = []
+    for fix in fixes:
+        title_desc = f"{fix.get('title', '')} {fix.get('description', '')}".lower()
+        is_type_switch = False
+        for pattern, label in _TYPE_SWITCH_PATTERNS:
+            if re.search(pattern, title_desc, re.IGNORECASE):
+                logger.info("[IncidentSummary] Dropping type-incompatible fix: %s (%s)", fix.get('title', '')[:60], label)
+                is_type_switch = True
+                ids_to_remove.append(fix.get('id'))
+                break
+        if not is_type_switch:
+            filtered.append(fix)
+
+    # Remove from DB so they don't show in the UI
+    if ids_to_remove:
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM incident_suggestions WHERE id = ANY(%s)",
+                        ([i for i in ids_to_remove if i],),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.warning("[IncidentSummary] Failed to delete type-incompatible fixes from DB: %s", e)
+
+    return filtered
+
+
 def _fetch_fix_suggestions(incident_id: str, _retries: int = 2) -> List[Dict[str, Any]]:
     """Fetch pre-existing fix suggestions (created by github_fix during RCA)."""
     import time
@@ -741,9 +789,19 @@ def generate_incident_summary_from_chat(
         # Fetch pre-existing fix suggestions (created by github_fix during RCA)
         fix_suggestions = _fetch_fix_suggestions(incident_id)
         if fix_suggestions:
-            logger.info(
-                f"[IncidentSummary] Found {len(fix_suggestions)} fix suggestions for incident {incident_id}"
-            )
+            # Filter out suggestions that violate type compatibility
+            # (e.g., switching from PostgreSQL to MySQL)
+            pre_filter = len(fix_suggestions)
+            fix_suggestions = _filter_type_incompatible_fixes(fix_suggestions)
+            if len(fix_suggestions) < pre_filter:
+                logger.info(
+                    f"[IncidentSummary] Filtered {pre_filter - len(fix_suggestions)} "
+                    f"type-incompatible fix suggestions for {incident_id}"
+                )
+            if fix_suggestions:
+                logger.info(
+                    f"[IncidentSummary] Found {len(fix_suggestions)} fix suggestions for incident {incident_id}"
+                )
 
         # Feed the same Thoughts-panel content the user sees back to the
         # summarizer. Without it the LLM has only raw tool outputs and
@@ -833,6 +891,7 @@ def generate_incident_summary_from_chat(
                     user_id=user_id,
                     session_id=session_id,
                     existing_fixes=fix_suggestions or [],
+                    rca_summary=summary or "",
                 )
             else:
                 suggestions = []
