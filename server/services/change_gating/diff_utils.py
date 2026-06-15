@@ -132,6 +132,44 @@ def format_changed_files(files: List[Dict[str, Any]]) -> List[str]:
     ]
 
 
+def _build_file_block(
+    f: Dict[str, Any],
+    esc: Callable[[str], str],
+    max_file_chars: int,
+) -> str:
+    """Render one file's labelled diff section: ``### path (status, +a/-d)``
+    followed by its fenced patch.
+
+    ``esc`` defangs author-controlled text (the filename — which lands in the
+    header and truncation note outside the fence — and the patch body); the
+    header text, note, and ```` ```diff ```` fences stay trusted. Files GitHub
+    served without a patch (binary, too large, or rename-only) get a notice
+    pointing at the agent's PR-reading tools instead of a diff.
+    """
+    filename = esc(f.get("filename", "<unknown>"))
+    header = "### {} ({}, +{}/-{})".format(
+        filename,
+        f.get("status", "modified"),
+        f.get("additions", 0),
+        f.get("deletions", 0),
+    )
+    patch = f.get("patch")
+    if not patch:
+        return (
+            f"{header}\n[No inline diff served by GitHub for this file "
+            "(binary, too large, or rename-only). Read its changes with "
+            "your GitHub PR-reading tools if it looks risky.]"
+        )
+    note = ""
+    if len(patch) > max_file_chars:
+        patch = patch[:max_file_chars]
+        note = (
+            f"\n[Diff for {filename} truncated at {max_file_chars:,} chars; "
+            "read the full file with your GitHub PR-reading tools if needed.]"
+        )
+    return f"{header}\n```diff\n{esc(patch)}\n```{note}"
+
+
 def build_per_file_diff(
     files: List[Dict[str, Any]],
     diff: Optional[str] = None,
@@ -186,28 +224,7 @@ def build_per_file_diff(
         # filename is author-controlled (a PR can add/rename a file to any
         # name) and lands outside the ```diff fence, so it must be defanged too.
         filename = esc(f.get("filename", "<unknown>"))
-        header = "### {} ({}, +{}/-{})".format(
-            filename,
-            f.get("status", "modified"),
-            f.get("additions", 0),
-            f.get("deletions", 0),
-        )
-        patch = f.get("patch")
-        if not patch:
-            block = (
-                f"{header}\n[No inline diff served by GitHub for this file "
-                "(binary, too large, or rename-only). Read its changes with "
-                "your GitHub PR-reading tools if it looks risky.]"
-            )
-        else:
-            note = ""
-            if len(patch) > max_file_chars:
-                patch = patch[:max_file_chars]
-                note = (
-                    f"\n[Diff for {filename} truncated at {max_file_chars:,} chars; "
-                    "read the full file with your GitHub PR-reading tools if needed.]"
-                )
-            block = f"{header}\n```diff\n{esc(patch)}\n```{note}"
+        block = _build_file_block(f, esc, max_file_chars)
         # Budget applies to every block; the first is always kept so a single
         # over-cap file still yields content.
         if sections and total + len(block) > max_total_chars:

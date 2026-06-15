@@ -133,7 +133,7 @@ class TestImportInstallationRepos:
     def test_suspended_installation_is_a_noop(self):
         from utils.auth.github_app_token import GitHubAppInstallationSuspended
 
-        conn, cur, gen, fetch = _run(
+        _, cur, gen, fetch = _run(
             [{"full_name": "acme/api"}], token_exc=GitHubAppInstallationSuspended("x")
         )
         fetch.assert_not_called()
