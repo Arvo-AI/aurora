@@ -59,6 +59,48 @@ def verify_slack_signature(request_body: bytes, timestamp: str, signature: str) 
     return hmac.compare_digest(expected_signature, signature)
 
 
+def _get_all_org_ids() -> list:
+    """Get all distinct org_ids from the users table (not RLS-protected)."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
+                return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error fetching org_ids: {e}", exc_info=True)
+        return []
+
+
+def _lookup_slack_token(team_id: str, select_cols: str = "user_id") -> list:
+    """
+    Query user_tokens for Slack entries matching team_id, iterating orgs to
+    bypass FORCE ROW LEVEL SECURITY (which blocks even superuser without context).
+    """
+    org_ids = _get_all_org_ids()
+    for org_id in org_ids:
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SET myapp.current_org_id = %s", (org_id,))
+                    cursor.execute(
+                        f"""
+                        SELECT {select_cols}
+                        FROM user_tokens 
+                        WHERE provider = 'slack' 
+                        AND subscription_id = %s
+                        AND is_active = TRUE
+                        """,
+                        (team_id,)
+                    )
+                    results = cursor.fetchall()
+                    if results:
+                        return results
+        except Exception as e:
+            logger.debug(f"Error querying slack tokens for org {org_id}: {e}")
+            continue
+    return []
+
+
 def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
     """
     Find Aurora user_id from Slack team_id (workspace ID).
@@ -68,26 +110,10 @@ def get_user_id_from_slack_team(team_id: str) -> Optional[str]:
     This is to send a message into a channel where the requesting user is not authenticated. (We need credentials to send a message)
     """
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                # No RLS needed — webhook bootstrap, no user_id
-                cursor.execute(
-                    """
-                    SELECT user_id 
-                    FROM user_tokens 
-                    WHERE provider = 'slack' 
-                    AND subscription_id = %s
-                    AND is_active = TRUE
-                    LIMIT 1
-                    """,
-                    (team_id,)
-                )
-                result = cursor.fetchone()
-                
-                if result:
-                    return result[0]
-                
-                return None
+        results = _lookup_slack_token(team_id)
+        if results:
+            return results[0][0]
+        return None
     except Exception as e:
         logger.error(f"Error looking up user from Slack team_id {sanitize(team_id)}: {e}", exc_info=True)
         return None
@@ -100,43 +126,28 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
     Note: team_id is stored in the subscription_id column for Slack.
     """
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                # No RLS needed — webhook bootstrap, no user_id
-                cursor.execute(
-                    """
-                    SELECT user_id, secret_ref 
-                    FROM user_tokens 
-                    WHERE provider = 'slack' 
-                    AND subscription_id = %s
-                    AND is_active = TRUE
-                    """,
-                    (team_id,)
-                )
-                results = cursor.fetchall()
+        results = _lookup_slack_token(team_id, select_cols="user_id, secret_ref")
+        
+        if not results:
+            return None
+        
+        from utils.secrets.secret_ref_utils import get_user_token_data
+        
+        for user_id, secret_ref in results:
+            try:
+                token_data = get_user_token_data(user_id, "slack")
+                if not token_data:
+                    continue
                 
-                if not results:
-                    return None
+                stored_slack_user_id = token_data.get('user_id')
                 
-                from utils.secrets.secret_ref_utils import get_user_token_data
-                
-                for user_id, secret_ref in results:
-                    try:
-                        token_data = get_user_token_data(user_id, "slack")
-                        if not token_data:
-                            continue
-                        
-                        # Check if Slack user_id matches
-                        stored_slack_user_id = token_data.get('user_id')  # Slack user ID of the person who connected
-                        
-                        # Match if same Slack user (team_id already matched in query)
-                        if stored_slack_user_id == slack_user_id:
-                            return user_id
-                    except Exception as e:
-                        logger.debug(f"Error checking user {user_id}: {e}")
-                        continue
-                
-                return None
+                if stored_slack_user_id == slack_user_id:
+                    return user_id
+            except Exception as e:
+                logger.debug(f"Error checking user {user_id}: {e}")
+                continue
+        
+        return None
     except Exception as e:
         logger.error(f"Error looking up user from Slack user_id {sanitize(slack_user_id)}: {e}", exc_info=True)
         return None
@@ -507,7 +518,10 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # No RLS needed — webhook bootstrap, no user_id
+                cursor.execute(
+                    "SET myapp.current_org_id = (SELECT org_id FROM users WHERE id = %s)",
+                    (user_id,)
+                )
                 cursor.execute(
                     """
                     SELECT id, aurora_chat_session_id
@@ -548,7 +562,10 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
         # Otherwise, look up by thread_ts in chat session metadata
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                # No RLS needed — webhook bootstrap, no user_id
+                cursor.execute(
+                    "SET myapp.current_org_id = (SELECT org_id FROM users WHERE id = %s)",
+                    (user_id,)
+                )
                 cursor.execute(
                     """
                     SELECT id, ui_state
@@ -567,7 +584,6 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
                 if result:
                     session_id = str(result[0])
                     
-                    # Try to find associated incident
                     cursor.execute(
                         """
                         SELECT id
