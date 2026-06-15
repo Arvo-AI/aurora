@@ -768,7 +768,24 @@ def github_fix(
 
     final_commit_message = commit_message or f"fix: {fix_description[:100]}"
     title = _build_title(file_path, fix_description)
-    description = f"{fix_description}\n\n**Root Cause:** {root_cause_summary}"
+    # Keep description concise for UI display — first sentence of each
+    desc_short = fix_description.strip()
+    period_idx = desc_short.find('. ')
+    if 0 < period_idx <= 200:
+        desc_short = desc_short[:period_idx + 1]
+    elif len(desc_short) > 200:
+        space_idx = desc_short.rfind(' ', 0, 200)
+        desc_short = desc_short[:space_idx] + '...' if space_idx > 80 else desc_short[:200] + '...'
+
+    rcs_short = root_cause_summary.strip()
+    period_idx = rcs_short.find('. ')
+    if 0 < period_idx <= 200:
+        rcs_short = rcs_short[:period_idx + 1]
+    elif len(rcs_short) > 200:
+        space_idx = rcs_short.rfind(' ', 0, 200)
+        rcs_short = rcs_short[:space_idx] + '...' if space_idx > 80 else rcs_short[:200] + '...'
+
+    description = f"{desc_short}\n\n**Root Cause:** {rcs_short}"
 
     suggestion_id = _save_fix_suggestion(
         incident_id=incident_id,
