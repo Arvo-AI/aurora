@@ -66,38 +66,58 @@ def _get_all_org_ids() -> list:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
                 return [row[0] for row in cursor.fetchall()]
-    except Exception as e:
-        logger.error(f"Error fetching org_ids: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to fetch org_ids for Slack webhook bootstrap")
         return []
 
 
-def _lookup_slack_token(team_id: str, select_cols: str = "user_id") -> list:
+def _lookup_slack_token(team_id: str, include_secret_ref: bool = False) -> list:
     """
     Query user_tokens for Slack entries matching team_id, iterating orgs to
     bypass FORCE ROW LEVEL SECURITY (which blocks even superuser without context).
     """
     org_ids = _get_all_org_ids()
+    if not org_ids:
+        return []
+
+    errors = 0
     for org_id in org_ids:
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SET myapp.current_org_id = %s", (org_id,))
-                    cursor.execute(
-                        f"""
-                        SELECT {select_cols}
-                        FROM user_tokens 
-                        WHERE provider = 'slack' 
-                        AND subscription_id = %s
-                        AND is_active = TRUE
-                        """,
-                        (team_id,)
-                    )
+                    if include_secret_ref:
+                        cursor.execute(
+                            """
+                            SELECT user_id, secret_ref
+                            FROM user_tokens 
+                            WHERE provider = 'slack' 
+                            AND subscription_id = %s
+                            AND is_active = TRUE
+                            """,
+                            (team_id,)
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT user_id
+                            FROM user_tokens 
+                            WHERE provider = 'slack' 
+                            AND subscription_id = %s
+                            AND is_active = TRUE
+                            """,
+                            (team_id,)
+                        )
                     results = cursor.fetchall()
                     if results:
                         return results
         except Exception as e:
+            errors += 1
             logger.debug(f"Error querying slack tokens for org {org_id}: {e}")
             continue
+
+    if errors == len(org_ids):
+        logger.warning(f"All org lookups failed for Slack team {sanitize(team_id)} ({errors} errors)")
     return []
 
 
@@ -126,7 +146,7 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
     Note: team_id is stored in the subscription_id column for Slack.
     """
     try:
-        results = _lookup_slack_token(team_id, select_cols="user_id, secret_ref")
+        results = _lookup_slack_token(team_id, include_secret_ref=True)
         
         if not results:
             return None
