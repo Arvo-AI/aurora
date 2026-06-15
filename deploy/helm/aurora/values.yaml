@@ -78,6 +78,20 @@ image:
   #   - name: regcred
 
 # ------------------------------------------------------------------------------
+# Frontend image override
+# ------------------------------------------------------------------------------
+# When set, the frontend deployment uses this image instead of the default
+# aurora-frontend from image.registry. Useful for custom frontend builds
+# (e.g. with additional analytics or SaaS overlay features).
+# Deploy with: helm upgrade --reuse-values --set frontendImage.tag=sha-abc1234
+frontendImage: {}
+  # registry: "ghcr.io/your-org"
+  # repository: "aurora-frontend-custom"
+  # tag: "sha-abc1234"
+  # pullSecrets:
+  #   - name: ghcr-pull
+
+# ------------------------------------------------------------------------------
 # Autoscaling (HPA)
 # ------------------------------------------------------------------------------
 autoscaling:
