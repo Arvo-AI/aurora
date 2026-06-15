@@ -6,11 +6,15 @@ Uses the stored access_token from OAuth to interact with Slack workspace.
 import logging
 import time
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Iterator
 
 logger = logging.getLogger(__name__)
 
 SLACK_API_BASE = "https://slack.com/api"
+
+# Safety cap: stop paginating after this many channels to prevent runaway
+# memory allocation on very large Slack workspaces.
+_MAX_CHANNELS_DEFAULT = 5000
 
 
 class SlackClient:
@@ -18,14 +22,14 @@ class SlackClient:
     Slack API client for Aurora integration.
     Handles message sending, channel listing, and message reading.
     """
-    
+
     def __init__(self, access_token: str):
         self.access_token = access_token
         self.headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
-    
+
     @staticmethod
     def _get_retry_delay(attempt: int, response=None) -> int:
         """Parse Retry-After header or compute exponential backoff, capped at 30s."""
@@ -39,6 +43,36 @@ class SlackClient:
             delay = fallback
         return min(delay, 30)
 
+    @staticmethod
+    def _sleep(seconds: float) -> None:
+        """
+        Sleep without blocking the event loop when called from a thread
+        that shares a running asyncio loop (e.g. gunicorn gthread workers
+        that co-exist with an asyncio loop on the same thread or a sibling
+        thread).  Falls back to plain time.sleep in pure-sync contexts
+        (Celery workers, tests).
+        """
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            # We are inside a running event loop — schedule a coroutine and
+            # block the *current* thread on its result so we don't starve
+            # other coroutines.
+            future = asyncio.run_coroutine_threadsafe(
+                asyncio.sleep(seconds), loop
+            )
+            try:
+                future.result(timeout=seconds + 5)
+            except Exception:
+                # Fallback: if the future fails for any reason just sleep
+                time.sleep(seconds)
+        else:
+            time.sleep(seconds)
+
     def _validate_response(self, result: Dict[str, Any], endpoint: str) -> Dict[str, Any]:
         """Check Slack's ok field; raise ValueError on API-level errors."""
         if result.get('ok', False):
@@ -48,84 +82,145 @@ class SlackClient:
             logger.error("Slack API error on %s: %s", endpoint, error)
         raise ValueError(f"Slack API error: {error}")
 
-    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
+    def _make_request(
+        self,
+        method: str,
+        endpoint: str,
+        data: Optional[Dict] = None,
+        timeout: int = 30,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
         """Make a request to Slack API with retry on 429 rate limits."""
         url = f"{SLACK_API_BASE}/{endpoint}"
-        
+
         for attempt in range(max_retries + 1):
             try:
                 if method == "GET":
                     response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
                 else:
                     response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
-                
+
                 if response.status_code == 429 and attempt < max_retries:
                     retry_after = self._get_retry_delay(attempt, response)
-                    logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
-                    time.sleep(retry_after)
+                    logger.warning(
+                        "Rate limited on %s, retrying in %ds (attempt %d/%d)",
+                        endpoint, retry_after, attempt + 1, max_retries,
+                    )
+                    self._sleep(retry_after)
                     continue
 
                 response.raise_for_status()
                 return self._validate_response(response.json(), endpoint)
-                
+
             except requests.RequestException as e:
                 if attempt < max_retries and "429" in str(e):
                     retry_after = self._get_retry_delay(attempt)
-                    logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
-                    time.sleep(retry_after)
+                    logger.warning(
+                        "Rate limited on %s, retrying in %ds (attempt %d/%d)",
+                        endpoint, retry_after, attempt + 1, max_retries,
+                    )
+                    self._sleep(retry_after)
                     continue
                 logger.exception("Request to Slack API failed on %s", endpoint)
                 raise ValueError(f"Failed to communicate with Slack: {e}") from e
-        
-        raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
-    
-    def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None, 
-                     blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
+
+        raise ValueError(
+            f"Failed to communicate with Slack after {max_retries} retries: "
+            f"rate limited on {endpoint}"
+        )
+
+    def send_message(
+        self,
+        channel: str,
+        text: str,
+        thread_ts: Optional[str] = None,
+        blocks: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
         """Send a message to a Slack channel."""
         data = {"channel": channel, "text": text}
         if thread_ts:
             data["thread_ts"] = thread_ts
         if blocks:
             data["blocks"] = blocks
-        result = self._make_request("POST", "chat.postMessage", data)
-        return result
-    
-    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
+        return self._make_request("POST", "chat.postMessage", data)
+
+    def update_message(
+        self,
+        channel: str,
+        ts: str,
+        text: str,
+        blocks: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
         """Update an existing message in a Slack channel."""
         data = {"channel": channel, "ts": ts, "text": text}
         if blocks:
             data["blocks"] = blocks
         return self._make_request("POST", "chat.update", data)
-    
+
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""
         return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
-    
-    def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
-        """List channels the bot is a member of (much smaller set than all visible channels)."""
-        all_channels = []
+
+    def iter_bot_channel_pages(
+        self,
+        types: str = "public_channel,private_channel",
+    ) -> Iterator[List[Dict[str, Any]]]:
+        """
+        Yield one page of channels at a time from users.conversations.
+
+        Prefer this over list_bot_channels() when you only need to scan
+        channels without holding all of them in memory simultaneously.
+        """
         cursor = None
-        
         while True:
-            data = {"types": types, "exclude_archived": True, "limit": 200}
+            data: Dict[str, Any] = {
+                "types": types,
+                "exclude_archived": True,
+                "limit": 200,
+            }
             if cursor:
                 data["cursor"] = cursor
-            
+
             result = self._make_request("GET", "users.conversations", data)
-            channels = result.get('channels', [])
-            all_channels.extend(channels)
-            
-            cursor = result.get('response_metadata', {}).get('next_cursor')
+            page: List[Dict[str, Any]] = result.get("channels", [])
+            if page:
+                yield page
+
+            cursor = result.get("response_metadata", {}).get("next_cursor")
             if not cursor:
                 break
+
+    def list_bot_channels(
+        self,
+        types: str = "public_channel,private_channel",
+        max_channels: int = _MAX_CHANNELS_DEFAULT,
+    ) -> List[Dict[str, Any]]:
+        """
+        List channels the bot is a member of (uses users.conversations).
+
+        Pagination is bounded by *max_channels* to prevent unbounded memory
+        growth on very large Slack workspaces.  If the workspace has more
+        channels than the cap, a warning is logged and the truncated list is
+        returned — callers should not rely on completeness beyond the cap.
+        """
+        all_channels: List[Dict[str, Any]] = []
+        for page in self.iter_bot_channel_pages(types=types):
+            all_channels.extend(page)
+            if len(all_channels) >= max_channels:
+                logger.warning(
+                    "list_bot_channels: reached max_channels cap (%d); "
+                    "truncating result to avoid OOM. "
+                    "Consider processing channels page-by-page via iter_bot_channel_pages().",
+                    max_channels,
+                )
+                return all_channels[:max_channels]
         return all_channels
-    
+
     def create_channel(self, name: str, is_private: bool = False) -> Dict[str, Any]:
         """Create a new channel."""
         result = self._make_request("POST", "conversations.create", {"name": name, "is_private": is_private})
-        channel = result.get('channel', {})
-        return channel
-    
+        return result.get("channel", {})
+
     def invite_to_channel(self, channel: str, users: List[str]) -> Optional[Dict[str, Any]]:
         """Add users to a channel automatically (no acceptance required). Returns None on failure."""
         try:
@@ -134,16 +229,15 @@ class SlackClient:
         except Exception:
             logger.warning("Could not add users to channel", exc_info=True)
             return None
-    
+
     def join_channel(self, channel: str) -> Optional[Dict[str, Any]]:
         """Join a public channel by ID. Returns channel info or None on failure."""
         try:
             result = self._make_request("POST", "conversations.join", {"channel": channel})
-            return result.get('channel')
+            return result.get("channel")
         except Exception:
             logger.warning("Could not join channel via conversations.join", exc_info=True)
             return None
-    
 
 
 def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, Any]]:
@@ -166,7 +260,7 @@ def join_existing_incidents_channel(access_token: str, channel_id: str) -> Dict[
         client = SlackClient(access_token)
         channel = client.join_channel(channel_id)
         if channel:
-            channel_name = channel.get('name', 'unknown')
+            channel_name = channel.get("name", "unknown")
             logger.info("Rejoined existing incidents channel on reconnect")
             return {"ok": True, "channel_id": channel_id, "channel_name": channel_name, "created": False}
 
@@ -180,7 +274,7 @@ def join_existing_incidents_channel(access_token: str, channel_id: str) -> Dict[
 def create_incidents_channel(access_token: str, team_name: str, installer_user_id: str) -> Dict[str, Any]:
     """
     Create an incidents channel for Aurora notifications.
-    
+
     Tries channel names in order until one succeeds:
     1. 'incidents'
     2. 'aurora_incidents'
@@ -190,13 +284,13 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
 
     try:
         client = SlackClient(access_token)
-        
+
         candidates = [
             "incidents",
             "aurora_incidents",
             f"aurora_incidents_{secrets.token_hex(4)}",
         ]
-        
+
         channel = None
         channel_name = None
         for name in candidates:
@@ -204,27 +298,30 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
             if channel:
                 channel_name = name
                 break
-        
+
         if not channel or not channel_name:
             logger.error("Failed to create any incidents channel variant")
             return {"ok": False, "error": "Could not create an incidents channel"}
-        
-        channel_id = channel['id']
+
+        channel_id = channel["id"]
         logger.info("Incidents channel created successfully")
-        
+
         try:
             client.invite_to_channel(channel_id, [installer_user_id])
             client.set_channel_topic(channel_id, "Aurora incident alerts notifications")
-            client.send_message(channel_id, (
-                f"Welcome to #{channel_name}!\n\n"
-                f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
-                "• Real-time incident alerts and notifications\n"
-                "• Automated root cause analysis updates\n\n"
-                "Tag @Aurora in any channel to start a conversation!"
-            ))
+            client.send_message(
+                channel_id,
+                (
+                    f"Welcome to #{channel_name}!\n\n"
+                    f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
+                    "• Real-time incident alerts and notifications\n"
+                    "• Automated root cause analysis updates\n\n"
+                    "Tag @Aurora in any channel to start a conversation!"
+                ),
+            )
         except Exception:
             logger.warning("Non-critical error during channel setup", exc_info=True)
-        
+
         return {
             "ok": True,
             "channel_id": channel_id,
@@ -245,12 +342,12 @@ def get_slack_client_for_user(user_id: str) -> Optional[SlackClient]:
     """
     try:
         from utils.auth.stateless_auth import get_credentials_from_db
-        
+
         slack_creds = get_credentials_from_db(user_id, "slack")
         if not slack_creds or not slack_creds.get("access_token"):
             logger.debug("No Slack credentials for user %s", user_id)
             return None
-        
+
         return SlackClient(slack_creds["access_token"])
     except Exception:
         logger.exception("Failed to get Slack client")
