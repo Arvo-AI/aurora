@@ -136,6 +136,11 @@ from .newrelic_tool import (
     is_newrelic_connected,
     QueryNewRelicArgs,
 )
+from .prometheus_tool import (
+    query_prometheus,
+    is_prometheus_connected,
+    QueryPrometheusArgs,
+)
 from .sentry_tool import (
     query_sentry,
     is_sentry_connected,
@@ -2029,6 +2034,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryNewRelicArgs,
         ))
         logging.info(f"Added New Relic tool for user {user_id}")
+
+    # Add Prometheus tool if connected
+    if is_prometheus_connected(user_id):
+        context_wrapped_prom = with_user_context(query_prometheus)
+        notification_wrapped_prom = with_completion_notification(context_wrapped_prom)
+        final_prom_func = wrap_func_with_capture(notification_wrapped_prom, "query_prometheus") if tool_capture else notification_wrapped_prom
+
+        tools.append(StructuredTool.from_function(
+            func=final_prom_func,
+            name="query_prometheus",
+            description=(
+                "Query Prometheus for metrics via PromQL, firing alerts, scrape targets, rules, or metric metadata. "
+                "resource_type must be 'metrics', 'instant', 'alerts', 'rules', 'targets', or 'metadata'. "
+                "Use 'metrics' for range queries (time series), 'instant' for point-in-time snapshots. "
+                "Examples: query_prometheus(resource_type='metrics', query='rate(http_requests_total{status=~\"5..\"}[5m])', time_from='1h') "
+                "or query_prometheus(resource_type='instant', query='up{job=\"api-server\"}') "
+                "or query_prometheus(resource_type='alerts') "
+                "or query_prometheus(resource_type='targets', query='active')"
+            ),
+            args_schema=QueryPrometheusArgs,
+        ))
+        logging.info(f"Added Prometheus tool for user {user_id}")
 
     # Add Sentry tool if connected
     if is_sentry_connected(user_id):
