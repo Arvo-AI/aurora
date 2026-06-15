@@ -88,7 +88,7 @@ class SlackClient:
         if blocks:
             data["blocks"] = blocks
         result = self._make_request("POST", "chat.postMessage", data)
-        logger.info("Message sent to %s: %s", channel, result.get('ts'))
+        logger.info("Message sent to channel %s", channel)
         return result
     
     def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
