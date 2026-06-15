@@ -180,7 +180,7 @@ def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, An
         if "name_taken" in str(e).lower():
             logger.info(f"[SLACK-DEBUG] #{name} already exists (name_taken), trying next")
             return None
-        logger.error(f"[SLACK-DEBUG] Unexpected error creating #{name}: {e}")
+        logger.exception("[SLACK-DEBUG] Unexpected error creating #%s", name)
         raise
 
 
@@ -256,7 +256,7 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                 "• Automated root cause analysis updates\n\n"
                 "Tag @Aurora in any channel to start a conversation!"
             ))
-            logger.info(f"[SLACK-DEBUG] Channel setup complete")
+            logger.info("[SLACK-DEBUG] Channel setup complete")
         except Exception as setup_e:
             logger.warning(f"[SLACK-DEBUG] [{team_name}] Non-critical error during channel setup: {setup_e}")
         
