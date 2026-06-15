@@ -77,7 +77,10 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 - [ ] Token retrieval via `get_token_data(user_id, "<name>")`
 - [ ] Disconnect deletes via `delete_user_secret(user_id, "<name>")`
 - [ ] Provider added to `SUPPORTED_SECRET_PROVIDERS` in `server/utils/secrets/secret_ref_utils.py` (without this, `get_token_data` silently returns `None`)
-- [ ] Provider added to `SUPPORTED_SECRET_PROVIDERS` in `server/utils/secrets/secret_ref_utils.py` (without this, `get_token_data` silently returns `None`)
+
+### Webhook / Celery Tasks (if connector receives webhooks)
+- [ ] Task module added to the `include` list in `server/celery_config.py` (without this, the worker silently drops the task as "unregistered")
+- [ ] Webhook route path added to `_OPEN_PREFIXES` in `server/main_compute.py` (external services cannot send the `X-Internal-Secret` header)
 
 ### Blueprint Registration
 - [ ] Blueprint registered in `server/main_compute.py` with appropriate `url_prefix`

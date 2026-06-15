@@ -88,6 +88,7 @@ celery_app.conf.update(
         'routes.pagerduty.tasks',
         'routes.opsgenie.tasks',
         'routes.newrelic.tasks',
+        'routes.prometheus.tasks',
         'routes.sentry.tasks',
         'routes.jenkins.tasks',
         'routes.spinnaker.tasks',

@@ -123,8 +123,6 @@ class ConnectorRegistry {
       category: "Monitoring",
       path: "/prometheus/auth",
       storageKey: "isPrometheusConnected",
-      alertsPath: "/prometheus/alerts",
-      alertsLabel: "View Alerts",
       useCustomConnection: true,
     });
 
