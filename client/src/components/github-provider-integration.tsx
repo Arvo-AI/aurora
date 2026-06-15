@@ -261,6 +261,11 @@ export default function GitHubProviderIntegration() {
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
   const [isLoadingInstallations, setIsLoadingInstallations] = useState(false);
+  // True once the first installations fetch has resolved. The loading skeleton
+  // is shown only before this flips — otherwise an OAuth-connected user (who
+  // has no App installations) sees the "Connected GitHub Installations"
+  // skeleton flash on every window focus/visibility refetch.
+  const [installationsLoaded, setInstallationsLoaded] = useState(false);
   const [installationFilter, setInstallationFilter] = useState<string>('all');
 
   // App installations that exist on GitHub but aren't linked to this Aurora
@@ -315,7 +320,7 @@ export default function GitHubProviderIntegration() {
         setDiscoveredInstallations([]);
       }
     } catch { setInstallations([]); }
-    finally { setIsLoadingInstallations(false); }
+    finally { setIsLoadingInstallations(false); setInstallationsLoaded(true); }
   }, [authConfig.app_enabled]);
 
   const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
@@ -702,6 +707,9 @@ export default function GitHubProviderIntegration() {
       setHasLoadedRepos(false);
       setExpanded(false);
       setInstallations([]);
+      // Reset so a genuine App reconnect in this session shows the loading
+      // skeleton again (it's only suppressed AFTER the first load completes).
+      setInstallationsLoaded(false);
       setGithubConnectedOptimistically(false);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -997,11 +1005,13 @@ export default function GitHubProviderIntegration() {
       {/* Expanded content */}
       {expanded && githubStatus.isAuthenticated && (
         <div className="ml-6 border-l-2 border-muted pl-6 mt-2 space-y-3">
-          {/* GitHub App installations (rendered only when at least one exists or first load is in flight) */}
-          {(installations.length > 0 || (isLoadingInstallations && installations.length === 0)) && (
+          {/* GitHub App installations (rendered only when at least one exists, or
+              while the FIRST load is still in flight — never re-flash the skeleton
+              on refetch for OAuth users who have no App installations). */}
+          {(installations.length > 0 || (isLoadingInstallations && !installationsLoaded)) && (
             <div className="space-y-2" data-testid="installations-section">
               <p className="text-sm font-medium text-muted-foreground">Connected GitHub Installations</p>
-              {isLoadingInstallations && installations.length === 0 ? (
+              {isLoadingInstallations && !installationsLoaded ? (
                 <div className="space-y-2" data-testid="installations-skeleton">
                   {[0, 1].map(i => (
                     <div key={i} className="p-3 rounded-md border border-border animate-pulse">
