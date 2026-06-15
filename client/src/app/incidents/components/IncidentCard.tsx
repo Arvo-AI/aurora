@@ -325,8 +325,13 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
         const sevGlyph = suggestion.risk === 'high' ? '!!' : suggestion.risk === 'medium' ? '!' : suggestion.type === 'prevent' ? '~' : '·';
         const sevColor = suggestion.risk === 'high' ? 'text-rose-400' : suggestion.risk === 'medium' ? 'text-amber-400' : suggestion.type === 'prevent' ? 'text-blue-400' : 'text-zinc-500';
 
-        // Detect if command is mutating (can't run in sandbox)
-        const isMutating = suggestion.command ? /\b(git\s+(push|commit|add|checkout|clone)|sed\s+-i|rm\s|mv\s|cp\s|chmod|chown|kubectl\s+(apply|delete|patch|edit)|terraform\s+(apply|destroy)|helm\s+(install|upgrade|delete))\b/.test(suggestion.command) : false;
+        // Detect if command is mutating (can't auto-run — show Copy instead)
+        const isMutating = suggestion.command ? (
+          /\b(git\s+(push|commit|add|checkout|clone)|sed\s+-i|rm\s|mv\s|cp\s|chmod|chown|kubectl\s+(apply|delete|patch|edit|scale|rollout)|terraform\s+(apply|destroy)|helm\s+(install|upgrade|delete))\b/.test(suggestion.command) ||
+          /\baws\s+\S+\s+(update-|put-|delete-|create-|set-|add-|remove-|modify-|enable-|disable-|start-|stop-|invoke|publish|send-|verify-|tag-|untag-)/.test(suggestion.command) ||
+          /\bgcloud\s+\S+\s+\S+\s+(update|delete|create|set|add-iam|remove-iam|deploy)/.test(suggestion.command) ||
+          /\baz\s+\S+\s+(update|delete|create|set|start|stop|restart)/.test(suggestion.command)
+        ) : false;
 
         const actionLabel = isFixType
           ? suggestion.prUrl ? 'View PR' : 'Create PR'
@@ -419,6 +424,8 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
                     e.stopPropagation();
                     if (isFixType) {
                       onFixSuggestion(suggestion);
+                    } else if (isMutating && suggestion.command) {
+                      navigator.clipboard.writeText(suggestion.command);
                     } else {
                       onRunSuggestion(suggestion);
                     }
@@ -437,6 +444,8 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
                     <GitBranch className="w-[13px] h-[13px]" />
                   ) : wasExecuted ? (
                     execStatus === 'completed' ? <CheckCircle2 className="w-[13px] h-[13px]" /> : execStatus === 'failed' ? <AlertCircle className="w-[13px] h-[13px]" /> : <Play className="w-[13px] h-[13px]" />
+                  ) : isMutating ? (
+                    <Copy className="w-[13px] h-[13px]" />
                   ) : (
                     <Play className="w-[13px] h-[13px]" />
                   )}
