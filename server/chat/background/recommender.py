@@ -601,6 +601,20 @@ def _extract_commands_from_trace(citations: List[Citation]) -> set:
     return commands
 
 
+def _overlaps_existing_fix(suggestion: Suggestion, fix_files: set) -> bool:
+    """Check if a suggestion is redundant with an existing github_fix suggestion."""
+    if suggestion.type not in ("remediate", "fix"):
+        return False
+    title_lower = suggestion.title.lower()
+    for fp in fix_files:
+        basename = fp.split("/")[-1] if "/" in fp else fp
+        if basename and basename in title_lower:
+            return True
+        if fp and fp in title_lower:
+            return True
+    return False
+
+
 def _is_redundant(suggestion: Suggestion, executed_commands: set) -> bool:
     """Check if a suggestion duplicates something already executed."""
     if not suggestion.command:
@@ -791,7 +805,7 @@ def generate_recommendations(
     severity: str = "unknown",
     user_id: str = "",
     session_id: str = "",
-    existing_fixes: Optional[List[dict]] = None,  # kept for API compat, unused
+    existing_fixes: Optional[List[dict]] = None,
 ) -> List[Suggestion]:
     """Generate next steps from the investigation trace.
 
@@ -799,7 +813,7 @@ def generate_recommendations(
     1. Extract hypothesis ledger from agent reasoning
     2. Run self-execution round (safe diagnostics)
     3. Generate suggestions for human-required actions only
-    4. Filter out fix-type suggestions that duplicate existing fixes
+    4. Dedup against existing fix suggestions from github_fix tool
     """
     from chat.backend.agent.llm import ModelConfig
     from chat.backend.agent.providers import create_chat_model
@@ -833,6 +847,12 @@ def generate_recommendations(
         if r.get("success") and r.get("command"):
             executed_commands.add(r["command"].strip().lower())
 
+    # Build context about existing fix suggestions (from github_fix tool)
+    fix_context = ""
+    if existing_fixes:
+        fix_lines = [f"  - {f.get('file_path', '?')}: {f.get('title', '')[:80]}" for f in existing_fixes]
+        fix_context = "EXISTING CODE FIXES (already generated with full diffs — do NOT duplicate these):\n" + "\n".join(fix_lines)
+
     prompt = _build_recommender_prompt(
         service=service,
         alert_title=alert_title,
@@ -840,7 +860,7 @@ def generate_recommendations(
         trace_context=trace_context,
         hypothesis_ledger=hypothesis_ledger,
         self_exec_results=self_exec_context,
-        resource_inventory=resource_inventory,
+        resource_inventory=resource_inventory + ("\n\n" + fix_context if fix_context else ""),
     )
 
     try:
@@ -854,6 +874,17 @@ def generate_recommendations(
             request_type="recommendation",
         )
         suggestions = _parse_recommendations(response.content, executed_commands)
+
+        # Dedup: remove suggestions that overlap with existing fix suggestions
+        if existing_fixes:
+            fix_files = {f.get("file_path", "").lower().strip() for f in existing_fixes if f.get("file_path")}
+            pre_dedup = len(suggestions)
+            suggestions = [
+                s for s in suggestions
+                if not _overlaps_existing_fix(s, fix_files)
+            ]
+            if len(suggestions) < pre_dedup:
+                logger.info("[Recommender] Deduped %d suggestions covered by existing fixes", pre_dedup - len(suggestions))
 
         # Generate one-line summaries with a cheap model
         _generate_summaries(suggestions, user_id, session_id)

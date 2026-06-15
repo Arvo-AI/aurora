@@ -701,7 +701,15 @@ def _save_fix_suggestion(
 
 def _build_title(file_path: str, fix_description: str) -> str:
     filename = file_path.split('/')[-1]
-    return f"Fix `{filename}`: {fix_description}"
+    # Take first sentence or first 80 chars, whichever is shorter
+    desc = fix_description.strip()
+    period_idx = desc.find('. ')
+    if 0 < period_idx <= 80:
+        desc = desc[:period_idx + 1]
+    elif len(desc) > 80:
+        space_idx = desc.rfind(' ', 0, 80)
+        desc = desc[:space_idx] if space_idx > 40 else desc[:80]
+    return f"Fix `{filename}`: {desc}"
 
 
 def github_fix(

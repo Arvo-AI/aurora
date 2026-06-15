@@ -832,6 +832,7 @@ def generate_incident_summary_from_chat(
                     severity=basics.get("severity", "unknown"),
                     user_id=user_id,
                     session_id=session_id,
+                    existing_fixes=fix_suggestions or [],
                 )
             else:
                 suggestions = []
