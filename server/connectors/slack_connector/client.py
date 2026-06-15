@@ -45,18 +45,8 @@ class SlackClient:
             return result
         error = result.get('error', 'unknown_error')
         if not (error == 'name_taken' and endpoint == 'conversations.create'):
-            logger.error(f"Slack API error on {endpoint}: {error}")
+            logger.error("Slack API error on %s: %s", endpoint, error)
         raise ValueError(f"Slack API error: {error}")
-
-    _REDACTED_ENDPOINTS = frozenset({"chat.postMessage", "chat.update"})
-
-    def _safe_data_repr(self, endpoint: str, data: Optional[Dict]) -> str:
-        """Return a log-safe representation of request data, redacting message content."""
-        if data is None:
-            return "None"
-        if endpoint in self._REDACTED_ENDPOINTS:
-            return str({k: (v if k == "channel" else "<redacted>") for k, v in data.items()})
-        return str(data)
 
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
         """Make a request to Slack API with retry on 429 rate limits."""
@@ -64,36 +54,27 @@ class SlackClient:
         
         for attempt in range(max_retries + 1):
             try:
-                t0 = time.time()
-                logger.info(f"[SLACK-DEBUG] >>> {method} {endpoint} data={self._safe_data_repr(endpoint, data)} (attempt {attempt})")
                 if method == "GET":
                     response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
                 else:
                     response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
                 
-                elapsed = time.time() - t0
-                logger.info(f"[SLACK-DEBUG] <<< {method} {endpoint} status={response.status_code} elapsed={elapsed:.2f}s")
-                
                 if response.status_code == 429 and attempt < max_retries:
                     retry_after = self._get_retry_delay(attempt, response)
-                    logger.warning(f"[SLACK-DEBUG] 429 Rate limited on {endpoint}, Retry-After={response.headers.get('Retry-After')}, waiting {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
                     time.sleep(retry_after)
                     continue
 
                 response.raise_for_status()
-                result = response.json()
-                logger.info(f"[SLACK-DEBUG] response ok={result.get('ok')} error={result.get('error', 'none')}")
-                return self._validate_response(result, endpoint)
+                return self._validate_response(response.json(), endpoint)
                 
             except requests.RequestException as e:
-                elapsed = time.time() - t0
-                logger.warning(f"[SLACK-DEBUG] !!! {method} {endpoint} RequestException after {elapsed:.2f}s: {e}")
                 if attempt < max_retries and "429" in str(e):
                     retry_after = self._get_retry_delay(attempt)
-                    logger.warning(f"[SLACK-DEBUG] 429 in exception, waiting {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
                     time.sleep(retry_after)
                     continue
-                logger.exception("Request to Slack API failed")
+                logger.exception("Request to Slack API failed on %s", endpoint)
                 raise ValueError(f"Failed to communicate with Slack: {e}") from e
         
         raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
@@ -104,10 +85,10 @@ class SlackClient:
         data = {"channel": channel, "text": text}
         if thread_ts:
             data["thread_ts"] = thread_ts
-        if blocks: #Blocks are Slack Block Kit for rich formatting
+        if blocks:
             data["blocks"] = blocks
         result = self._make_request("POST", "chat.postMessage", data)
-        logger.info(f"Message sent to {channel}: {result.get('ts')}")
+        logger.info("Message sent to %s: %s", channel, result.get('ts'))
         return result
     
     def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
@@ -144,7 +125,7 @@ class SlackClient:
         """Create a new channel."""
         result = self._make_request("POST", "conversations.create", {"name": name, "is_private": is_private})
         channel = result.get('channel', {})
-        logger.info(f"Created channel: {name} ({channel.get('id')})")
+        logger.info("Created channel: %s (%s)", name, channel.get('id'))
         return channel
     
     def invite_to_channel(self, channel: str, users: List[str]) -> Optional[Dict[str, Any]]:
@@ -152,10 +133,10 @@ class SlackClient:
         try:
             users_str = ",".join(users) if isinstance(users, list) else users
             result = self._make_request("POST", "conversations.invite", {"channel": channel, "users": users_str})
-            logger.info(f"Added {len(users) if isinstance(users, list) else 1} user(s) to {channel}")
+            logger.info("Added %d user(s) to %s", len(users) if isinstance(users, list) else 1, channel)
             return result
-        except Exception as e:
-            logger.warning(f"Could not add users to channel {channel}: {e}")
+        except Exception:
+            logger.warning("Could not add users to channel %s", channel, exc_info=True)
             return None
     
     def join_channel(self, channel: str) -> Optional[Dict[str, Any]]:
@@ -171,16 +152,11 @@ class SlackClient:
 
 def _try_create_channel(client: SlackClient, name: str) -> Optional[Dict[str, Any]]:
     """Attempt to create a channel. Returns channel dict on success, None if name is taken."""
-    logger.info(f"[SLACK-DEBUG] Trying to create channel: #{name}")
     try:
-        result = client.create_channel(name, is_private=False)
-        logger.info(f"[SLACK-DEBUG] Successfully created #{name}")
-        return result
+        return client.create_channel(name, is_private=False)
     except ValueError as e:
         if "name_taken" in str(e).lower():
-            logger.info(f"[SLACK-DEBUG] #{name} already exists (name_taken), trying next")
             return None
-        logger.exception("[SLACK-DEBUG] Unexpected error creating #%s", name)
         raise
 
 
@@ -190,19 +166,18 @@ def join_existing_incidents_channel(access_token: str, channel_id: str) -> Dict[
     Returns ok=True with channel info if the bot can access the channel,
     or ok=False if the channel no longer exists or is inaccessible.
     """
-    logger.info(f"[SLACK-DEBUG] Attempting to rejoin stored channel: {channel_id}")
     try:
         client = SlackClient(access_token)
         channel = client.join_channel(channel_id)
         if channel:
             channel_name = channel.get('name', 'unknown')
-            logger.info(f"[SLACK-DEBUG] Rejoined #{channel_name} ({channel_id})")
+            logger.info("Rejoined existing incidents channel on reconnect")
             return {"ok": True, "channel_id": channel_id, "channel_name": channel_name, "created": False}
 
-        logger.info(f"[SLACK-DEBUG] Could not rejoin {channel_id}, will create a new one")
+        logger.info("Could not rejoin stored channel, will create a new one")
         return {"ok": False}
-    except Exception as e:
-        logger.warning(f"[SLACK-DEBUG] Exception rejoining {channel_id}: {e}", exc_info=True)
+    except Exception:
+        logger.warning("Failed to rejoin stored incidents channel", exc_info=True)
         return {"ok": False}
 
 
@@ -217,7 +192,6 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
     """
     import secrets
 
-    logger.info(f"[SLACK-DEBUG] === create_incidents_channel START for team={team_name}, installer={installer_user_id}")
     try:
         client = SlackClient(access_token)
         
@@ -226,7 +200,6 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
             "aurora_incidents",
             f"aurora_incidents_{secrets.token_hex(4)}",
         ]
-        logger.info(f"[SLACK-DEBUG] Channel candidates: {candidates}")
         
         channel = None
         channel_name = None
@@ -237,18 +210,15 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                 break
         
         if not channel or not channel_name:
-            logger.error(f"[SLACK-DEBUG] [{team_name}] All candidates failed")
+            logger.error("Failed to create any incidents channel variant")
             return {"ok": False, "error": "Could not create an incidents channel"}
         
         channel_id = channel['id']
-        logger.info(f"[{team_name}] Created incidents channel: #{channel_name} ({channel_id})")
+        logger.info("Created incidents channel: #%s (%s)", channel_name, channel_id)
         
         try:
-            logger.info(f"[SLACK-DEBUG] Inviting installer {installer_user_id} to {channel_id}")
             client.invite_to_channel(channel_id, [installer_user_id])
-            logger.info(f"[SLACK-DEBUG] Setting topic on {channel_id}")
             client.set_channel_topic(channel_id, "Aurora incident alerts notifications")
-            logger.info(f"[SLACK-DEBUG] Sending welcome message to {channel_id}")
             client.send_message(channel_id, (
                 f"Welcome to #{channel_name}!\n\n"
                 f"Aurora is now connected to {team_name}. This channel will be used for:\n\n"
@@ -256,11 +226,9 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                 "• Automated root cause analysis updates\n\n"
                 "Tag @Aurora in any channel to start a conversation!"
             ))
-            logger.info("[SLACK-DEBUG] Channel setup complete")
         except Exception as setup_e:
-            logger.warning(f"[SLACK-DEBUG] [{team_name}] Non-critical error during channel setup: {setup_e}")
+            logger.warning("Non-critical error during channel setup: %s", setup_e)
         
-        logger.info(f"[SLACK-DEBUG] === create_incidents_channel DONE for team={team_name}")
         return {
             "ok": True,
             "channel_id": channel_id,
@@ -269,9 +237,9 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
             "message": f"Created channel #{channel_name}",
         }
 
-    except Exception as e:
-        logger.exception(f"[{team_name}] Failed to create incidents channel")
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        logger.exception("Failed to create incidents channel")
+        return {"ok": False, "error": "Could not create an incidents channel"}
 
 
 def get_slack_client_for_user(user_id: str) -> Optional[SlackClient]:
@@ -284,11 +252,10 @@ def get_slack_client_for_user(user_id: str) -> Optional[SlackClient]:
         
         slack_creds = get_credentials_from_db(user_id, "slack")
         if not slack_creds or not slack_creds.get("access_token"):
-            logger.debug(f"No Slack credentials for user {user_id}")
+            logger.debug("No Slack credentials for user %s", user_id)
             return None
         
         return SlackClient(slack_creds["access_token"])
-    except Exception as e:
-        logger.error(f"Failed to get Slack client for user {user_id}: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to get Slack client")
         return None
-
