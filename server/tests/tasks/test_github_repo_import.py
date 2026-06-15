@@ -12,13 +12,27 @@ GitHub API, DB and Celery ``delay`` are all mocked — no I/O.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import routes.github.github_repo_metadata as mod
-from routes.github.github_repo_metadata import import_installation_repos
 
 _USER = "user-1"
 _INSTALL = 4242
+
+
+class _MaxRetriesExceeded(Exception):
+    """Stand-in for Celery's ``self.MaxRetriesExceededError`` exception class."""
+
+
+def _task_self():
+    """Fake bound-task ``self`` so the body runs without Celery (stubbed in CI).
+
+    Tests call ``_import_installation_repos`` directly rather than the
+    ``@celery_app.task``-decorated wrapper, because the lightweight test env
+    stubs Celery and a decorated task degrades to a no-op MagicMock.
+    """
+    return SimpleNamespace(retry=MagicMock(), MaxRetriesExceededError=_MaxRetriesExceeded)
 
 
 def _mock_db(existing_repos=()):
@@ -61,7 +75,7 @@ def _run(repos, existing=(), org="org-1", token_exc=None):
             get_tok.side_effect = token_exc
         else:
             get_tok.return_value = "ghs_installtoken"
-        import_installation_repos.run(_USER, _INSTALL)
+        mod._import_installation_repos(_task_self(), _USER, _INSTALL)
     return conn, cur, gen, fetch
 
 

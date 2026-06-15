@@ -196,12 +196,7 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             _update_metadata(user_id, repo_full_name, None, "error")
 
 
-@celery_app.task(
-    name="routes.github.github_repo_metadata.import_installation_repos",
-    bind=True,
-    max_retries=2,
-)
-def import_installation_repos(self, user_id: str, installation_id: int):
+def _import_installation_repos(self, user_id: str, installation_id: int):
     """Auto-import a GitHub App installation's repos into ``connected_repos``.
 
     Runs after a user installs/links the App so they do not have to re-select,
@@ -239,7 +234,10 @@ def import_installation_repos(self, user_id: str, installation_id: int):
         try:
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:
-            pass
+            logger.warning(
+                "[RepoImport] token mint retries exhausted installation_id=%s; giving up",
+                installation_id,
+            )
         return
 
     repos = _fetch_installation_repos(token, installation_id)
@@ -309,3 +307,18 @@ def import_installation_repos(self, user_id: str, installation_id: int):
             logger.warning(
                 "[RepoImport] metadata enqueue failed for %s: %s", repo_name, exc,
             )
+
+
+@celery_app.task(
+    name="routes.github.github_repo_metadata.import_installation_repos",
+    bind=True,
+    max_retries=2,
+)
+def import_installation_repos(self, user_id: str, installation_id: int):
+    """Celery entry point for the App repo auto-import.
+
+    Delegates to :func:`_import_installation_repos` so the body stays unit
+    testable without Celery's task machinery (which is stubbed out in the
+    lightweight test env, turning a decorated task into a no-op MagicMock).
+    """
+    return _import_installation_repos(self, user_id, installation_id)
