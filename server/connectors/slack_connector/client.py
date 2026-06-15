@@ -88,7 +88,6 @@ class SlackClient:
         if blocks:
             data["blocks"] = blocks
         result = self._make_request("POST", "chat.postMessage", data)
-        logger.info("Message sent to channel %s", channel)
         return result
     
     def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
@@ -125,18 +124,15 @@ class SlackClient:
         """Create a new channel."""
         result = self._make_request("POST", "conversations.create", {"name": name, "is_private": is_private})
         channel = result.get('channel', {})
-        logger.info("Created channel: %s (%s)", name, channel.get('id'))
         return channel
     
     def invite_to_channel(self, channel: str, users: List[str]) -> Optional[Dict[str, Any]]:
         """Add users to a channel automatically (no acceptance required). Returns None on failure."""
         try:
             users_str = ",".join(users) if isinstance(users, list) else users
-            result = self._make_request("POST", "conversations.invite", {"channel": channel, "users": users_str})
-            logger.info("Added %d user(s) to %s", len(users) if isinstance(users, list) else 1, channel)
-            return result
+            return self._make_request("POST", "conversations.invite", {"channel": channel, "users": users_str})
         except Exception:
-            logger.warning("Could not add users to channel %s", channel, exc_info=True)
+            logger.warning("Could not add users to channel", exc_info=True)
             return None
     
     def join_channel(self, channel: str) -> Optional[Dict[str, Any]]:
@@ -214,7 +210,7 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
             return {"ok": False, "error": "Could not create an incidents channel"}
         
         channel_id = channel['id']
-        logger.info("Created incidents channel: #%s (%s)", channel_name, channel_id)
+        logger.info("Incidents channel created successfully")
         
         try:
             client.invite_to_channel(channel_id, [installer_user_id])
@@ -226,8 +222,8 @@ def create_incidents_channel(access_token: str, team_name: str, installer_user_i
                 "• Automated root cause analysis updates\n\n"
                 "Tag @Aurora in any channel to start a conversation!"
             ))
-        except Exception as setup_e:
-            logger.warning("Non-critical error during channel setup: %s", setup_e)
+        except Exception:
+            logger.warning("Non-critical error during channel setup", exc_info=True)
         
         return {
             "ok": True,
