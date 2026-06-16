@@ -110,11 +110,11 @@ def get_hook(name: str):
     def _safe_hook(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception as e:
+        except Exception:
             if name in _fail_closed_hooks:
-                logger.error("Hook '%s' raised: %s — failing closed", name, e)
+                logger.exception("Hook '%s' raised — failing closed", name)
                 return False, "Entitlement verification unavailable"
-            logger.error("Hook '%s' raised: %s — failing open", name, e)
+            logger.exception("Hook '%s' raised — failing open", name)
             return _HOOK_REGISTRY[name](*args, **kwargs)
 
     _hook_cache[name] = _safe_hook
