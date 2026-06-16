@@ -3,10 +3,12 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/aurora-logo.png" />
   <source media="(prefers-color-scheme: light)" srcset=".github/assets/aurora-logo.png" />
-  <img alt="Aurora" src=".github/assets/aurora-logo.png" width="80" />
+  <img alt="Aurora" src=".github/assets/aurora-logo.png" width="140" />
 </picture>
 
 <h1>Aurora</h1>
+
+<p><em>by <a href="https://www.arvoai.ca">Arvo AI</a></em></p>
 
 <h3>The open-source AI agent that investigates your incidents for you</h3>
 
