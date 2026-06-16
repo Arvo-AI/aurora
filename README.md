@@ -18,6 +18,7 @@ and delivers root cause analysis with remediation — in minutes, not hours.
 <br />
 
 <a href="https://github.com/Arvo-AI/aurora/stargazers"><img src="https://img.shields.io/github/stars/Arvo-AI/aurora?style=for-the-badge&logo=github&color=181717" alt="Stars" /></a>&nbsp;
+<a href="https://github.com/Arvo-AI/aurora/releases/latest"><img src="https://img.shields.io/github/v/release/Arvo-AI/aurora?style=for-the-badge&label=version&color=2ea44f" alt="Version" /></a>&nbsp;
 <a href="https://github.com/Arvo-AI/aurora/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue?style=for-the-badge" alt="License" /></a>&nbsp;
 <a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join_us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>&nbsp;
 <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book_a_Demo-FF6B4A?style=for-the-badge&logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
