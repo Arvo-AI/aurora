@@ -1128,11 +1128,24 @@ def initialize_tables():
                         name VARCHAR(255) NOT NULL,
                         slug VARCHAR(255) NOT NULL UNIQUE,
                         created_by VARCHAR(255) REFERENCES users(id),
+                        onboarding_completed BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
+                "onboarding_selections": """
+                    CREATE TABLE IF NOT EXISTS onboarding_selections (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id),
+                        selected_connectors TEXT[] NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_selections_org
+                        ON onboarding_selections(org_id);
                 """,
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
@@ -2984,6 +2997,17 @@ def initialize_tables():
                 """)
             except Exception as e:
                 logging.warning(f"Error adding expires_at to org_invitations: {e}")
+                conn.rollback()
+
+            # Migration: Add onboarding_completed column to organizations table
+            try:
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info("Ensured onboarding_completed column exists on organizations table.")
+            except Exception as e:
+                logging.warning(f"Error adding onboarding_completed column: {e}")
                 conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)

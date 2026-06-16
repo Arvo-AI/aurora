@@ -14,6 +14,7 @@ declare module "next-auth" {
       orgId?: string
       orgName?: string
       mustChangePassword?: boolean
+      onboardingCompleted?: boolean
     } & DefaultSession["user"]
   }
 
@@ -25,6 +26,7 @@ declare module "next-auth" {
     orgId?: string
     orgName?: string
     mustChangePassword?: boolean
+    onboardingCompleted?: boolean
   }
 }
 
@@ -37,6 +39,7 @@ declare module "next-auth/jwt" {
     orgId?: string
     orgName?: string
     mustChangePassword?: boolean
+    onboardingCompleted?: boolean
     lastRefreshedAt?: number
   }
 }

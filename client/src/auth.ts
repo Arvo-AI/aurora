@@ -8,6 +8,7 @@ type RefreshResult = {
   orgId: string | null
   orgName: string | null
   mustChangePassword: boolean
+  onboardingCompleted?: boolean
 } | null | "not_found"
 
 // Deduplicate concurrent refresh calls — all middleware requests share one
@@ -127,6 +128,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.orgId = user.orgId
         token.orgName = user.orgName
         token.mustChangePassword = user.mustChangePassword
+        token.onboardingCompleted = user.onboardingCompleted
         token.lastRefreshedAt = Math.floor(Date.now() / 1000)
         return token
       }
@@ -151,6 +153,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.orgId = fresh.orgId
           token.orgName = fresh.orgName
           token.mustChangePassword = fresh.mustChangePassword
+          token.onboardingCompleted = fresh.onboardingCompleted ?? token.onboardingCompleted
           token.lastRefreshedAt = now
         }
       }
@@ -169,6 +172,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           session.user.orgId = (token.orgId as string) ?? undefined
           session.user.orgName = (token.orgName as string) ?? undefined
           session.user.mustChangePassword = token.mustChangePassword as boolean
+          session.user.onboardingCompleted = token.onboardingCompleted as boolean | undefined
         }
       }
       return session

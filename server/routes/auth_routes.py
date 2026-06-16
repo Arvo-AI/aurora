@@ -313,7 +313,8 @@ def login():
                 # No RLS needed — users not RLS-protected
                 cursor.execute(
                     "SELECT u.id, u.email, u.name, u.password_hash, u.role, u.org_id, o.name, "
-                    "COALESCE(u.must_change_password, FALSE) "
+                    "COALESCE(u.must_change_password, FALSE), "
+                    "COALESCE(o.onboarding_completed, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.email = %s",
                     (email,)
@@ -323,7 +324,7 @@ def login():
                 # Always perform password check to prevent timing attacks
                 # Use dummy hash if user doesn't exist
                 if user:
-                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw = user
+                    user_id, user_email, user_name, password_hash, user_role, user_org_id, user_org_name, must_change_pw, onboarding_done = user
                 else:
                     # Dummy hash to maintain consistent timing
                     password_hash = _DUMMY_BCRYPT_HASH
@@ -363,6 +364,7 @@ def login():
                     "orgId": user_org_id,
                     "orgName": user_org_name,
                     "mustChangePassword": bool(must_change_pw),
+                    "onboardingCompleted": bool(onboarding_done),
                 }), 200
         finally:
             conn.close()
@@ -451,7 +453,8 @@ def get_current_user(user_id):
             with conn.cursor() as cursor:
                 # No RLS needed — users, organizations not RLS-protected
                 cursor.execute(
-                    "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE) "
+                    "SELECT u.role, u.org_id, o.name, COALESCE(u.must_change_password, FALSE), "
+                    "COALESCE(o.onboarding_completed, FALSE) "
                     "FROM users u LEFT JOIN organizations o ON u.org_id = o.id "
                     "WHERE u.id = %s",
                     (user_id,),
@@ -465,6 +468,7 @@ def get_current_user(user_id):
                     "orgId": row[1],
                     "orgName": row[2],
                     "mustChangePassword": bool(row[3]),
+                    "onboardingCompleted": bool(row[4]),
                 }), 200
     except Exception:
         logging.exception("Error in /me")

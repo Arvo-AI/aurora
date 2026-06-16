@@ -642,6 +642,10 @@ app.register_blueprint(prediscovery_bp, url_prefix="/api/prediscovery")
 from routes.debug import bp as debug_bp
 app.register_blueprint(debug_bp)
 
+# --- Onboarding Routes ---
+from routes.onboarding_routes import onboarding_bp
+app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
+
 # ============================================================================
 # Global Error Handlers
 # ============================================================================

@@ -71,7 +71,8 @@ export default function SignUpPage() {
       })
 
       if (result?.ok) {
-        router.push("/")
+        sessionStorage.removeItem("aurora_onboarding_state")
+        router.push("/onboarding")
         router.refresh()
       } else {
         setError("Registration successful but sign-in failed. Please sign in manually.")
