@@ -41,11 +41,23 @@ def _default_before_add_member(org_id: str, current_member_count: int) -> Tuple[
     return True, None
 
 
+def _default_report_usage(org_id: Optional[str], usage_usd: float, metadata: dict) -> None:
+    """Called after LLM usage is recorded. For marketplace metering integration."""
+    pass
+
+
+def _default_verify_entitlement(org_id: Optional[str]) -> Tuple[bool, Optional[str]]:
+    """Verify the org has a valid marketplace entitlement. Return (False, message) to block."""
+    return True, None
+
+
 # Explicit registry — only these names are valid hook points
 _HOOK_REGISTRY = {
     "before_llm_call": _default_before_llm_call,
     "after_llm_call": _default_after_llm_call,
     "before_add_member": _default_before_add_member,
+    "report_usage": _default_report_usage,
+    "verify_entitlement": _default_verify_entitlement,
 }
 
 

@@ -108,6 +108,17 @@ autoscaling:
     targetCPU: 70
 
 # ------------------------------------------------------------------------------
+# Extra environment variables (for marketplace metering, custom integrations, etc.)
+# ------------------------------------------------------------------------------
+extraEnv: []
+# Example:
+#   extraEnv:
+#     - name: AWS_MP_PRODUCT_CODE
+#       value: "prod-abc123"
+#     - name: GCP_MP_SERVICE_NAME
+#       value: "aurora-marketplace.endpoints.project.cloud.goog"
+
+# ------------------------------------------------------------------------------
 # Celery worker pod settings
 # ------------------------------------------------------------------------------
 celeryWorker:
