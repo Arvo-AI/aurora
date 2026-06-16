@@ -81,7 +81,7 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 - [ ] Provider added to `SUPPORTED_SECRET_PROVIDERS` in `server/utils/secrets/secret_ref_utils.py` (without this, `get_token_data` silently returns `None`)
 
 ### Webhook / Celery Tasks (if connector receives webhooks)
-- [ ] **Use the shared alert pipeline** — `from services.alert_pipeline import AlertPipelineInput, process_alert_pipeline`. Do NOT reimplement DB connection, RLS, correlation, incident creation, or RCA triggering manually.
+- [ ] **Use the shared alert pipeline** — `from services.general_alert_task import AlertPipelineInput, process_alert_pipeline`. Do NOT reimplement DB connection, RLS, correlation, incident creation, or RCA triggering manually.
 - [ ] Connector task only extracts fields from the payload and provides a `persist_event(cursor, org_id, received_at) -> event_id` callback
 - [ ] Task module added to the `include` list in `server/celery_config.py` (without this, the worker silently drops the task as "unregistered")
 - [ ] Webhook route path added to `_OPEN_PREFIXES` in `server/main_compute.py` (external services cannot send the `X-Internal-Secret` header)
@@ -146,9 +146,9 @@ These rules are enforced by automated review (CodeRabbit) and **must** be follow
 
 ## Alert Processing Pipeline (mandatory for webhook connectors)
 
-All connector webhook tasks **must** use the shared pipeline in `server/services/alert_pipeline.py`. Do NOT copy-paste DB/correlation/incident/RCA logic into individual task files.
+All connector webhook tasks **must** use the shared pipeline in `server/services/general_alert_task.py`. Do NOT copy-paste DB/correlation/incident/RCA logic into individual task files.
 
-- **Module**: `from services.alert_pipeline import AlertPipelineInput, process_alert_pipeline`
+- **Module**: `from services.general_alert_task import AlertPipelineInput, process_alert_pipeline`
 - **Reference implementation**: `server/routes/prometheus/tasks.py`
 - **What the pipeline handles**: RLS context, event persistence (via callback), alert correlation, incident creation/upsert, `incident_alerts` linking, SSE notification, summary generation, background RCA triggering, and error handling.
 - **What the connector provides** (via `AlertPipelineInput`):
@@ -164,7 +164,7 @@ All connector webhook tasks **must** use the shared pipeline in `server/services
 
 **Pattern:**
 ```python
-from services.alert_pipeline import AlertPipelineInput, process_alert_pipeline
+from services.general_alert_task import AlertPipelineInput, process_alert_pipeline
 
 def _persist_my_event(cursor, org_id, received_at):
     cursor.execute("INSERT INTO my_events (...) VALUES (...) RETURNING id", (...))
