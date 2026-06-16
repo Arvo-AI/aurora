@@ -81,6 +81,8 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 - [ ] Provider added to `SUPPORTED_SECRET_PROVIDERS` in `server/utils/secrets/secret_ref_utils.py` (without this, `get_token_data` silently returns `None`)
 
 ### Webhook / Celery Tasks (if connector receives webhooks)
+- [ ] **Use the shared alert pipeline** — `from services.alert_pipeline import AlertPipelineInput, process_alert_pipeline`. Do NOT reimplement DB connection, RLS, correlation, incident creation, or RCA triggering manually.
+- [ ] Connector task only extracts fields from the payload and provides a `persist_event(cursor, org_id, received_at) -> event_id` callback
 - [ ] Task module added to the `include` list in `server/celery_config.py` (without this, the worker silently drops the task as "unregistered")
 - [ ] Webhook route path added to `_OPEN_PREFIXES` in `server/main_compute.py` (external services cannot send the `X-Internal-Secret` header)
 
@@ -141,6 +143,46 @@ These rules are enforced by automated review (CodeRabbit) and **must** be follow
 - Routes must use RBAC decorators (`@require_permission`), never manual auth checks.
 - Token storage must go through centralized helpers (`store_tokens_in_db` / `get_token_data`), not ad-hoc DB writes.
 - OAuth callbacks must never log full token responses.
+
+## Alert Processing Pipeline (mandatory for webhook connectors)
+
+All connector webhook tasks **must** use the shared pipeline in `server/services/alert_pipeline.py`. Do NOT copy-paste DB/correlation/incident/RCA logic into individual task files.
+
+- **Module**: `from services.alert_pipeline import AlertPipelineInput, process_alert_pipeline`
+- **Reference implementation**: `server/routes/prometheus/tasks.py`
+- **What the pipeline handles**: RLS context, event persistence (via callback), alert correlation, incident creation/upsert, `incident_alerts` linking, SSE notification, summary generation, background RCA triggering, and error handling.
+- **What the connector provides** (via `AlertPipelineInput`):
+  - `source_type` — e.g. `"datadog"`, `"grafana"`, `"prometheus"`
+  - `user_id` — from webhook metadata
+  - `event_title`, `severity`, `service` — extracted from the payload
+  - `alert_metadata` — structured dict for the correlator
+  - `raw_payload` — full webhook payload for RCA context
+  - `persist_event` — a callback `(cursor, org_id, received_at) -> event_id` that inserts into the connector-specific events table
+  - `alert_fired_at` (optional) — original fire timestamp for MTTD
+  - `trigger_metadata` (optional) — dict for RCA session traceability
+  - `skip_incident_creation` (optional) — set `True` for resolved/non-firing alerts that should only be persisted
+
+**Pattern:**
+```python
+from services.alert_pipeline import AlertPipelineInput, process_alert_pipeline
+
+def _persist_my_event(cursor, org_id, received_at):
+    cursor.execute("INSERT INTO my_events (...) VALUES (...) RETURNING id", (...))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+pipeline_input = AlertPipelineInput(
+    source_type="my_connector",
+    user_id=user_id,
+    event_title=title,
+    severity=severity,
+    service=service,
+    alert_metadata=metadata,
+    raw_payload=payload,
+    persist_event=_persist_my_event,
+)
+process_alert_pipeline(pipeline_input)
+```
 
 ## Code Style
 - **Python**: Use Flask blueprints in routes/, async with langchain/langgraph, psycopg2 for DB, logging at INFO level
