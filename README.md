@@ -14,7 +14,8 @@
 
 <p>
 Aurora autonomously queries your infrastructure, correlates data across 30+ tools,<br />
-and delivers root cause analysis with remediation — in minutes, not hours.
+and delivers root cause analysis with remediation — in minutes, not hours.<br /><br />
+<strong>100% open source. Self-hosted. Apache 2.0. Free forever.</strong>
 </p>
 
 <br />
