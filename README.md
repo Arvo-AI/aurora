@@ -10,7 +10,7 @@
 
 <br />
 
-<a href="#-quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#-integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.arvoai.ca">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
+<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.arvoai.ca">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
 
 </div>
 
@@ -216,27 +216,39 @@ Also available via OCI: `oci://ghcr.io/arvo-ai/charts/aurora-oss`
 
 ## Integrations
 
-| Category | Tools |
-|----------|-------|
-| **Monitoring** | PagerDuty, Datadog, Grafana, New Relic, OpsGenie, Netdata, Dynatrace, Coroot, ThousandEyes, BigPanda, incident.io |
-| **Cloud** | AWS, Azure, GCP, OVH, Scaleway, Cloudflare |
-| **Infrastructure** | Kubernetes, Terraform, Docker, Tailscale |
-| **CI/CD** | GitHub Actions, Jenkins, Spinnaker, CloudBees |
-| **Logs** | Splunk, Datadog Logs |
-| **Communication** | Slack, Google Chat |
-| **Knowledge** | GitHub, Bitbucket, Jira, Confluence, Notion, SharePoint |
-| **AI Assistants** | [MCP Server](website/docs/integrations/mcp.md) — Cursor, Claude Desktop, Windsurf |
+<div align="center">
 
-### LLM Providers
+![PagerDuty](https://img.shields.io/badge/PagerDuty-06AC38?style=flat-square&logo=pagerduty&logoColor=white)
+![Datadog](https://img.shields.io/badge/Datadog-632CA6?style=flat-square&logo=datadog&logoColor=white)
+![Grafana](https://img.shields.io/badge/Grafana-F46800?style=flat-square&logo=grafana&logoColor=white)
+![New Relic](https://img.shields.io/badge/New_Relic-1CE783?style=flat-square&logo=newrelic&logoColor=white)
+![OpsGenie](https://img.shields.io/badge/OpsGenie-0052CC?style=flat-square&logo=opsgenie&logoColor=white)
+![Dynatrace](https://img.shields.io/badge/Dynatrace-1496FF?style=flat-square&logo=dynatrace&logoColor=white)
+![incident.io](https://img.shields.io/badge/incident.io-FF4785?style=flat-square&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-232F3E?style=flat-square&logo=amazonwebservices&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure-0078D4?style=flat-square&logo=microsoftazure&logoColor=white)
+![GCP](https://img.shields.io/badge/GCP-4285F4?style=flat-square&logo=googlecloud&logoColor=white)
+![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-844FBA?style=flat-square&logo=terraform&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white)
+![Jenkins](https://img.shields.io/badge/Jenkins-D24939?style=flat-square&logo=jenkins&logoColor=white)
+![Slack](https://img.shields.io/badge/Slack-4A154B?style=flat-square&logo=slack&logoColor=white)
+![Google Chat](https://img.shields.io/badge/Google_Chat-34A853?style=flat-square&logo=googlechat&logoColor=white)
+![Jira](https://img.shields.io/badge/Jira-0052CC?style=flat-square&logo=jira&logoColor=white)
+![Confluence](https://img.shields.io/badge/Confluence-172B4D?style=flat-square&logo=confluence&logoColor=white)
+![Notion](https://img.shields.io/badge/Notion-000000?style=flat-square&logo=notion&logoColor=white)
+![SharePoint](https://img.shields.io/badge/SharePoint-0078D4?style=flat-square&logo=microsoftsharepoint&logoColor=white)
+![Bitbucket](https://img.shields.io/badge/Bitbucket-0052CC?style=flat-square&logo=bitbucket&logoColor=white)
+![Splunk](https://img.shields.io/badge/Splunk-000000?style=flat-square&logo=splunk&logoColor=white)
+![Fly.io](https://img.shields.io/badge/Fly.io-7B36ED?style=flat-square&logo=flydotio&logoColor=white)
+![CloudBees](https://img.shields.io/badge/CloudBees-1997B5?style=flat-square&logoColor=white)
+![Tailscale](https://img.shields.io/badge/Tailscale-242424?style=flat-square&logo=tailscale&logoColor=white)
 
-| Provider | Models |
-|----------|--------|
-| **OpenAI** | GPT-5.4, GPT-5.2, o3, o4-mini, GPT-4.1, GPT-4o |
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Opus 4.5, Haiku 4.5 |
-| **Google** | Gemini 3.1 Pro, Gemini 2.5 Pro/Flash |
-| **Vertex AI** | Same Gemini models via IAM auth |
-| **OpenRouter** | Any model, single API key |
-| **Ollama** | Llama 3.1, Qwen 2.5, any local model (air-gapped) |
+**LLMs:** OpenAI &bull; Anthropic &bull; Google Gemini &bull; Vertex AI &bull; AWS Bedrock &bull; OpenRouter &bull; Ollama (air-gapped)
+
+</div>
 
 ---
 
