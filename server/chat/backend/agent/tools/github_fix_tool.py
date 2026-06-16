@@ -668,15 +668,16 @@ def _save_fix_suggestion(
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            # Dedup: skip if a fix for the same file already exists on this incident
+            # Dedup: return existing ID if a fix for the same file already exists
             cursor.execute(
                 "SELECT id FROM incident_suggestions WHERE incident_id = %s AND file_path = %s AND type = 'fix'",
                 (incident_id, file_path),
             )
-            if cursor.fetchone():
-                logger.info("Fix suggestion for %s already exists on incident %s, skipping duplicate", file_path, incident_id)
+            existing = cursor.fetchone()
+            if existing:
+                logger.info("Fix suggestion for %s already exists on incident %s, returning existing", file_path, incident_id)
                 conn.rollback()
-                return None
+                return existing[0]
             cursor.execute(
                 """
                 INSERT INTO incident_suggestions
@@ -713,7 +714,7 @@ def _save_fix_suggestion(
 def _build_title(file_path: str, fix_description: str) -> str:
     filename = file_path.split('/')[-1]
     prefix = f"Fix `{filename}`: "
-    max_desc = 70 - len(prefix)
+    max_desc = max(20, 70 - len(prefix))
     desc = fix_description.strip()
     period_idx = desc.find('. ')
     if 0 < period_idx <= max_desc:

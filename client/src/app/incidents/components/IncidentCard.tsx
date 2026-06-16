@@ -132,7 +132,7 @@ function buildMdComponents(processChildren: (children: React.ReactNode) => React
 function parseRuledOutItems(content: string | undefined) {
   if (!content) return [];
   return content
-    .split(/\n[-*]\s+/)
+    .split(/(?:^|\n)\s*[-*]\s+/)
     .filter(s => s.trim())
     .map(item => {
       const cleaned = item.replace(/^\*\*/, '').trim();
@@ -380,7 +380,10 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
 
         // Find citation keys referenced in description or rationale
         const descText = (suggestion.description || '') + ' ' + (suggestion.rationale || '');
-        const citationKeys = new Set([...descText.matchAll(/\[(\d+)\]/g)].map(m => m[1]));
+        const citationKeys = new Set(
+          [...descText.matchAll(/\[(\d+(?:,\s*\d+)*)\]/g)]
+            .flatMap(m => m[1].split(/,\s*/))
+        );
         const relatedCitations = citations.filter(c => citationKeys.has(c.key));
 
         return (

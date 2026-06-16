@@ -978,7 +978,7 @@ Return one summary per line, numbered:"""
 # Post-generation validation — cross-check commands against resource inventory
 # ---------------------------------------------------------------------------
 
-def _validate_table_name(suggestion: Suggestion, inventory_lower: str) -> None:
+def _validate_table_name(suggestion: Suggestion, inventory_lower: str, resource_inventory: str) -> None:
     """Fix DynamoDB table names in commands that don't match inventory."""
     table_match = re.search(r'--table-name\s+(\S+)', suggestion.command)
     if not table_match:
@@ -986,7 +986,7 @@ def _validate_table_name(suggestion: Suggestion, inventory_lower: str) -> None:
     table_name = table_match.group(1).strip("'\"")
     if table_name.lower() in inventory_lower:
         return
-    dynamo_refs = re.findall(r'notification-dedup-\w+|[\w-]+-dedup[\w-]*', inventory_lower)
+    dynamo_refs = re.findall(r'notification-dedup-\w+|[\w-]+-dedup[\w-]*', resource_inventory)
     if dynamo_refs:
         suggestion.command = suggestion.command.replace(table_name, dynamo_refs[0])
     else:
@@ -1020,7 +1020,7 @@ def _validate_suggestion_commands(
         if _should_drop_suggestion(s, resource_inventory):
             continue
         if s.command:
-            _validate_table_name(s, inventory_lower)
+            _validate_table_name(s, inventory_lower, resource_inventory)
         validated.append(s)
 
     if len(validated) < len(suggestions):

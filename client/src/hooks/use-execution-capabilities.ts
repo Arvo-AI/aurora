@@ -30,7 +30,7 @@ export function useExecutionCapabilities() {
   const { data } = useQuery<ExecutionCapabilities>(
     '/api/connectors/status/exec-caps',
     fetcher,
-    { staleTime: 60_000, retryCount: 1 },
+    { staleTime: 60_000, retryCount: 1, revalidateOnFocus: true },
   );
   return data ?? { aws: false, gcp: false, kubectl: false, azure: false, terraform: false };
 }

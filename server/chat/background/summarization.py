@@ -339,7 +339,17 @@ ANTI-HALLUCINATION RULES (non-negotiable):
 
 Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
-After the summary, add a "## Suggested Next Steps" section with concrete actions. Include only as many steps as the situation warrants. When the root cause is confirmed, state the fix. When undetermined, list the precise checks an engineer would run to determine it — not generic advice.
+After the summary, add these sections:
+
+## Suggested Next Steps
+Concrete actions. Include only as many steps as the situation warrants. When the root cause is confirmed, state the fix. When undetermined, list the precise checks an engineer would run to determine it — not generic advice.
+
+---
+## Ruled Out
+List hypotheses that were investigated and eliminated, with the evidence that ruled them out.
+
+## Not Checked
+List paths that were not investigated and briefly explain why (e.g., access denied, out of scope, insufficient data).
 {fix_suggestions_block}"""
     return prompt
 

@@ -15,7 +15,7 @@ After you have confirmed the root cause and before you conclude, you MUST run a 
    - The command would be a no-op (already in desired state) → don't suggest it
 4. Record the validation results in your final message using this format:
 
-```
+```text
 VALIDATED FIXES:
 1. [TITLE]: [command]
    Validated by: [validation command] → [key finding from output]
