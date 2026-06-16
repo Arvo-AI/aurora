@@ -18,12 +18,14 @@
 
 ## What's New
 
-- **New Relic, OpsGenie, incident.io Connectors** — Ingest alerts and query telemetry from three more monitoring platforms
-- **Notion & SharePoint** — Export RCAs and postmortems to Notion pages or SharePoint sites
-- **Google Chat** — Receive incident notifications and interact with Aurora from Google Workspace
-- **SigmaHQ Guardrails** — Community threat detection rules (37 SigmaHQ signatures) protect the agent's command execution
-- **NeMo Input Rail** — Prompt injection detection on every turn using NVIDIA NeMo Guardrails
-- **Org-level Command Policies** — Admins can configure per-org allowlists and denylists for agent commands
+- **Artifacts** — Persistent agent-maintained documents in Monitor, continuously updated as investigations progress
+- **Actions** — Automated post-RCA workflows (generate postmortems, open fix PRs, notify Slack) triggered on investigation completion
+- **AWS Bedrock Support** — Use Claude, Titan, and other Bedrock models via IAM auth
+- **Fly.io Connector** — Investigate incidents on Fly.io infrastructure
+- **CloudBees Enterprise** — Operations Center + Feature Management connector
+- **Kubeconfig Upload** — Connect on-prem Kubernetes clusters without a cloud provider
+- **CloudWatch Alarm Webhooks** — Ingest AWS CloudWatch alarms directly as incidents
+- **Extensibility Hooks** — Gate LLM calls, enforce seat limits, and customize behavior with lifecycle hooks
 
 See the full [CHANGELOG](CHANGELOG.md) for all releases.
 
