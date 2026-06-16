@@ -141,6 +141,11 @@ from .prometheus_tool import (
     is_prometheus_connected,
     QueryPrometheusArgs,
 )
+from .alertmanager_tool import (
+    manage_alertmanager,
+    is_alertmanager_connected,
+    AlertmanagerToolArgs,
+)
 from .sentry_tool import (
     query_sentry,
     is_sentry_connected,
@@ -2056,6 +2061,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=QueryPrometheusArgs,
         ))
         logging.info(f"Added Prometheus tool for user {user_id}")
+
+    if is_alertmanager_connected(user_id):
+        context_wrapped_am = with_user_context(manage_alertmanager)
+        notification_wrapped_am = with_completion_notification(context_wrapped_am)
+        final_am_func = wrap_func_with_capture(notification_wrapped_am, "manage_alertmanager") if tool_capture else notification_wrapped_am
+
+        tools.append(StructuredTool.from_function(
+            func=final_am_func,
+            name="manage_alertmanager",
+            description=(
+                "Manage Alertmanager alerts and silences. "
+                "action must be 'list_alerts', 'list_silences', 'create_silence', or 'expire_silence'. "
+                "Use list_alerts to see all currently firing alerts (richer than Prometheus /alerts — includes silenced state). "
+                "Use create_silence to suppress noisy alerts during incident investigation (requires matchers like 'alertname=HighCPU,namespace=prod'). "
+                "Use expire_silence to re-enable alerts after investigation. "
+                "Examples: manage_alertmanager(action='list_alerts') "
+                "or manage_alertmanager(action='create_silence', matchers='alertname=HighCPU,namespace=production', duration_minutes=30, comment='Silencing during RCA') "
+                "or manage_alertmanager(action='expire_silence', silence_id='abc-123')"
+            ),
+            args_schema=AlertmanagerToolArgs,
+        ))
+        logging.info(f"Added Alertmanager tool for user {user_id}")
 
     # Add Sentry tool if connected
     if is_sentry_connected(user_id):
