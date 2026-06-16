@@ -115,13 +115,13 @@ function parseRuledOutItems(content: string | undefined) {
     .filter(s => s.trim())
     .map(item => {
       const cleaned = item.replace(/^\*\*/, '').trim();
-      const dashSplit = cleaned.match(/^(.+?)\s*[—–]\s*([\s\S]+)$/);
+      const dashSplit = /^(.+?)\s*[—–]\s*([\s\S]+)$/.exec(cleaned);
       if (dashSplit) {
-        const title = dashSplit[1].replace(/\*\*/g, '').trim();
+        const title = dashSplit[1].replaceAll('**', '').trim();
         const explanation = dashSplit[2].trim();
         return { title, explanation };
       }
-      return { title: cleaned.replace(/\*\*/g, ''), explanation: '' };
+      return { title: cleaned.replaceAll('**', ''), explanation: '' };
     });
 }
 
@@ -133,19 +133,19 @@ function renderRuledOutItemText(
   const parts = str.split(/(`[^`]+`|\[\d+(?:,\s*\d+)*\])/g);
   return parts.map((part, i) => {
     if (!part) return null;
-    const codeMatch = part.match(/^`([^`]+)`$/);
-    if (codeMatch) return <code key={i} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap">{codeMatch[1]}</code>;
-    const citeMatch = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
+    const codeMatch = /^`([^`]+)`$/.exec(part);
+    if (codeMatch) return <code key={`code-${i}`} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap">{codeMatch[1]}</code>;
+    const citeMatch = /^\[(\d+(?:,\s*\d+)*)\]$/.exec(part);
     if (citeMatch) {
       const keys = citeMatch[1].split(/,\s*/);
       return keys.map(key => {
         const citation = citations.find(c => c.key === key);
         return citation ? (
-          <button key={`${i}-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
-        ) : <span key={`${i}-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
+          <button key={`cite-${i}-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
+        ) : <span key={`cite-${i}-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
       });
     }
-    return part;
+    return <span key={`text-${i}`}>{part}</span>;
   });
 }
 
@@ -177,7 +177,7 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
       >
         <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
         <span className="text-[13px] font-semibold text-zinc-400 flex-1 text-left">
-          Ruled Out & Not Checked
+          Ruled Out &amp; Not Checked{' '}
           <span className="ml-2 text-[11px] font-normal text-zinc-500">
             {sections.ruledOut.length} eliminated · {sections.notChecked.length} skipped
           </span>
@@ -233,36 +233,34 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
 
 const CODE_PILL = "font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap";
 
-function formatDescriptionWithCode(text: string): React.ReactNode {
-  // First pass: handle backticks, **bold**, citation refs [N], and auto-detect code terms
-  // Pattern matches: `code`, **bold**, [N] citations, and code-like tokens
-  const TOKEN_RE = /(`[^`]+`|\*\*[^*]+\*\*|\[\d+(?:,\s*\d+)*\]|(?<!\w)(?:[A-Z][a-z]+[A-Z]\w*|[a-z]+[A-Z]\w*|[\w./]+\.(?:go|py|ts|js|yml|yaml|json|toml|md)|(?:\d+(?:\.\d+)?(?:ms|s|m|MB|GB|Ki|Mi|Gi|%))|\b[0-9a-f]{7,40}\b)(?!\w))/g;
+const TOKEN_RE = /(`[^`]+`|\*\*[^*]+\*\*|\[\d+(?:,\s*\d+)*\])/g;
 
+function isCodeToken(part: string): boolean {
+  return /^[A-Z][a-z]+[A-Z]\w*$/.test(part)
+    || /^[a-z]+[A-Z]\w*$/.test(part)
+    || /^[\w./]+\.(?:go|py|ts|js|yml|yaml|json|toml|md)$/.test(part)
+    || /^\d+(?:\.\d+)?(?:ms|s|m|MB|GB|Ki|Mi|Gi|%)$/.test(part)
+    || /^[0-9a-f]{7,40}$/.test(part);
+}
+
+function formatPlainSegment(segment: string, baseKey: string): React.ReactNode[] {
+  return segment.split(/\s+/).map((word, j) => {
+    if (!word) return null;
+    if (isCodeToken(word)) return <code key={`${baseKey}-w${j}`} className={CODE_PILL}>{word}</code>;
+    return <span key={`${baseKey}-w${j}`}>{j > 0 ? ` ${word}` : word}</span>;
+  });
+}
+
+function formatDescriptionWithCode(text: string): React.ReactNode {
   const parts = text.split(TOKEN_RE);
   return parts.map((part, i) => {
     if (!part) return null;
-    // Backtick code
-    const codeMatch = part.match(/^`([^`]+)`$/);
-    if (codeMatch) return <code key={i} className={CODE_PILL}>{codeMatch[1]}</code>;
-    // Bold markdown
-    const boldMatch = part.match(/^\*\*([^*]+)\*\*$/);
-    if (boldMatch) return <strong key={i} className="text-zinc-200 font-semibold">{boldMatch[1]}</strong>;
-    // Citation refs — strip (shown as badges below)
+    const codeMatch = /^`([^`]+)`$/.exec(part);
+    if (codeMatch) return <code key={`code-${i}`} className={CODE_PILL}>{codeMatch[1]}</code>;
+    const boldMatch = /^\*\*([^*]+)\*\*$/.exec(part);
+    if (boldMatch) return <strong key={`bold-${i}`} className="text-zinc-200 font-semibold">{boldMatch[1]}</strong>;
     if (/^\[\d+(?:,\s*\d+)*\]$/.test(part)) return null;
-    // Auto-detected code terms (camelCase, file paths, durations, hashes)
-    if (/^[A-Z][a-z]+[A-Z]\w*$/.test(part) || /^[a-z]+[A-Z]\w*$/.test(part)) {
-      return <code key={i} className={CODE_PILL}>{part}</code>;
-    }
-    if (/^[\w./]+\.(?:go|py|ts|js|yml|yaml|json|toml|md)$/.test(part)) {
-      return <code key={i} className={CODE_PILL}>{part}</code>;
-    }
-    if (/^\d+(?:\.\d+)?(?:ms|s|m|MB|GB|Ki|Mi|Gi|%)$/.test(part)) {
-      return <code key={i} className={CODE_PILL}>{part}</code>;
-    }
-    if (/^[0-9a-f]{7,40}$/.test(part)) {
-      return <code key={i} className={CODE_PILL}>{part}</code>;
-    }
-    return part;
+    return <span key={`seg-${i}`}>{formatPlainSegment(part, `seg-${i}`)}</span>;
   });
 }
 
@@ -322,7 +320,7 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
       >
         <span className="w-2 h-2 rounded-sm bg-emerald-400 shadow-[0_0_8px_theme(colors.emerald.400)]" />
         <span className="text-[13px] font-semibold text-zinc-200 flex-1 text-left">
-          Next Steps
+          Next Steps{' '}
           <span className="ml-2 text-[11px] font-normal text-zinc-500">
             {pendingCount > 0 && <>{pendingCount} pending</>}
             {doneCount > 0 && pendingCount > 0 && ' · '}
@@ -360,8 +358,8 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
 
         // Find citation keys referenced in description or rationale
         const descText = (suggestion.description || '') + ' ' + (suggestion.rationale || '');
-        const citationKeys = [...descText.matchAll(/\[(\d+)\]/g)].map(m => m[1]);
-        const relatedCitations = citations.filter(c => citationKeys.includes(c.key));
+        const citationKeys = new Set([...descText.matchAll(/\[(\d+)\]/g)].map(m => m[1]));
+        const relatedCitations = citations.filter(c => citationKeys.has(c.key));
 
         return (
           <div
@@ -434,41 +432,47 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
               )}
             </div>
             <div className="flex items-center py-3.5 pr-3.5 pl-1.5 self-start">
-              {actionLabel && canWrite ? (
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isFixType) {
-                      onFixSuggestion(suggestion);
-                    } else if (!canExec && suggestion.command) {
-                      navigator.clipboard.writeText(suggestion.command);
-                    } else {
-                      onRunSuggestion(suggestion);
-                    }
-                  }}
-                  className={`inline-flex items-center gap-[7px] px-3.5 py-2 rounded-[9px] text-[12.5px] font-semibold tracking-[.005em] whitespace-nowrap transition-all active:translate-y-px ${
-                    (() => {
-                      if (wasExecuted && execStatus === 'completed') return 'bg-[#14171C] text-emerald-400 border border-white/[.07]';
-                      if (wasExecuted && execStatus === 'failed') return 'bg-[#14171C] text-rose-400 border border-white/[.07]';
-                      if (isPrimary) return 'bg-gradient-to-b from-emerald-300 to-emerald-400 text-[#04140F] border border-transparent shadow-[0_1px_0_rgba(255,255,255,.25)_inset,0_6px_18px_-8px_rgba(63,224,182,.7)] hover:shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_8px_22px_-8px_rgba(63,224,182,.9)]';
-                      return 'bg-[#14171C] text-zinc-100 border border-white/[.07] hover:border-white/[.18] hover:bg-[#181b21]';
-                    })()
-                  }`}
-                >
-                  {(() => {
-                    if (isFixType) return <GitBranch className="w-[13px] h-[13px]" />;
-                    if (wasExecuted && execStatus === 'completed') return <CheckCircle2 className="w-[13px] h-[13px]" />;
-                    if (wasExecuted && execStatus === 'failed') return <AlertCircle className="w-[13px] h-[13px]" />;
-                    if (wasExecuted) return <Play className="w-[13px] h-[13px]" />;
-                    if (canExec) return <Play className="w-[13px] h-[13px]" />;
-                    return <Copy className="w-[13px] h-[13px]" />;
-                  })()}
-                  {actionLabel}
-                </button>
-              ) : actionLabel && !canWrite ? (
-                <span className="text-[12.5px] text-zinc-500">{actionLabel}</span>
-              ) : null}
+              {(() => {
+                if (actionLabel && canWrite) {
+                  return (
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (isFixType) {
+                          onFixSuggestion(suggestion);
+                        } else if (!canExec && suggestion.command) {
+                          navigator.clipboard.writeText(suggestion.command);
+                        } else {
+                          onRunSuggestion(suggestion);
+                        }
+                      }}
+                      className={`inline-flex items-center gap-[7px] px-3.5 py-2 rounded-[9px] text-[12.5px] font-semibold tracking-[.005em] whitespace-nowrap transition-all active:translate-y-px ${
+                        (() => {
+                          if (wasExecuted && execStatus === 'completed') return 'bg-[#14171C] text-emerald-400 border border-white/[.07]';
+                          if (wasExecuted && execStatus === 'failed') return 'bg-[#14171C] text-rose-400 border border-white/[.07]';
+                          if (isPrimary) return 'bg-gradient-to-b from-emerald-300 to-emerald-400 text-[#04140F] border border-transparent shadow-[0_1px_0_rgba(255,255,255,.25)_inset,0_6px_18px_-8px_rgba(63,224,182,.7)] hover:shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_8px_22px_-8px_rgba(63,224,182,.9)]';
+                          return 'bg-[#14171C] text-zinc-100 border border-white/[.07] hover:border-white/[.18] hover:bg-[#181b21]';
+                        })()
+                      }`}
+                    >
+                      {(() => {
+                        if (isFixType) return <GitBranch className="w-[13px] h-[13px]" />;
+                        if (wasExecuted && execStatus === 'completed') return <CheckCircle2 className="w-[13px] h-[13px]" />;
+                        if (wasExecuted && execStatus === 'failed') return <AlertCircle className="w-[13px] h-[13px]" />;
+                        if (wasExecuted) return <Play className="w-[13px] h-[13px]" />;
+                        if (canExec) return <Play className="w-[13px] h-[13px]" />;
+                        return <Copy className="w-[13px] h-[13px]" />;
+                      })()}
+                      {actionLabel}
+                    </button>
+                  );
+                }
+                if (actionLabel && !canWrite) {
+                  return <span className="text-[12.5px] text-zinc-500">{actionLabel}</span>;
+                }
+                return null;
+              })()}
             </div>
           </div>
         );
@@ -520,16 +524,17 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
 
   // Function to render text with citation badges
   const renderTextWithCitations = useCallback((text: string): React.ReactNode => {
+    const CITATION_RE = /^\[(\d+(?:,\s*\d+)*)\]$/;
     const parts = text.split(/(\[\d+(?:,\s*\d+)*\])/g);
 
     return parts.map((part, index) => {
-      const match = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
+      const match = CITATION_RE.exec(part);
       if (match) {
-        const citationKeys = match[1].split(/,\s*/).map(k => k.trim());
+        const keys = match[1].split(/,\s*/).map(k => k.trim());
 
         return (
           <span key={`citation-group-${index}`}>
-            {citationKeys.map((citationKey) => {
+            {keys.map((citationKey) => {
               const citation = citations.find(c => c.key === citationKey);
               if (citation) {
                 return (
@@ -565,78 +570,38 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   // citations like [5][6][7] as markdown link references
   const { summaryMain, summaryTrailing } = useMemo(() => {
     if (!incident.summary) return { summaryMain: '', summaryTrailing: '' };
-    let text = incident.summary.replace(/\](\[)/g, '] $1');
-    // Strip "Suggested Next Steps" section (and its --- separator) — rendered separately as console
-    text = text.replace(/---[\s]*\n##\s*Suggested Next Steps[\s\S]*?(?=---[\s]*\n##|\s*$)/, '');
-    // Also handle without leading ---
-    text = text.replace(/##\s*Suggested Next Steps[\s\S]*?(?=---[\s]*\n##|\n##|\s*$)/, '');
-    // Split: everything before "Ruled Out" is main, rest is trailing
-    const trailingMatch = text.match(/(---[\s]*\n##\s*Ruled Out[\s\S]*)$/m);
-    if (trailingMatch && trailingMatch.index !== undefined) {
+    let text = incident.summary.replace(/]\[/g, '] [');
+    text = text.replace(/---\s*\n##\s*Suggested Next Steps[\s\S]*?(?=---\s*\n##|\s*$)/, '');
+    text = text.replace(/##\s*Suggested Next Steps[\s\S]*?(?=---\s*\n##|\n##|\s*$)/, '');
+    const trailingMatch = /((---\s*\n)?##\s*Ruled Out[\s\S]*)$/m.exec(text);
+    if (trailingMatch?.index !== undefined) {
       return { summaryMain: text.slice(0, trailingMatch.index).trim(), summaryTrailing: trailingMatch[1].trim() };
-    }
-    // Try without the --- prefix
-    const trailingMatch2 = text.match(/(##\s*Ruled Out[\s\S]*)$/m);
-    if (trailingMatch2 && trailingMatch2.index !== undefined) {
-      return { summaryMain: text.slice(0, trailingMatch2.index).trim(), summaryTrailing: trailingMatch2[1].trim() };
     }
     return { summaryMain: text.trim(), summaryTrailing: '' };
   }, [incident.summary]);
 
-  // Memoize markdown rendering to prevent re-parsing on every render
+  const mdComponents = useMemo(() => ({
+    h1: (props: { children?: React.ReactNode }) => <h1 className="text-base font-semibold text-white mb-1">{processChildren(props.children)}</h1>,
+    h2: (props: { children?: React.ReactNode }) => <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(props.children)}</h2>,
+    strong: (props: { children?: React.ReactNode }) => <strong className="text-orange-300 font-semibold">{processChildren(props.children)}</strong>,
+    p: (props: { children?: React.ReactNode }) => <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(props.children)}</p>,
+    ol: (props: { children?: React.ReactNode }) => <ol className="list-decimal list-outside ml-4 mb-2 space-y-2">{props.children}</ol>,
+    ul: (props: { children?: React.ReactNode }) => <ul className="list-disc list-outside ml-4 mb-2 space-y-2">{props.children}</ul>,
+    li: (props: { children?: React.ReactNode }) => <li className="text-zinc-300 text-sm [&>p]:inline [&>p]:mb-0">{processChildren(props.children)}</li>,
+    code: (props: { children?: React.ReactNode }) => <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">{props.children}</code>,
+    table: (props: { children?: React.ReactNode }) => <table className="w-full text-sm border-collapse my-3">{props.children}</table>,
+    thead: (props: { children?: React.ReactNode }) => <thead className="border-b border-zinc-700">{props.children}</thead>,
+    tbody: (props: { children?: React.ReactNode }) => <tbody>{props.children}</tbody>,
+    tr: (props: { children?: React.ReactNode }) => <tr className="border-b border-zinc-800/50">{props.children}</tr>,
+    th: (props: { children?: React.ReactNode }) => <th className="text-left text-xs font-semibold text-zinc-400 py-1.5 pr-4">{processChildren(props.children)}</th>,
+    td: (props: { children?: React.ReactNode }) => <td className="text-zinc-300 text-sm py-1.5 pr-4">{processChildren(props.children)}</td>,
+  }), [processChildren]);
+
   const renderedSummary = useMemo(() => (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        h1: ({ children }) => (
-          <h1 className="text-base font-semibold text-white mb-1">{processChildren(children)}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(children)}</h2>
-        ),
-        strong: ({ children }) => (
-          <strong className="text-orange-300 font-semibold">{processChildren(children)}</strong>
-        ),
-        p: ({ children }) => (
-          <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(children)}</p>
-        ),
-        ol: ({ children }) => (
-          <ol className="list-decimal list-outside ml-4 mb-2 space-y-2">{children}</ol>
-        ),
-        ul: ({ children }) => (
-          <ul className="list-disc list-outside ml-4 mb-2 space-y-2">{children}</ul>
-        ),
-        li: ({ children }) => (
-          <li className="text-zinc-300 text-sm [&>p]:inline [&>p]:mb-0">
-            {processChildren(children)}
-          </li>
-        ),
-        code: ({ children }) => (
-          <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">
-            {children}
-          </code>
-        ),
-        table: ({ children }) => (
-          <table className="w-full text-sm border-collapse my-3">{children}</table>
-        ),
-        thead: ({ children }) => (
-          <thead className="border-b border-zinc-700">{children}</thead>
-        ),
-        tbody: ({ children }) => <tbody>{children}</tbody>,
-        tr: ({ children }) => (
-          <tr className="border-b border-zinc-800/50">{children}</tr>
-        ),
-        th: ({ children }) => (
-          <th className="text-left text-xs font-semibold text-zinc-400 py-1.5 pr-4">{processChildren(children)}</th>
-        ),
-        td: ({ children }) => (
-          <td className="text-zinc-300 text-sm py-1.5 pr-4">{processChildren(children)}</td>
-        ),
-      }}
-    >
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
       {summaryMain}
     </ReactMarkdown>
-  ), [summaryMain, processChildren]);
+  ), [summaryMain, mdComponents]);
 
 
   return (
@@ -777,29 +742,23 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               Raw Alert
             </button>
             {/* PagerDuty custom fields runbook */}
-            {alert.metadata?.customFields?.runbook_link ? (
-              isSafeUrl(alert.metadata.customFields.runbook_link) ? (
-                <a 
-                  href={alert.metadata.customFields.runbook_link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-green-400 hover:text-green-300"
-                  title="Runbook from PagerDuty"
-                >
-                  Runbook Link
-                </a>
-              ) : (
-                <span className="text-zinc-500" title="Invalid runbook URL">
-                  Runbook (invalid URL)
-                </span>
-              )
-            ) : (
-              alert.source === 'pagerduty' && (
-                <span className="text-zinc-600" title="No runbook configured">
-                  Runbook: none
-                </span>
-              )
-            )}
+            {(() => {
+              const runbookUrl = alert.metadata?.customFields?.runbook_link;
+              if (runbookUrl && isSafeUrl(runbookUrl)) {
+                return (
+                  <a href={runbookUrl} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:text-green-300" title="Runbook from PagerDuty">
+                    Runbook Link
+                  </a>
+                );
+              }
+              if (runbookUrl) {
+                return <span className="text-zinc-500" title="Invalid runbook URL">Runbook (invalid URL)</span>;
+              }
+              if (alert.source === 'pagerduty') {
+                return <span className="text-zinc-600" title="No runbook configured">Runbook: none</span>;
+              }
+              return null;
+            })()}
           </div>
         </div>
 

@@ -77,7 +77,7 @@ def _friendly_tool_name(raw_name: str) -> str:
 
 
 _INTERNAL_REF_RE = re.compile(
-    r"(?:suggestion\s+(?:ID|id)[:\s]*\d+|RCA-\d+|tool\s+call\s*\[\d+\])", re.IGNORECASE
+    r"(?:suggestion\s+id[:\s]*\d+|RCA-\d+|tool\s+call\s*\[\d+\])", re.IGNORECASE
 )
 
 
@@ -107,26 +107,8 @@ _RESOURCE_LABELS = {
 }
 
 
-def _scan_citation_resources(c: Citation, resources: dict, accessed_repos: set) -> None:
-    """Extract resource identifiers from a single citation."""
-    text = (c.command or "") + " " + (c.output or "")[:2000]
-    tool = c.tool_name or ""
-
-    if any(t in tool for t in _REPO_ACCESS_TOOLS):
-        for m in re.finditer(r'"owner":\s*"([^"]+)".*?"repo":\s*"([^"]+)"', text):
-            accessed_repos.add(f"{m.group(1)}/{m.group(2)}")
-        for m in re.finditer(r'"repository":\s*"([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)"', text):
-            accessed_repos.add(m.group(1))
-
-    cmd = c.command or ""
-    for m in re.finditer(r'raw\.githubusercontent\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)', cmd):
-        accessed_repos.add(m.group(1))
-
-    for key, pattern in _RESOURCE_PATTERNS:
-        for m in re.finditer(pattern, text):
-            val = m.group(1)[:12] if key == "commits" else m.group(1)
-            resources[key].add(val)
-
+def _scan_aws_resources(text: str, resources: dict) -> None:
+    """Extract AWS-specific resource identifiers from text."""
     for m in re.finditer(r'(?:--region|us-(?:east|west)-[12]|eu-(?:west|central)-[123]|ap-(?:southeast|northeast|south)-[12])', text):
         region = m.group(0).replace("--region", "").strip()
         if region:
@@ -141,6 +123,34 @@ def _scan_citation_resources(c: Citation, resources: dict, accessed_repos: set) 
         resources["endpoints"].add(m.group(1))
     for m in re.finditer(r'([a-z][a-z0-9-]+\.[a-z0-9]+\.[a-z]{2}-[a-z]+-\d\.rds\.amazonaws\.com)', text):
         resources["endpoints"].add(m.group(1))
+
+
+def _scan_repos(c: Citation, text: str, accessed_repos: set) -> None:
+    """Extract repository references from a citation."""
+    tool = c.tool_name or ""
+    if any(t in tool for t in _REPO_ACCESS_TOOLS):
+        for m in re.finditer(r'"owner":\s*"([^"]+)".*?"repo":\s*"([^"]+)"', text):
+            accessed_repos.add(f"{m.group(1)}/{m.group(2)}")
+        for m in re.finditer(r'"repository":\s*"([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)"', text):
+            accessed_repos.add(m.group(1))
+
+    cmd = c.command or ""
+    for m in re.finditer(r'raw\.githubusercontent\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)', cmd):
+        accessed_repos.add(m.group(1))
+
+
+def _scan_citation_resources(c: Citation, resources: dict, accessed_repos: set) -> None:
+    """Extract resource identifiers from a single citation."""
+    text = (c.command or "") + " " + (c.output or "")[:2000]
+
+    _scan_repos(c, text, accessed_repos)
+
+    for key, pattern in _RESOURCE_PATTERNS:
+        for m in re.finditer(pattern, text):
+            val = m.group(1)[:12] if key == "commits" else m.group(1)
+            resources[key].add(val)
+
+    _scan_aws_resources(text, resources)
 
 
 def _extract_resource_inventory(citations: List[Citation]) -> str:
@@ -346,6 +356,28 @@ _CLI_PREFIXES = ("aws ", "kubectl ", "gcloud ", "az ", "terraform ", "helm ",
                  "curl ", "gh ", "docker ", "sed ", "grep ", "python3 ")
 
 
+def _parse_validated_metadata(lines: List[str]) -> tuple:
+    """Parse metadata lines (Validated by, Risk, Note) from a validated entry."""
+    validated_by, risk, undo, note = "", "medium", None, ""
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Validated by:"):
+            validated_by = line[len("Validated by:"):].strip()
+        elif line.startswith("Risk:"):
+            risk_undo = line[len("Risk:"):].strip()
+            risk_match = re.match(r'(\w+)', risk_undo)
+            if risk_match:
+                risk = risk_match.group(1).lower()
+            undo_match = re.search(r'Undo:\s*(.+)', risk_undo)
+            if undo_match:
+                undo = undo_match.group(1).strip()
+        elif line.startswith("Note:"):
+            note = line[len("Note:"):].strip()
+    if risk not in _VALID_RISKS:
+        risk = "medium"
+    return validated_by, risk, undo, note
+
+
 def _parse_validated_entry(entry: str) -> Optional[Suggestion]:
     """Parse a single numbered entry from the VALIDATED FIXES block."""
     lines = entry.strip().split('\n')
@@ -365,24 +397,7 @@ def _parse_validated_entry(entry: str) -> Optional[Suggestion]:
     command = command_or_desc if any(command_or_desc.startswith(p) for p in _CLI_PREFIXES) else None
     description = "" if command else command_or_desc
 
-    validated_by, risk, undo, note = "", "medium", None, ""
-    for line in lines[1:]:
-        line = line.strip()
-        if line.startswith("Validated by:"):
-            validated_by = line[len("Validated by:"):].strip()
-        elif line.startswith("Risk:"):
-            risk_undo = line[len("Risk:"):].strip()
-            risk_match = re.match(r'(\w+)', risk_undo)
-            if risk_match:
-                risk = risk_match.group(1).lower()
-            undo_match = re.search(r'Undo:\s*(.+)', risk_undo)
-            if undo_match:
-                undo = undo_match.group(1).strip()
-        elif line.startswith("Note:"):
-            note = line[len("Note:"):].strip()
-
-    if risk not in _VALID_RISKS:
-        risk = "medium"
+    validated_by, risk, undo, note = _parse_validated_metadata(lines[1:])
 
     if not command and ("handler.py" in title.lower() or "code fix" in description.lower()):
         return None
@@ -438,6 +453,17 @@ def _extract_validated_fixes(agent_reasoning: str) -> List[Suggestion]:
 # Self-execution round — run safe diagnostics before suggesting
 # ---------------------------------------------------------------------------
 
+def _parse_json_list_response(content: str) -> list:
+    """Parse an LLM response expected to be a JSON list, stripping code fences."""
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        end_index = -1 if lines[-1].strip() == "```" else len(lines)
+        text = "\n".join(lines[1:end_index]).strip()
+    result = json.loads(text)
+    return result if isinstance(result, list) else []
+
+
 def _self_execute_safe_diagnostics(
     citations: List[Citation],
     user_id: str,
@@ -490,17 +516,7 @@ Return ONLY the JSON array."""
     try:
         llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
         response = llm.invoke([HumanMessage(content=prompt)])
-        text = str(response.content).strip()
-
-        if text.startswith("```"):
-            lines = text.split("\n")
-            end_index = -1 if lines[-1].strip() == "```" else len(lines)
-            text = "\n".join(lines[1:end_index]).strip()
-
-        commands_to_run = json.loads(text)
-        if not isinstance(commands_to_run, list):
-            return []
-
+        commands_to_run = _parse_json_list_response(str(response.content))
     except Exception as e:
         logger.warning("[Recommender] Self-exec planning failed: %s", e)
         return []
@@ -512,8 +528,7 @@ Return ONLY the JSON array."""
             continue
         if command.strip().lower() in executed_commands:
             continue
-        result = _execute_single_diagnostic(cmd_spec, user_id, session_id)
-        results.append(result)
+        results.append(_execute_single_diagnostic(cmd_spec, user_id, session_id))
 
     return results
 
@@ -710,19 +725,20 @@ def _is_redundant(suggestion: Suggestion, executed_commands: set) -> bool:
     return False
 
 
+def _extract_text_part(part: Any) -> str:
+    """Extract text from a single content block, filtering out thinking blocks."""
+    if isinstance(part, str):
+        return part
+    if isinstance(part, dict) and part.get("type") not in ("thinking", "reasoning"):
+        text = part.get("text", "")
+        return str(text) if text else ""
+    return ""
+
+
 def _extract_text_from_content(content: Any) -> str:
     """Extract plain text from LLM response content (handles Gemini thinking blocks)."""
     if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict):
-                if part.get("type") not in ("thinking", "reasoning"):
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts).strip()
+        return "".join(_extract_text_part(part) for part in content).strip()
     return str(content).strip()
 
 
@@ -801,8 +817,8 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
         try:
             fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", text)
             data = json.loads(fixed)
-        except json.JSONDecodeError as e:
-            logger.error("[Recommender] JSON parse failed: %s. Content: %s", e, text[:200])
+        except json.JSONDecodeError:
+            logger.exception("[Recommender] JSON parse failed. Content: %s", text[:200])
             return []
 
     if not isinstance(data, list):
