@@ -108,6 +108,27 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
+type ChildrenProps = { children?: React.ReactNode };
+
+function buildMdComponents(processChildren: (children: React.ReactNode) => React.ReactNode) {
+  return {
+    h1: (props: ChildrenProps) => <h1 className="text-base font-semibold text-white mb-1">{processChildren(props.children)}</h1>,
+    h2: (props: ChildrenProps) => <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(props.children)}</h2>,
+    strong: (props: ChildrenProps) => <strong className="text-orange-300 font-semibold">{processChildren(props.children)}</strong>,
+    p: (props: ChildrenProps) => <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(props.children)}</p>,
+    ol: (props: ChildrenProps) => <ol className="list-decimal list-outside ml-4 mb-2 space-y-2">{props.children}</ol>,
+    ul: (props: ChildrenProps) => <ul className="list-disc list-outside ml-4 mb-2 space-y-2">{props.children}</ul>,
+    li: (props: ChildrenProps) => <li className="text-zinc-300 text-sm [&>p]:inline [&>p]:mb-0">{processChildren(props.children)}</li>,
+    code: (props: ChildrenProps) => <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">{props.children}</code>,
+    table: (props: ChildrenProps) => <table className="w-full text-sm border-collapse my-3">{props.children}</table>,
+    thead: (props: ChildrenProps) => <thead className="border-b border-zinc-700">{props.children}</thead>,
+    tbody: (props: ChildrenProps) => <tbody>{props.children}</tbody>,
+    tr: (props: ChildrenProps) => <tr className="border-b border-zinc-800/50">{props.children}</tr>,
+    th: (props: ChildrenProps) => <th className="text-left text-xs font-semibold text-zinc-400 py-1.5 pr-4">{processChildren(props.children)}</th>,
+    td: (props: ChildrenProps) => <td className="text-zinc-300 text-sm py-1.5 pr-4">{processChildren(props.children)}</td>,
+  };
+}
+
 function parseRuledOutItems(content: string | undefined) {
   if (!content) return [];
   return content
@@ -138,12 +159,12 @@ function renderRuledOutItemText(
     const citeMatch = /^\[(\d+(?:,\s*\d+)*)\]$/.exec(part);
     if (citeMatch) {
       const keys = citeMatch[1].split(/,\s*/);
-      return keys.map(key => {
+      return (<span key={`cites-${i}`}>{keys.map(key => {
         const citation = citations.find(c => c.key === key);
         return citation ? (
-          <button key={`cite-${i}-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
-        ) : <span key={`cite-${i}-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
-      });
+          <button key={`cite-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
+        ) : <span key={`cite-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
+      })}</span>);
     }
     return <span key={`text-${i}`}>{part}</span>;
   });
@@ -157,8 +178,8 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
   const [expanded, setExpanded] = useState(false);
 
   const sections = useMemo(() => {
-    const ruledOutMatch = text.match(/##\s*Ruled Out\s*\n([\s\S]*?)(?=##\s*Not Checked|$)/);
-    const notCheckedMatch = text.match(/##\s*Not Checked\s*\n([\s\S]*?)$/);
+    const ruledOutMatch = /##\s*Ruled Out\s*\n([\s\S]*?)(?=##\s*Not Checked|$)/.exec(text);
+    const notCheckedMatch = /##\s*Not Checked\s*\n([\s\S]*?)$/.exec(text);
     return {
       ruledOut: parseRuledOutItems(ruledOutMatch?.[1]),
       notChecked: parseRuledOutItems(notCheckedMatch?.[1]),
@@ -202,8 +223,8 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
                   <div className="px-4 pt-3 pb-1.5">
                     <span className="text-[10.5px] tracking-[.05em] uppercase text-zinc-600 font-medium">Ruled Out</span>
                   </div>
-                  {sections.ruledOut.map((item, idx) => (
-                    <div key={idx} className={`px-4 py-2.5 ${idx > 0 ? 'border-t border-white/[.035]' : ''}`}>
+                  {sections.ruledOut.map((item) => (
+                    <div key={item.title} className="px-4 py-2.5 border-t border-white/[.035] first:border-t-0">
                       <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
                       {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
                     </div>
@@ -215,8 +236,8 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
                   <div className={`px-4 pt-3 pb-1.5 ${sections.ruledOut.length > 0 ? 'border-t border-white/[.07]' : ''}`}>
                     <span className="text-[10.5px] tracking-[.05em] uppercase text-amber-500/70 font-medium">Not Checked</span>
                   </div>
-                  {sections.notChecked.map((item, idx) => (
-                    <div key={idx} className={`px-4 py-2.5 ${idx > 0 ? 'border-t border-white/[.035]' : ''}`}>
+                  {sections.notChecked.map((item) => (
+                    <div key={item.title} className="px-4 py-2.5 border-t border-white/[.035] first:border-t-0">
                       <p className="text-[12.5px] font-medium text-zinc-300">{renderItemText(item.title)}</p>
                       {item.explanation && <p className="text-[12px] text-zinc-500 mt-1 leading-relaxed">{renderItemText(item.explanation)}</p>}
                     </div>
@@ -243,11 +264,12 @@ function isCodeToken(part: string): boolean {
     || /^[0-9a-f]{7,40}$/.test(part);
 }
 
-function formatPlainSegment(segment: string, baseKey: string): React.ReactNode[] {
-  return segment.split(/\s+/).map((word, j) => {
-    if (!word) return null;
-    if (isCodeToken(word)) return <code key={`${baseKey}-w${j}`} className={CODE_PILL}>{word}</code>;
-    return <span key={`${baseKey}-w${j}`}>{j > 0 ? ` ${word}` : word}</span>;
+function formatPlainSegment(segment: string, baseKey: string): React.ReactNode {
+  const words = segment.split(/\s+/).filter(Boolean);
+  return words.map((word, j) => {
+    const prefix = j > 0 ? ' ' : '';
+    if (isCodeToken(word)) return <React.Fragment key={`${baseKey}-${word}`}>{prefix}<code className={CODE_PILL}>{word}</code></React.Fragment>;
+    return <React.Fragment key={`${baseKey}-${word}-${j}`}>{prefix}{word}</React.Fragment>;
   });
 }
 
@@ -527,25 +549,24 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     const CITATION_RE = /^\[(\d+(?:,\s*\d+)*)\]$/;
     const parts = text.split(/(\[\d+(?:,\s*\d+)*\])/g);
 
-    return parts.map((part, index) => {
+    return parts.map((part) => {
       const match = CITATION_RE.exec(part);
       if (match) {
         const keys = match[1].split(/,\s*/).map(k => k.trim());
-
         return (
-          <span key={`citation-group-${index}`}>
+          <span key={`cg-${match[1]}`}>
             {keys.map((citationKey) => {
               const citation = citations.find(c => c.key === citationKey);
               if (citation) {
                 return (
                   <CitationBadge
-                    key={`citation-${index}-${citationKey}`}
+                    key={`cb-${citationKey}`}
                     citationKey={citationKey}
                     onClick={() => setSelectedCitation(citation)}
                   />
                 );
               }
-              return <span key={`citation-${index}-${citationKey}`}>[{citationKey}]</span>;
+              return <span key={`cs-${citationKey}`}>[{citationKey}]</span>;
             })}
           </span>
         );
@@ -580,22 +601,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     return { summaryMain: text.trim(), summaryTrailing: '' };
   }, [incident.summary]);
 
-  const mdComponents = useMemo(() => ({
-    h1: (props: { children?: React.ReactNode }) => <h1 className="text-base font-semibold text-white mb-1">{processChildren(props.children)}</h1>,
-    h2: (props: { children?: React.ReactNode }) => <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(props.children)}</h2>,
-    strong: (props: { children?: React.ReactNode }) => <strong className="text-orange-300 font-semibold">{processChildren(props.children)}</strong>,
-    p: (props: { children?: React.ReactNode }) => <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(props.children)}</p>,
-    ol: (props: { children?: React.ReactNode }) => <ol className="list-decimal list-outside ml-4 mb-2 space-y-2">{props.children}</ol>,
-    ul: (props: { children?: React.ReactNode }) => <ul className="list-disc list-outside ml-4 mb-2 space-y-2">{props.children}</ul>,
-    li: (props: { children?: React.ReactNode }) => <li className="text-zinc-300 text-sm [&>p]:inline [&>p]:mb-0">{processChildren(props.children)}</li>,
-    code: (props: { children?: React.ReactNode }) => <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">{props.children}</code>,
-    table: (props: { children?: React.ReactNode }) => <table className="w-full text-sm border-collapse my-3">{props.children}</table>,
-    thead: (props: { children?: React.ReactNode }) => <thead className="border-b border-zinc-700">{props.children}</thead>,
-    tbody: (props: { children?: React.ReactNode }) => <tbody>{props.children}</tbody>,
-    tr: (props: { children?: React.ReactNode }) => <tr className="border-b border-zinc-800/50">{props.children}</tr>,
-    th: (props: { children?: React.ReactNode }) => <th className="text-left text-xs font-semibold text-zinc-400 py-1.5 pr-4">{processChildren(props.children)}</th>,
-    td: (props: { children?: React.ReactNode }) => <td className="text-zinc-300 text-sm py-1.5 pr-4">{processChildren(props.children)}</td>,
-  }), [processChildren]);
+  const mdComponents = useMemo(() => buildMdComponents(processChildren), [processChildren]);
 
   const renderedSummary = useMemo(() => (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
