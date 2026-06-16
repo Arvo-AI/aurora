@@ -460,11 +460,16 @@ def _extract_validated_fixes(agent_reasoning: str, incident_id: str) -> List[Sug
         if not command and ("handler.py" in title.lower() or "code fix" in description.lower()):
             continue
 
-        rationale = f"Validated: {validated_by}" if validated_by else "Pre-validated during investigation"
+        rationale = f"Validated: {validated_by}" if validated_by else None
 
-        # Build description: use note for context when command has placeholders
+        # Build description from available context
         if not description:
-            description = note if note else "Validated fix from investigation"
+            if note:
+                description = note
+            elif validated_by:
+                description = validated_by
+            else:
+                description = title
         elif note:
             description = f"{description}\n\n{note}"
 
@@ -871,6 +876,88 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
 
 
 # ---------------------------------------------------------------------------
+# Enrich validated fixes with LLM-generated descriptions and summaries
+# ---------------------------------------------------------------------------
+
+def _enrich_validated_fixes(
+    suggestions: List[Suggestion],
+    agent_reasoning: str,
+    user_id: str,
+    session_id: str,
+) -> None:
+    """Generate proper descriptions and summaries for validated fixes.
+
+    The parser extracts titles and commands but descriptions are often just
+    raw validation evidence. This uses a cheap model to write user-facing
+    descriptions explaining WHY each fix matters, using the investigation
+    context.
+    """
+    if not suggestions:
+        return
+
+    from chat.backend.agent.providers import create_chat_model
+    from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
+
+    items = []
+    for i, s in enumerate(suggestions):
+        entry = f"{i+1}. TITLE: {s.title}"
+        if s.command:
+            entry += f"\n   COMMAND: {s.command}"
+        if s.rationale:
+            entry += f"\n   EVIDENCE: {s.rationale}"
+        items.append(entry)
+
+    # Truncate agent reasoning to fit context
+    reasoning_excerpt = agent_reasoning[:4000] if agent_reasoning else ""
+
+    prompt = f"""You are writing descriptions for incident remediation steps. For each suggestion below, write:
+- A DESCRIPTION (1-2 sentences): what the problem is and why this fix resolves it. Reference specific evidence from the investigation.
+- A SUMMARY (max 15 words): the "why" that isn't obvious from the title.
+
+Investigation context (excerpt):
+{reasoning_excerpt}
+
+Suggestions:
+{chr(10).join(items)}
+
+Return in this exact format (one block per suggestion):
+1. DESCRIPTION: <text>
+   SUMMARY: <text>
+2. DESCRIPTION: <text>
+   SUMMARY: <text>"""
+
+    try:
+        llm = create_chat_model("anthropic/claude-haiku-4.5", temperature=0)
+        response = tracked_invoke(
+            llm,
+            [HumanMessage(content=prompt)],
+            user_id=user_id,
+            session_id=session_id or None,
+            model_name="anthropic/claude-haiku-4.5",
+            request_type="suggestion_enrichment",
+        )
+        text = str(response.content).strip()
+
+        import re
+        blocks = re.split(r'\n(?=\d+\.)', text)
+        for block in blocks:
+            m = re.match(r'(\d+)\.\s*DESCRIPTION:\s*(.+?)(?:\n\s*SUMMARY:\s*(.+))?$', block, re.DOTALL)
+            if m:
+                idx = int(m.group(1)) - 1
+                if 0 <= idx < len(suggestions):
+                    desc = m.group(2).strip()
+                    summary = m.group(3).strip() if m.group(3) else None
+                    if desc:
+                        suggestions[idx].description = desc
+                    if summary:
+                        suggestions[idx].summary = summary
+    except Exception as e:
+        logger.warning("[Recommender] Validated fix enrichment failed (non-fatal): %s", e)
+        # Fall back to just generating summaries
+        _generate_summaries(suggestions, user_id, session_id)
+
+
+# ---------------------------------------------------------------------------
 # Summary generation (cheap model, one-line per suggestion)
 # ---------------------------------------------------------------------------
 
@@ -1023,6 +1110,7 @@ def generate_recommendations(
     validated_fixes = _extract_validated_fixes(agent_reasoning, incident_id)
     if validated_fixes:
         logger.info("[Recommender] Found %d pre-validated fixes from investigation agent", len(validated_fixes))
+        _enrich_validated_fixes(validated_fixes, agent_reasoning, user_id, session_id)
         return validated_fixes
 
     # Step 1: Extract hypothesis ledger

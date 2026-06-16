@@ -661,24 +661,35 @@ def _save_fix_suggestion(
     suggested_content: str,
     repository: str,
     commit_message: Optional[str],
+    summary: Optional[str] = None,
 ) -> Optional[int]:
     from utils.db.connection_pool import db_pool
 
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
+            # Dedup: skip if a fix for the same file already exists on this incident
+            cursor.execute(
+                "SELECT id FROM incident_suggestions WHERE incident_id = %s AND file_path = %s AND type = 'fix'",
+                (incident_id, file_path),
+            )
+            if cursor.fetchone():
+                logger.info("Fix suggestion for %s already exists on incident %s, skipping duplicate", file_path, incident_id)
+                conn.rollback()
+                return None
             cursor.execute(
                 """
                 INSERT INTO incident_suggestions
-                (incident_id, title, description, type, risk, file_path,
+                (incident_id, title, description, summary, type, risk, file_path,
                  original_content, suggested_content, repository, command)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
                     incident_id,
                     title,
                     description,
+                    summary,
                     "fix",
                     "medium",
                     file_path,
@@ -701,15 +712,16 @@ def _save_fix_suggestion(
 
 def _build_title(file_path: str, fix_description: str) -> str:
     filename = file_path.split('/')[-1]
-    # Take first sentence or first 80 chars, whichever is shorter
+    prefix = f"Fix `{filename}`: "
+    max_desc = 70 - len(prefix)
     desc = fix_description.strip()
     period_idx = desc.find('. ')
-    if 0 < period_idx <= 80:
+    if 0 < period_idx <= max_desc:
         desc = desc[:period_idx + 1]
-    elif len(desc) > 80:
-        space_idx = desc.rfind(' ', 0, 80)
-        desc = desc[:space_idx] if space_idx > 40 else desc[:80]
-    return f"Fix `{filename}`: {desc}"
+    elif len(desc) > max_desc:
+        space_idx = desc.rfind(' ', 0, max_desc)
+        desc = desc[:space_idx] if space_idx > 20 else desc[:max_desc]
+    return f"{prefix}{desc}"
 
 
 def github_fix(
@@ -797,6 +809,7 @@ def github_fix(
         suggested_content=suggested_content,
         repository=full_repo,
         commit_message=final_commit_message,
+        summary=rcs_short,
     )
 
     if not suggestion_id:

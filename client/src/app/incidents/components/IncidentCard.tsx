@@ -42,6 +42,7 @@ import IncidentActionRuns from './IncidentActionRuns';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
+import { useExecutionCapabilities, canExecuteCommand, type ExecutionCapabilities } from '@/hooks/use-execution-capabilities';
 
 function sourceDisplayName(source: string): string {
   const connector = connectorRegistry.get(source);
@@ -265,10 +266,11 @@ function formatDescriptionWithCode(text: string): React.ReactNode {
   });
 }
 
-function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, onFixSuggestion, onCitationClick }: {
+function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSuggestion, onFixSuggestion, onCitationClick }: {
   readonly suggestions: Suggestion[];
   readonly citations: Citation[];
   readonly canWrite: boolean;
+  readonly execCaps: ExecutionCapabilities;
   readonly onRunSuggestion: (s: Suggestion) => void;
   readonly onFixSuggestion: (s: Suggestion) => void;
   readonly onCitationClick: (c: Citation) => void;
@@ -325,21 +327,16 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
         const sevGlyph = suggestion.risk === 'high' ? '!!' : suggestion.risk === 'medium' ? '!' : suggestion.type === 'prevent' ? '~' : '·';
         const sevColor = suggestion.risk === 'high' ? 'text-rose-400' : suggestion.risk === 'medium' ? 'text-amber-400' : suggestion.type === 'prevent' ? 'text-blue-400' : 'text-zinc-500';
 
-        // Detect if command is mutating (can't auto-run — show Copy instead)
-        const isMutating = suggestion.command ? (
-          /\b(git\s+(push|commit|add|checkout|clone)|sed\s+-i|rm\s|mv\s|cp\s|chmod|chown|kubectl\s+(apply|delete|patch|edit|scale|rollout)|terraform\s+(apply|destroy)|helm\s+(install|upgrade|delete))\b/.test(suggestion.command) ||
-          /\baws\s+\S+\s+(update-|put-|delete-|create-|set-|add-|remove-|modify-|enable-|disable-|start-|stop-|invoke|publish|send-|verify-|tag-|untag-)/.test(suggestion.command) ||
-          /\bgcloud\s+\S+\s+\S+\s+(update|delete|create|set|add-iam|remove-iam|deploy)/.test(suggestion.command) ||
-          /\baz\s+\S+\s+(update|delete|create|set|start|stop|restart)/.test(suggestion.command)
-        ) : false;
+        // Dynamic: can we execute this command based on the user's connector permissions?
+        const canExec = suggestion.command ? canExecuteCommand(suggestion.command, execCaps) : true;
 
         const actionLabel = isFixType
           ? suggestion.prUrl ? 'View PR' : 'Create PR'
           : wasExecuted
             ? execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : 'View output'
-            : suggestion.command ? (isMutating ? 'Copy' : 'Run') : null;
+            : suggestion.command ? (canExec ? 'Run' : 'Copy') : null;
 
-        const isPrimary = !wasExecuted && suggestion.command && !isFixType && isFirst && !isMutating;
+        const isPrimary = !wasExecuted && suggestion.command && !isFixType && isFirst && canExec;
 
         // Find citation keys referenced in description or rationale
         const descText = (suggestion.description || '') + ' ' + (suggestion.rationale || '');
@@ -354,7 +351,7 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
             <div className={`pt-3.5 pb-3.5 pl-3 pr-2.5 text-right font-mono text-[11px] select-none ${sevColor}`}>
               {sevGlyph}
             </div>
-            <div className="py-3.5 pr-2">
+            <div className="py-3.5 pr-2 min-w-0">
               <p className="text-[13px] font-semibold text-zinc-100 tracking-[-0.01em] mb-1">{formatDescriptionWithCode(suggestion.title)}</p>
               {!expandedItems.has(suggestion.id) && (
                 <p className="text-[12.5px] text-zinc-400 leading-[1.55]">
@@ -416,7 +413,7 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
                 </div>
               )}
             </div>
-            <div className="flex items-center py-3.5 pr-3.5 pl-1.5">
+            <div className="flex items-center py-3.5 pr-3.5 pl-1.5 self-start">
               {actionLabel && canWrite ? (
                 <button
                   onClick={(e) => {
@@ -424,7 +421,7 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
                     e.stopPropagation();
                     if (isFixType) {
                       onFixSuggestion(suggestion);
-                    } else if (isMutating && suggestion.command) {
+                    } else if (!canExec && suggestion.command) {
                       navigator.clipboard.writeText(suggestion.command);
                     } else {
                       onRunSuggestion(suggestion);
@@ -444,10 +441,10 @@ function NextStepsConsole({ suggestions, citations, canWrite, onRunSuggestion, o
                     <GitBranch className="w-[13px] h-[13px]" />
                   ) : wasExecuted ? (
                     execStatus === 'completed' ? <CheckCircle2 className="w-[13px] h-[13px]" /> : execStatus === 'failed' ? <AlertCircle className="w-[13px] h-[13px]" /> : <Play className="w-[13px] h-[13px]" />
-                  ) : isMutating ? (
-                    <Copy className="w-[13px] h-[13px]" />
-                  ) : (
+                  ) : canExec ? (
                     <Play className="w-[13px] h-[13px]" />
+                  ) : (
+                    <Copy className="w-[13px] h-[13px]" />
                   )}
                   {actionLabel}
                 </button>
@@ -481,6 +478,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
+  const execCaps = useExecutionCapabilities();
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
   const sourceIconSrc = getSourceIconSrc(alert.source);
   const sourceIconBgColor = getSourceIconBgColor(alert.source);
@@ -942,6 +940,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               suggestions={incident.suggestions}
               citations={citations}
               canWrite={canWrite}
+              execCaps={execCaps}
               onRunSuggestion={setSelectedSuggestion}
               onFixSuggestion={setSelectedFixSuggestion}
               onCitationClick={setSelectedCitation}

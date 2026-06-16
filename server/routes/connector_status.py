@@ -908,7 +908,56 @@ def _check_all_connectors(
     ):
         results["cloudbees"] = {"connected": True}
 
+    # Augment cloud providers with execution capability based on role setup
+    _augment_execution_capability(results, user_id, org_id)
+
     return results
+
+
+def _augment_execution_capability(
+    results: Dict[str, Dict[str, Any]],
+    user_id: str,
+    org_id: str,
+) -> None:
+    """Add canExecute field to cloud providers based on role configuration.
+
+    AWS: has role_arn (not just read_only_role_arn) → can execute write commands.
+    GCP: OAuth with full scopes or SA with write perms → can execute.
+    kubectl: connected → can execute (kubectl apply, etc.).
+    """
+    if results.get("aws", {}).get("connected"):
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                    cursor.execute(
+                        """SELECT role_arn, read_only_role_arn
+                           FROM user_connections
+                           WHERE (user_id = %s OR org_id = %s)
+                             AND provider = 'aws' AND status = 'active'
+                           ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END
+                           LIMIT 1""",
+                        (user_id, org_id, user_id),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        role_arn, read_only_role_arn = row
+                        has_write_role = bool(role_arn) and role_arn != read_only_role_arn
+                        results["aws"]["canExecute"] = has_write_role
+                    else:
+                        results["aws"]["canExecute"] = False
+        except Exception as exc:
+            logger.debug("[STATUS] aws canExecute check failed: %s", exc)
+            results["aws"]["canExecute"] = False
+
+    if results.get("gcp", {}).get("connected"):
+        results["gcp"]["canExecute"] = True
+
+    if results.get("azure", {}).get("connected"):
+        results["azure"]["canExecute"] = True
+
+    if results.get("kubectl", {}).get("connected"):
+        results["kubectl"]["canExecute"] = True
 
 
 def _check_onprem(user_id: str, org_id: str) -> Dict[str, Any]:
