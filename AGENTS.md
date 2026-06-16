@@ -65,6 +65,8 @@ Every new connector (or connector route file) **must** satisfy all of the follow
 - [ ] Tools registered as LangChain `StructuredTool` in `server/chat/backend/agent/tools/cloud_tools.py`
 - [ ] Tools gated behind `is_<name>_connected(user_id)` check
 - [ ] `run_<name>_tool()` pattern with `_do(client)` callback for auth + error handling
+- [ ] Logo added in `client/src/components/tool-calls/CommandLogo.tsx` (logo entry in `logos` object + matching rule in `getLogoForCommand`)
+- [ ] Command parser added in `client/src/components/tool-calls/tool-command-parser.ts` to display tool parameters (query, resource type, etc.) in the widget header, and wired into `ToolExecutionWidget.tsx`
 
 ### Frontend
 - [ ] Provider added to `ConnectorRegistry.ts` with proper `stateEvent` name
