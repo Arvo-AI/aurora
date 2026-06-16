@@ -1,5 +1,9 @@
 <div align="center">
 
+<img src=".github/assets/aurora-banner.gif" alt="Aurora" width="100%" />
+
+<br />
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/aurora-logo.png" />
   <source media="(prefers-color-scheme: light)" srcset=".github/assets/aurora-logo.png" />
@@ -15,7 +19,7 @@
 <p>
 Aurora autonomously queries your infrastructure, correlates data across 30+ tools,<br />
 and delivers root cause analysis with remediation — in minutes, not hours.<br /><br />
-<strong>100% open source. Self-hosted. Apache 2.0. Free forever.</strong>
+<strong>100% open source. Self-hosted. Apache 2.0.</strong>
 </p>
 
 <br />
