@@ -132,20 +132,7 @@ Visualize your entire infrastructure as a dependency graph. When an incident occ
 </tr>
 </table>
 
-<details>
-<summary><strong>More capabilities</strong></summary>
-<br />
-
-- **Knowledge Base RAG** — Weaviate-powered vector search over runbooks, past postmortems, and documentation
-- **Multi-Cloud** — AWS (STS AssumeRole + IRSA), Azure, GCP, OVH, Scaleway, Cloudflare, Kubernetes
-- **Any LLM** — OpenAI, Anthropic, Google Gemini, Vertex AI, OpenRouter, or Ollama for air-gapped deployments
-- **Terraform/IaC Analysis** — Understands your infrastructure-as-code state
-- **MCP Server** — Use Aurora from Cursor, Claude Desktop, Windsurf, or any MCP-compatible client
-- **Org-level Command Policies** — Admin-configurable allowlists and denylists for agent commands
-- **SigmaHQ Guardrails** — 37 community threat detection rules protect agent command execution
-- **NeMo Input Rail** — Prompt injection detection on every conversation turn
-
-</details>
+**More capabilities:** Knowledge Base RAG &bull; Multi-Cloud (AWS, Azure, GCP, OVH, Scaleway, Cloudflare) &bull; Any LLM (OpenAI, Anthropic, Gemini, Vertex AI, OpenRouter, Ollama) &bull; Terraform/IaC Analysis &bull; MCP Server (Cursor, Claude Desktop, Windsurf) &bull; Org-level Command Policies &bull; SigmaHQ Guardrails &bull; NeMo Input Rail
 
 ---
 
