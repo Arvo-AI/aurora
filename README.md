@@ -77,6 +77,20 @@ AI agents dynamically select from 30+ tools. They run `kubectl`, `aws`, `az`, an
 <tr>
 <td width="50%" valign="top">
 
+### AI Code Fixes
+
+Aurora doesn't just find root cause — it suggests fixes and can generate pull requests with the remediation.
+
+</td>
+<td width="50%">
+
+<img src=".github/assets/pr-suggestion.png" alt="PR suggestion" width="100%" />
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### Incident Dashboard
 
 Ingest alerts from PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io and more. Every alert auto-triggers a background investigation.
@@ -116,20 +130,6 @@ Visualize your entire infrastructure as a dependency graph. When an incident occ
 
 </td>
 </tr>
-<tr>
-<td width="50%" valign="top">
-
-### AI Code Fixes
-
-Aurora doesn't just find root cause — it suggests fixes and can generate pull requests with the remediation.
-
-</td>
-<td width="50%">
-
-<img src=".github/assets/pr-suggestion.png" alt="PR suggestion" width="100%" />
-
-</td>
-</tr>
 </table>
 
 <details>
@@ -146,43 +146,6 @@ Aurora doesn't just find root cause — it suggests fixes and can generate pull 
 - **NeMo Input Rail** — Prompt injection detection on every conversation turn
 
 </details>
-
----
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Alert fires                                                         │
-│  (PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io)    │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Aurora receives webhook → creates incident → spawns AI agents       │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-                 ┌───────────────┼───────────────┐
-                 │               │               │
-                 ▼               ▼               ▼
-        ┌──────────────┐ ┌─────────────┐ ┌──────────────┐
-        │ Cloud APIs   │ │ CLI in      │ │ Logs &       │
-        │ AWS/GCP/Azure│ │ sandboxed   │ │ Knowledge    │
-        │ Cloudflare   │ │ K8s pods    │ │ Base (RAG)   │
-        └──────┬───────┘ └──────┬──────┘ └──────┬───────┘
-               │                │                │
-               └────────────────┼────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Root Cause Analysis                                                 │
-│  ├── Structured timeline with evidence                               │
-│  ├── Impact assessment & blast radius                                │
-│  ├── Remediation recommendations                                     │
-│  ├── Code fix PRs                                                    │
-│  └── Postmortem → Confluence / Notion / SharePoint                   │
-└─────────────────────────────────────────────────────────────────────┘
-```
 
 ---
 
