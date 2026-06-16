@@ -81,133 +81,96 @@ _INTERNAL_REF_RE = re.compile(
 )
 
 
-def _extract_resource_inventory(citations: List[Citation]) -> str:
-    """Extract concrete resource identifiers from citation commands and outputs.
+_REPO_ACCESS_TOOLS = {"MCP: Get File Contents", "MCP: Get Commit", "MCP: List Commits",
+                      "MCP: Create Or Update File", "GitHub RCA"}
 
-    Scans all citations for real values (namespaces, pod names, ARNs, repos,
-    file paths, commit SHAs, endpoints, etc.) and returns a formatted inventory
-    the recommender can reference when building commands.
-    """
-    resources: dict[str, set] = {
-        "repositories": set(),
-        "files": set(),
-        "commits": set(),
-        "k8s_namespaces": set(),
-        "k8s_pods": set(),
-        "k8s_deployments": set(),
-        "aws_region": set(),
-        "aws_arns": set(),
-        "aws_resources": set(),
-        "gcp_projects": set(),
-        "endpoints": set(),
-        "jira_keys": set(),
-        "services": set(),
-    }
+_RESOURCE_PATTERNS = [
+    ("files", r'(?:^|[\s"/])([a-zA-Z][\w./]*\.(?:go|py|ts|js|yaml|yml|json|toml|tf|sh))\b'),
+    ("commits", r'(?:sha|commit|"sha")["\s:]*([0-9a-f]{7,40})\b'),
+    ("k8s_namespaces", r'(?:-n|--namespace)[=\s]+([a-z][a-z0-9-]*)'),
+    ("k8s_namespaces", r'"namespace":\s*"([^"]+)"'),
+    ("k8s_pods", r'(?:pod|pods)/([a-z][a-z0-9-]+)'),
+    ("k8s_deployments", r'(?:deployment|deploy)/([a-z][a-z0-9-]+)'),
+    ("aws_resources", r'\b(i-[0-9a-f]{8,17}|sg-[0-9a-f]+|vpc-[0-9a-f]+|subnet-[0-9a-f]+)\b'),
+    ("gcp_projects", r'(?:project[=\s/]+|projects/)([a-z][a-z0-9-]{4,28}[a-z0-9])'),
+    ("jira_keys", r'\b([A-Z]{2,10}-\d+)\b'),
+    ("services", r'"(?:service|serviceName)":\s*"([^"]+)"'),
+]
 
-    # Track which repos were actively accessed (not just search results)
-    accessed_repos = set()
-    repo_access_tools = {"MCP: Get File Contents", "MCP: Get Commit", "MCP: List Commits",
-                         "MCP: Create Or Update File", "GitHub RCA"}
+_RESOURCE_LABELS = {
+    "repositories": "Repositories", "files": "Files", "commits": "Commits",
+    "k8s_namespaces": "K8s Namespaces", "k8s_pods": "K8s Pods",
+    "k8s_deployments": "K8s Deployments", "aws_region": "AWS Region",
+    "aws_arns": "AWS ARNs", "aws_resources": "AWS Resources",
+    "gcp_projects": "GCP Projects", "endpoints": "Endpoints",
+    "jira_keys": "Jira Issues", "services": "Services",
+}
 
-    for c in citations:
-        text = (c.command or "") + " " + (c.output or "")[:2000]
-        tool = c.tool_name or ""
 
-        # GitHub repos — only from tools that actually accessed content
-        if any(t in tool for t in repo_access_tools):
-            for m in re.finditer(r'"owner":\s*"([^"]+)".*?"repo":\s*"([^"]+)"', text):
-                accessed_repos.add(f"{m.group(1)}/{m.group(2)}")
-            for m in re.finditer(r'"repository":\s*"([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)"', text):
-                accessed_repos.add(m.group(1))
-        # curl to raw.githubusercontent — only from the command part
-        cmd = c.command or ""
-        for m in re.finditer(r'raw\.githubusercontent\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)', cmd):
+def _scan_citation_resources(c: Citation, resources: dict, accessed_repos: set) -> None:
+    """Extract resource identifiers from a single citation."""
+    text = (c.command or "") + " " + (c.output or "")[:2000]
+    tool = c.tool_name or ""
+
+    if any(t in tool for t in _REPO_ACCESS_TOOLS):
+        for m in re.finditer(r'"owner":\s*"([^"]+)".*?"repo":\s*"([^"]+)"', text):
+            accessed_repos.add(f"{m.group(1)}/{m.group(2)}")
+        for m in re.finditer(r'"repository":\s*"([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)"', text):
             accessed_repos.add(m.group(1))
 
-        # File paths from code (*.go, *.py, *.ts, *.yaml, etc.)
-        for m in re.finditer(r'(?:^|[\s"/])([a-zA-Z][\w./]*\.(?:go|py|ts|js|yaml|yml|json|toml|tf|sh))\b', text):
-            resources["files"].add(m.group(1))
+    cmd = c.command or ""
+    for m in re.finditer(r'raw\.githubusercontent\.com/([a-zA-Z0-9_-]+/[a-zA-Z0-9._-]+)', cmd):
+        accessed_repos.add(m.group(1))
 
-        # Git commit SHAs (7+ hex chars, exclude things that look like AWS resource IDs)
-        for m in re.finditer(r'(?:sha|commit|"sha")["\s:]*([0-9a-f]{7,40})\b', text):
-            resources["commits"].add(m.group(1)[:12])
+    for key, pattern in _RESOURCE_PATTERNS:
+        for m in re.finditer(pattern, text):
+            val = m.group(1)[:12] if key == "commits" else m.group(1)
+            resources[key].add(val)
 
-        # Kubernetes namespaces
-        for m in re.finditer(r'(?:-n|--namespace)[=\s]+([a-z][a-z0-9-]*)', text):
-            resources["k8s_namespaces"].add(m.group(1))
-        for m in re.finditer(r'"namespace":\s*"([^"]+)"', text):
-            resources["k8s_namespaces"].add(m.group(1))
+    for m in re.finditer(r'(?:--region|us-(?:east|west)-[12]|eu-(?:west|central)-[123]|ap-(?:southeast|northeast|south)-[12])', text):
+        region = m.group(0).replace("--region", "").strip()
+        if region:
+            resources["aws_region"].add(region)
 
-        # Kubernetes pods/deployments
-        for m in re.finditer(r'(?:pod|pods)/([a-z][a-z0-9-]+)', text):
-            resources["k8s_pods"].add(m.group(1))
-        for m in re.finditer(r'(?:deployment|deploy)/([a-z][a-z0-9-]+)', text):
-            resources["k8s_deployments"].add(m.group(1))
+    for m in re.finditer(r'arn:aws:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^\s"]+', text):
+        arn = m.group(0).rstrip(",.")
+        if "*" not in arn and ":assumed-role/" not in arn:
+            resources["aws_arns"].add(arn)
 
-        # AWS region
-        for m in re.finditer(r'(?:--region|us-(?:east|west)-[12]|eu-(?:west|central)-[123]|ap-(?:southeast|northeast|south)-[12])', text):
-            region = m.group(0).replace("--region", "").strip()
-            if region:
-                resources["aws_region"].add(region)
+    for m in re.finditer(r'([a-z][a-z0-9-]+\.(?:[a-z0-9]+\.)?(?:use[12]|usw[12]|euw[123])\.cache\.amazonaws\.com)', text):
+        resources["endpoints"].add(m.group(1))
+    for m in re.finditer(r'([a-z][a-z0-9-]+\.[a-z0-9]+\.[a-z]{2}-[a-z]+-\d\.rds\.amazonaws\.com)', text):
+        resources["endpoints"].add(m.group(1))
 
-        # AWS ARNs (exclude wildcard and assumed-role session ARNs)
-        for m in re.finditer(r'arn:aws:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^\s"]+', text):
-            arn = m.group(0).rstrip(",.")
-            if "*" not in arn and ":assumed-role/" not in arn:
-                resources["aws_arns"].add(arn)
 
-        # AWS resource identifiers (cluster IDs, instance IDs, etc.)
-        for m in re.finditer(r'\b(i-[0-9a-f]{8,17}|sg-[0-9a-f]+|vpc-[0-9a-f]+|subnet-[0-9a-f]+)\b', text):
-            resources["aws_resources"].add(m.group(1))
+def _extract_resource_inventory(citations: List[Citation]) -> str:
+    """Extract concrete resource identifiers from citation commands and outputs."""
+    resources = {k: set() for k in _RESOURCE_LABELS}
+    accessed_repos: set = set()
 
-        # ElastiCache / RDS endpoints
-        for m in re.finditer(r'([a-z][a-z0-9-]+\.(?:[a-z0-9]+\.)?(?:use[12]|usw[12]|euw[123])\.cache\.amazonaws\.com)', text):
-            resources["endpoints"].add(m.group(1))
-        for m in re.finditer(r'([a-z][a-z0-9-]+\.[a-z0-9]+\.[a-z]{2}-[a-z]+-\d\.rds\.amazonaws\.com)', text):
-            resources["endpoints"].add(m.group(1))
-
-        # GCP projects
-        for m in re.finditer(r'(?:project[=\s/]+|projects/)([a-z][a-z0-9-]{4,28}[a-z0-9])', text):
-            resources["gcp_projects"].add(m.group(1))
-
-        # Jira issue keys
-        for m in re.finditer(r'\b([A-Z]{2,10}-\d+)\b', text):
-            resources["jira_keys"].add(m.group(1))
-
-        # Service names from tool outputs
-        for m in re.finditer(r'"(?:service|serviceName)":\s*"([^"]+)"', text):
-            resources["services"].add(m.group(1))
+    for c in citations:
+        _scan_citation_resources(c, resources, accessed_repos)
 
     resources["repositories"] = accessed_repos
 
-    # Format non-empty categories
     lines = []
-    labels = {
-        "repositories": "Repositories",
-        "files": "Files",
-        "commits": "Commits",
-        "k8s_namespaces": "K8s Namespaces",
-        "k8s_pods": "K8s Pods",
-        "k8s_deployments": "K8s Deployments",
-        "aws_region": "AWS Region",
-        "aws_arns": "AWS ARNs",
-        "aws_resources": "AWS Resources",
-        "gcp_projects": "GCP Projects",
-        "endpoints": "Endpoints",
-        "jira_keys": "Jira Issues",
-        "services": "Services",
-    }
-    for key, label in labels.items():
+    for key, label in _RESOURCE_LABELS.items():
         vals = resources[key]
         if vals:
-            # Limit to 10 per category to keep prompt manageable
-            items = sorted(vals)[:10]
-            lines.append(f"  {label}: {', '.join(items)}")
+            lines.append(f"  {label}: {', '.join(sorted(vals)[:10])}")
 
     if not lines:
         return ""
-
     return "RESOURCE INVENTORY (real values from investigation — use these in commands):\n" + "\n".join(lines)
+
+
+def _format_citation_line(citation: Citation, output_cap: int) -> str:
+    """Format a single citation into a trace line with truncated output."""
+    output = citation.output[:output_cap] if citation.output else "(no output)"
+    if len(citation.output or "") > output_cap:
+        output += "..."
+    tool_display = _friendly_tool_name(citation.tool_name)
+    return f"[{citation.index}] {tool_display}: {citation.command}\n    → {output}"
 
 
 def _build_trace_context(
@@ -220,28 +183,20 @@ def _build_trace_context(
     if agent_reasoning:
         reasoning = _INTERNAL_REF_RE.sub("", agent_reasoning)
         if len(reasoning) > _MAX_REASONING_CHARS:
-            reasoning = reasoning[-_MAX_REASONING_CHARS:]
-            reasoning = "...[earlier reasoning truncated]\n\n" + reasoning
+            reasoning = "...[earlier reasoning truncated]\n\n" + reasoning[-_MAX_REASONING_CHARS:]
         parts.append(f"AGENT REASONING (investigator's analysis):\n{reasoning}")
 
     if citations:
         parts.append("\nINVESTIGATION EVIDENCE (tool calls in chronological order):")
-        n = len(citations)
-        recent_start = max(0, n - 5)
-
+        recent_start = max(0, len(citations) - 5)
         for i, c in enumerate(citations):
             cap = _RECENT_OUTPUT_CHARS if i >= recent_start else _OLDER_OUTPUT_CHARS
-            output = c.output[:cap] if c.output else "(no output)"
-            if len(c.output or "") > cap:
-                output += "..."
-            tool_display = _friendly_tool_name(c.tool_name)
-            parts.append(f"[{c.index}] {tool_display}: {c.command}\n    → {output}")
+            parts.append(_format_citation_line(c, cap))
 
     trace = "\n\n".join(parts)
 
     if len(trace) > _MAX_TRACE_CHARS:
-        trace = trace[-_MAX_TRACE_CHARS:]
-        trace = "...[earlier trace truncated]\n\n" + trace
+        trace = "...[earlier trace truncated]\n\n" + trace[-_MAX_TRACE_CHARS:]
 
     return trace
 
@@ -331,6 +286,29 @@ Return ONLY the JSON object."""
         return InvestigationState()
 
 
+def _format_confirmed_hypotheses(hypotheses: List[Hypothesis]) -> List[str]:
+    """Format confirmed root cause hypotheses."""
+    lines = ["\nCONFIRMED ROOT CAUSE:"]
+    for h in hypotheses:
+        evidence = ", ".join(f"[{e}]" for e in h.supporting_evidence)
+        lines.append(f"  • {h.statement} (evidence: {evidence}, mitigation: {h.mitigation_class})")
+    return lines
+
+
+def _format_open_hypotheses(hypotheses: List[Hypothesis]) -> List[str]:
+    """Format open hypotheses with evidence and contradictions."""
+    lines = ["\nOPEN HYPOTHESES:"]
+    for h in hypotheses:
+        evidence = ", ".join(f"[{e}]" for e in h.supporting_evidence)
+        contra = ", ".join(f"[{e}]" for e in h.contradicting_evidence)
+        line = f"  • [{h.probability}] {h.statement} (supports: {evidence}"
+        if contra:
+            line += f", contradicts: {contra}"
+        line += f", mitigation: {h.mitigation_class})"
+        lines.append(line)
+    return lines
+
+
 def _format_hypothesis_ledger(state: InvestigationState) -> str:
     """Format the hypothesis ledger for the recommender prompt."""
     if not state.hypotheses and not state.ruled_out:
@@ -342,21 +320,9 @@ def _format_hypothesis_ledger(state: InvestigationState) -> str:
     open_h = [h for h in state.hypotheses if h.status == "open"]
 
     if confirmed:
-        parts.append("\nCONFIRMED ROOT CAUSE:")
-        for h in confirmed:
-            evidence = ", ".join(f"[{e}]" for e in h.supporting_evidence)
-            parts.append(f"  • {h.statement} (evidence: {evidence}, mitigation: {h.mitigation_class})")
-
+        parts.extend(_format_confirmed_hypotheses(confirmed))
     if open_h:
-        parts.append("\nOPEN HYPOTHESES:")
-        for h in open_h:
-            evidence = ", ".join(f"[{e}]" for e in h.supporting_evidence)
-            contra = ", ".join(f"[{e}]" for e in h.contradicting_evidence)
-            line = f"  • [{h.probability}] {h.statement} (supports: {evidence}"
-            if contra:
-                line += f", contradicts: {contra}"
-            line += f", mitigation: {h.mitigation_class})"
-            parts.append(line)
+        parts.extend(_format_open_hypotheses(open_h))
 
     if state.ruled_out:
         parts.append("\nRULED OUT:")
@@ -539,58 +505,54 @@ Return ONLY the JSON array."""
         logger.warning("[Recommender] Self-exec planning failed: %s", e)
         return []
 
-    # Execute each command
     results = []
     for cmd_spec in commands_to_run[:_MAX_SELF_EXEC_CALLS]:
         command = cmd_spec.get("command", "").strip()
-        provider = cmd_spec.get("provider", "general")
-
-        if not command:
+        if not command or not is_command_safe(command):
             continue
-
-        # Safety check — reject anything that looks mutating
-        if not is_command_safe(command):
-            logger.warning("[Recommender] Self-exec rejected unsafe command: %s", command[:100])
-            continue
-
-        # Skip if already executed
         if command.strip().lower() in executed_commands:
             continue
-
-        try:
-            from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
-
-            result_json = cloud_exec(
-                provider=provider,
-                command=command,
-                user_id=user_id,
-                session_id=session_id,
-                timeout=_SELF_EXEC_TIMEOUT,
-            )
-            result = json.loads(result_json) if isinstance(result_json, str) else result_json
-            output = result.get("stdout", result.get("output", ""))[:500]
-
-            results.append({
-                "command": command,
-                "provider": provider,
-                "output": output,
-                "success": result.get("success", result.get("returncode", 1) == 0),
-                "rationale": cmd_spec.get("rationale", ""),
-            })
-
-            logger.info("[Recommender] Self-executed: %s → %s", command[:80], "ok" if results[-1]["success"] else "failed")
-
-        except Exception as e:
-            logger.warning("[Recommender] Self-exec failed for '%s': %s", command[:80], e)
-            results.append({
-                "command": command,
-                "provider": provider,
-                "output": f"Error: {e}",
-                "success": False,
-                "rationale": cmd_spec.get("rationale", ""),
-            })
+        result = _execute_single_diagnostic(cmd_spec, user_id, session_id)
+        results.append(result)
 
     return results
+
+
+def _execute_single_diagnostic(cmd_spec: dict, user_id: str, session_id: str) -> dict:
+    """Execute a single diagnostic command and return the result."""
+    from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
+
+    command = cmd_spec["command"].strip()
+    provider = cmd_spec.get("provider", "general")
+
+    try:
+        result_json = cloud_exec(
+            provider=provider,
+            command=command,
+            user_id=user_id,
+            session_id=session_id,
+            timeout=_SELF_EXEC_TIMEOUT,
+        )
+        result = json.loads(result_json) if isinstance(result_json, str) else result_json
+        output = result.get("stdout", result.get("output", ""))[:500]
+        success = result.get("success", result.get("returncode", 1) == 0)
+        logger.info("[Recommender] Self-executed: %s → %s", command[:80], "ok" if success else "failed")
+        return {
+            "command": command,
+            "provider": provider,
+            "output": output,
+            "success": success,
+            "rationale": cmd_spec.get("rationale", ""),
+        }
+    except Exception as e:
+        logger.warning("[Recommender] Self-exec failed for '%s': %s", command[:80], e)
+        return {
+            "command": command,
+            "provider": provider,
+            "output": f"Error: {e}",
+            "success": False,
+            "rationale": cmd_spec.get("rationale", ""),
+        }
 
 
 def _format_self_exec_results(results: List[dict]) -> str:
@@ -748,12 +710,8 @@ def _is_redundant(suggestion: Suggestion, executed_commands: set) -> bool:
     return False
 
 
-def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggestion]:
-    """Parse LLM response into validated, ordered Suggestion objects."""
-    if not content:
-        return []
-
-    # Handle Gemini thinking model responses
+def _extract_text_from_content(content: Any) -> str:
+    """Extract plain text from LLM response content (handles Gemini thinking blocks)."""
     if isinstance(content, list):
         text_parts = []
         for part in content:
@@ -764,11 +722,74 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
                         text_parts.append(str(text))
             elif isinstance(part, str):
                 text_parts.append(part)
-        text = "".join(text_parts).strip()
-    else:
-        text = str(content).strip()
+        return "".join(text_parts).strip()
+    return str(content).strip()
 
-    # Strip markdown code fences
+
+def _parse_item_to_suggestion(item: dict) -> Optional[Suggestion]:
+    """Convert a single parsed JSON item into a validated Suggestion."""
+    if not isinstance(item, dict):
+        return None
+    title = item.get("title", "").strip()
+    if not title:
+        return None
+
+    stype = item.get("type", "diagnostic")
+    if stype == "fix":
+        stype = "remediate"
+    if stype not in _VALID_TYPES:
+        stype = "diagnostic"
+    risk = item.get("risk", "safe")
+    if risk not in _VALID_RISKS:
+        risk = "safe"
+
+    command = item.get("command")
+    if command and re.search(r'<[a-zA-Z][a-zA-Z0-9_-]*>', command):
+        command = None
+    elif command and not is_command_safe(command):
+        risk = "high"
+
+    undo = item.get("undo") if risk in ("medium", "high") else None
+
+    rationale = _build_rationale(item)
+
+    return Suggestion(
+        title=title,
+        description=item.get("description", "").strip(),
+        type=stype,
+        risk=risk,
+        command=command,
+        rationale=rationale,
+        undo=undo,
+    )
+
+
+def _build_rationale(item: dict) -> str:
+    """Build rationale string including expected_outcome if present."""
+    rationale = item.get("rationale", "")
+    expected_outcome = item.get("expected_outcome")
+    if not expected_outcome or not isinstance(expected_outcome, dict):
+        return rationale
+    outcome_parts = []
+    if expected_outcome.get("if_true"):
+        outcome_parts.append(f"If confirmed: {expected_outcome['if_true']}")
+    if expected_outcome.get("if_false"):
+        outcome_parts.append(f"If not: {expected_outcome['if_false']}")
+    if expected_outcome.get("then"):
+        outcome_parts.append(f"Then: {expected_outcome['then']}")
+    if not outcome_parts:
+        return rationale
+    joined = " / ".join(outcome_parts)
+    return f"{rationale} | {joined}" if rationale else joined
+
+
+def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggestion]:
+    """Parse LLM response into validated, ordered Suggestion objects."""
+    if not content:
+        return []
+
+    text = _extract_text_from_content(content)
+
     if text.startswith("```"):
         lines = text.split("\n")
         end_index = -1 if lines[-1].strip() == "```" else len(lines)
@@ -789,69 +810,14 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
 
     suggestions = []
     for item in data:
-        if not isinstance(item, dict):
+        suggestion = _parse_item_to_suggestion(item)
+        if not suggestion:
             continue
-        title = item.get("title", "").strip()
-        if not title:
-            continue
-
-        stype = item.get("type", "diagnostic")
-        if stype == "fix":
-            stype = "remediate"
-        if stype not in _VALID_TYPES:
-            stype = "diagnostic"
-        risk = item.get("risk", "safe")
-        if risk not in _VALID_RISKS:
-            risk = "safe"
-
-        command = item.get("command")
-        if command:
-            if re.search(r'<[a-zA-Z][a-zA-Z0-9_-]*>', command):
-                logger.info("[Recommender] Stripped command with placeholders: %s", command[:100])
-                command = None
-            elif not is_command_safe(command):
-                logger.warning("[Recommender] Dangerous command flagged: %s", command[:100])
-                risk = "high"
-
-        undo = item.get("undo")
-        if risk in ("medium", "high") and not undo:
-            logger.debug("[Recommender] Missing undo for %s-risk suggestion: %s", risk, title)
-        if risk in ("safe", "low"):
-            undo = None
-
-        # Build rationale with expected_outcome if present
-        rationale = item.get("rationale", "")
-        expected_outcome = item.get("expected_outcome")
-        if expected_outcome and isinstance(expected_outcome, dict):
-            outcome_parts = []
-            if expected_outcome.get("if_true"):
-                outcome_parts.append(f"If confirmed: {expected_outcome['if_true']}")
-            if expected_outcome.get("if_false"):
-                outcome_parts.append(f"If not: {expected_outcome['if_false']}")
-            if expected_outcome.get("then"):
-                outcome_parts.append(f"Then: {expected_outcome['then']}")
-            if outcome_parts:
-                rationale = rationale + " | " + " / ".join(outcome_parts) if rationale else " / ".join(outcome_parts)
-
-        suggestion = Suggestion(
-            title=title,
-            description=item.get("description", "").strip(),
-            type=stype,
-            risk=risk,
-            command=command,
-            rationale=rationale,
-            undo=undo,
-        )
-
         if _is_redundant(suggestion, executed_commands):
-            logger.info("[Recommender] Filtered redundant suggestion: %s", title)
             continue
-
         suggestions.append(suggestion)
 
-    # Sort: mitigation → diagnostic → fix → remediate → prevent
     suggestions.sort(key=lambda s: _TYPE_SORT_ORDER.get(s.type, 99))
-
     return suggestions
 
 
@@ -916,24 +882,27 @@ Return in this exact format (one block per suggestion):
             model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_enrichment",
         )
-        text = str(response.content).strip()
-
-        blocks = re.split(r'\n(?=\d+\.)', text)
-        for block in blocks:
-            m = re.match(r'(\d+)\.\s*DESCRIPTION:\s*(.+?)(?:\n\s*SUMMARY:\s*(.+))?$', block, re.DOTALL)
-            if m:
-                idx = int(m.group(1)) - 1
-                if 0 <= idx < len(suggestions):
-                    desc = m.group(2).strip()
-                    summary = m.group(3).strip() if m.group(3) else None
-                    if desc:
-                        suggestions[idx].description = desc
-                    if summary:
-                        suggestions[idx].summary = summary
+        _apply_enrichment_response(str(response.content).strip(), suggestions)
     except Exception as e:
         logger.warning("[Recommender] Validated fix enrichment failed (non-fatal): %s", e)
-        # Fall back to just generating summaries
         _generate_summaries(suggestions, user_id, session_id)
+
+
+def _apply_enrichment_response(text: str, suggestions: List[Suggestion]) -> None:
+    """Parse enrichment LLM response and apply descriptions/summaries to suggestions."""
+    blocks = re.split(r'\n(?=\d+\.)', text)
+    for block in blocks:
+        m = re.match(r'(\d+)\.\s*DESCRIPTION:\s*(.+?)(?:\n\s*SUMMARY:\s*(.+))?$', block, re.DOTALL)
+        if not m:
+            continue
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(suggestions):
+            desc = m.group(2).strip()
+            summary = m.group(3).strip() if m.group(3) else None
+            if desc:
+                suggestions[idx].description = desc
+            if summary:
+                suggestions[idx].summary = summary
 
 
 # ---------------------------------------------------------------------------
@@ -993,59 +962,49 @@ Return one summary per line, numbered:"""
 # Post-generation validation — cross-check commands against resource inventory
 # ---------------------------------------------------------------------------
 
+def _validate_table_name(suggestion: Suggestion, inventory_lower: str) -> None:
+    """Fix DynamoDB table names in commands that don't match inventory."""
+    table_match = re.search(r'--table-name\s+(\S+)', suggestion.command)
+    if not table_match:
+        return
+    table_name = table_match.group(1).strip("'\"")
+    if table_name.lower() in inventory_lower:
+        return
+    dynamo_refs = re.findall(r'notification-dedup-\w+|[\w-]+-dedup[\w-]*', inventory_lower)
+    if dynamo_refs:
+        suggestion.command = suggestion.command.replace(table_name, dynamo_refs[0])
+    else:
+        suggestion.rationale = (suggestion.rationale or "") + " [WARNING: table name not confirmed in investigation evidence]"
+
+
+def _should_drop_suggestion(suggestion: Suggestion, resource_inventory: str) -> bool:
+    """Return True if the suggestion should be dropped due to failed validation."""
+    cmd = suggestion.command
+    if not cmd:
+        return False
+    rollback_words = ('rollback', 'roll-back', 'previous-version', 'revert')
+    if any(word in cmd.lower() for word in rollback_words):
+        if '$LATEST' not in resource_inventory and 'Version' not in resource_inventory:
+            return True
+    return False
+
+
 def _validate_suggestion_commands(
     suggestions: List[Suggestion],
     resource_inventory: str,
 ) -> List[Suggestion]:
-    """Validate commands in suggestions against known resource names.
-
-    Catches cases where the LLM uses a guessed resource name that doesn't
-    match what the investigation actually found. Fixes or drops bad ones.
-    """
+    """Validate commands in suggestions against known resource names."""
     if not suggestions:
         return suggestions
 
-    # Extract known resource identifiers from the inventory
     inventory_lower = resource_inventory.lower()
 
     validated = []
     for s in suggestions:
-        if not s.command:
-            validated.append(s)
+        if _should_drop_suggestion(s, resource_inventory):
             continue
-
-        cmd = s.command
-
-        # Check: DynamoDB table names in commands should match inventory
-        table_match = re.search(r'--table-name\s+(\S+)', cmd)
-        if table_match:
-            table_name = table_match.group(1).strip("'\"")
-            if table_name.lower() not in inventory_lower:
-                # Table name not in inventory — check if a similar name exists
-                # Look for dynamodb table references in inventory
-                dynamo_refs = re.findall(r'notification-dedup-\w+|[\w-]+-dedup[\w-]*', inventory_lower)
-                if dynamo_refs:
-                    correct_name = dynamo_refs[0]
-                    s.command = cmd.replace(table_name, correct_name)
-                    logger.info("[Recommender:Validate] Fixed table name: %s → %s", table_name, correct_name)
-                else:
-                    # Can't find correct name, add note to rationale
-                    s.rationale = (s.rationale or "") + " [WARNING: table name not confirmed in investigation evidence]"
-                    logger.warning("[Recommender:Validate] Unconfirmed table name: %s", table_name)
-
-        # Check: Lambda function names should exist in inventory
-        fn_match = re.search(r'--function-name\s+(\S+)', cmd)
-        if fn_match:
-            fn_name = fn_match.group(1).strip("'\"")
-            if fn_name.lower() not in inventory_lower and fn_name not in cmd:
-                logger.warning("[Recommender:Validate] Function name %s not found in inventory", fn_name)
-
-        # Check: rollback commands without evidence of previous versions
-        if any(word in cmd.lower() for word in ['rollback', 'roll-back', 'previous-version', 'revert']):
-            if '$LATEST' not in resource_inventory and 'Version' not in resource_inventory:
-                logger.info("[Recommender:Validate] Dropping rollback suggestion — no version evidence")
-                continue
-
+        if s.command:
+            _validate_table_name(s, inventory_lower)
         validated.append(s)
 
     if len(validated) < len(suggestions):
@@ -1145,26 +1104,9 @@ def generate_recommendations(
             request_type="recommendation",
         )
         suggestions = _parse_recommendations(response.content, executed_commands)
-
-        # Dedup: remove suggestions that overlap with existing fix suggestions
-        if existing_fixes:
-            fix_files = {f.get("file_path", "").lower().strip() for f in existing_fixes if f.get("file_path")}
-            pre_dedup = len(suggestions)
-            suggestions = [
-                s for s in suggestions
-                if not _overlaps_existing_fix(s, fix_files)
-            ]
-            if len(suggestions) < pre_dedup:
-                logger.info("[Recommender] Deduped %d suggestions covered by existing fixes", pre_dedup - len(suggestions))
-
-        # Post-generation validation: verify resource names in commands
-        if resource_inventory:
-            suggestions = _validate_suggestion_commands(
-                suggestions, resource_inventory
-            )
-
-        # Generate one-line summaries with a cheap model
-        _generate_summaries(suggestions, user_id, session_id)
+        suggestions = _post_process_suggestions(
+            suggestions, existing_fixes, resource_inventory, user_id, session_id,
+        )
 
         logger.info(
             "[Recommender] Generated %d recommendations for incident %s "
@@ -1179,5 +1121,24 @@ def generate_recommendations(
     except Exception as e:
         logger.exception("[Recommender] Failed for incident %s: %s", incident_id, e)
         return []
+
+
+def _post_process_suggestions(
+    suggestions: List[Suggestion],
+    existing_fixes: Optional[List[dict]],
+    resource_inventory: str,
+    user_id: str,
+    session_id: str,
+) -> List[Suggestion]:
+    """Dedup, validate, and enrich suggestions after LLM generation."""
+    if existing_fixes:
+        fix_files = {f.get("file_path", "").lower().strip() for f in existing_fixes if f.get("file_path")}
+        suggestions = [s for s in suggestions if not _overlaps_existing_fix(s, fix_files)]
+
+    if resource_inventory:
+        suggestions = _validate_suggestion_commands(suggestions, resource_inventory)
+
+    _generate_summaries(suggestions, user_id, session_id)
+    return suggestions
 
 

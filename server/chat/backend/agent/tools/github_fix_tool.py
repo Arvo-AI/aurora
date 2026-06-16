@@ -724,6 +724,31 @@ def _build_title(file_path: str, fix_description: str) -> str:
     return f"{prefix}{desc}"
 
 
+def _truncate_to_sentence(text: str, max_len: int = 200) -> str:
+    """Truncate text to first sentence or max length with word boundary."""
+    text = text.strip()
+    period_idx = text.find('. ')
+    if 0 < period_idx <= max_len:
+        return text[:period_idx + 1]
+    if len(text) > max_len:
+        space_idx = text.rfind(' ', 0, max_len)
+        return text[:space_idx] + '...' if space_idx > 80 else text[:max_len] + '...'
+    return text
+
+
+def _validate_fix_inputs(
+    user_id: Optional[str], incident_id: Optional[str], edits: list
+) -> Optional[str]:
+    """Validate required inputs, returning an error message or None."""
+    if not user_id:
+        return "User ID is required"
+    if not incident_id:
+        return "Incident ID is required. This tool should be used during RCA."
+    if not edits:
+        return "edits must contain at least one entry"
+    return None
+
+
 def github_fix(
     file_path: str,
     edits: list,
@@ -736,12 +761,9 @@ def github_fix(
     incident_id: Optional[str] = None,
 ) -> str:
     """Suggest a code fix via anchored multi-edit applied server-side."""
-    if not user_id:
-        return build_error_response("User ID is required")
-    if not incident_id:
-        return build_error_response("Incident ID is required. This tool should be used during RCA.")
-    if not edits:
-        return build_error_response("edits must contain at least one entry")
+    validation_err = _validate_fix_inputs(user_id, incident_id, edits)
+    if validation_err:
+        return build_error_response(validation_err)
 
     owner, repo_name, source = _resolve_repository(user_id, repo)
     if not owner or not repo_name:
@@ -761,7 +783,6 @@ def github_fix(
 
     suggested_content, apply_err = _apply_edits(original_content, edits)
     if apply_err or suggested_content is None:
-        logger.warning("[github_fix] edit application failed for %s: %s", file_path, apply_err)
         return build_error_response(apply_err or "edit application failed")
 
     if suggested_content == original_content:
@@ -769,8 +790,6 @@ def github_fix(
             "Applied edits produced no change to the file. Double-check old_string/new_string."
         )
     if not suggested_content.strip():
-        # An edit that empties the entire file is almost always a mistake and
-        # push_files would silently truncate the file. Reject explicitly.
         return build_error_response(
             "Applied edits produced an empty (or whitespace-only) file. If you "
             "really intend to empty this file, do it manually — github_fix is "
@@ -779,23 +798,8 @@ def github_fix(
 
     final_commit_message = commit_message or f"fix: {fix_description[:100]}"
     title = _build_title(file_path, fix_description)
-    # Keep description concise for UI display — first sentence of each
-    desc_short = fix_description.strip()
-    period_idx = desc_short.find('. ')
-    if 0 < period_idx <= 200:
-        desc_short = desc_short[:period_idx + 1]
-    elif len(desc_short) > 200:
-        space_idx = desc_short.rfind(' ', 0, 200)
-        desc_short = desc_short[:space_idx] + '...' if space_idx > 80 else desc_short[:200] + '...'
-
-    rcs_short = root_cause_summary.strip()
-    period_idx = rcs_short.find('. ')
-    if 0 < period_idx <= 200:
-        rcs_short = rcs_short[:period_idx + 1]
-    elif len(rcs_short) > 200:
-        space_idx = rcs_short.rfind(' ', 0, 200)
-        rcs_short = rcs_short[:space_idx] + '...' if space_idx > 80 else rcs_short[:200] + '...'
-
+    desc_short = _truncate_to_sentence(fix_description)
+    rcs_short = _truncate_to_sentence(root_cause_summary)
     description = f"{desc_short}\n\n**Root Cause:** {rcs_short}"
 
     suggestion_id = _save_fix_suggestion(

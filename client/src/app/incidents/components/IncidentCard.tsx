@@ -108,6 +108,47 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
+function parseRuledOutItems(content: string | undefined) {
+  if (!content) return [];
+  return content
+    .split(/\n[-*]\s+/)
+    .filter(s => s.trim())
+    .map(item => {
+      const cleaned = item.replace(/^\*\*/, '').trim();
+      const dashSplit = cleaned.match(/^(.+?)\s*[—–]\s*([\s\S]+)$/);
+      if (dashSplit) {
+        const title = dashSplit[1].replace(/\*\*/g, '').trim();
+        const explanation = dashSplit[2].trim();
+        return { title, explanation };
+      }
+      return { title: cleaned.replace(/\*\*/g, ''), explanation: '' };
+    });
+}
+
+function renderRuledOutItemText(
+  str: string,
+  citations: Citation[],
+  onCitationClick: (c: Citation) => void,
+) {
+  const parts = str.split(/(`[^`]+`|\[\d+(?:,\s*\d+)*\])/g);
+  return parts.map((part, i) => {
+    if (!part) return null;
+    const codeMatch = part.match(/^`([^`]+)`$/);
+    if (codeMatch) return <code key={i} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap">{codeMatch[1]}</code>;
+    const citeMatch = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
+    if (citeMatch) {
+      const keys = citeMatch[1].split(/,\s*/);
+      return keys.map(key => {
+        const citation = citations.find(c => c.key === key);
+        return citation ? (
+          <button key={`${i}-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
+        ) : <span key={`${i}-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
+      });
+    }
+    return part;
+  });
+}
+
 function RuledOutConsole({ text, citations, onCitationClick }: {
   readonly text: string;
   readonly citations: Citation[];
@@ -115,53 +156,16 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  // Parse sections from the markdown text
   const sections = useMemo(() => {
     const ruledOutMatch = text.match(/##\s*Ruled Out\s*\n([\s\S]*?)(?=##\s*Not Checked|$)/);
     const notCheckedMatch = text.match(/##\s*Not Checked\s*\n([\s\S]*?)$/);
-
-    const parseItems = (content: string | undefined) => {
-      if (!content) return [];
-      return content
-        .split(/\n[-*]\s+/)
-        .filter(s => s.trim())
-        .map(item => {
-          const cleaned = item.replace(/^\*\*/, '').trim();
-          const dashSplit = cleaned.match(/^(.+?)\s*[—–]\s*(.+)$/s);
-          if (dashSplit) {
-            const title = dashSplit[1].replace(/\*\*/g, '').trim();
-            const explanation = dashSplit[2].trim();
-            return { title, explanation };
-          }
-          return { title: cleaned.replace(/\*\*/g, ''), explanation: '' };
-        });
-    };
-
     return {
-      ruledOut: parseItems(ruledOutMatch?.[1]),
-      notChecked: parseItems(notCheckedMatch?.[1]),
+      ruledOut: parseRuledOutItems(ruledOutMatch?.[1]),
+      notChecked: parseRuledOutItems(notCheckedMatch?.[1]),
     };
   }, [text]);
 
-  const renderItemText = (str: string) => {
-    const parts = str.split(/(`[^`]+`|\[\d+(?:,\s*\d+)*\])/g);
-    return parts.map((part, i) => {
-      if (!part) return null;
-      const codeMatch = part.match(/^`([^`]+)`$/);
-      if (codeMatch) return <code key={i} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap">{codeMatch[1]}</code>;
-      const citeMatch = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
-      if (citeMatch) {
-        const keys = citeMatch[1].split(/,\s*/);
-        return keys.map(key => {
-          const citation = citations.find(c => c.key === key);
-          return citation ? (
-            <button key={`${i}-${key}`} onClick={() => onCitationClick(citation)} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5 hover:text-emerald-400 hover:border-emerald-400/30 transition-colors">{key}</button>
-          ) : <span key={`${i}-${key}`} className="font-mono text-[10px] text-zinc-500 border border-white/[.07] rounded-[5px] px-1.5 py-px mx-0.5">{key}</span>;
-        });
-      }
-      return part;
-    });
-  };
+  const renderItemText = (str: string) => renderRuledOutItemText(str, citations, onCitationClick);
 
   if (sections.ruledOut.length === 0 && sections.notChecked.length === 0) return null;
 
