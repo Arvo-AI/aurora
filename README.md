@@ -105,20 +105,6 @@ Ingest alerts from PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io
 <tr>
 <td width="50%" valign="top">
 
-### Auto-Generated Postmortems
-
-Detailed reports with timeline, root cause, impact assessment, and remediation steps. Export directly to Confluence, Notion, or SharePoint.
-
-</td>
-<td width="50%">
-
-<img src=".github/assets/postmortem-report.png" alt="Postmortem report" width="100%" />
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
 ### Infrastructure Knowledge Graph
 
 Visualize your entire infrastructure as a dependency graph. When an incident occurs, Aurora traces blast radius across services and providers.
