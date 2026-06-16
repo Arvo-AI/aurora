@@ -132,7 +132,7 @@ function buildMdComponents(processChildren: (children: React.ReactNode) => React
 function parseRuledOutItems(content: string | undefined) {
   if (!content) return [];
   return content
-    .split(/(?:^|\n)\s*[-*]\s+/)
+    .split(/(?:^|\n)[ \t]*[-*][ \t]+/)
     .filter(s => s.trim())
     .map(item => {
       const cleaned = item.replace(/^\*\*/, '').trim();
