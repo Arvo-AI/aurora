@@ -2,23 +2,30 @@
 
 <img src=".github/assets/aurora-banner.gif" alt="Aurora — The open-source AI agent that investigates your incidents for you" width="100%" />
 
-<br />
-
-<br />
-
 <a href="https://github.com/Arvo-AI/aurora/stargazers"><img src="https://img.shields.io/github/stars/Arvo-AI/aurora?style=for-the-badge&logo=github&color=181717" alt="Stars" /></a>&nbsp;
 <a href="https://github.com/Arvo-AI/aurora/releases/latest"><img src="https://img.shields.io/github/v/release/Arvo-AI/aurora?style=for-the-badge&label=version&color=2ea44f" alt="Version" /></a>&nbsp;
 <a href="https://github.com/Arvo-AI/aurora/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue?style=for-the-badge" alt="License" /></a>&nbsp;
 <a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join_us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>&nbsp;
 <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book_a_Demo-FF6B4A?style=for-the-badge&logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
 
-<br /><br />
+<br />
 
 <a href="#-quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#-integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.arvoai.ca">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
 
 </div>
 
-<br />
+---
+
+## What's New
+
+- **New Relic, OpsGenie, incident.io Connectors** — Ingest alerts and query telemetry from three more monitoring platforms
+- **Notion & SharePoint** — Export RCAs and postmortems to Notion pages or SharePoint sites
+- **Google Chat** — Receive incident notifications and interact with Aurora from Google Workspace
+- **SigmaHQ Guardrails** — Community threat detection rules (37 SigmaHQ signatures) protect the agent's command execution
+- **NeMo Input Rail** — Prompt injection detection on every turn using NVIDIA NeMo Guardrails
+- **Org-level Command Policies** — Admins can configure per-org allowlists and denylists for agent commands
+
+See the full [CHANGELOG](CHANGELOG.md) for all releases.
 
 ---
 
