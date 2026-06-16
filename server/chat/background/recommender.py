@@ -37,6 +37,7 @@ _OLDER_OUTPUT_CHARS = 200
 
 _VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
+_ENRICHMENT_MODEL = "anthropic/claude-haiku-4.5"
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
@@ -249,7 +250,7 @@ def _build_trace_context(
 # Hypothesis extraction — parse structured state from agent reasoning
 # ---------------------------------------------------------------------------
 
-def _extract_hypotheses(agent_reasoning: str, citations: List[Citation]) -> InvestigationState:
+def _extract_hypotheses(agent_reasoning: str) -> InvestigationState:
     """Extract hypothesis ledger from agent reasoning using an LLM call.
 
     This converts the unstructured agent thoughts into the structured
@@ -375,12 +376,71 @@ def _format_hypothesis_ledger(state: InvestigationState) -> str:
 # Extract validated fixes from investigation agent's remediation phase
 # ---------------------------------------------------------------------------
 
-def _extract_validated_fixes(agent_reasoning: str, incident_id: str) -> List[Suggestion]:
-    """Parse VALIDATED FIXES block from the investigation agent's final output.
+_CLI_PREFIXES = ("aws ", "kubectl ", "gcloud ", "az ", "terraform ", "helm ",
+                 "curl ", "gh ", "docker ", "sed ", "grep ", "python3 ")
 
-    The remediation phase (rca_sections/remediation.md) instructs the agent to
-    output fixes in a structured format after running validation queries.
-    """
+
+def _parse_validated_entry(entry: str) -> Optional[Suggestion]:
+    """Parse a single numbered entry from the VALIDATED FIXES block."""
+    lines = entry.strip().split('\n')
+    if not lines:
+        return None
+
+    first_line = lines[0].strip()
+    title_match = re.match(r'(.+?):\s*(.+)', first_line)
+    if not title_match:
+        return None
+
+    title = title_match.group(1).strip()
+    title = re.sub(r'^\[(.+)\]$', r'\1', title)
+    title = re.sub(r'\*\*(.+?)\*\*', r'\1', title)
+    command_or_desc = title_match.group(2).strip()
+
+    command = command_or_desc if any(command_or_desc.startswith(p) for p in _CLI_PREFIXES) else None
+    description = "" if command else command_or_desc
+
+    validated_by, risk, undo, note = "", "medium", None, ""
+    for line in lines[1:]:
+        line = line.strip()
+        if line.startswith("Validated by:"):
+            validated_by = line[len("Validated by:"):].strip()
+        elif line.startswith("Risk:"):
+            risk_undo = line[len("Risk:"):].strip()
+            risk_match = re.match(r'(\w+)', risk_undo)
+            if risk_match:
+                risk = risk_match.group(1).lower()
+            undo_match = re.search(r'Undo:\s*(.+)', risk_undo)
+            if undo_match:
+                undo = undo_match.group(1).strip()
+        elif line.startswith("Note:"):
+            note = line[len("Note:"):].strip()
+
+    if risk not in _VALID_RISKS:
+        risk = "medium"
+
+    if not command and ("handler.py" in title.lower() or "code fix" in description.lower()):
+        return None
+
+    rationale = f"Validated: {validated_by}" if validated_by else None
+
+    if not description:
+        description = note or validated_by or title
+    elif note:
+        description = f"{description}\n\n{note}"
+
+    return Suggestion(
+        title=title[:200],
+        description=description,
+        type="mitigation",
+        risk=risk,
+        command=command,
+        rationale=rationale,
+        undo=undo,
+    )
+
+
+def _extract_validated_fixes(agent_reasoning: str) -> List[Suggestion]:
+    """Parse VALIDATED FIXES block from the investigation agent's final output."""
     if not agent_reasoning or "VALIDATED FIXES:" not in agent_reasoning:
         return []
 
@@ -389,7 +449,6 @@ def _extract_validated_fixes(agent_reasoning: str, incident_id: str) -> List[Sug
         return []
 
     section = agent_reasoning[start:]
-    # Cut off at code fence closure, markdown heading, or end-of-section marker
     end_markers = ["\n```", "\n---", "\n# ", "\n### ", "\nLet me"]
     for marker in end_markers:
         end = section.find(marker, 20)
@@ -397,91 +456,13 @@ def _extract_validated_fixes(agent_reasoning: str, incident_id: str) -> List[Sug
             section = section[:end]
             break
 
-    # Split into individual entries by numbered prefix
     entry_splits = re.split(r'\n\d+\.\s+', section)
-    # First split is "VALIDATED FIXES:\n..." header, skip it
     raw_entries = entry_splits[1:] if len(entry_splits) > 1 else []
 
     if not raw_entries:
         return []
 
-    suggestions = []
-    for entry in raw_entries:
-        lines = entry.strip().split('\n')
-        if not lines:
-            continue
-
-        # First line: TITLE: command (or TITLE: description)
-        first_line = lines[0].strip()
-        title_match = re.match(r'(.+?):\s*(.+)', first_line)
-        if not title_match:
-            continue
-
-        title = title_match.group(1).strip()
-        # Strip markdown formatting from title: [brackets], **bold**
-        title = re.sub(r'^\[(.+)\]$', r'\1', title)
-        title = re.sub(r'\*\*(.+?)\*\*', r'\1', title)
-        command_or_desc = title_match.group(2).strip()
-
-        # Determine if first line value is an executable command or description
-        command = None
-        description = ""
-        cli_prefixes = ("aws ", "kubectl ", "gcloud ", "az ", "terraform ", "helm ",
-                        "curl ", "gh ", "docker ", "sed ", "grep ", "python3 ")
-        if any(command_or_desc.startswith(p) for p in cli_prefixes):
-            command = command_or_desc
-        else:
-            description = command_or_desc
-
-        # Parse remaining lines for Validated by, Risk, Undo, Note
-        validated_by = ""
-        risk = "medium"
-        undo = None
-        note = ""
-        for line in lines[1:]:
-            line = line.strip()
-            if line.startswith("Validated by:"):
-                validated_by = line[len("Validated by:"):].strip()
-            elif line.startswith("Risk:"):
-                risk_undo = line[len("Risk:"):].strip()
-                risk_match = re.match(r'(\w+)', risk_undo)
-                if risk_match:
-                    risk = risk_match.group(1).lower()
-                undo_match = re.search(r'Undo:\s*(.+)', risk_undo)
-                if undo_match:
-                    undo = undo_match.group(1).strip()
-            elif line.startswith("Note:"):
-                note = line[len("Note:"):].strip()
-
-        if risk not in _VALID_RISKS:
-            risk = "medium"
-
-        # Skip code fixes that are handled by github_fix_tool
-        if not command and ("handler.py" in title.lower() or "code fix" in description.lower()):
-            continue
-
-        rationale = f"Validated: {validated_by}" if validated_by else None
-
-        # Build description from available context
-        if not description:
-            if note:
-                description = note
-            elif validated_by:
-                description = validated_by
-            else:
-                description = title
-        elif note:
-            description = f"{description}\n\n{note}"
-
-        suggestions.append(Suggestion(
-            title=title[:200],
-            description=description,
-            type="mitigation",
-            risk=risk,
-            command=command,
-            rationale=rationale,
-            undo=undo,
-        ))
+    suggestions = [s for entry in raw_entries if (s := _parse_validated_entry(entry))]
 
     logger.info("[Recommender] Parsed %d validated fixes from investigation agent", len(suggestions))
     return suggestions
@@ -712,7 +693,6 @@ Return a JSON array where each item has:
 - "description": why this helps + how to verify success. Use backticks for code terms, file paths, values.
 - "type": "mitigation" | "diagnostic" | "remediate" | "prevent"
 - "risk": "safe" | "low" | "medium" | "high"
-- "class": "privilege_gap" | "non_trivial_risk" | "human_knowledge" (which invariant class)
 - "command": exact CLI command. Must be directly executable. For code changes, use sed/patch or describe the edit.
 - "rationale": one sentence tying this to specific evidence. Include citation numbers like [15].
 - "undo": reversal command for medium/high risk, null otherwise
@@ -927,18 +907,17 @@ Return in this exact format (one block per suggestion):
    SUMMARY: <text>"""
 
     try:
-        llm = create_chat_model("anthropic/claude-haiku-4.5", temperature=0)
+        llm = create_chat_model(_ENRICHMENT_MODEL, temperature=0)
         response = tracked_invoke(
             llm,
             [HumanMessage(content=prompt)],
             user_id=user_id,
             session_id=session_id or None,
-            model_name="anthropic/claude-haiku-4.5",
+            model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_enrichment",
         )
         text = str(response.content).strip()
 
-        import re
         blocks = re.split(r'\n(?=\d+\.)', text)
         for block in blocks:
             m = re.match(r'(\d+)\.\s*DESCRIPTION:\s*(.+?)(?:\n\s*SUMMARY:\s*(.+))?$', block, re.DOTALL)
@@ -988,20 +967,19 @@ Good examples (title → summary):
 Return one summary per line, numbered:"""
 
     try:
-        llm = create_chat_model("anthropic/claude-haiku-4.5", temperature=0)
+        llm = create_chat_model(_ENRICHMENT_MODEL, temperature=0)
         response = tracked_invoke(
             llm,
             [HumanMessage(content=prompt)],
             user_id=user_id,
             session_id=session_id or None,
-            model_name="anthropic/claude-haiku-4.5",
+            model_name=_ENRICHMENT_MODEL,
             request_type="suggestion_summary",
         )
         text = str(response.content).strip()
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         for line in lines:
-            import re
             m = re.match(r"^(\d+)\.\s*(.+)$", line)
             if m:
                 idx = int(m.group(1)) - 1
@@ -1018,8 +996,6 @@ Return one summary per line, numbered:"""
 def _validate_suggestion_commands(
     suggestions: List[Suggestion],
     resource_inventory: str,
-    user_id: str,
-    session_id: str,
 ) -> List[Suggestion]:
     """Validate commands in suggestions against known resource names.
 
@@ -1107,14 +1083,14 @@ def generate_recommendations(
     from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
 
     # Step 0: Check if the investigation agent already validated fixes
-    validated_fixes = _extract_validated_fixes(agent_reasoning, incident_id)
+    validated_fixes = _extract_validated_fixes(agent_reasoning)
     if validated_fixes:
         logger.info("[Recommender] Found %d pre-validated fixes from investigation agent", len(validated_fixes))
         _enrich_validated_fixes(validated_fixes, agent_reasoning, user_id, session_id)
         return validated_fixes
 
     # Step 1: Extract hypothesis ledger
-    hypothesis_state = _extract_hypotheses(agent_reasoning, citations)
+    hypothesis_state = _extract_hypotheses(agent_reasoning)
     hypothesis_ledger = _format_hypothesis_ledger(hypothesis_state)
 
     # Step 2: Self-execution round — run safe diagnostics before suggesting
@@ -1182,9 +1158,9 @@ def generate_recommendations(
                 logger.info("[Recommender] Deduped %d suggestions covered by existing fixes", pre_dedup - len(suggestions))
 
         # Post-generation validation: verify resource names in commands
-        if user_id and session_id:
+        if resource_inventory:
             suggestions = _validate_suggestion_commands(
-                suggestions, resource_inventory, user_id, session_id
+                suggestions, resource_inventory
             )
 
         # Generate one-line summaries with a cheap model
@@ -1205,223 +1181,3 @@ def generate_recommendations(
         return []
 
 
-# ---------------------------------------------------------------------------
-# Option B: Agentic fix generation (tool-validated)
-# ---------------------------------------------------------------------------
-
-def generate_agentic_fixes(
-    incident_id: str,
-    citations: List[Citation],
-    agent_reasoning: str,
-    service: str,
-    alert_title: str,
-    rca_summary: str,
-    user_id: str = "",
-    session_id: str = "",
-) -> List[Suggestion]:
-    """Generate fixes using tool calls to validate before suggesting.
-
-    Unlike the one-shot recommender, this:
-    1. Asks LLM what fix it would suggest + what validation query would confirm it
-    2. Runs the validation query via cloud_exec
-    3. Re-prompts LLM with validation results to produce final, verified suggestion
-    """
-    from chat.backend.agent.llm import ModelConfig
-    from chat.backend.agent.providers import create_chat_model
-    from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
-    from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
-
-    if not rca_summary:
-        logger.info("[AgenticFix] No RCA summary, skipping agentic fix generation")
-        return []
-
-    # Set up cloud provider context so cloud_exec can use user's credentials
-    if user_id:
-        try:
-            from utils.auth.stateless_auth import get_connected_providers
-            from utils.cloud.cloud_utils import set_user_context
-            providers = get_connected_providers(user_id)
-            if providers:
-                set_user_context(
-                    user_id=user_id,
-                    session_id=session_id,
-                    provider_preference=providers,
-                    mode="ask",
-                )
-                logger.info("[AgenticFix] Set provider context: %s", providers)
-            else:
-                logger.warning("[AgenticFix] No connected providers for user %s", user_id)
-        except Exception as e:
-            logger.warning("[AgenticFix] Failed to set provider context: %s", e)
-
-    resource_inventory = _extract_resource_inventory(citations)
-    trace_context = _build_trace_context(citations, agent_reasoning)
-
-    # Step 1: Ask LLM for a fix plan + validation queries
-    plan_prompt = f"""You are an SRE fixing a production incident. Root cause is CONFIRMED.
-
-INCIDENT: {alert_title}
-SERVICE: {service}
-
-CONFIRMED ROOT CAUSE:
-{rca_summary[:3000]}
-
-RESOURCE INVENTORY (real values from investigation):
-{resource_inventory}
-
-INVESTIGATION CONTEXT:
-{trace_context[:8000]}
-
-Your job: produce 1-2 fix commands that will resolve this incident.
-
-For EACH fix you want to suggest, also provide a VALIDATION QUERY — a read-only command that will confirm the fix is correct before we suggest it to the engineer. For example:
-- If you want to update a Lambda env var to point to an RDS instance, first validate that the RDS instance exists AND has the right engine type
-- If you want to add a Lambda layer, validate the runtime version first
-
-Return JSON:
-[
-  {{
-    "title": "short title",
-    "fix_command": "the actual fix command to suggest to the engineer",
-    "validation_query": "a read-only AWS/kubectl/etc command to run NOW to confirm the fix makes sense",
-    "what_to_check": "what the validation output must show for this fix to be valid",
-    "description": "why this fixes the root cause",
-    "risk": "low|medium|high",
-    "undo": "command to reverse this if it makes things worse"
-  }}
-]
-
-RULES:
-- Use REAL values from the resource inventory. No placeholders.
-- validation_query must be read-only (describe, get, list, etc.)
-- fix_command must be directly executable
-- 1-2 fixes max. The minimum change to restore service.
-
-Return ONLY the JSON array."""
-
-    try:
-        llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.2)
-
-        # Get fix plan with validation queries
-        response = tracked_invoke(
-            llm,
-            [HumanMessage(content=plan_prompt)],
-            user_id=user_id,
-            session_id=session_id or None,
-            model_name=ModelConfig.SUGGESTION_MODEL,
-            request_type="agentic_fix_plan",
-        )
-
-        plan_text = response.content if isinstance(response.content, str) else str(response.content)
-        json_match = re.search(r"\[.*\]", plan_text, re.DOTALL)
-        if not json_match:
-            logger.warning("[AgenticFix] Could not parse plan JSON")
-            return []
-
-        plans = json.loads(json_match.group())
-        if not plans:
-            return []
-
-        # Step 2: Run validation queries
-        validated_fixes = []
-        for plan in plans[:2]:  # Max 2
-            validation_query = plan.get("validation_query")
-            if not validation_query:
-                continue
-
-            logger.info("[AgenticFix] Running validation: %s", validation_query[:100])
-            try:
-                validation_result = cloud_exec(
-                    provider="aws",
-                    command=validation_query,
-                    user_id=user_id,
-                    session_id=session_id,
-                    timeout=30,
-                )
-            except Exception as e:
-                validation_result = f"ERROR: {e}"
-
-            validated_fixes.append({
-                **plan,
-                "validation_result": str(validation_result)[:2000],
-            })
-
-        if not validated_fixes:
-            return []
-
-        # Step 3: Re-prompt with validation results to produce final suggestions
-        validation_context = "\n\n".join([
-            f"FIX: {v['title']}\nVALIDATION QUERY: {v['validation_query']}\nVALIDATION RESULT:\n{v['validation_result']}\nWHAT TO CHECK: {v['what_to_check']}"
-            for v in validated_fixes
-        ])
-
-        refine_prompt = f"""You proposed fixes for this incident. I ran your validation queries. Based on the results, produce the FINAL fix suggestions.
-
-INCIDENT: {alert_title}
-SERVICE: {service}
-ROOT CAUSE: {rca_summary[:1000]}
-
-VALIDATION RESULTS:
-{validation_context}
-
-For each fix:
-- If validation CONFIRMS the fix is correct: output it with the exact command
-- If validation shows the fix would FAIL (wrong resource type, doesn't exist, etc.): either fix the command based on what validation revealed, or DROP IT entirely
-
-Return JSON array:
-[
-  {{
-    "title": "action verb + specific target",
-    "description": "why this helps + how to verify success",
-    "type": "mitigation",
-    "risk": "low|medium|high",
-    "command": "exact CLI command, directly executable",
-    "rationale": "tied to validation evidence",
-    "undo": "reversal command or null"
-  }}
-]
-
-If NO fixes survived validation, return []. An empty array is better than a wrong command.
-Return ONLY the JSON array."""
-
-        response2 = tracked_invoke(
-            llm,
-            [HumanMessage(content=refine_prompt)],
-            user_id=user_id,
-            session_id=session_id or None,
-            model_name=ModelConfig.SUGGESTION_MODEL,
-            request_type="agentic_fix_refine",
-        )
-
-        refine_text = response2.content if isinstance(response2.content, str) else str(response2.content)
-        json_match2 = re.search(r"\[.*\]", refine_text, re.DOTALL)
-        if not json_match2:
-            logger.warning("[AgenticFix] Could not parse refined JSON")
-            return []
-
-        refined = json.loads(json_match2.group())
-        suggestions = []
-        for item in refined:
-            stype = item.get("type", "mitigation")
-            if stype not in _VALID_TYPES:
-                stype = "mitigation"
-            risk = item.get("risk", "medium")
-            if risk not in _VALID_RISKS:
-                risk = "medium"
-
-            suggestions.append(Suggestion(
-                title=item.get("title", "")[:200],
-                description=item.get("description", ""),
-                type=stype,
-                risk=risk,
-                command=item.get("command"),
-                rationale=item.get("rationale", ""),
-                undo=item.get("undo"),
-            ))
-
-        logger.info("[AgenticFix] Generated %d validated fixes for incident %s", len(suggestions), incident_id)
-        return suggestions
-
-    except Exception as e:
-        logger.exception("[AgenticFix] Failed for incident %s: %s", incident_id, e)
-        return []

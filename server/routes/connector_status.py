@@ -306,7 +306,6 @@ def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str,
 
     if is_oauth_enabled():
         try:
-            from utils.auth.token_management import get_token_data
             creds = get_token_data(user_id, "github")
             if creds and creds.get("access_token"):
                 return {"connected": True}
@@ -356,10 +355,7 @@ def _check_thousandeyes(creds: Dict[str, Any]) -> Dict[str, Any]:
     if not api_token:
         return {"connected": False}
     try:
-        from connectors.thousandeyes_connector.client import (
-            ThousandEyesAPIError,
-            get_thousandeyes_client,
-        )
+        from connectors.thousandeyes_connector.client import get_thousandeyes_client
         uid = creds.get("_user_id") or "batch-check"
         account_group_id = creds.get("account_group_id")
         client = get_thousandeyes_client(

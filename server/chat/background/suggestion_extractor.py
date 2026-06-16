@@ -78,7 +78,6 @@ class Suggestion:
     rationale: Optional[str] = None
     undo: Optional[str] = None
     file_path: Optional[str] = None
-    change_description: Optional[str] = None
     summary: Optional[str] = None
 
 

@@ -734,7 +734,6 @@ def github_fix(
     branch: Optional[str] = None,
     user_id: Optional[str] = None,
     incident_id: Optional[str] = None,
-    **kwargs,
 ) -> str:
     """Suggest a code fix via anchored multi-edit applied server-side."""
     if not user_id:

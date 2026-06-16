@@ -2284,6 +2284,19 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: Add summary column to incident_suggestions
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incident_suggestions
+                    ADD COLUMN IF NOT EXISTS summary TEXT;
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding summary column to incident_suggestions: {e}")
+                conn.rollback()
+
             # Migration: Create postmortems table if it doesn't exist
             # Note: 'resolved' is now a valid incident status value.
             # The incidents.status column is VARCHAR so no ALTER Table is needed.

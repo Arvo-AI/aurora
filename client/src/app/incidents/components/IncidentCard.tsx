@@ -16,14 +16,12 @@ import {
   FileText,
   Coins,
   Activity,
-  Check,
   Copy,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { useUser } from '@/hooks/useAuthHooks';
 import { canWrite as checkCanWrite } from '@/lib/roles';
@@ -167,8 +165,6 @@ function RuledOutConsole({ text, citations, onCitationClick }: {
 
   if (sections.ruledOut.length === 0 && sections.notChecked.length === 0) return null;
 
-  const totalCount = sections.ruledOut.length + sections.notChecked.length;
-
   return (
     <div className="mt-4 rounded-[14px] border border-white/[.07] overflow-hidden bg-[#0A0C0F]">
       <button
@@ -266,6 +262,31 @@ function formatDescriptionWithCode(text: string): React.ReactNode {
   });
 }
 
+function getSevGlyph(s: Suggestion): string {
+  if (s.risk === 'high') return '!!';
+  if (s.risk === 'medium') return '!';
+  if (s.type === 'prevent') return '~';
+  return '·';
+}
+
+function getSevColor(s: Suggestion): string {
+  if (s.risk === 'high') return 'text-rose-400';
+  if (s.risk === 'medium') return 'text-amber-400';
+  if (s.type === 'prevent') return 'text-blue-400';
+  return 'text-zinc-500';
+}
+
+function getActionLabel(s: Suggestion, isFixType: boolean, wasExecuted: boolean, execStatus: string | undefined, canExec: boolean): string | null {
+  if (isFixType) return s.prUrl ? 'View PR' : 'Create PR';
+  if (wasExecuted) {
+    if (execStatus === 'completed') return 'Done';
+    if (execStatus === 'failed') return 'Failed';
+    return 'View output';
+  }
+  if (s.command) return canExec ? 'Run' : 'Copy';
+  return null;
+}
+
 function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSuggestion, onFixSuggestion, onCitationClick }: {
   readonly suggestions: Suggestion[];
   readonly citations: Citation[];
@@ -324,17 +345,12 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
         const execStatus = suggestion.executionStatus;
         const isFirst = idx === 0;
 
-        const sevGlyph = suggestion.risk === 'high' ? '!!' : suggestion.risk === 'medium' ? '!' : suggestion.type === 'prevent' ? '~' : '·';
-        const sevColor = suggestion.risk === 'high' ? 'text-rose-400' : suggestion.risk === 'medium' ? 'text-amber-400' : suggestion.type === 'prevent' ? 'text-blue-400' : 'text-zinc-500';
+        const sevGlyph = getSevGlyph(suggestion);
+        const sevColor = getSevColor(suggestion);
 
-        // Dynamic: can we execute this command based on the user's connector permissions?
         const canExec = suggestion.command ? canExecuteCommand(suggestion.command, execCaps) : true;
 
-        const actionLabel = isFixType
-          ? suggestion.prUrl ? 'View PR' : 'Create PR'
-          : wasExecuted
-            ? execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : 'View output'
-            : suggestion.command ? (canExec ? 'Run' : 'Copy') : null;
+        const actionLabel = getActionLabel(suggestion, isFixType, wasExecuted, execStatus, canExec);
 
         const isPrimary = !wasExecuted && suggestion.command && !isFixType && isFirst && canExec;
 
@@ -428,24 +444,22 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
                     }
                   }}
                   className={`inline-flex items-center gap-[7px] px-3.5 py-2 rounded-[9px] text-[12.5px] font-semibold tracking-[.005em] whitespace-nowrap transition-all active:translate-y-px ${
-                    wasExecuted && execStatus === 'completed'
-                      ? 'bg-[#14171C] text-emerald-400 border border-white/[.07]'
-                      : wasExecuted && execStatus === 'failed'
-                        ? 'bg-[#14171C] text-rose-400 border border-white/[.07]'
-                        : isPrimary
-                          ? 'bg-gradient-to-b from-emerald-300 to-emerald-400 text-[#04140F] border border-transparent shadow-[0_1px_0_rgba(255,255,255,.25)_inset,0_6px_18px_-8px_rgba(63,224,182,.7)] hover:shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_8px_22px_-8px_rgba(63,224,182,.9)]'
-                          : 'bg-[#14171C] text-zinc-100 border border-white/[.07] hover:border-white/[.18] hover:bg-[#181b21]'
+                    (() => {
+                      if (wasExecuted && execStatus === 'completed') return 'bg-[#14171C] text-emerald-400 border border-white/[.07]';
+                      if (wasExecuted && execStatus === 'failed') return 'bg-[#14171C] text-rose-400 border border-white/[.07]';
+                      if (isPrimary) return 'bg-gradient-to-b from-emerald-300 to-emerald-400 text-[#04140F] border border-transparent shadow-[0_1px_0_rgba(255,255,255,.25)_inset,0_6px_18px_-8px_rgba(63,224,182,.7)] hover:shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_8px_22px_-8px_rgba(63,224,182,.9)]';
+                      return 'bg-[#14171C] text-zinc-100 border border-white/[.07] hover:border-white/[.18] hover:bg-[#181b21]';
+                    })()
                   }`}
                 >
-                  {isFixType ? (
-                    <GitBranch className="w-[13px] h-[13px]" />
-                  ) : wasExecuted ? (
-                    execStatus === 'completed' ? <CheckCircle2 className="w-[13px] h-[13px]" /> : execStatus === 'failed' ? <AlertCircle className="w-[13px] h-[13px]" /> : <Play className="w-[13px] h-[13px]" />
-                  ) : canExec ? (
-                    <Play className="w-[13px] h-[13px]" />
-                  ) : (
-                    <Copy className="w-[13px] h-[13px]" />
-                  )}
+                  {(() => {
+                    if (isFixType) return <GitBranch className="w-[13px] h-[13px]" />;
+                    if (wasExecuted && execStatus === 'completed') return <CheckCircle2 className="w-[13px] h-[13px]" />;
+                    if (wasExecuted && execStatus === 'failed') return <AlertCircle className="w-[13px] h-[13px]" />;
+                    if (wasExecuted) return <Play className="w-[13px] h-[13px]" />;
+                    if (canExec) return <Play className="w-[13px] h-[13px]" />;
+                    return <Copy className="w-[13px] h-[13px]" />;
+                  })()}
                   {actionLabel}
                 </button>
               ) : actionLabel && !canWrite ? (
@@ -474,7 +488,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showActions, setShowActions] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
-  const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
@@ -501,107 +514,18 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     }
   };
 
-  // Extract significant words (length > 3) from text for matching.
-  // Splits on every non-word run AND on underscores, so path-y tokens like
-  // `server/routes/health_routes.py` become ['server', 'routes', 'health',
-  // 'routes', 'py'] instead of one un-splittable blob. Without this, file
-  // paths in bullets never overlap with file paths in fix-suggestion titles.
-  const extractSignificantWords = useCallback((text: string): string[] => {
-    return text
-      .toLowerCase()
-      .split(/[\W_]+/)
-      .filter(word => word.length > 3);
-  }, []);
-
-  // Pull the bare filename out of a path so we can do a strong "file mentioned
-  // in this bullet?" check for fix-type suggestions independent of word overlap.
-  const fileBasename = useCallback((filePath?: string): string | null => {
-    if (!filePath) return null;
-    const trimmed = filePath.trim();
-    if (!trimmed) return null;
-    const parts = trimmed.split(/[\\/]/);
-    const base = parts[parts.length - 1] || trimmed;
-    return base.toLowerCase();
-  }, []);
-
-  // Matches summary list items to suggestions by comparing significant words
-  // Returns the suggestion with the BEST match (most matching words), not just the first match.
-  // For fix-type suggestions, a basename mention in the bullet is also a strong match signal.
-  const findMatchingSuggestion = useCallback((text: string): Suggestion | null => {
-    if (!incident.suggestions?.length) return null;
-
-    const textWords = extractSignificantWords(text);
-    const lowerText = text.toLowerCase();
-    const normalizedText = text.toLowerCase().replace(/[^\w\s]/g, '');
-
-    let bestMatch: Suggestion | null = null;
-    let bestMatchCount = 0;
-
-    for (const suggestion of incident.suggestions) {
-      // Match by title word overlap (at least 2 significant words in common)
-      const titleWords = extractSignificantWords(suggestion.title);
-      const textWordSet = new Set(textWords);
-      const matchingWordCount = titleWords.filter(word => textWordSet.has(word)).length;
-
-      // Keep track of the best match (most words in common)
-      if (matchingWordCount >= 2 && matchingWordCount > bestMatchCount) {
-        bestMatch = suggestion;
-        bestMatchCount = matchingWordCount;
-      }
-
-      // For fix-type suggestions, also match if the bullet text mentions the
-      // target filename. Bullets like "Audit `server/routes/health_routes.py`"
-      // are a clear pointer to a fix on that file even when the prose vocab
-      // doesn't otherwise overlap with the fix title.
-      if (suggestion.type === 'fix') {
-        const base = fileBasename(suggestion.filePath);
-        if (base && lowerText.includes(base) && bestMatchCount < 3) {
-          bestMatch = suggestion;
-          bestMatchCount = 3; // beat any 2-word overlap; lose to richer overlap
-        }
-      }
-
-      // Match by description prefix overlap (only if no better title match)
-      if (!bestMatch) {
-        const normalizedDesc = suggestion.description.toLowerCase().replace(/[^\w\s]/g, '');
-        const textPrefix = normalizedText.slice(0, 50);
-        const descPrefix = normalizedDesc.slice(0, 50);
-        if (normalizedText.includes(descPrefix) || normalizedDesc.includes(textPrefix)) {
-          bestMatch = suggestion;
-          bestMatchCount = 2; // Treat description match as 2 words
-        }
-      }
-    }
-    return bestMatch;
-  }, [incident.suggestions, extractSignificantWords, fileBasename]);
-
-  // Find a fix suggestion by its database ID (for [S:id] markers)
-  const findFixSuggestionById = useCallback((id: string): Suggestion | null => {
-    if (!incident.suggestions?.length) return null;
-    return incident.suggestions.find(s => String(s.id) === id && s.type === 'fix') || null;
-  }, [incident.suggestions]);
-
-  // Function to render text with citation badges and suggestion markers
+  // Function to render text with citation badges
   const renderTextWithCitations = useCallback((text: string): React.ReactNode => {
-    // Split by citation patterns [1], [1, 2] AND suggestion markers [S:4]
-    const parts = text.split(/(\[\d+(?:,\s*\d+)*\]|\[S:\d+\])/g);
+    const parts = text.split(/(\[\d+(?:,\s*\d+)*\])/g);
 
     return parts.map((part, index) => {
-      // Match suggestion marker [S:id] — always consume to avoid showing raw tokens
-      const suggestionMatch = part.match(/^\[S:(\d+)\]$/);
-      if (suggestionMatch) {
-        return null;
-      }
-
-      // Match single [1] or multiple [1, 2] or [6, 7]
       const match = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
       if (match) {
         const citationKeys = match[1].split(/,\s*/).map(k => k.trim());
 
-        // Render each citation key as a separate badge
         return (
           <span key={`citation-group-${index}`}>
-            {citationKeys.map((citationKey, keyIndex) => {
+            {citationKeys.map((citationKey) => {
               const citation = citations.find(c => c.key === citationKey);
               if (citation) {
                 return (
@@ -612,7 +536,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   />
                 );
               }
-              // If citation not found, render as plain text
               return <span key={`citation-${index}-${citationKey}`}>[{citationKey}]</span>;
             })}
           </span>
@@ -620,7 +543,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       }
       return part;
     });
-  }, [citations, canWrite, findFixSuggestionById]);
+  }, [citations]);
 
 
   // Helper to process children and replace citation patterns
@@ -634,15 +557,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   }, [renderTextWithCitations]);
 
   // Recursively extract text content from React nodes for suggestion matching
-  const extractTextFromNode = useCallback((node: React.ReactNode): string => {
-    if (typeof node === 'string') return node;
-    if (Array.isArray(node)) return node.map((child) => extractTextFromNode(child)).join('');
-    if (React.isValidElement(node) && node.props.children) {
-      return extractTextFromNode(node.props.children);
-    }
-    return '';
-  }, []);
-
   // Preprocess summary to prevent ReactMarkdown from interpreting consecutive
   // citations like [5][6][7] as markdown link references
   const { summaryMain, summaryTrailing } = useMemo(() => {
@@ -718,7 +632,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     >
       {summaryMain}
     </ReactMarkdown>
-  ), [summaryMain, processChildren, extractTextFromNode]);
+  ), [summaryMain, processChildren]);
 
 
   return (
