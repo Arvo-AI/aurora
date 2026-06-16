@@ -16,14 +16,6 @@
 
 <a href="#-quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#-integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.arvoai.ca">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
 
-<br /><br />
-
-<a href="https://www.loom.com/share/8082df350ea64a928f7fadbf811c5138">
-  <img src=".github/assets/aurora-demo.gif" alt="Aurora Demo — AI agent investigating a cloud incident" width="100%" />
-</a>
-
-<sub>Click to watch the full demo</sub>
-
 </div>
 
 <br />
@@ -43,6 +35,16 @@ When an alert fires at 3 AM, your on-call engineer spends 30-60 minutes doing th
 | Knowledge siloed in individuals | Investigation reasoning captured |
 | Postmortem written days later | Postmortem auto-generated |
 | Same failure, different engineer | Knowledge base grows over time |
+
+<div align="center">
+
+<a href="https://www.loom.com/share/8082df350ea64a928f7fadbf811c5138">
+  <img src=".github/assets/aurora-demo.gif" alt="Aurora Demo — AI agent investigating a cloud incident" width="100%" />
+</a>
+
+<sub>Click to watch the full demo</sub>
+
+</div>
 
 ---
 
