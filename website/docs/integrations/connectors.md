@@ -376,8 +376,8 @@ python3 server/scripts/register_github_app.py --org <your-github-org>
 ```
 
 For a manual click-through (every form field, permissions table, event
-list, troubleshooting), the operator walkthrough lives in the source
-tree at [`server/connectors/github_connector/SETUP_GITHUB_APP.md`](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md).
+list, troubleshooting), see the
+[GitHub App Setup guide](/docs/integrations/github-app).
 
 Required env (set in `.env`):
 
@@ -430,8 +430,36 @@ https://github.com/organizations/<customer-org>/settings/apps/new
 | Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to your secrets backend |
 | Where can be installed? | **Only on this account** (locks the App to the customer org) |
 
-Permissions and events match the dev walkthrough — see
-[SETUP_GITHUB_APP.md § Step 3 / § Step 4](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md#step-3-permissions-checklist).
+**Repository permissions** (set in Permissions & events tab):
+
+| Permission | Access level | Why |
+|---|---|---|
+| Actions | Read-only | Workflow run status for CI/CD correlation |
+| Checks | Read-only | CI check-result correlation |
+| Contents | Read-only | Read file contents, repo trees (MCP, metadata generation) |
+| Deployments | Read-only | Deploy timeline correlation |
+| Issues | Read-only | Issue-to-incident correlation |
+| Metadata | Read-only | Required by GitHub for all App installations (auto-selected) |
+| Pull requests | **Read and write** | Read PR diffs; post change-gating review comments |
+
+**Organization permissions:** Members → Read-only (org membership for owner resolution).
+
+**Subscribe to events** (same Permissions & events tab):
+
+| Event | Purpose |
+|---|---|
+| Check run | CI check correlation |
+| Check suite | CI suite lifecycle |
+| Deployment | Deploy timeline |
+| Deployment status | Deploy success/failure tracking |
+| Installation | Install/uninstall/suspend lifecycle |
+| Installation repositories | Repos added/removed from the install |
+| Issues | Issue-incident correlation |
+| Pull request | Change-gating trigger (`opened`, `synchronize`, `reopened`, `ready_for_review`) |
+| Workflow run | CI/CD pipeline correlation |
+
+For the full click-by-click walkthrough (every form field, secrets setup,
+verification), see the [GitHub App Setup guide](/docs/integrations/github-app).
 
 **Step 2 — Download the private key**: on the App's settings page after
 creation, **Generate a private key** downloads a `.pem` file once. Back
@@ -461,6 +489,13 @@ aws secretsmanager create-secret --name aurora/system/github-app/webhook-secret 
 aws secretsmanager create-secret --name aurora/system/github-app/private-key \
   --secret-string file:///absolute/path/to/app-private-key.pem --region "$AWS_SM_REGION"
 ```
+
+:::warning PEM Key Format
+The `.pem` file is multi-line with `-----BEGIN RSA PRIVATE KEY-----` headers.
+You **must** use `file://` to preserve newlines. Passing the PEM content
+directly as a shell string strips newlines and causes "Could not deserialize
+key data" errors when Aurora tries to sign installation tokens.
+:::
 
 To update a secret that already exists, swap `create-secret` for
 `put-secret-value --secret-id <name> --secret-string … --region "$AWS_SM_REGION"`.
