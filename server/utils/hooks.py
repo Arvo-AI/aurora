@@ -104,11 +104,16 @@ def get_hook(name: str):
     else:
         fn = _HOOK_REGISTRY[name]
 
-    # Wrap in safety net so a broken hook never crashes the caller
+    # Hooks that gate access must fail closed; all others fail open.
+    _fail_closed_hooks = {"verify_entitlement"}
+
     def _safe_hook(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
+            if name in _fail_closed_hooks:
+                logger.error("Hook '%s' raised: %s — failing closed", name, e)
+                return False, "Entitlement verification unavailable"
             logger.error("Hook '%s' raised: %s — failing open", name, e)
             return _HOOK_REGISTRY[name](*args, **kwargs)
 
