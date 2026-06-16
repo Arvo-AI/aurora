@@ -341,8 +341,8 @@ class LLMUsageTracker:
                         "input_tokens": usage.input_tokens,
                         "output_tokens": usage.output_tokens,
                     })
-                except Exception:
-                    pass
+                except Exception as hook_err:
+                    logger.debug("report_usage hook error (non-fatal): %s", hook_err)
 
                 return True
 
