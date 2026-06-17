@@ -129,6 +129,10 @@ class GitHubPRAdapter:
         # investigation (same pattern as the connector clients elsewhere).
         self._session = requests.Session()
 
+    def close(self):
+        """Close the underlying HTTP session to release TCP connections."""
+        self._session.close()
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -172,7 +176,7 @@ class GitHubPRAdapter:
             )
             self._raise_for_status(response, path)
             batch = response.json()
-            if not batch:
+            if not isinstance(batch, list) or not batch:
                 break
             results.extend(batch)
             if len(batch) < _PER_PAGE:

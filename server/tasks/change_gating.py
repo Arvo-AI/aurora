@@ -816,3 +816,4 @@ def _run_investigation(
         # Always remove this attempt's progress comment, on any exit path —
         # return, skip, _PermanentGitHubError, or a retry raised by _gh.
         _clear_progress_comment(adapter, progress_comment_id, log_ctx)
+        adapter.close()

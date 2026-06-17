@@ -255,7 +255,9 @@ def build_review_prompt(
     if prior_findings and not incremental:
         sections.append(
             _RE_REVIEW_APPENDIX.format(
-                prior_findings_json=json.dumps(prior_findings, indent=2)
+                prior_findings_json=_escape_prompt_data(
+                    json.dumps(prior_findings, indent=2)
+                )
             )
         )
     return "\n\n".join(sections)
