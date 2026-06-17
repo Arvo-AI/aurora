@@ -64,8 +64,16 @@ spec:
                 name: {{ include "aurora.secretName.app" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.llm" . }}
-          {{- with .Values.extraEnv }}
           env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:

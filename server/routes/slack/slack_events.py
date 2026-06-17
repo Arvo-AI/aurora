@@ -78,7 +78,11 @@ def slack_events():
 
                 try:
                     # 1. Resolve Identity and Client
+                    import time as _slack_time
+                    _t_slack_start = _slack_time.perf_counter()
                     user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+                    _t_identity = (_slack_time.perf_counter() - _t_slack_start) * 1000
+                    logger.info(f"[LATENCY] Slack identity resolution took {_t_identity:.1f} ms (user_id={user_id})")
                     
                     if user_id:
                         # User is connected and verified
@@ -145,12 +149,17 @@ def slack_events():
                                          final_thread_ts = msg_thread_ts
                                     else:
                                          # New top level - fetch channel context with thread summaries
+                                         _t_ctx = _slack_time.perf_counter()
                                          channel_context = get_channel_context_with_threads(client, channel, limit=5)
+                                         _ctx_ms = (_slack_time.perf_counter() - _t_ctx) * 1000
+                                         logger.info(f"[LATENCY] Slack channel context fetch took {_ctx_ms:.1f} ms")
                                          final_thread_ts = ts
                                     
                                     thinking_ts = sent_msg.get('ts')
                                     
                                     logger.info(f"Processing @Aurora mention in channel {channel}, thread {final_thread_ts}: {text[:100]}")
+                                    _t_total_slack_sync = (_slack_time.perf_counter() - _t_slack_start) * 1000
+                                    logger.info(f"[LATENCY] Slack webhook total sync time before Celery dispatch: {_t_total_slack_sync:.1f} ms")
                                     
                                     send_message_to_aurora(
                                         user_id=user_id,

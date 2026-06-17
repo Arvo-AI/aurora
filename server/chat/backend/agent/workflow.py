@@ -1067,7 +1067,11 @@ class Workflow:
             if not msg_text or is_pr_review:
                 rail_result = InputRailResult(blocked=False)
             else:
+                import time as _rail_time
+                _t_rail_start = _rail_time.perf_counter()
                 rail_result = await check_input(msg_text)
+                _rail_ms = (_rail_time.perf_counter() - _t_rail_start) * 1000
+                logger.info(f"[LATENCY] Guardrails input rail took {_rail_ms:.1f} ms (blocked={rail_result.blocked})")
             if rail_result.blocked:
                 emit_block_event(
                     user_id=getattr(input_state, "user_id", "") or "",

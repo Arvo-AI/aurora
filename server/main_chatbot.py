@@ -331,6 +331,10 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+    import time as _pwa_time
+    _pwa_t0 = _pwa_time.perf_counter()
+    _pwa_first_token_logged = False
+    
     incident_id = incident_id or getattr(state, "incident_id", None)
     curr_node = "START"
     sent_message_count = 0
@@ -605,6 +609,10 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                         if websocket_connected:
                             token_text = event_data  # event_data is the token string
                             if token_text:
+                                if not _pwa_first_token_logged:
+                                    _pwa_first_token_logged = True
+                                    _ttft = (_pwa_time.perf_counter() - _pwa_t0) * 1000
+                                    logger.info(f"[LATENCY] === TIME TO FIRST TOKEN (WebSocket): {_ttft:.1f} ms === session={session_id}")
                                 msg_response = {
                                     "type": "message",
                                     "data": {
@@ -1160,6 +1168,8 @@ async def handle_connection(websocket) -> None:
             # Extract the question from the incoming data
             question = data.get('query')
             
+            import time as _msg_time
+            _msg_t0 = _msg_time.perf_counter()
             logger.info(f"Processing question: {question}")
             
             user_id = data.get('user_id')  # Extract user_id from the incoming data
@@ -1266,6 +1276,8 @@ async def handle_connection(websocket) -> None:
                     "data": {"text": "Missing user_id in the message."}
                 }))
                 continue
+            _auth_ms = (_msg_time.perf_counter() - _msg_t0) * 1000
+            logger.info(f"[LATENCY] Auth + provider resolution took {_auth_ms:.1f} ms")
             logger.info(f"Processing question from user {user_id}: {question}")
             logger.info(f"Using chat session: {session_id} and provider_preference: {provider_preference}")
             
@@ -1509,6 +1521,8 @@ async def handle_connection(websocket) -> None:
             # Generate a temporary session_id if none provided (for new chats)
             effective_session_id = session_id or f"temp_{user_id}_{uuid.uuid4().hex[:8]}"
             wf = Workflow(agent, effective_session_id)
+            _workflow_ms = (_msg_time.perf_counter() - _msg_t0) * 1000
+            logger.info(f"[LATENCY] Message receipt → workflow created: {_workflow_ms:.1f} ms")
             logger.info(f"Created new workflow instance with session_id: {effective_session_id}")
 
 
@@ -1607,6 +1621,9 @@ async def handle_connection(websocket) -> None:
             logger.info(f"Created state with {len(attachments) if attachments else 0} attachments for regular query")
             logger.info(f"WebSocket sender initialized: {websocket_sender is not None}")
 
+            _total_setup_ms = (_msg_time.perf_counter() - _msg_t0) * 1000
+            logger.info(f"[LATENCY] Total message processing (receipt → task dispatch): {_total_setup_ms:.1f} ms")
+
             # Launch workflow processing as async task without blocking
             # Set UI state in workflow before processing so it gets saved
             wf._ui_state = ui_state
@@ -1651,6 +1668,37 @@ async def main():
     WS_PORT = 5006
     HEALTH_PORT = 5007
     logger.info("Starting WebSocket server...")
+
+    # Log environment info for K8s debugging
+    import os as _os
+    logger.info(
+        "[STARTUP] Environment: AURORA_ENV=%s, LLM_PROVIDER_MODE=%s, POSTGRES_HOST=%s, "
+        "REDIS_URL=%s, VAULT_ADDR=%s, AWS_DEFAULT_REGION=%s, POD_NAME=%s, NODE_NAME=%s",
+        _os.getenv("AURORA_ENV", "unset"),
+        _os.getenv("LLM_PROVIDER_MODE", "unset"),
+        _os.getenv("POSTGRES_HOST", "unset"),
+        _os.getenv("REDIS_URL", "unset")[:30] if _os.getenv("REDIS_URL") else "unset",
+        _os.getenv("VAULT_ADDR", "unset"),
+        _os.getenv("AWS_DEFAULT_REGION", "unset"),
+        _os.getenv("POD_NAME", "unset"),
+        _os.getenv("NODE_NAME", "unset"),
+    )
+
+    # DNS and connectivity check for K8s debugging
+    import time as _startup_time
+    _dns_targets = [
+        _os.getenv("POSTGRES_HOST", "postgres"),
+        "vault" if "vault" in (_os.getenv("VAULT_ADDR") or "") else None,
+    ]
+    for host in filter(None, _dns_targets):
+        try:
+            import socket
+            _t_dns = _startup_time.perf_counter()
+            ip = socket.gethostbyname(host)
+            _dns_ms = (_startup_time.perf_counter() - _t_dns) * 1000
+            logger.info(f"[STARTUP] DNS resolution: {host} → {ip} ({_dns_ms:.1f} ms)")
+        except Exception as e:
+            logger.warning(f"[STARTUP] DNS resolution FAILED for {host}: {e}")
 
     # Clean up old terraform files on startup
     cleanup_terraform_directory()

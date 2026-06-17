@@ -138,6 +138,8 @@ class BedrockProvider(BaseLLMProvider):
         kwargs.pop("streaming", None)
 
         logger.info(f"Creating Bedrock (native) chat model: {native_model} (region={self.region})")
+        import time as _br_time
+        _t_br = _br_time.perf_counter()
         config = {
             "model": native_model,
             "temperature": temperature,
@@ -154,7 +156,13 @@ class BedrockProvider(BaseLLMProvider):
             config["credentials_profile_name"] = self.profile
 
         config.update(kwargs)
-        return converse_cls(**config)
+        model_instance = converse_cls(**config)
+        _br_ms = (_br_time.perf_counter() - _t_br) * 1000
+        if _br_ms > 200:
+            logger.warning(f"[LATENCY] Bedrock model instantiation took {_br_ms:.1f} ms (model={native_model}, region={self.region})")
+        else:
+            logger.info(f"[LATENCY] Bedrock model instantiation: {_br_ms:.1f} ms")
+        return model_instance
 
     def is_available(self) -> bool:
         """Available when a gateway URL is set or a native region is resolvable."""
