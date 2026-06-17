@@ -66,6 +66,113 @@ def is_destructive_mcp_tool(tool_name: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# File-size guard for GitHub write MCP tools (issue #521)
+# ---------------------------------------------------------------------------
+# When the LLM's output is silently truncated, create_or_update_file pushes
+# a partial file to GitHub, destroying the original.  The guard rejects
+# writes where the new content is suspiciously small relative to the
+# existing file or exceeds a hard size cap.
+_FILE_SIZE_GUARD_ABS_CAP = 50_000       # reject content > 50 KB outright
+_FILE_SIZE_GUARD_MIN_ORIGINAL = 10_000   # only compare ratio when original > 10 KB
+_FILE_SIZE_GUARD_MIN_RATIO = 0.50        # new must be >= 50% of original
+
+
+def _check_file_size_guard(
+    original_tool_name: str,
+    kwargs: dict,
+    manager: "RealMCPServerManager",
+    run_async,
+) -> str | None:
+    """Return an error string if the write should be blocked, else ``None``.
+
+    For ``create_or_update_file``: if the file already exists on GitHub
+    (``sha`` is present), fetches the current size via ``get_file_contents``.
+    Rejects when the new content is < 50% of the original (and the original
+    exceeds 10 KB) -- the signature of a truncated LLM output.
+
+    For ``push_files``: applies only the absolute 50 KB cap per file entry.
+    """
+    if original_tool_name == "create_or_update_file":
+        content = kwargs.get("content", "")
+        new_size = len(content.encode("utf-8", errors="replace")) if isinstance(content, str) else 0
+
+        # Hard cap
+        if new_size > _FILE_SIZE_GUARD_ABS_CAP:
+            return (
+                f"Blocked: content is {new_size:,} bytes which exceeds the "
+                f"{_FILE_SIZE_GUARD_ABS_CAP:,}-byte safety cap for create_or_update_file. "
+                "Use push_files with git or incremental edits for large files."
+            )
+
+        # Ratio check -- only when updating an existing file (sha present)
+        owner = kwargs.get("owner")
+        repo = kwargs.get("repo")
+        path = kwargs.get("path")
+        branch = kwargs.get("branch")
+        sha = kwargs.get("sha")
+
+        if sha and owner and repo and path:
+            try:
+                get_kwargs: dict = {"owner": owner, "repo": repo, "path": path}
+                if branch:
+                    get_kwargs["branch"] = branch
+                result = run_async(
+                    manager.call_mcp_tool("github", "get_file_contents", get_kwargs)
+                )
+                existing_size = _extract_github_file_size(result)
+                if (
+                    existing_size is not None
+                    and existing_size > _FILE_SIZE_GUARD_MIN_ORIGINAL
+                    and new_size < existing_size * _FILE_SIZE_GUARD_MIN_RATIO
+                ):
+                    return (
+                        f"Blocked: new content ({new_size:,} bytes) is less than "
+                        f"{int(_FILE_SIZE_GUARD_MIN_RATIO * 100)}% of the existing "
+                        f"file ({existing_size:,} bytes).  This looks like a "
+                        "truncated LLM output.  Use incremental (line-level) edits "
+                        "or push_files with the complete file content instead."
+                    )
+            except Exception as exc:
+                logging.warning(
+                    "[FileGuard] Could not fetch existing file for %s/%s/%s -- "
+                    "skipping ratio check: %s", owner, repo, path, exc,
+                )
+
+    elif original_tool_name == "push_files":
+        files = kwargs.get("files") or []
+        for entry in files:
+            if isinstance(entry, dict):
+                content = entry.get("content", "")
+                entry_size = len(content.encode("utf-8", errors="replace")) if isinstance(content, str) else 0
+                if entry_size > _FILE_SIZE_GUARD_ABS_CAP:
+                    return (
+                        f"Blocked: file entry '{entry.get('path', '?')}' is "
+                        f"{entry_size:,} bytes, exceeding the "
+                        f"{_FILE_SIZE_GUARD_ABS_CAP:,}-byte safety cap for push_files. "
+                        "Split large file changes into smaller commits."
+                    )
+
+    return None
+
+
+def _extract_github_file_size(mcp_result: dict | None) -> int | None:
+    """Best-effort extraction of a file's byte size from a ``get_file_contents`` response."""
+    if not mcp_result:
+        return None
+    try:
+        content_items = mcp_result.get("content") or []
+        for item in content_items:
+            if isinstance(item, dict) and "text" in item:
+                import json as _json
+                data = _json.loads(item["text"])
+                if isinstance(data, dict) and "size" in data:
+                    return int(data["size"])
+    except Exception:
+        pass
+    return None
+
+
 def summarize_mcp_tool_action(tool_name: str, kwargs: dict) -> str:
     """Generate a human-readable summary of what the MCP tool will do."""
     action = tool_name.replace("_", " ")
@@ -1320,7 +1427,30 @@ def create_mcp_langchain_tools(real_mcp_tools: List, tool_capture=None, send_too
                     except Exception as confirm_err:
                         logging.warning(f"Failed to get confirmation for {tool_name}: {confirm_err}")
                         # Continue without confirmation if there's an error
-                
+
+                # File-size guard (issue #521) -- reject writes that look like
+                # truncated LLM output before they reach the GitHub Contents API.
+                if server_type == "github" and original_tool_name in (
+                    "create_or_update_file", "push_files",
+                ):
+                    try:
+                        guard_msg = _check_file_size_guard(
+                            original_tool_name, kwargs, _mcp_manager, run_async_in_thread,
+                        )
+                        if guard_msg:
+                            logging.warning("[FileGuard] Blocked %s: %s", original_tool_name, guard_msg)
+                            try:
+                                if send_tool_completion:
+                                    send_tool_completion(tool_name, guard_msg, "blocked", tool_call_id)
+                            except Exception:
+                                pass
+                            return guard_msg
+                    except Exception as guard_exc:
+                        logging.warning(
+                            "[FileGuard] Guard check failed for %s, allowing through: %s",
+                            original_tool_name, guard_exc,
+                        )
+
                 try:
                     # Handle both old 'command' and new 'cli_command' parameters
                     if 'kwargs' in kwargs:
