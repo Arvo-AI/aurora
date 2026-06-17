@@ -55,7 +55,7 @@ def ensure_kcp_properties() -> bool:
         "DATE": DataType.DATE,
     }
 
-    _client, collection = _get_weaviate_client()
+    _, collection = _get_weaviate_client()
 
     existing_config = collection.config.get()
     existing_names = {p.name for p in existing_config.properties}

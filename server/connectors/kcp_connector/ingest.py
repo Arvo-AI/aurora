@@ -96,9 +96,9 @@ def ingest_kcp_manifest(
         try:
             from utils.auth.stateless_auth import get_org_id_for_user
             org_id = get_org_id_for_user(user_id)
-        except Exception:
+        except Exception as e:
             logger.warning(
-                "%s Could not resolve org_id for user %s", _LOG_PREFIX, user_id,
+                "%s Could not resolve org_id for user %s: %s", _LOG_PREFIX, user_id, e,
             )
 
     for unit in manifest.units:
