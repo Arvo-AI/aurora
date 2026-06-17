@@ -981,6 +981,23 @@ from .mcp_tools import (
 
 _NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
 
+# GitHub write MCP tools that MUST be restricted to RCA sessions (issue #522).
+# Non-RCA sessions (interactive chat, ask, actions) should never have these
+# loaded -- they bypass ModeAccessController (which only gates "ask" mode) and
+# can push destructive changes without the structured github_fix guardrails.
+# Tool names match the StructuredTool naming: "mcp_{original_tool_name}".
+_GITHUB_MCP_WRITE_TOOLS = frozenset({
+    "mcp_create_or_update_file",
+    "mcp_push_files",
+    "mcp_create_branch",
+    "mcp_create_pull_request",
+    "mcp_merge_pull_request",
+    "mcp_delete_file",
+    "mcp_create_repository",
+    "mcp_fork_repository",
+    "mcp_update_pull_request_branch",
+})
+
 
 def _is_background_rca(state_context, is_background: bool) -> bool:
     """True when the session is a background RCA investigating a real incident.
@@ -2560,13 +2577,31 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         
         if real_mcp_tools:
             mcp_tools = create_mcp_langchain_tools(
-                real_mcp_tools, 
+                real_mcp_tools,
                 tool_capture=tool_capture,
                 send_tool_start=send_tool_start,
                 send_tool_completion=send_tool_completion,
                 send_tool_error=send_tool_error,
                 run_async_in_thread=run_async_in_thread
             )
+
+            # Issue #522: strip GitHub write MCP tools from non-RCA sessions.
+            # RCA sessions use the structured github_fix -> github_apply_fix
+            # flow with line-level edits.  Non-RCA sessions must not have raw
+            # write tools that bypass ModeAccessController and github_fix.
+            if not is_rca_context:
+                before_count = len(mcp_tools)
+                mcp_tools = [
+                    t for t in mcp_tools
+                    if getattr(t, "name", "") not in _GITHUB_MCP_WRITE_TOOLS
+                ]
+                dropped = before_count - len(mcp_tools)
+                if dropped:
+                    logging.info(
+                        "Stripped %d GitHub write MCP tools from non-RCA session (user=%s)",
+                        dropped, user_id,
+                    )
+
             tools.extend(mcp_tools)
             logging.info(f"Added {len(mcp_tools)} MCP tools for user {user_id}")
         else:
