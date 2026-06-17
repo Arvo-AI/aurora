@@ -39,9 +39,16 @@ spec:
             - -c
             - |
               echo "Waiting for t2v-transformers to be ready..."
-              until wget -qO- http://{{ include "aurora.fullname" . }}-t2v-transformers:8080/.well-known/ready > /dev/null 2>&1; do
+              max_attempts=60
+              attempt=1
+              until wget -q -T 3 -t 1 -O- http://{{ include "aurora.fullname" . }}-t2v-transformers:8080/.well-known/ready > /dev/null 2>&1; do
+                if [ "$attempt" -ge "$max_attempts" ]; then
+                  echo "t2v-transformers did not become ready after ${max_attempts} attempts"
+                  exit 1
+                fi
                 echo "t2v-transformers not ready yet, retrying in 5s..."
                 sleep 5
+                attempt=$((attempt + 1))
               done
               echo "t2v-transformers is ready."
       containers:
