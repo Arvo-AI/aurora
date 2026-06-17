@@ -260,12 +260,6 @@ export default function GitHubProviderIntegration() {
 
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
-  const [isLoadingInstallations, setIsLoadingInstallations] = useState(false);
-  // True once the first installations fetch has resolved. The loading skeleton
-  // is shown only before this flips — otherwise an OAuth-connected user (who
-  // has no App installations) sees the "Connected GitHub Installations"
-  // skeleton flash on every window focus/visibility refetch.
-  const [installationsLoaded, setInstallationsLoaded] = useState(false);
   const [installationFilter, setInstallationFilter] = useState<string>('all');
 
   // App installations that exist on GitHub but aren't linked to this Aurora
@@ -300,15 +294,10 @@ export default function GitHubProviderIntegration() {
   }, []);
 
   const fetchInstallations = useCallback(async () => {
-    setIsLoadingInstallations(true);
     try {
       const data = await GitHubAppService.listInstallations();
       const linked = data.installations || [];
       setInstallations(linked);
-      // If the user has no linked installs but the App exists on GitHub
-      // for some account (left over from a previous install or another
-      // session), surface those for explicit claim. Cleared once any
-      // install is linked.
       if (linked.length === 0 && authConfig.app_enabled) {
         try {
           const discovered = await GitHubAppService.discoverInstallations();
@@ -320,7 +309,6 @@ export default function GitHubProviderIntegration() {
         setDiscoveredInstallations([]);
       }
     } catch { setInstallations([]); }
-    finally { setIsLoadingInstallations(false); setInstallationsLoaded(true); }
   }, [authConfig.app_enabled]);
 
   const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
@@ -707,9 +695,6 @@ export default function GitHubProviderIntegration() {
       setHasLoadedRepos(false);
       setExpanded(false);
       setInstallations([]);
-      // Reset so a genuine App reconnect in this session shows the loading
-      // skeleton again (it's only suppressed AFTER the first load completes).
-      setInstallationsLoaded(false);
       setGithubConnectedOptimistically(false);
       githubStatus.refresh();
       window.dispatchEvent(new CustomEvent('providerStateChanged'));
@@ -1005,28 +990,10 @@ export default function GitHubProviderIntegration() {
       {/* Expanded content */}
       {expanded && githubStatus.isAuthenticated && (
         <div className="ml-6 border-l-2 border-muted pl-6 mt-2 space-y-3">
-          {/* GitHub App installations (rendered only when at least one exists, or
-              while the FIRST load is still in flight — never re-flash the skeleton
-              on refetch for OAuth users who have no App installations). */}
-          {(installations.length > 0 || (isLoadingInstallations && !installationsLoaded)) && (
+          {installations.length > 0 && (
             <div className="space-y-2" data-testid="installations-section">
               <p className="text-sm font-medium text-muted-foreground">Connected GitHub Installations</p>
-              {isLoadingInstallations && !installationsLoaded ? (
-                <div className="space-y-2" data-testid="installations-skeleton">
-                  {[0, 1].map(i => (
-                    <div key={i} className="p-3 rounded-md border border-border animate-pulse">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
-                        <div className="flex-1 space-y-2">
-                          <div className="h-3 w-32 bg-muted rounded" />
-                          <div className="h-3 w-48 bg-muted rounded" />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                installations.map(installation => (
+              {installations.map(installation => (
                   <div
                     key={installation.installation_id}
                     className="p-3 rounded-md border border-border"
@@ -1082,8 +1049,7 @@ export default function GitHubProviderIntegration() {
                       </div>
                     </div>
                   </div>
-                ))
-              )}
+                ))}
             </div>
           )}
 
