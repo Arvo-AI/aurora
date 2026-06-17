@@ -86,7 +86,10 @@ def slack_events():
                     
                     if user_id:
                         # User is connected and verified
+                        _t_client = _slack_time.perf_counter()
                         client = get_slack_client_for_user(user_id)
+                        _client_ms = (_slack_time.perf_counter() - _t_client) * 1000
+                        logger.info(f"[LATENCY] get_slack_client_for_user took {_client_ms:.1f} ms")
                         if not client:
                             logger.error(f"Failed to create client for user {user_id}")
                     else:
@@ -124,11 +127,15 @@ def slack_events():
                     if client:
                         if response_text:
                             try:
+                                _t_thinking = _slack_time.perf_counter()
                                 sent_msg = client.send_message(
                                     channel=channel, 
                                     text=response_text, 
                                     thread_ts=thread_ts
                                 )
+                                _thinking_ms = (_slack_time.perf_counter() - _t_thinking) * 1000
+                                if trigger_background:
+                                    logger.info(f"[LATENCY] Slack 'Thinking...' message send took {_thinking_ms:.1f} ms")
                                 
                                 if trigger_background and sent_msg:
                                     # Proceed with background task
@@ -161,6 +168,9 @@ def slack_events():
                                     _t_total_slack_sync = (_slack_time.perf_counter() - _t_slack_start) * 1000
                                     logger.info(f"[LATENCY] Slack webhook total sync time before Celery dispatch: {_t_total_slack_sync:.1f} ms")
                                     
+                                    # Pass wall-clock timestamp so Celery worker can measure queue wait
+                                    _dispatch_ts = _slack_time.time()
+                                    
                                     send_message_to_aurora(
                                         user_id=user_id,
                                         message_text=text,
@@ -170,7 +180,8 @@ def slack_events():
                                         session_id=session_id,
                                         context_messages=context_messages,
                                         channel_context=channel_context,
-                                        thinking_message_ts=thinking_ts
+                                        thinking_message_ts=thinking_ts,
+                                        dispatch_ts=_dispatch_ts
                                     )
                             except Exception as e:
                                 logger.error(f"Failed to send message to Slack: {e}")

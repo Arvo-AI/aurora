@@ -455,6 +455,16 @@ def run_background_chat(
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
+    # Track overall task timing and queue wait for Slack messages
+    import time as _task_time
+    _task_t0 = _task_time.perf_counter()
+    _task_timings = {}
+    
+    if trigger_metadata and trigger_metadata.get('dispatch_ts'):
+        _queue_wait_ms = (_task_time.time() - trigger_metadata['dispatch_ts']) * 1000
+        _task_timings['queue_wait'] = _queue_wait_ms
+        logger.info(f"[LATENCY] Celery queue wait (dispatch → task start): {_queue_wait_ms:.1f} ms")
+
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
     if os.environ.get("DISPLAY__RCA_USER_MSG", "").lower() in ("1", "true", "yes"):
@@ -653,6 +663,7 @@ def run_background_chat(
 
         # Run the async workflow in the sync Celery context
         logger.info(f"[BackgroundChat] Starting workflow execution for session {session_id}, incident {incident_id}")
+        _t_workflow = _task_time.perf_counter()
         try:
             result = asyncio.run(_execute_background_chat(
                 user_id=user_id,
@@ -667,6 +678,10 @@ def run_background_chat(
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
+        
+        _workflow_ms = (_task_time.perf_counter() - _t_workflow) * 1000
+        _task_timings['workflow'] = _workflow_ms
+        logger.info(f"[LATENCY] Workflow execution (agent init + LLM + streaming) took {_workflow_ms:.1f} ms")
         
         completed_successfully = True
         logger.info(f"[BackgroundChat] Workflow execution completed for session {session_id}")
@@ -781,7 +796,11 @@ def run_background_chat(
         # Send response back to Slack if this was triggered from Slack
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
             try:
+                _t_slack_send = _task_time.perf_counter()
                 _send_response_to_slack(user_id, session_id, trigger_metadata)
+                _slack_send_ms = (_task_time.perf_counter() - _t_slack_send) * 1000
+                _task_timings['slack_send'] = _slack_send_ms
+                logger.info(f"[LATENCY] _send_response_to_slack took {_slack_send_ms:.1f} ms")
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
         
@@ -827,6 +846,17 @@ def run_background_chat(
                 logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
+        
+        # Emit end-to-end summary for Slack-triggered tasks
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+            _total_task_ms = (_task_time.perf_counter() - _task_t0) * 1000
+            _task_timings['total'] = _total_task_ms
+            _parts = [f"total={_total_task_ms:.0f}ms"]
+            for k in ('queue_wait', 'workflow', 'slack_send'):
+                if k in _task_timings:
+                    _parts.append(f"{k}={_task_timings[k]:.0f}ms")
+            logger.info(f"[LATENCY] === SLACK E2E: {' '.join(_parts)} === session={session_id}")
+        
         return result
     
     except SoftTimeLimitExceeded:
@@ -1260,6 +1290,9 @@ async def _execute_background_chat(
     weaviate_client = None
     
     try:
+        import time as _exec_time
+        _t_agent_init = _exec_time.perf_counter()
+        
         # Initialize clients (same as handle_connection in main_chatbot.py)
         postgres_client = PostgreSQLClient()
         weaviate_client = WeaviateClient(postgres_client)
@@ -1284,12 +1317,18 @@ async def _execute_background_chat(
         wf = Workflow(agent, session_id)
         logger.info(f"[BackgroundChat] Created workflow for session {session_id}")
         
+        _agent_init_ms = (_exec_time.perf_counter() - _t_agent_init) * 1000
+        logger.info(f"[LATENCY] Agent + Workflow creation took {_agent_init_ms:.1f} ms")
+        
         # Build RCA context for system prompt (NOT added to user message)
+        _t_rca_ctx = _exec_time.perf_counter()
         rca_context = _build_rca_context(
             user_id=user_id,
             trigger_metadata=trigger_metadata,
             provider_preference=provider_preference,
         )
+        _rca_ctx_ms = (_exec_time.perf_counter() - _t_rca_ctx) * 1000
+        logger.info(f"[LATENCY] _build_rca_context took {_rca_ctx_ms:.1f} ms")
         if rca_context:
             logger.info(f"[BackgroundChat] Built RCA context: source={rca_context.get('source')}, providers={rca_context.get('providers')}")
 
@@ -1357,6 +1396,7 @@ async def _execute_background_chat(
         # Use centralized model configuration for RCA with provider mode awareness
         _is_pr_review = _tm_source == "change_gating"
 
+        _t_state = _exec_time.perf_counter()
         state = State(
             user_id=user_id,
             session_id=session_id,
@@ -1390,6 +1430,8 @@ async def _execute_background_chat(
             workflow=wf,  # Pass workflow so RCA context updates can be injected
         )
         logger.info(f"[BackgroundChat] Set user context with mode={mode}, incident_id={incident_id}")
+        _state_ms = (_exec_time.perf_counter() - _t_state) * 1000
+        logger.info(f"[LATENCY] State creation + set_user_context took {_state_ms:.1f} ms")
         
         # Set UI state (preserve triggerMetadata so it persists when workflow saves)
         wf._ui_state = {
@@ -1402,7 +1444,10 @@ async def _execute_background_chat(
             wf._ui_state["triggerMetadata"] = trigger_metadata
         
         # Run the workflow - this is the same function used by regular chats
+        _t_process = _exec_time.perf_counter()
         await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
+        _process_ms = (_exec_time.perf_counter() - _t_process) * 1000
+        logger.info(f"[LATENCY] process_workflow_async (guardrails + tools + LLM) took {_process_ms:.1f} ms")
         
         # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
         # The workflow stream might complete, but tool calls could still be running
