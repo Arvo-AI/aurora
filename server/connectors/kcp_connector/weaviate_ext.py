@@ -144,10 +144,10 @@ def insert_chunks_with_metadata(
                 batch.add_object(properties=properties, uuid=uuid)
                 success_count += 1
 
-            except Exception as e:
-                logger.error(
-                    "[KCP Weaviate] Error adding chunk %s: %s",
-                    chunk.get("chunk_index", "?"), e,
+            except Exception:
+                logger.exception(
+                    "[KCP Weaviate] Error adding chunk %s",
+                    chunk.get("chunk_index", "?"),
                 )
 
     # Report batch failures

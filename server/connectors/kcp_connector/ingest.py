@@ -102,84 +102,7 @@ def ingest_kcp_manifest(
             )
 
     for unit in manifest.units:
-        if not unit.resolved_path:
-            msg = f"Unit '{unit.id}': content file not found ({unit.path})"
-            result.errors.append(msg)
-            result.units_skipped += 1
-            logger.warning("%s %s", _LOG_PREFIX, msg)
-            continue
-
-        try:
-            content_bytes = unit.resolved_path.read_bytes()
-        except Exception as e:
-            msg = f"Unit '{unit.id}': failed to read {unit.resolved_path}: {e}"
-            result.errors.append(msg)
-            result.units_skipped += 1
-            logger.error("%s %s", _LOG_PREFIX, msg)
-            continue
-
-        if not content_bytes.strip():
-            msg = f"Unit '{unit.id}': content file is empty"
-            result.errors.append(msg)
-            result.units_skipped += 1
-            logger.warning("%s %s", _LOG_PREFIX, msg)
-            continue
-
-        # Stable document ID derived from project + unit ID so
-        # re-ingesting the same manifest replaces rather than duplicates.
-        doc_id = str(
-            uuid.uuid5(uuid.NAMESPACE_URL, f"kcp:{result.project}:{unit.id}")
-        )
-
-        file_type = _kcp_format_to_aurora_type(unit.format, unit.path)
-
-        logger.info(
-            "%s Processing unit '%s' (%s, %d bytes, type=%s)",
-            _LOG_PREFIX, unit.id, unit.path, len(content_bytes), file_type,
-        )
-
-        if dry_run:
-            result.units_ingested += 1
-            logger.info("%s [dry-run] Would ingest unit '%s'", _LOG_PREFIX, unit.id)
-            continue
-
-        try:
-            chunks = _chunk_unit(user_id, doc_id, unit.path, content_bytes, file_type)
-        except Exception as e:
-            msg = f"Unit '{unit.id}': chunking failed: {e}"
-            result.errors.append(msg)
-            result.units_skipped += 1
-            logger.error("%s %s", _LOG_PREFIX, msg)
-            continue
-
-        if not chunks:
-            msg = f"Unit '{unit.id}': no chunks produced"
-            result.errors.append(msg)
-            result.units_skipped += 1
-            logger.warning("%s %s", _LOG_PREFIX, msg)
-            continue
-
-        # Inject KCP metadata into each chunk's properties
-        _enrich_chunks_with_kcp_metadata(chunks, unit, manifest)
-
-        try:
-            inserted = _upload_chunks(
-                user_id=user_id,
-                document_id=doc_id,
-                source_filename=unit.path,
-                chunks=chunks,
-                org_id=org_id,
-            )
-            result.total_chunks += inserted
-            result.units_ingested += 1
-            logger.info(
-                "%s Unit '%s': inserted %d chunks", _LOG_PREFIX, unit.id, inserted,
-            )
-        except Exception as e:
-            msg = f"Unit '{unit.id}': Weaviate upload failed: {e}"
-            result.errors.append(msg)
-            result.units_skipped += 1
-            logger.error("%s %s", _LOG_PREFIX, msg)
+        _ingest_unit(unit, manifest, result.project, user_id, org_id, dry_run, result)
 
     logger.info(
         "%s Finished: %d/%d units ingested, %d chunks total, %d errors",
@@ -195,6 +118,92 @@ def ingest_kcp_manifest(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _ingest_unit(
+    unit,
+    manifest,
+    project: str,
+    user_id: str,
+    org_id: Optional[str],
+    dry_run: bool,
+    result: IngestResult,
+) -> None:
+    """Process a single KCP unit and update *result* in place."""
+    if not unit.resolved_path:
+        msg = f"Unit '{unit.id}': content file not found ({unit.path})"
+        result.errors.append(msg)
+        result.units_skipped += 1
+        logger.warning("%s %s", _LOG_PREFIX, msg)
+        return
+
+    try:
+        content_bytes = unit.resolved_path.read_bytes()
+    except Exception as e:
+        msg = f"Unit '{unit.id}': failed to read {unit.resolved_path}: {e}"
+        result.errors.append(msg)
+        result.units_skipped += 1
+        logger.error("%s %s", _LOG_PREFIX, msg)
+        return
+
+    if not content_bytes.strip():
+        msg = f"Unit '{unit.id}': content file is empty"
+        result.errors.append(msg)
+        result.units_skipped += 1
+        logger.warning("%s %s", _LOG_PREFIX, msg)
+        return
+
+    # Stable document ID derived from project + unit ID so
+    # re-ingesting the same manifest replaces rather than duplicates.
+    doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"kcp:{project}:{unit.id}"))
+    file_type = _kcp_format_to_aurora_type(unit.format, unit.path)
+
+    logger.info(
+        "%s Processing unit '%s' (%s, %d bytes, type=%s)",
+        _LOG_PREFIX, unit.id, unit.path, len(content_bytes), file_type,
+    )
+
+    if dry_run:
+        result.units_ingested += 1
+        logger.info("%s [dry-run] Would ingest unit '%s'", _LOG_PREFIX, unit.id)
+        return
+
+    try:
+        chunks = _chunk_unit(user_id, doc_id, unit.path, content_bytes, file_type)
+    except Exception as e:
+        msg = f"Unit '{unit.id}': chunking failed: {e}"
+        result.errors.append(msg)
+        result.units_skipped += 1
+        logger.error("%s %s", _LOG_PREFIX, msg)
+        return
+
+    if not chunks:
+        msg = f"Unit '{unit.id}': no chunks produced"
+        result.errors.append(msg)
+        result.units_skipped += 1
+        logger.warning("%s %s", _LOG_PREFIX, msg)
+        return
+
+    _enrich_chunks_with_kcp_metadata(chunks, unit, manifest)
+
+    try:
+        inserted = _upload_chunks(
+            user_id=user_id,
+            document_id=doc_id,
+            source_filename=unit.path,
+            chunks=chunks,
+            org_id=org_id,
+        )
+        result.total_chunks += inserted
+        result.units_ingested += 1
+        logger.info(
+            "%s Unit '%s': inserted %d chunks", _LOG_PREFIX, unit.id, inserted,
+        )
+    except Exception as e:
+        msg = f"Unit '{unit.id}': Weaviate upload failed: {e}"
+        result.errors.append(msg)
+        result.units_skipped += 1
+        logger.error("%s %s", _LOG_PREFIX, msg)
+
 
 def _kcp_format_to_aurora_type(kcp_format: str, path: str) -> str:
     """Map KCP ``format`` field to Aurora's file_type enum."""
