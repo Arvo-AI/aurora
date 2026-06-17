@@ -12,7 +12,7 @@ it enqueues :func:`investigate_pr`. The task:
    ``services.change_gating.github_adapter.GitHubPRAdapter``.
 4. Runs a full agentic investigation through the existing
    ``run_background_chat`` task — SYNCHRONOUSLY via ``.apply()`` so this
-   task owns the whole review lifecycle — with write/exec tools denylisted.
+   task owns the whole review lifecycle — in read-only ``mode="ask"``.
 5. Parses the agent's final message as a verdict JSON and posts a GitHub
    PR review: APPROVE when SAFE, COMMENT with inline findings when RISKY.
 
@@ -255,8 +255,8 @@ def _read_final_assistant_message(user_id: str, session_id: str) -> Optional[str
     name="tasks.change_gating.investigate_pr",
     max_retries=2,
     default_retry_delay=60,
-    time_limit=2700,
-    soft_time_limit=2640,
+    time_limit=900,
+    soft_time_limit=840,
 )
 def investigate_pr(
     self,
@@ -443,7 +443,6 @@ def _run_investigation(
         parse_diff_hunks,
     )
     from services.change_gating.verdict import (
-        CHANGE_GATING_TOOL_DENYLIST,
         build_review_prompt,
         extract_verdict_with_llm,
         finding_fingerprint,
@@ -546,7 +545,6 @@ def _run_investigation(
                     "send_notifications": False,
                     "mode": "ask",
                     "rail_text": rail_text,
-                    "tool_denylist": list(CHANGE_GATING_TOOL_DENYLIST),
                 }
             ).result
 
@@ -572,7 +570,19 @@ def _run_investigation(
             final_text = _read_final_assistant_message(user_id, session_id)
             verdict = None
             if final_text:
-                verdict = parse_verdict(final_text) or extract_verdict_with_llm(final_text)
+                verdict = parse_verdict(final_text)
+                if verdict:
+                    logger.info(
+                        "change_gating=investigate_pr %s verdict_source=parse_verdict",
+                        log_ctx,
+                    )
+                else:
+                    verdict = extract_verdict_with_llm(final_text)
+                    if verdict:
+                        logger.warning(
+                            "change_gating=investigate_pr %s verdict_source=llm_extraction_fallback",
+                            log_ctx,
+                        )
             if not verdict:
                 logger.error(
                     "change_gating=investigate_pr %s session_id=%s status=verdict_parse_failed "

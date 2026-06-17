@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 from services.change_gating.github_adapter import decode_marker
 from services.change_gating.verdict import (
-    CHANGE_GATING_TOOL_DENYLIST,
     build_review_prompt,
     extract_inline_fingerprint,
     extract_verdict_with_llm,
@@ -369,38 +368,6 @@ class TestBuildReviewPrompt:
     def test_incremental_note_absent_by_default(self):
         prompt = build_review_prompt("acme/widgets", self.PR, self.FILES, "+x")
         assert "INCREMENTAL REVIEW:" not in prompt
-
-
-class TestToolDenylist:
-    def test_sorted_and_contains_core_exclusions(self):
-        assert CHANGE_GATING_TOOL_DENYLIST == sorted(CHANGE_GATING_TOOL_DENYLIST)
-        for tool in (
-            "terminal_exec",
-            "cloud_exec",
-            "tailscale_ssh",
-            "on_prem_kubectl",
-            "github_fix",
-            "github_commit",
-            "write_artifact",
-            "save_postmortem",
-            "trigger_rca",
-            "trigger_action",
-            "iac_tool",
-        ):
-            assert tool in CHANGE_GATING_TOOL_DENYLIST
-
-    def test_read_only_tools_not_denylisted(self):
-        for tool in (
-            "github_rca",
-            "get_connected_repos",
-            "query_datadog",
-            "search_splunk",
-            "get_postmortem",
-            "list_artifacts",
-            "read_artifact",
-            "list_slack_channels",
-        ):
-            assert tool not in CHANGE_GATING_TOOL_DENYLIST
 
 
 class TestExtractVerdictWithLlm:

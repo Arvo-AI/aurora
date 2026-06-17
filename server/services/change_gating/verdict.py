@@ -20,49 +20,6 @@ from services.change_gating.github_adapter import encode_marker
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Tool denylist
-# ---------------------------------------------------------------------------
-
-# Tools the PR review agent must NOT get (design doc section 5.1): anything
-# that writes, mutates, executes commands, or triggers actions. Read-only
-# investigative tools (github_rca, query_datadog, search_splunk, Slack reads,
-# get_postmortem, list/read_artifact, etc.) stay available. Every name below
-# is a registered StructuredTool name from get_cloud_tools().
-#
-# Beyond the doc's explicit list, this also excludes:
-# - gitlab: single mixed tool whose actions include apply_fix, push_files,
-#   create_merge_request, delete_branch — cannot be filtered per-action.
-# - bitbucket_fix: Bitbucket analogue of github_fix (RCA-only fix writer).
-# - cloudflare_action: explicit remediation/write tool (purge cache, DNS
-#   updates, firewall toggles).
-# - jira_* write tools: create/update/link issues and add comments mutate
-#   an external system (same intent as excluding notion_create_action_items).
-CHANGE_GATING_TOOL_DENYLIST = [
-    "analyze_zip_file",
-    "bitbucket_fix",
-    "cloud_exec",
-    "cloudflare_action",
-    "github_commit",
-    "github_fix",
-    "gitlab",
-    "iac_tool",
-    "jira_add_comment",
-    "jira_create_issue",
-    "jira_link_issues",
-    "jira_update_issue",
-    "notion_create_action_items",
-    "notion_export_postmortem",
-    "on_prem_kubectl",
-    "rag_index_zip",
-    "save_postmortem",
-    "sharepoint_create_page",
-    "tailscale_ssh",
-    "terminal_exec",
-    "trigger_action",
-    "trigger_rca",
-    "write_artifact",
-]
-
 # ---------------------------------------------------------------------------
 # Agent prompt
 # ---------------------------------------------------------------------------
