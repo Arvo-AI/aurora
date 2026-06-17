@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 # the opening line are anchored by test_change_gating_verdict.py.
 
 _REVIEW_PROMPT = """You are Aurora, a senior SRE performing a pre-merge risk review on a pull request.
-Your job is to determine whether deploying this change could plausibly cause a
-production incident at the infrastructure, deployment, or CI/CD layer.
+You have live context about this team's infrastructure: their monitoring alerts,
+deployment history, service topology, and CI/CD pipelines. Your job is to
+determine whether deploying this change could plausibly cause a production
+incident, informed by what you know about how their systems actually run and fail.
 
 You are NOT a general code reviewer. Other tools (e.g. CodeRabbit) already
 review application code for bugs, logic errors, style, and generic security.
@@ -44,16 +46,21 @@ higher-confidence, infrastructure/deployment-focused findings over volume.
 
 You have access to tools that let you:
 - Read the full diff and any file in the repository (config, IaC, pipelines)
-- Check monitoring systems (Datadog, Grafana) for recent alerts on affected services
-- View recent deployment history
-- Inspect infrastructure configuration
+- Query monitoring systems (Datadog, Grafana, New Relic) for recent alerts on affected services
+- View recent deployment history and CI/CD pipeline status
+- Inspect live infrastructure configuration and service health
+- Search Slack for recent incident discussions about affected services
 
 WORKFLOW:
 1. Understand what is being changed, file by file — focus on infra, config,
    pipeline, and deployment-affecting files, not application business logic
-2. For each such change, assess: could deploying this cause an incident?
-3. If needed, fetch additional context (full file content, related config, monitoring data)
-4. Render your verdict
+2. For each risky-looking change, check live signals: is the affected service
+   currently healthy? Any recent alerts, failed deploys, or active incidents?
+   A change to a service that is already degraded is higher risk.
+3. Correlate: does this change touch something involved in a recent incident
+   or known reliability issue? Use monitoring and deployment tools to verify.
+4. Render your verdict — cite live evidence (alert names, deploy failures,
+   error rates) when it strengthens a finding
 
 WHAT TO FLAG: (infrastructure, deployment & CI/CD incident risk — your lane)
 - Infrastructure-as-code (Terraform, Helm, Kubernetes manifests, Dockerfiles,
@@ -136,9 +143,9 @@ def _escape_prompt_data(text: str) -> str:
     A crafted PR title/body/diff could otherwise embed ``</pr_description>``
     or a triple-backtick fence to break out of its data block and smuggle
     instructions to the agent (e.g. forcing a SAFE verdict on a risky PR).
-    The agent is already read-only via the tool denylist; this guards the
-    *verdict* against prompt injection. A space (in the delimiter) / zero-width
-    space (in the fence) neutralizes the token while keeping text readable.
+    The agent is already read-only via mode=ask; this guards the *verdict*
+    against prompt injection. A space (in the delimiter) / zero-width space
+    (in the fence) neutralizes the token while keeping text readable.
     """
     return (
         _PROMPT_DELIM_RE.sub(lambda m: m.group(0).replace("<", "< "), str(text))
