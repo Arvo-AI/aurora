@@ -84,75 +84,87 @@ def _check_file_size_guard(
     manager: "RealMCPServerManager",
     run_async,
 ) -> str | None:
-    """Return an error string if the write should be blocked, else ``None``.
-
-    For ``create_or_update_file``: if the file already exists on GitHub
-    (``sha`` is present), fetches the current size via ``get_file_contents``.
-    Rejects when the new content is < 50% of the original (and the original
-    exceeds 10 KB) -- the signature of a truncated LLM output.
-
-    For ``push_files``: applies only the absolute 50 KB cap per file entry.
-    """
+    """Return an error string if the write should be blocked, else ``None``."""
     if original_tool_name == "create_or_update_file":
-        content = kwargs.get("content", "")
-        new_size = len(content.encode("utf-8", errors="replace")) if isinstance(content, str) else 0
+        return _guard_create_or_update_file(kwargs, manager, run_async)
+    if original_tool_name == "push_files":
+        return _guard_push_files(kwargs)
+    return None
 
-        # Hard cap
-        if new_size > _FILE_SIZE_GUARD_ABS_CAP:
+
+def _guard_create_or_update_file(
+    kwargs: dict,
+    manager: "RealMCPServerManager",
+    run_async,
+) -> str | None:
+    """Size guard for ``create_or_update_file``.
+
+    Applies the absolute cap and, when updating an existing file (``sha``
+    is present), checks that the new content is not suspiciously smaller
+    than the existing file (truncated LLM output heuristic).
+    """
+    content = kwargs.get("content", "")
+    new_size = len(content.encode("utf-8", errors="replace")) if isinstance(content, str) else 0
+
+    if new_size > _FILE_SIZE_GUARD_ABS_CAP:
+        return (
+            f"Blocked: content is {new_size:,} bytes which exceeds the "
+            f"{_FILE_SIZE_GUARD_ABS_CAP:,}-byte safety cap for create_or_update_file. "
+            "Use push_files with git or incremental edits for large files."
+        )
+
+    owner = kwargs.get("owner")
+    repo = kwargs.get("repo")
+    path = kwargs.get("path")
+    branch = kwargs.get("branch")
+    sha = kwargs.get("sha")
+
+    if not (sha and owner and repo and path):
+        return None
+
+    try:
+        get_kwargs: dict = {"owner": owner, "repo": repo, "path": path}
+        if branch:
+            get_kwargs["branch"] = branch
+        result = run_async(
+            manager.call_mcp_tool("github", "get_file_contents", get_kwargs)
+        )
+        existing_size = _extract_github_file_size(result)
+        if (
+            existing_size is not None
+            and existing_size > _FILE_SIZE_GUARD_MIN_ORIGINAL
+            and new_size < existing_size * _FILE_SIZE_GUARD_MIN_RATIO
+        ):
             return (
-                f"Blocked: content is {new_size:,} bytes which exceeds the "
-                f"{_FILE_SIZE_GUARD_ABS_CAP:,}-byte safety cap for create_or_update_file. "
-                "Use push_files with git or incremental edits for large files."
+                f"Blocked: new content ({new_size:,} bytes) is less than "
+                f"{int(_FILE_SIZE_GUARD_MIN_RATIO * 100)}% of the existing "
+                f"file ({existing_size:,} bytes).  This looks like a "
+                "truncated LLM output.  Use incremental (line-level) edits "
+                "or push_files with the complete file content instead."
             )
+    except Exception as exc:
+        logging.warning(
+            "[FileGuard] Could not fetch existing file for %s/%s/%s -- "
+            "skipping ratio check: %s", owner, repo, path, exc,
+        )
 
-        # Ratio check -- only when updating an existing file (sha present)
-        owner = kwargs.get("owner")
-        repo = kwargs.get("repo")
-        path = kwargs.get("path")
-        branch = kwargs.get("branch")
-        sha = kwargs.get("sha")
+    return None
 
-        if sha and owner and repo and path:
-            try:
-                get_kwargs: dict = {"owner": owner, "repo": repo, "path": path}
-                if branch:
-                    get_kwargs["branch"] = branch
-                result = run_async(
-                    manager.call_mcp_tool("github", "get_file_contents", get_kwargs)
+
+def _guard_push_files(kwargs: dict) -> str | None:
+    """Size guard for ``push_files``: absolute cap per file entry."""
+    files = kwargs.get("files") or []
+    for entry in files:
+        if isinstance(entry, dict):
+            content = entry.get("content", "")
+            entry_size = len(content.encode("utf-8", errors="replace")) if isinstance(content, str) else 0
+            if entry_size > _FILE_SIZE_GUARD_ABS_CAP:
+                return (
+                    f"Blocked: file entry '{entry.get('path', '?')}' is "
+                    f"{entry_size:,} bytes, exceeding the "
+                    f"{_FILE_SIZE_GUARD_ABS_CAP:,}-byte safety cap for push_files. "
+                    "Split large file changes into smaller commits."
                 )
-                existing_size = _extract_github_file_size(result)
-                if (
-                    existing_size is not None
-                    and existing_size > _FILE_SIZE_GUARD_MIN_ORIGINAL
-                    and new_size < existing_size * _FILE_SIZE_GUARD_MIN_RATIO
-                ):
-                    return (
-                        f"Blocked: new content ({new_size:,} bytes) is less than "
-                        f"{int(_FILE_SIZE_GUARD_MIN_RATIO * 100)}% of the existing "
-                        f"file ({existing_size:,} bytes).  This looks like a "
-                        "truncated LLM output.  Use incremental (line-level) edits "
-                        "or push_files with the complete file content instead."
-                    )
-            except Exception as exc:
-                logging.warning(
-                    "[FileGuard] Could not fetch existing file for %s/%s/%s -- "
-                    "skipping ratio check: %s", owner, repo, path, exc,
-                )
-
-    elif original_tool_name == "push_files":
-        files = kwargs.get("files") or []
-        for entry in files:
-            if isinstance(entry, dict):
-                content = entry.get("content", "")
-                entry_size = len(content.encode("utf-8", errors="replace")) if isinstance(content, str) else 0
-                if entry_size > _FILE_SIZE_GUARD_ABS_CAP:
-                    return (
-                        f"Blocked: file entry '{entry.get('path', '?')}' is "
-                        f"{entry_size:,} bytes, exceeding the "
-                        f"{_FILE_SIZE_GUARD_ABS_CAP:,}-byte safety cap for push_files. "
-                        "Split large file changes into smaller commits."
-                    )
-
     return None
 
 
