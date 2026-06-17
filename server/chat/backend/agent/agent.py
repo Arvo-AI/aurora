@@ -6,7 +6,7 @@ from chat.backend.agent.llm import LLMManager, ModelConfig
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model, get_registry
 from chat.backend.agent.weaviate_client import WeaviateClient
-from chat.backend.agent.utils.state import State, filter_denied_tools
+from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -355,8 +355,6 @@ class Agent:
             tools = get_cloud_tools()
             if tool_subset is not None:
                 tools = tool_subset
-            # Drop denylisted tools (returns a new list — get_cloud_tools() result is cached)
-            tools = filter_denied_tools(tools, state.tool_denylist)
 
 
             prompt_text = ''
