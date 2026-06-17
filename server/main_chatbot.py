@@ -595,7 +595,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     try:
         # Wrap the workflow stream with timeout to prevent infinite hangs
         async def process_stream():
-            nonlocal sent_message_count
+            nonlocal sent_message_count, _pwa_first_token_logged
             # Track tool calls we've already sent to avoid duplicates
             sent_tool_call_ids = set()
             event_count = 0
