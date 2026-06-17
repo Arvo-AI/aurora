@@ -40,10 +40,6 @@ logger = logging.getLogger(__name__)
 _POSTED_KEY_TTL_SECONDS = 86400
 _RUN_KEY_TTL_SECONDS = 3600
 _VERDICT_KEY_TTL_SECONDS = 3600
-# Matches the codebase's truthy-env idiom (chat/background/task.py,
-# utils/storage/storage.py, etc.).
-_TRUTHY = ("1", "true", "yes")
-
 # Transient "Aurora is reviewing…" conversation comment, deleted in a finally
 # block the moment the run leaves the review phase (review posted, skipped, or
 # failed). Gives the PR the live signal CodeRabbit shows. The id lives only in
@@ -85,10 +81,6 @@ class _PermanentGitHubError(Exception):
     return so Celery does not burn retries on a permanent failure.
     """
 
-
-def _is_dry_run() -> bool:
-    """True when ``CHANGE_GATING_DRY_RUN`` is set to a truthy value."""
-    return os.getenv("CHANGE_GATING_DRY_RUN", "").strip().lower() in _TRUTHY
 
 
 def _classify_github_exc(exc: Exception) -> tuple[str, Optional[int]]:
@@ -480,7 +472,7 @@ def _run_investigation(
     # is cleared in the finally below on EVERY exit (return, skip, retry, or
     # failure) — so it can never leak; a Celery retry just posts a fresh one.
     progress_comment_id = None
-    if not _is_dry_run() and cached_verdict is None:
+    if cached_verdict is None:
         progress_comment_id = _post_progress_comment(adapter, pr_number, log_ctx)
 
     try:
@@ -701,25 +693,6 @@ def _run_investigation(
             event = "COMMENT"
         else:
             event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
-
-        # Dry run exits BEFORE any GitHub write (the reads above are
-        # read-only); calibration logs the would-be incremental diff.
-        if _is_dry_run():
-            logger.info(
-                "change_gating=investigate_pr %s session_id=%s status=dry_run "
-                "incremental=%s would_post_inline=%d would_keep_inline=%d "
-                "would_supersede_review_id=%s review=%s",
-                log_ctx,
-                session_id,
-                incremental,
-                len(comments),
-                kept,
-                prior.get("id") if prior else None,
-                json.dumps(
-                    {"event": event, "body": body, "comments": comments, "verdict": verdict}
-                ),
-            )
-            return {"status": "dry_run", "session_id": session_id}
 
         # --------------------------------------------------------------
         # 11. Post the new review. Inline comments = net-new findings only;

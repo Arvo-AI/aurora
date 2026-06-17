@@ -926,6 +926,8 @@ def github_app_unlink_installation(user_id, installation_id):
 @require_permission("connectors", "read")
 def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorator
     """Return the deployment's GitHub auth configuration."""
+    from utils.flags.feature_flags import is_incident_prevention_enabled
+
     app_runtime_ready = bool(flask.current_app.config.get("GITHUB_APP_ENABLED"))
     return jsonify(
         {
@@ -935,6 +937,7 @@ def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorat
             # NEW-connection enablement (off by default; OAuth is deprecated).
             "oauth_enabled": is_oauth_login_enabled(),
             "oauth_configured": oauth_credentials_configured(),
+            "incident_prevention_enabled": is_incident_prevention_enabled(),
         }
     )
 

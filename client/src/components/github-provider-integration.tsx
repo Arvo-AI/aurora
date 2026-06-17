@@ -87,6 +87,7 @@ export interface GitHubAuthConfig {
   app_enabled: boolean;
   oauth_enabled: boolean;
   oauth_configured: boolean;
+  incident_prevention_enabled: boolean;
 }
 
 export class GitHubIntegrationService {
@@ -101,7 +102,7 @@ export class GitHubIntegrationService {
     if (!response.ok) {
       // Default to App-only on error so a misconfigured proxy never
       // surfaces an OAuth CTA the deployment hasn't enabled.
-      return { mode: 'app', app_enabled: true, oauth_enabled: false, oauth_configured: false };
+      return { mode: 'app', app_enabled: true, oauth_enabled: false, oauth_configured: false, incident_prevention_enabled: true };
     }
     return response.json();
   }
@@ -275,6 +276,7 @@ export default function GitHubProviderIntegration() {
     app_enabled: true,
     oauth_enabled: false,
     oauth_configured: false,
+    incident_prevention_enabled: true,
   });
 
   useEffect(() => {
@@ -1161,7 +1163,7 @@ export default function GitHubProviderIntegration() {
                     {isReady && !isEditing && repo.metadata_summary && (
                       <p className="text-xs text-muted-foreground">{repo.metadata_summary.replace(/\*\*/g, '')}</p>
                     )}
-                    {repo.installation_id != null && (
+                    {repo.installation_id != null && authConfig.incident_prevention_enabled && (
                       <div
                         className="flex items-center justify-between gap-2 pt-1"
                         title="Incident Prevention — Aurora reviews PRs for incident risk"

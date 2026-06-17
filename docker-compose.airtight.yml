@@ -65,8 +65,8 @@ x-common-env: &common-env
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
   NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
   NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
-  # Log PR change-gating reviews instead of posting to GitHub (calibration mode)
-  CHANGE_GATING_DRY_RUN: ${CHANGE_GATING_DRY_RUN:-false}
+  # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
+  NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
   # Slack OAuth (needed by celery_worker for formatting responses)
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}

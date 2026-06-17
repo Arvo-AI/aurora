@@ -730,6 +730,11 @@ def _maybe_enqueue_change_gating(
             delivery_id,
         )
 
+    from utils.flags.feature_flags import is_incident_prevention_enabled
+
+    if not is_incident_prevention_enabled():
+        _skip("feature_disabled")
+        return
     if action not in _CHANGE_GATING_ACTIONS:
         _skip("action_not_gated")
         return
