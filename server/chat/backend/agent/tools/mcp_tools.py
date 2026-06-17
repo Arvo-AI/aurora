@@ -160,16 +160,16 @@ def _extract_github_file_size(mcp_result: dict | None) -> int | None:
     """Best-effort extraction of a file's byte size from a ``get_file_contents`` response."""
     if not mcp_result:
         return None
-    try:
-        content_items = mcp_result.get("content") or []
-        for item in content_items:
-            if isinstance(item, dict) and "text" in item:
-                import json as _json
+    import json as _json
+    content_items = mcp_result.get("content") or []
+    for item in content_items:
+        if isinstance(item, dict) and "text" in item:
+            try:
                 data = _json.loads(item["text"])
                 if isinstance(data, dict) and "size" in data:
                     return int(data["size"])
-    except Exception:
-        pass
+            except Exception:
+                pass
     return None
 
 
