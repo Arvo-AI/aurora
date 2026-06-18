@@ -2350,7 +2350,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 from utils.notifications.dispatcher import notify_investigation_failed
                                 notify_investigation_failed(uid, str(incident_id), error_message="Investigation stalled and was cleaned up", session_id=str(session_id))
                             except Exception:
-                                pass
+                                logger.exception("[CleanupOrphans] Failed to send stalled investigation notification for incident %s", incident_id)
                         conn.commit()
 
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
@@ -2387,7 +2387,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             from utils.notifications.dispatcher import notify_investigation_failed
                             notify_investigation_failed(uid, str(inc_id), error_message="Investigation worker died unexpectedly", session_id=str(session_id) if session_id else None)
                         except Exception:
-                            pass
+                            logger.exception("[CleanupOrphans] Failed to send dead-task notification for incident %s", inc_id)
 
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
                     cursor.execute("""
@@ -2417,7 +2417,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                     from utils.notifications.dispatcher import notify_investigation_failed
                                     notify_investigation_failed(uid, str(inc_id), error_message="Investigation became orphaned and was cleaned up")
                                 except Exception:
-                                    pass
+                                    logger.exception("[CleanupOrphans] Failed to send orphaned investigation notification for incident %s", inc_id)
                             orphaned_count += 1
                         conn.commit()
 

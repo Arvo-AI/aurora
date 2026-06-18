@@ -334,7 +334,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                     logger.error(f"Suggestion {suggestion_id} not found for incident {incident_id}")
                     return jsonify({"text": "WARNING: Suggestion not found"}), 200
                 
-                command, title, risk, incident_owner_id, incident_org_id, chat_session_id, owner_email = row
+                command, title, risk, _incident_owner_id, incident_org_id, chat_session_id, _owner_email = row
 
                 # Fetch the clicker's org_id
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (clicker_user_id,))

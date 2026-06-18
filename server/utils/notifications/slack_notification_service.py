@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 SLACK_MAX_BLOCKS = 50
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+_DEFAULT_ALERT_TITLE = "Unknown Alert"
 
 
 def _get_incidents_channel_id(user_id: str, client: SlackClient) -> Optional[str]:
@@ -39,8 +40,8 @@ def _get_incidents_channel_id(user_id: str, client: SlackClient) -> Optional[str
         logger.error(f"[SlackNotification] No Slack channel ID found for user {user_id}")
         return None
         
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error getting incidents channel ID: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error getting incidents channel ID")
         return None
 
 
@@ -85,7 +86,7 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
         
         # Extract incident data
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', 'Unknown Alert')
+        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
         severity = incident_data.get('severity', 'unknown')
         service = incident_data.get('service', 'unknown')
         source_type = incident_data.get('source_type', 'monitoring platform')
@@ -182,8 +183,8 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
             logger.warning(f"[SlackNotification] Failed to send 'started' notification")
             return False
             
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending started notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending started notification")
         return False
     
 def send_slack_investigation_completed_notification(
@@ -221,7 +222,7 @@ def send_slack_investigation_completed_notification(
         
         # Extract incident data
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', 'Unknown Alert')
+        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
         severity = incident_data.get('severity', 'unknown')
         service = incident_data.get('service', 'unknown')
         started_at = incident_data.get('started_at')
@@ -364,8 +365,8 @@ def send_slack_investigation_completed_notification(
         else:
             return False
             
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending completed notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending completed notification")
         return False
 
 
@@ -395,7 +396,7 @@ def send_slack_investigation_failed_notification(
             return False
 
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', 'Unknown Alert')
+        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
         severity = incident_data.get('severity', 'unknown')
         service = incident_data.get('service', 'unknown')
 
@@ -417,7 +418,7 @@ def send_slack_investigation_failed_notification(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"_Aurora could not complete this investigation_"
+                    "text": "_Aurora could not complete this investigation_"
                 },
                 "accessory": {
                     "type": "button",
@@ -465,8 +466,8 @@ def send_slack_investigation_failed_notification(
             return True
         return False
 
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending failed notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending failed notification")
         return False
 
 
@@ -538,8 +539,8 @@ def send_slack_action_started_notification(user_id: str, action_data: Dict[str, 
             return True
         return False
 
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending action started notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending action started notification")
         return False
 
 
@@ -570,7 +571,7 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         session_url = f"{FRONTEND_URL}/chat?sessionId={session_id}" if session_id else None
 
         status_emoji = ":white_check_mark:" if status == 'success' else ":x:"
-        status_text = "Completed Successfully" if status == 'success' else f"Failed"
+        status_text = "Completed Successfully" if status == 'success' else "Failed"
 
         detail_text = f"*Action:* {action_name}\n*Status:* {status_emoji} {status_text}"
         if error_message:
@@ -621,6 +622,6 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
             return True
         return False
 
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending action completed notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending action completed notification")
         return False

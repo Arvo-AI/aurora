@@ -69,7 +69,7 @@ export default function SlackManagePage() {
         for (const { key, defaultValue } of SLACK_NOTIFICATION_KEYS) {
           const val = data.preferences?.[key];
           if (val !== null && val !== undefined) {
-            loaded[key] = typeof val === "boolean" ? val : val === "true" || val === true;
+            loaded[key] = typeof val === "boolean" ? val : val === "true";
           } else {
             loaded[key] = defaultValue;
           }
@@ -118,9 +118,9 @@ export default function SlackManagePage() {
     setIsDisconnecting(true);
     try {
       await slackService.disconnect();
-      if (typeof window !== "undefined") {
+      if (typeof globalThis.window !== "undefined") {
         localStorage.removeItem("isSlackConnected");
-        window.dispatchEvent(new CustomEvent("providerStateChanged"));
+        globalThis.window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }
       const cached = queryClient.read<Record<string, boolean>>("/api/connectors/status");
       if (cached) {
@@ -227,7 +227,7 @@ export default function SlackManagePage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {SLACK_NOTIFICATION_KEYS.map(({ key, label, description }) => (
-              <div key={key} className={`flex items-center justify-between p-4 border rounded-lg ${!canWrite ? "opacity-50" : ""}`}>
+              <div key={key} className={`flex items-center justify-between p-4 border rounded-lg ${canWrite ? "" : "opacity-50"}`}>
                 <div className="space-y-1 flex-1">
                   <h4 className="font-medium text-sm">{label}</h4>
                   <p className="text-xs text-muted-foreground">{description}</p>
