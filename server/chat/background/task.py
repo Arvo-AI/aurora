@@ -487,10 +487,7 @@ def run_background_chat(
     # to the worker while it's still running. Use a Redis SETNX lock on the task ID.
     _dedup_key = f"celery:dedup:{self.request.id}"
     try:
-        _redis = celery_app.backend.client if hasattr(celery_app.backend, 'client') else None
-        if _redis is None:
-            from celery_config import celery_app as _ca
-            _redis = _ca.broker_connection().channel().client
+        _redis = celery_app.backend.client
         _acquired = _redis.set(_dedup_key, "1", nx=True, ex=1800)
         if not _acquired:
             logger.warning(f"[BackgroundChat] DEDUP: Task {self.request.id} already running, skipping duplicate execution")

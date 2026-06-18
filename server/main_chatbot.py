@@ -1684,15 +1684,11 @@ async def main():
         _os.getenv("NODE_NAME", "unset"),
     )
 
-    # DNS and connectivity check for K8s debugging
+    # DNS connectivity check for K8s debugging
     import time as _startup_time
-    _dns_targets = [
-        _os.getenv("POSTGRES_HOST", "postgres"),
-        "vault" if "vault" in (_os.getenv("VAULT_ADDR") or "") else None,
-    ]
-    for host in filter(None, _dns_targets):
+    import socket
+    for host in [_os.getenv("POSTGRES_HOST", "postgres")]:
         try:
-            import socket
             _t_dns = _startup_time.perf_counter()
             ip = socket.gethostbyname(host)
             _dns_ms = (_startup_time.perf_counter() - _t_dns) * 1000

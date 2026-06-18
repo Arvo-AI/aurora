@@ -256,54 +256,45 @@ from celery.signals import worker_process_init
 
 @worker_process_init.connect
 def _prewarm_worker(**kwargs):
-    """Pre-initialize NeMo Guardrails and MCP preloader at worker boot.
+    """Pre-initialize expensive singletons at worker child process boot.
 
-    These are the two largest cold-start costs observed in background chat
-    tasks (~1.7s for guardrails init, ~500ms for MCP). The chatbot pod keeps
-    them warm across WebSocket connections; this gives the celery worker the
-    same advantage.
+    Runs synchronously so the child is fully warm before accepting tasks.
+    Covers NeMo Guardrails (~1.7s), MCP preloader, and the Agent singleton
+    (~4.6s including imports) — the three largest cold-start costs.
     """
-    import threading
+    _logger = logging.getLogger("celery.prewarm")
 
-    def _do_prewarm():
-        import asyncio
-        _logger = logging.getLogger("celery.prewarm")
+    # 1. Pre-warm NeMo Guardrails (the _rails_instance global)
+    try:
+        import time as _pw_time
+        _t0 = _pw_time.perf_counter()
+        from guardrails.input_rail import _build_rails_sync
+        import guardrails.input_rail as _rail_mod
+        if _rail_mod._rails_instance is None:
+            _rail_mod._rails_instance = _build_rails_sync()
+            _ms = (_pw_time.perf_counter() - _t0) * 1000
+            _logger.info(f"[PREWARM] NeMo Guardrails initialized in {_ms:.0f} ms")
+        else:
+            _logger.info("[PREWARM] NeMo Guardrails already initialized")
+    except Exception as e:
+        _logger.warning(f"[PREWARM] Failed to pre-warm guardrails: {e}")
 
-        # 1. Pre-warm NeMo Guardrails (the _rails_instance global)
-        try:
-            import time as _pw_time
-            _t0 = _pw_time.perf_counter()
-            from guardrails.input_rail import _build_rails_sync
-            import guardrails.input_rail as _rail_mod
-            if _rail_mod._rails_instance is None:
-                _rail_mod._rails_instance = _build_rails_sync()
-                _ms = (_pw_time.perf_counter() - _t0) * 1000
-                _logger.info(f"[PREWARM] NeMo Guardrails initialized in {_ms:.0f} ms")
-            else:
-                _logger.info("[PREWARM] NeMo Guardrails already initialized")
-        except Exception as e:
-            _logger.warning(f"[PREWARM] Failed to pre-warm guardrails: {e}")
+    # 2. Start MCP preloader (background thread that refreshes tool schemas)
+    try:
+        from chat.backend.agent.tools.mcp_preloader import start_mcp_preloader
+        start_mcp_preloader()
+        _logger.info("[PREWARM] MCP Preloader service started")
+    except Exception as e:
+        _logger.warning(f"[PREWARM] Failed to start MCP preloader: {e}")
 
-        # 2. Start MCP preloader (background thread that refreshes tool schemas)
-        try:
-            from chat.backend.agent.tools.mcp_preloader import start_mcp_preloader
-            start_mcp_preloader()
-            _logger.info("[PREWARM] MCP Preloader service started")
-        except Exception as e:
-            _logger.warning(f"[PREWARM] Failed to start MCP preloader: {e}")
-
-        # 3. Pre-warm the per-worker Agent singleton so every child process is ready
-        # on first task (avoids ~4.6s import + init cold start)
-        try:
-            import time as _pw_time2
-            _t1 = _pw_time2.perf_counter()
-            from chat.background.task import _get_worker_agent
-            _get_worker_agent()
-            _ms2 = (_pw_time2.perf_counter() - _t1) * 1000
-            _logger.info(f"[PREWARM] Agent singleton created in {_ms2:.0f} ms")
-        except Exception as e:
-            _logger.warning(f"[PREWARM] Failed to pre-warm Agent singleton: {e}")
-
-    # Run pre-warming in a daemon thread to avoid blocking worker readiness
-    t = threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True)
-    t.start()
+    # 3. Pre-warm the per-worker Agent singleton so every child process is ready
+    # on first task (avoids ~4.6s import + init cold start)
+    try:
+        import time as _pw_time2
+        _t1 = _pw_time2.perf_counter()
+        from chat.background.task import _get_worker_agent
+        _get_worker_agent()
+        _ms2 = (_pw_time2.perf_counter() - _t1) * 1000
+        _logger.info(f"[PREWARM] Agent singleton created in {_ms2:.0f} ms")
+    except Exception as e:
+        _logger.warning(f"[PREWARM] Failed to pre-warm Agent singleton: {e}")

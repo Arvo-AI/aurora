@@ -1077,9 +1077,10 @@ class Workflow:
                 _guardrail_task_var.set(_guardrail_task)
 
             # Persist optimistically — if guardrails blocks, we delete afterward
-            if input_state.session_id and input_state.user_id and not _is_scaffold and _rail_msg_text:
+            if input_state.session_id and input_state.user_id and not _is_scaffold:
                 from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
-                handle_immediate_save(input_state.session_id, input_state.user_id, _rail_msg_text)
+                _persist_text = _rail_msg_text or last_msg.content
+                handle_immediate_save(input_state.session_id, input_state.user_id, _persist_text)
 
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")

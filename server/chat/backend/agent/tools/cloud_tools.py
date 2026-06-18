@@ -1109,8 +1109,6 @@ def get_cloud_tools():
                 # FIXED: Find the matching tool call ID by signature match instead of just "incomplete" status
                 matching_tool_call_id = None
                 if _tc:
-                    # Create signature to match against stored tool calls
-                    logging.info(f"TOOL CAPTURE: KWARGS: {kwargs}")
                     signature_payload = _sanitize_kwargs_for_signature(kwargs)
                     try:
                         serialized_payload = json.dumps(signature_payload, sort_keys=True)
@@ -1118,13 +1116,7 @@ def get_cloud_tools():
                         serialized_payload = str(signature_payload)
                     tool_signature = f"{tool_name}_{serialized_payload}"
                     
-                    # Look for a tool call that matches this exact signature
-                    logging.info(f"TOOL CAPTURE: Tool capture instance found: {_tc}")
-                    logging.info(f"TOOL CAPTURE: Tool capture instance found: {_tc.current_tool_calls}")
                     for call_id, call_info in _tc.current_tool_calls.items():
-                        logging.info(f"TOOL CAPTURE: Call info: {call_info}")
-                        logging.info(f"TOOL CAPTURE: Call signature right side: {tool_signature}")
-                        logging.info(f"TOOL CAPTURE: Call result: {result}")
                         if call_info.get('signature') == tool_signature:
                             matching_tool_call_id = call_id
                             logging.info(f"Found matching tool call for completion: {matching_tool_call_id}")
