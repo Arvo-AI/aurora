@@ -209,6 +209,7 @@ _OPEN_PREFIXES = (
     "/bitbucket/callback",
     "/slack/callback",
     "/slack/events",
+    "/slack/interactions",
     "/pagerduty/oauth/callback",
     "/google-chat/callback",
     "/google-chat/events",

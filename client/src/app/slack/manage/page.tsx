@@ -11,6 +11,7 @@ import { slackService, type SlackStatus } from "@/lib/services/slack";
 import { useUser } from "@/hooks/useAuthHooks";
 import { canWrite as checkCanWrite } from "@/lib/roles";
 import { DisconnectConfirmDialog } from "@/components/ui/disconnect-confirm-dialog";
+import { queryClient } from "@/lib/query";
 
 const SLACK_NOTIFICATION_KEYS = [
   { key: "slack_investigation_start_notifications", label: "Investigation Started", description: "Notify when Aurora begins an RCA investigation", defaultValue: true },
@@ -120,6 +121,10 @@ export default function SlackManagePage() {
       if (typeof window !== "undefined") {
         localStorage.removeItem("isSlackConnected");
         window.dispatchEvent(new CustomEvent("providerStateChanged"));
+      }
+      const cached = queryClient.read<Record<string, boolean>>("/api/connectors/status");
+      if (cached) {
+        queryClient.set("/api/connectors/status", { ...cached, slack: false });
       }
       toast({ title: "Success", description: "Slack disconnected successfully" });
       router.push("/connectors");

@@ -227,7 +227,6 @@ def send_slack_investigation_completed_notification(
         started_at = incident_data.get('started_at')
         analyzed_at = incident_data.get('analyzed_at')
         aurora_summary = incident_data.get('aurora_summary') or 'Analysis in progress...'
-        slack_message_ts = incident_data.get('slack_message_ts')
         
         # Format data
         incident_url = _get_incident_url(incident_id)
@@ -355,26 +354,9 @@ def send_slack_investigation_completed_notification(
             )
             return result is not None
         
-        # Update existing message if timestamp exists, otherwise send new message
-        if slack_message_ts:
-            try:
-                result = client.update_message(
-                    channel=channel_id,
-                    ts=slack_message_ts,
-                    text=f"Analysis Complete: {alert_title}",  # Fallback text
-                    blocks=blocks
-                )
-                if result and result.get('ok', False):
-                    return True
-                else:
-                    logger.warning(f"[SlackNotification] Failed to update message, falling back to new message")
-            except Exception as e:
-                logger.warning(f"[SlackNotification] Error updating message, falling back to new message: {e}", exc_info=True)
-        
-        # Fallback: send new message if update failed or no timestamp exists
         result = client.send_message(
             channel=channel_id,
-            text=f"Analysis Complete: {alert_title}",  # Fallback text
+            text=f"Analysis Complete: {alert_title}",
             blocks=blocks
         )
         
@@ -385,6 +367,107 @@ def send_slack_investigation_completed_notification(
             
     except Exception as e:
         logger.error(f"[SlackNotification] Error sending completed notification: {e}", exc_info=True)
+        return False
+
+
+def send_slack_investigation_failed_notification(
+    user_id: str,
+    incident_data: Dict[str, Any],
+    error_message: Optional[str] = None,
+) -> bool:
+    """
+    Send Slack notification when RCA investigation fails.
+
+    Args:
+        user_id: User ID
+        incident_data: Dictionary containing incident details
+        error_message: Optional error description
+
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return False
+
+        channel_id = _get_incidents_channel_id(user_id, client)
+        if not channel_id:
+            return False
+
+        incident_id = incident_data.get('incident_id', 'unknown')
+        alert_title = incident_data.get('alert_title', 'Unknown Alert')
+        severity = incident_data.get('severity', 'unknown')
+        service = incident_data.get('service', 'unknown')
+
+        incident_url = _get_incident_url(incident_id)
+
+        error_text = error_message or "The investigation encountered an error and could not complete."
+        if len(error_text) > 300:
+            error_text = error_text[:300] + "..."
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Investigation Failed"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"_Aurora could not complete this investigation_"
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "View Incident"
+                    },
+                    "url": incident_url,
+                    "style": "primary"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity.title()}\n*Service:* {service}"
+                }
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":x: *Error:* {error_text}"
+                }
+            }
+        ]
+
+        from routes.slack.slack_events_helpers import validate_slack_blocks
+        if not validate_slack_blocks(blocks):
+            simple_text = f"*Investigation Failed*\n\n{alert_title}\n\nError: {error_text}\n\nView incident: {incident_url}"
+            result = client.send_message(channel=channel_id, text=simple_text)
+            return result is not None
+
+        result = client.send_message(
+            channel=channel_id,
+            text=f"Investigation Failed: {alert_title}",
+            blocks=blocks
+        )
+
+        if result:
+            logger.info(f"[SlackNotification] Sent 'failed' notification for incident {incident_id}")
+            return True
+        return False
+
+    except Exception as e:
+        logger.error(f"[SlackNotification] Error sending failed notification: {e}", exc_info=True)
         return False
 
 
@@ -410,7 +493,7 @@ def send_slack_action_started_notification(user_id: str, action_data: Dict[str, 
 
         action_name = action_data.get('action_name', 'Unknown Action')
         session_id = action_data.get('session_id', '')
-        session_url = f"{FRONTEND_URL}/chat/{session_id}" if session_id else None
+        session_url = f"{FRONTEND_URL}/chat?sessionId={session_id}" if session_id else None
 
         blocks = [
             {
@@ -485,7 +568,7 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         status = action_data.get('status', 'unknown')
         error_message = action_data.get('error')
         session_id = action_data.get('session_id', '')
-        session_url = f"{FRONTEND_URL}/chat/{session_id}" if session_id else None
+        session_url = f"{FRONTEND_URL}/chat?sessionId={session_id}" if session_id else None
 
         status_emoji = ":white_check_mark:" if status == 'success' else ":x:"
         status_text = "Completed Successfully" if status == 'success' else f"Failed"

@@ -189,8 +189,8 @@ def notify_investigation_started(user_id: str, incident_id: str, session_id: Opt
             return
 
         # --- Email ---
-        email_general = bool(get_org_preference(org_id, 'rca_email_notifications', default=True))
-        email_start = bool(get_org_preference(org_id, 'rca_email_start_notifications', default=True))
+        email_general = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
+        email_start = bool(get_org_preference(org_id, 'rca_email_start_notifications', default=False))
         if email_general and email_start:
             recipients = _get_org_email_recipients(org_id, user_id)
             if recipients:
@@ -243,7 +243,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
             _enrich_incident_summary(incident_data, session_id, user_id)
 
         # --- Email ---
-        email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=True))
+        email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
         if email_enabled:
             recipients = _get_org_email_recipients(org_id, user_id)
             if recipients:
@@ -280,6 +280,63 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         logger.error(f"[Dispatcher] Error in notify_investigation_completed: {e}", exc_info=True)
 
 
+def notify_investigation_failed(user_id: str, incident_id: str, error_message: Optional[str] = None,
+                                session_id: Optional[str] = None) -> None:
+    """Send notifications for investigation failed event across all enabled channels."""
+    try:
+        org_id = get_org_id_for_user(user_id)
+        if not org_id:
+            return
+
+        incident_data = _get_incident_data(incident_id, user_id)
+        if not incident_data:
+            logger.error(f"[Dispatcher] Incident {incident_id} not found for failed notification")
+            return
+
+        # --- Email ---
+        email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
+        if email_enabled:
+            recipients = _get_org_email_recipients(org_id, user_id)
+            if recipients:
+                from utils.notifications.email_service import get_email_service
+                email_service = get_email_service()
+                for recipient in recipients:
+                    try:
+                        email_service.send_investigation_completed_email(recipient, {
+                            **incident_data,
+                            'aurora_summary': f"Investigation failed: {error_message or 'Unknown error'}",
+                        })
+                    except Exception as e:
+                        logger.warning(f"[Dispatcher] Email to {recipient} failed: {e}")
+
+        # --- Slack ---
+        slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
+        if slack_enabled and _has_slack_connected(user_id):
+            try:
+                from utils.notifications.slack_notification_service import (
+                    send_slack_investigation_failed_notification,
+                )
+                send_slack_investigation_failed_notification(user_id, incident_data, error_message=error_message)
+            except Exception as e:
+                logger.error(f"[Dispatcher] Slack failed notification failed: {e}", exc_info=True)
+
+        # --- Google Chat ---
+        if _has_google_chat_connected(user_id):
+            try:
+                from utils.notifications.google_chat_notification_service import (
+                    send_google_chat_investigation_completed_notification,
+                )
+                send_google_chat_investigation_completed_notification(user_id, {
+                    **incident_data,
+                    'aurora_summary': f"Investigation failed: {error_message or 'Unknown error'}",
+                })
+            except Exception as e:
+                logger.error(f"[Dispatcher] Google Chat failed notification failed: {e}", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"[Dispatcher] Error in notify_investigation_failed: {e}", exc_info=True)
+
+
 def notify_action_started(user_id: str, trigger_metadata: Dict[str, Any], session_id: str) -> None:
     """Send notifications for action started event across all enabled channels."""
     try:
@@ -290,7 +347,7 @@ def notify_action_started(user_id: str, trigger_metadata: Dict[str, Any], sessio
         action_data = _get_action_data(user_id, trigger_metadata, session_id, status='running')
 
         # --- Email ---
-        email_enabled = bool(get_org_preference(org_id, 'action_email_start_notifications', default=True))
+        email_enabled = bool(get_org_preference(org_id, 'action_email_start_notifications', default=False))
         if email_enabled:
             recipients = _get_org_email_recipients(org_id, user_id)
             if recipients:
@@ -328,7 +385,7 @@ def notify_action_completed(user_id: str, trigger_metadata: Dict[str, Any], sess
         action_data = _get_action_data(user_id, trigger_metadata, session_id, status=status, error_message=error_message)
 
         # --- Email ---
-        email_enabled = bool(get_org_preference(org_id, 'action_email_notifications', default=True))
+        email_enabled = bool(get_org_preference(org_id, 'action_email_notifications', default=False))
         if email_enabled:
             recipients = _get_org_email_recipients(org_id, user_id)
             if recipients:

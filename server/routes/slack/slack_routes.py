@@ -182,7 +182,7 @@ def slack_callback():
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=storage_failed")
         
         # Redirect to frontend with success (frontend reads team name from status endpoint)
-        return redirect(f"{FRONTEND_URL}?slack_auth=success")
+        return redirect(f"{FRONTEND_URL}/slack/manage?slack_auth=success")
     
     except Exception as e:
         logging.error("Error during Slack callback", exc_info=True)

@@ -320,7 +320,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 set_rls_context(cursor, conn, clicker_user_id, log_prefix="[SlackEvents:run_suggestion]")
                 cursor.execute(
                     """
-                    SELECT s.command, s.title, s.risk, i.user_id, i.aurora_chat_session_id, u.email
+                    SELECT s.command, s.title, s.risk, i.user_id, i.org_id, i.aurora_chat_session_id, u.email
                     FROM incident_suggestions s
                     JOIN incidents i ON s.incident_id = i.id
                     LEFT JOIN users u ON i.user_id = u.id
@@ -334,14 +334,16 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                     logger.error(f"Suggestion {suggestion_id} not found for incident {incident_id}")
                     return jsonify({"text": "WARNING: Suggestion not found"}), 200
                 
-                command, title, risk, incident_owner_id, chat_session_id, owner_email = row
+                command, title, risk, incident_owner_id, incident_org_id, chat_session_id, owner_email = row
+
+                # Fetch the clicker's org_id
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (clicker_user_id,))
+                clicker_row = cursor.fetchone()
+                clicker_org_id = clicker_row[0] if clicker_row else None
         
-        # 4. AUTHORIZE: Only incident owner can run commands
-        owner_name = owner_email.split('@')[0] if owner_email else "the incident owner"
-        
-        if clicker_user_id != incident_owner_id:
-            logger.warning(f"User {clicker_user_id} tried to run suggestion for incident owned by {incident_owner_id}")
-            # Use ephemeral message for better UX
+        # 4. AUTHORIZE: Only members of the same org can run commands
+        if clicker_org_id != incident_org_id:
+            logger.warning(f"User {clicker_user_id} (org {clicker_org_id}) tried to run suggestion for incident in org {incident_org_id}")
             client = get_slack_client_for_user(clicker_user_id)
             if client:
                 try:
@@ -351,7 +353,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                         {
                             "channel": channel_id,
                             "user": slack_user_id,
-                            "text": f"WARNING: Unauthorized\n\nThis investigation belongs to {owner_name}. Only the incident owner can run suggested commands."
+                            "text": "WARNING: Unauthorized\n\nYou don't have access to this incident. Only members of the same organization can run suggested commands."
                         }
                     )
                 except Exception as e:

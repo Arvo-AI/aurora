@@ -824,6 +824,11 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
+            try:
+                from utils.notifications.dispatcher import notify_investigation_failed
+                notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes", session_id=session_id)
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -845,6 +850,11 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
+            try:
+                from utils.notifications.dispatcher import notify_investigation_failed
+                notify_investigation_failed(user_id, incident_id, error_message=str(e), session_id=session_id)
+            except Exception:
+                logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -2331,6 +2341,11 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
+                            try:
+                                from utils.notifications.dispatcher import notify_investigation_failed
+                                notify_investigation_failed(uid, str(incident_id), error_message="Investigation stalled and was cleaned up", session_id=str(session_id))
+                            except Exception:
+                                pass
                         conn.commit()
 
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
@@ -2363,6 +2378,11 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         _record_rca_error(cursor, str(inc_id), uid)
                         conn.commit()
                         dead_task_count += 1
+                        try:
+                            from utils.notifications.dispatcher import notify_investigation_failed
+                            notify_investigation_failed(uid, str(inc_id), error_message="Investigation worker died unexpectedly", session_id=str(session_id) if session_id else None)
+                        except Exception:
+                            pass
 
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
                     cursor.execute("""
@@ -2388,6 +2408,11 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         if cursor.fetchone():
                             if cur_aurora not in ('complete', 'error'):
                                 _record_rca_error(cursor, str(inc_id), uid)
+                                try:
+                                    from utils.notifications.dispatcher import notify_investigation_failed
+                                    notify_investigation_failed(uid, str(inc_id), error_message="Investigation became orphaned and was cleaned up")
+                                except Exception:
+                                    pass
                             orphaned_count += 1
                         conn.commit()
 
