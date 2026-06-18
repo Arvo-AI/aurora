@@ -874,19 +874,7 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
         if len(text) > SLACK_SECTION_TEXT_BUFFER:  # Leave buffer for Slack
             text = text[:SLACK_SECTION_TEXT_BUFFER] + "..."
 
-        # Build the run button — kept as legacy for future use
-        # run_button = {
-        #     "type": "button",
-        #     "text": {
-        #         "type": "plain_text",
-        #         "text": "⚠️ Run" if is_high_risk else "Run"
-        #     },
-        #     "value": f"{incident_id}:{suggestion['id']}",
-        #     "action_id": f"run_suggestion_{suggestion['id']}",
-        #     "style": "danger" if is_high_risk else "primary"
-        # }
-        
-        # Build actions with More details button only
+        # Run button removed — handler still exists for previously-sent messages
         action_elements = []
         
         # Add "More details" button

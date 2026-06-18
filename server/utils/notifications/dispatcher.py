@@ -97,8 +97,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'started_at': result[9],
                         'analyzed_at': result[10],
                         'created_at': result[11],
-                        'slack_message_ts': result[12] if len(result) > 12 else None,
-                        'google_chat_message_name': result[13] if len(result) > 13 else None,
+                        'slack_message_ts': result[12],
+                        'google_chat_message_name': result[13],
                     }
         return None
     except Exception:
