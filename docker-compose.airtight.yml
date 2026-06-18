@@ -65,6 +65,16 @@ x-common-env: &common-env
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
   NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
   NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
+
+  # GitHub auth — every Aurora service that talks to GitHub (server,
+  # celery_worker, chatbot) needs the auth mode + App credentials to mint
+  # installation tokens. Webhook secret stays server-only (see aurora-server).
+  GITHUB_AUTH_MODE: ${GITHUB_AUTH_MODE:-app}
+  GITHUB_APP_ID: ${GITHUB_APP_ID}
+  GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
+  NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
+  GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
+  GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
   NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
   # Slack OAuth (needed by celery_worker for formatting responses)
@@ -199,6 +209,9 @@ services:
       AURORA_CACHE_TOKEN_IN_REDIS: ${AURORA_CACHE_TOKEN_IN_REDIS}
       GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
       GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+      # Webhook secret is server-only (only aurora-server verifies GitHub
+      # webhook deliveries). Other GitHub vars come from x-common-env.
+      GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET}
       BB_OAUTH_CLIENT_ID: ${BB_OAUTH_CLIENT_ID}
       BB_OAUTH_CLIENT_SECRET: ${BB_OAUTH_CLIENT_SECRET}
       PAGERDUTY_CLIENT_ID: ${PAGERDUTY_CLIENT_ID}
@@ -505,6 +518,7 @@ services:
       AURORA_ENV: ${AURORA_ENV}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
       NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
+      NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
       # Server-side only (Next.js API routes & middleware)
       PUBLIC_API_URL: ${NEXT_PUBLIC_BACKEND_URL}
       PUBLIC_WS_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}

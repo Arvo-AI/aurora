@@ -366,36 +366,6 @@ in `hybrid` mode).
 
 #### Path A — GitHub App (recommended)
 
-##### Quickstart (local dev or single-tenant)
-
-The bootstrap script registers an App via GitHub's App Manifest flow,
-captures the post-create redirect, and writes `.env` + Vault for you:
-
-```bash
-python3 server/scripts/register_github_app.py --org <your-github-org>
-```
-
-For a manual click-through (every form field, permissions table, event
-list, troubleshooting), see the
-[GitHub App Setup guide](/docs/integrations/github-app).
-
-Required env (set in `.env`):
-
-```bash
-GITHUB_AUTH_MODE=app
-
-GITHUB_APP_ID=<numeric, from App settings>
-GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
-NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
-GITHUB_APP_WEBHOOK_URL=https://<your-host>/github/webhook
-GITHUB_APP_SETUP_URL=https://<your-host>/github/app/install/callback
-GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
-```
-
-The App's private key (PEM) goes into your configured secrets backend
-(Vault or AWS Secrets Manager) at `aurora/system/github-app/private-key`,
-not into `.env`.
-
 ##### On-prem deployment
 
 When Aurora runs on customer infrastructure (private cloud, on-prem
@@ -414,18 +384,22 @@ their own Aurora hostname.
 | GitHub org admin role | Creating an App on an org requires owner. |
 | Aurora deployment shell + secrets backend access (Vault or AWS Secrets Manager) | You need to write App private key + webhook secret into the configured backend. |
 
-**Step 1 — Create the App in the customer's org**:
+**Step 1 — Create the App** on the org (or a personal account):
 
 ```
+# Organization-owned app
 https://github.com/organizations/<customer-org>/settings/apps/new
+
+# Personal account
+https://github.com/settings/apps/new
 ```
 
 | Field | Value |
 |---|---|
 | GitHub App name | `aurora-<customer-slug>` (globally unique). Examples: `aurora-acme-prod`, `aurora-acme-staging`. |
 | Homepage URL | `<BASE_URL>` (the customer's Aurora hostname) |
-| Callback URL | `<BASE_URL>/github/app/install/callback` |
-| Setup URL | Same as Callback URL |
+| Callback URL | `<BASE_URL>/github/callback` (OAuth user-authorization redirect) |
+| Setup URL | `<BASE_URL>/github/app/install/callback` (post-install redirect — a **different** route from the Callback URL) |
 | Webhook URL | `<BASE_URL>/github/webhook` |
 | Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to your secrets backend |
 | Where can be installed? | **Only on this account** (locks the App to the customer org) |
@@ -434,13 +408,23 @@ https://github.com/organizations/<customer-org>/settings/apps/new
 
 | Permission | Access level | Why |
 |---|---|---|
-| Actions | Read-only | Workflow run status for CI/CD correlation |
+| Actions | **Read and write** | Read workflow run status for CI/CD correlation; trigger workflow re-runs during remediation |
 | Checks | Read-only | CI check-result correlation |
-| Contents | Read-only | Read file contents, repo trees (MCP, metadata generation) |
+| Commit statuses | Read-only | Correlate commit/CI status with deployments |
+| Contents | **Read and write** | Read file contents and repo trees (MCP, metadata generation); create branches and commits when applying fixes |
 | Deployments | Read-only | Deploy timeline correlation |
-| Issues | Read-only | Issue-to-incident correlation |
+| Discussions | Read-only | Correlate GitHub Discussions with incidents |
+| Issues | **Read and write** | Issue-to-incident correlation; comment on and open issues |
 | Metadata | Read-only | Required by GitHub for all App installations (auto-selected) |
-| Pull requests | **Read and write** | Read PR diffs; post change-gating review comments |
+| Pull requests | **Read and write** | Read PR diffs; post change-gating review comments; open remediation PRs |
+
+:::note Why some permissions need write
+Aurora performs its write actions (commit a fix, open a PR, comment on an
+issue, re-run a workflow) through the **GitHub MCP** server. An MCP write
+call fails if the App installation lacks the matching permission — so every
+`Read and write` row above is required by the GitHub MCP tools that use it.
+Resources Aurora only reads stay `Read-only`.
+:::
 
 **Organization permissions:** Members → Read-only (org membership for owner resolution).
 
@@ -452,14 +436,14 @@ https://github.com/organizations/<customer-org>/settings/apps/new
 | Check suite | CI suite lifecycle |
 | Deployment | Deploy timeline |
 | Deployment status | Deploy success/failure tracking |
-| Installation | Install/uninstall/suspend lifecycle |
-| Installation repositories | Repos added/removed from the install |
 | Issues | Issue-incident correlation |
 | Pull request | Change-gating trigger (`opened`, `synchronize`, `reopened`, `ready_for_review`) |
 | Workflow run | CI/CD pipeline correlation |
 
-For the full click-by-click walkthrough (every form field, secrets setup,
-verification), see the [GitHub App Setup guide](/docs/integrations/github-app).
+There is no checkbox for the `installation` and `installation_repositories`
+events (install/uninstall/suspend, repos added/removed) — GitHub delivers
+those to every App automatically, and Aurora relies on them for installation
+lifecycle tracking.
 
 **Step 2 — Download the private key**: on the App's settings page after
 creation, **Generate a private key** downloads a `.pem` file once. Back
@@ -500,34 +484,33 @@ key data" errors when Aurora tries to sign installation tokens.
 To update a secret that already exists, swap `create-secret` for
 `put-secret-value --secret-id <name> --secret-string … --region "$AWS_SM_REGION"`.
 
-**Step 4 — Set Aurora env vars** in the customer's `.env` (same keys as
-the Quickstart block above), with `GITHUB_APP_*` URLs pointing at the
-customer's `<BASE_URL>`. Set `AURORA_ENV=production` and a rotated
-`INTERNAL_API_SECRET` so the runtime startup check enforces both.
+**Step 4 — Set Aurora env vars** in the customer's `.env`, with the
+`GITHUB_APP_*` URLs pointing at the customer's `<BASE_URL>`. Set
+`AURORA_ENV=production` and a rotated `INTERNAL_API_SECRET` so the runtime
+startup check enforces both.
 
-**Step 5 — Reverse-proxy sketch (nginx)**: terminate TLS at the edge,
-forward to `aurora-server:5080`.
+```bash
+GITHUB_AUTH_MODE=app
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name aurora.example.com;
-    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
-    client_max_body_size 25m;
-    location / {
-        proxy_pass http://aurora-server:5080;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 300s;
-    }
-}
+GITHUB_APP_ID=<numeric, from App settings>
+GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
+NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
+GITHUB_APP_WEBHOOK_URL=<BASE_URL>/github/webhook
+GITHUB_APP_SETUP_URL=<BASE_URL>/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
-Traefik labels achieve the same; the only requirements are TLS
-termination and Host-header preservation.
+The private key (PEM) is **not** an env var — it lives in your secrets
+backend at `aurora/system/github-app/private-key` (Step 3).
+
+:::note Kubernetes (Helm)
+A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (including
+`GITHUB_APP_WEBHOOK_SECRET`) already live under `config:` in the chart's
+`values.yaml` — fill in your values there and apply with `helm upgrade`.
+The private key is **not** a values field — it is read from your secrets
+backend at `aurora/system/github-app/private-key`, so store it there
+(`vault kv put` or `aws secretsmanager create-secret`) exactly as in Step 3.
+:::
 
 **Per-environment Apps**: create separate `aurora-<customer>-prod`,
 `aurora-<customer>-staging`, `aurora-<customer>-dev` Apps. Aurora reads
@@ -535,12 +518,36 @@ termination and Host-header preservation.
 and a stray callback-URL change in dev cannot break prod webhook
 delivery.
 
-**Verification**: open `<BASE_URL>` in a browser, navigate to **Settings →
-Connectors → GitHub** → **Connect** → **Install GitHub App**. The popup
-goes to GitHub.com, you approve repository access, and the dialog flips
+**Verification**: open `<BASE_URL>` in a browser, click **Connectors** in
+the left sidebar, find the **GitHub** card and click **Manage**, then use
+**Install GitHub App**. The popup goes to GitHub.com, you approve
+repository access, and the dialog flips
 from "Not connected" to "Available" or "Connected". `aurora-server` logs
 should show `200 GET /github/app/install/callback` followed by the new
 `installation_id`.
+
+##### Upgrading permissions later
+
+When you change the App's permissions (e.g. adding a repository permission
+for a new feature), GitHub does **not** apply them to existing installations
+automatically — each installer must approve the new scope first, and Aurora
+flags the installation as pending until they do.
+
+To approve:
+
+1. In Aurora, click **Connectors** in the left sidebar, open the **GitHub**
+   card's **Manage** dialog, then click **Manage** on the installation under
+   **Connected GitHub Installations**. This opens its GitHub settings page
+   (`https://github.com/settings/installations/<id>`, or the
+   `…/organizations/<org>/settings/installations/<id>` variant for orgs).
+2. GitHub shows a banner — *"&lt;App name&gt; is requesting an update to its
+   permissions"* — click **Review request**.
+3. Review the diff (e.g. *Read and write access to Issues — was read-only*)
+   and click **Accept new permissions**.
+
+GitHub then delivers an `installation` event with action
+`new_permissions_accepted`, which Aurora processes to refresh the stored
+scopes and clear the pending state.
 
 #### Path B — OAuth fallback (on-prem only, when public ingress isn't possible)
 
@@ -581,6 +588,11 @@ use the OAuth fallback above.
 | "GitHub App install URL is missing the required state parameter" | `GITHUB_APP_SETUP_URL` doesn't match what's registered on the App settings page. Update `.env` to match. |
 | "Failed to initiate GitHub OAuth" | `GH_OAUTH_CLIENT_ID`/`SECRET` empty when `GITHUB_AUTH_MODE=oauth` or `hybrid`. Set them and restart. |
 | Webhook deliveries fail with 4xx | Webhook secret in your secrets backend doesn't match what's registered on the App. Rewrite it at `aurora/system/github-app/webhook-secret` (`vault kv put` or `aws secretsmanager put-secret-value`, per `SECRETS_BACKEND`) and re-save the App secret. |
+| "Could not deserialize key data" in logs | Private-key PEM was stored without its newlines. Re-store with `file://` (AWS SM) or `@` (Vault) so the multi-line PEM is preserved verbatim. |
+| Change-gating / incident-prevention reviews not posting | Pull Requests permission is Read-only. Upgrade it to **Read and write** in Permissions & events, then accept the prompt in GitHub. |
+| No webhook for `pull_request` events | Event not subscribed. Add it under Permissions & events → Subscribe to events (existing installs receive new events automatically). |
+| `installation_id` not stored after install | Setup URL misconfigured or server unreachable from GitHub. Verify `GITHUB_APP_SETUP_URL` matches the App's Setup URL exactly and is reachable from the public internet. |
+| "Suspended installation" in logs | An org owner suspended the App. Unsuspend it via GitHub org settings → GitHub Apps. |
 
 ---
 
