@@ -1669,33 +1669,6 @@ async def main():
     HEALTH_PORT = 5007
     logger.info("Starting WebSocket server...")
 
-    # Log environment info for K8s debugging
-    import os as _os
-    logger.info(
-        "[STARTUP] Environment: AURORA_ENV=%s, LLM_PROVIDER_MODE=%s, POSTGRES_HOST=%s, "
-        "REDIS_URL=%s, VAULT_ADDR=%s, AWS_DEFAULT_REGION=%s, POD_NAME=%s, NODE_NAME=%s",
-        _os.getenv("AURORA_ENV", "unset"),
-        _os.getenv("LLM_PROVIDER_MODE", "unset"),
-        _os.getenv("POSTGRES_HOST", "unset"),
-        _os.getenv("REDIS_URL", "unset")[:30] if _os.getenv("REDIS_URL") else "unset",
-        _os.getenv("VAULT_ADDR", "unset"),
-        _os.getenv("AWS_DEFAULT_REGION", "unset"),
-        _os.getenv("POD_NAME", "unset"),
-        _os.getenv("NODE_NAME", "unset"),
-    )
-
-    # DNS connectivity check for K8s debugging
-    import time as _startup_time
-    import socket
-    for host in [_os.getenv("POSTGRES_HOST", "postgres")]:
-        try:
-            _t_dns = _startup_time.perf_counter()
-            ip = socket.gethostbyname(host)
-            _dns_ms = (_startup_time.perf_counter() - _t_dns) * 1000
-            logger.info(f"[STARTUP] DNS resolution: {host} → {ip} ({_dns_ms:.1f} ms)")
-        except Exception as e:
-            logger.warning(f"[STARTUP] DNS resolution FAILED for {host}: {e}")
-
     # Clean up old terraform files on startup
     cleanup_terraform_directory()
 
