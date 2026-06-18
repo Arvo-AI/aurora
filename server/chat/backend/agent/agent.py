@@ -868,13 +868,46 @@ class Agent:
                     # Retry logic for network errors
                     for attempt in range(3):
                         try:
+                            # --- Await the guardrails task that was fired concurrently ---
+                            from chat.backend.agent.workflow import _guardrail_task_var
+                            _pending_rail = _guardrail_task_var.get(None)
+                            if _pending_rail is not None:
+                                import time as _rail_time2
+                                _t_rail_await = _rail_time2.perf_counter()
+                                from guardrails.input_rail import InputRailResult, _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
+                                rail_result: InputRailResult = await _pending_rail
+                                _rail_await_ms = (_rail_time2.perf_counter() - _t_rail_await) * 1000
+                                logging.info(f"[LATENCY] Guardrails await (concurrent) took {_rail_await_ms:.1f} ms (blocked={rail_result.blocked})")
+                                # Clear the context var so it doesn't leak to the next turn
+                                _guardrail_task_var.set(None)
+
+                                if rail_result.blocked:
+                                    from utils.security.audit_events import emit_block_event
+                                    emit_block_event(
+                                        user_id=state.user_id or "",
+                                        session_id=state.session_id or "",
+                                        layer="input_rail",
+                                        tool="agentic_tool_flow",
+                                        subject=getattr(state, "question", ""),
+                                        reason=rail_result.reason,
+                                        latency_ms=rail_result.latency_ms,
+                                    )
+                                    # Delete optimistically persisted message
+                                    if state.session_id and state.user_id:
+                                        try:
+                                            from chat.backend.agent.utils.immediate_save_handler import delete_last_saved_message
+                                            delete_last_saved_message(state.session_id, state.user_id)
+                                        except Exception as _del_err:
+                                            logging.warning(f"Failed to delete blocked message: {_del_err}")
+                                    state.guardrail_blocked = True
+                                    return state
+
                             # Use astream_events for token-by-token streaming
                             _timings['total_pre_llm'] = (_perf_time.perf_counter() - _atf_t0) * 1000
                             logging.info(
                                 f"[LATENCY] === TOTAL PRE-LLM SETUP: {_timings['total_pre_llm']:.1f} ms === "
                                 f"Breakdown: providers={_timings.get('get_user_providers', 0):.0f}ms, "
-                                f"prompt={_timings.get('build_prompt', 0):.0f}ms, "
-                                f"tools={_timings.get('get_cloud_tools', 0):.0f}ms, "
+                                f"prompt+tools={_timings.get('build_prompt_and_tools', 0):.0f}ms, "
                                 f"llm+agent={_timings.get('create_llm_and_agent', 0):.0f}ms"
                             )
                             logging.info(f"Starting agent token streaming for session {state.session_id}")
