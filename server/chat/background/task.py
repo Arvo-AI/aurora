@@ -37,6 +37,34 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Per-worker Agent singleton: avoids recreating PostgreSQLClient, WeaviateClient,
+# and LLMManager on every background chat task (~2s cold-start savings).
+# ---------------------------------------------------------------------------
+_worker_agent = None
+
+
+def _get_worker_agent():
+    """Return a cached Agent instance for the current worker process."""
+    global _worker_agent
+    if _worker_agent is None:
+        from chat.backend.agent.agent import Agent
+        from chat.backend.agent.db import PostgreSQLClient
+        from chat.backend.agent.weaviate_client import WeaviateClient
+
+        pg = PostgreSQLClient()
+        wv = WeaviateClient(pg)
+        _worker_agent = Agent(
+            weaviate_client=wv,
+            postgres_client=pg,
+            websocket_sender=None,
+            event_loop=None,
+            ctx_len=15,
+        )
+        logger.info("[BackgroundChat] Created per-worker singleton Agent")
+    return _worker_agent
+
+
 def _resolve_permitted_tools(user_id: str) -> Optional[set]:
     """Resolve permitted tools for background chats. Always fetches fresh from DB."""
     try:
@@ -1287,35 +1315,20 @@ async def _execute_background_chat(
     from chat.background.background_websocket import BackgroundWebSocket
     from main_chatbot import process_workflow_async
     
-    weaviate_client = None
-    
     try:
         import time as _exec_time
         _t_agent_init = _exec_time.perf_counter()
         
-        # Initialize clients (same as handle_connection in main_chatbot.py)
-        postgres_client = PostgreSQLClient()
-        weaviate_client = WeaviateClient(postgres_client)
+        # Reuse a per-worker Agent to avoid recreating PostgreSQLClient, WeaviateClient,
+        # and LLMManager on every task (~2s cold-start savings).
+        agent = _get_worker_agent()
         
         # Create background websocket (no-op, just discards messages)
         background_ws = BackgroundWebSocket()
         
-        # Create agent WITHOUT websocket_sender - tools will skip WebSocket messages
-        # Use reasonable ctx_len for RCAs - need enough history to build on previous tool calls
-        # But not too high to avoid context length errors (Azure has 128K limit)
-        # 15 is a good balance - allows agent to see its investigation progress while staying within limits
-        agent = Agent(
-            weaviate_client=weaviate_client,
-            postgres_client=postgres_client,
-            websocket_sender=None,
-            event_loop=None,
-            ctx_len=15,  # Reasonable history for RCAs - allows agent to see investigation progress
-        )
-        logger.info(f"[BackgroundChat] Created agent with ctx_len=15 (no WebSocket)")
-        
         # Create workflow for this session
         wf = Workflow(agent, session_id)
-        logger.info(f"[BackgroundChat] Created workflow for session {session_id}")
+        logger.info(f"[BackgroundChat] Created agent + workflow (singleton reuse)")
         
         _agent_init_ms = (_exec_time.perf_counter() - _t_agent_init) * 1000
         logger.info(f"[LATENCY] Agent + Workflow creation took {_agent_init_ms:.1f} ms")
@@ -1570,12 +1583,7 @@ async def _execute_background_chat(
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to stop async save queue - potential resource leak: {e}")
         
-        # Clean up weaviate client
-        if weaviate_client:
-            try:
-                weaviate_client.close()
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
+        # Weaviate client is managed by the per-worker singleton — don't close it here
 
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})

@@ -68,6 +68,11 @@ def _adaptive_bedrock_converse():
 class BedrockProvider(BaseLLMProvider):
     """AWS Bedrock provider with OpenAI-compatible gateway and native SDK modes."""
 
+    # Module-level cache: reuse ChatBedrockConverse instances across calls to avoid
+    # repeated boto3 session + TLS handshake overhead (~300-570ms per instantiation).
+    _native_client_cache: dict = {}
+    _CACHE_TTL = 300  # seconds
+
     def __init__(self):
         super().__init__()
         # Gateway mode (OpenAI-compatible URL fronting Bedrock). Presence of this
@@ -137,8 +142,21 @@ class BedrockProvider(BaseLLMProvider):
         # still works via .astream() in the agent path. Mirrors the Vertex provider.
         kwargs.pop("streaming", None)
 
-        logger.info(f"Creating Bedrock (native) chat model: {native_model} (region={self.region})")
         import time as _br_time
+
+        # Check client cache to avoid repeated boto3 session + TLS handshake
+        cache_key = f"{native_model}:{self.region}:{temperature}"
+        now = _br_time.time()
+        cached = BedrockProvider._native_client_cache.get(cache_key)
+        if cached:
+            client, created_at = cached
+            if now - created_at < BedrockProvider._CACHE_TTL:
+                logger.info(f"[LATENCY] Bedrock client cache HIT for {native_model} (region={self.region})")
+                return client
+            else:
+                del BedrockProvider._native_client_cache[cache_key]
+
+        logger.info(f"Creating Bedrock (native) chat model: {native_model} (region={self.region})")
         _t_br = _br_time.perf_counter()
         config = {
             "model": native_model,
@@ -162,6 +180,8 @@ class BedrockProvider(BaseLLMProvider):
             logger.warning(f"[LATENCY] Bedrock model instantiation took {_br_ms:.1f} ms (model={native_model}, region={self.region})")
         else:
             logger.info(f"[LATENCY] Bedrock model instantiation: {_br_ms:.1f} ms")
+
+        BedrockProvider._native_client_cache[cache_key] = (model_instance, now)
         return model_instance
 
     def is_available(self) -> bool:

@@ -127,22 +127,10 @@ def slack_events():
                     if client:
                         if response_text:
                             try:
-                                _t_thinking = _slack_time.perf_counter()
-                                sent_msg = client.send_message(
-                                    channel=channel, 
-                                    text=response_text, 
-                                    thread_ts=thread_ts
-                                )
-                                _thinking_ms = (_slack_time.perf_counter() - _t_thinking) * 1000
                                 if trigger_background:
-                                    logger.info(f"[LATENCY] Slack 'Thinking...' message send took {_thinking_ms:.1f} ms")
-                                
-                                if trigger_background and sent_msg:
-                                    # Proceed with background task
-                                    # Determine session logic
-                                    msg_thread_ts = event.get('thread_ts') # Use original thread_ts for logic
+                                    # Determine session logic early to know if we need channel context
+                                    msg_thread_ts = event.get('thread_ts')
                                     
-                                    # Logic for new session vs thread
                                     incident_id = None
                                     session_id = None
                                     context_messages = []
@@ -150,18 +138,46 @@ def slack_events():
                                     final_thread_ts = None
                                     
                                     if msg_thread_ts and msg_thread_ts != ts:
-                                         # Reply in thread
-                                         session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
-                                         context_messages = get_thread_messages(client, channel, msg_thread_ts)
-                                         final_thread_ts = msg_thread_ts
+                                        # Reply in thread — send "Thinking..." then fetch thread context
+                                        _t_thinking = _slack_time.perf_counter()
+                                        sent_msg = client.send_message(
+                                            channel=channel, 
+                                            text=response_text, 
+                                            thread_ts=thread_ts
+                                        )
+                                        _thinking_ms = (_slack_time.perf_counter() - _t_thinking) * 1000
+                                        logger.info(f"[LATENCY] Slack 'Thinking...' message send took {_thinking_ms:.1f} ms")
+                                        session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
+                                        context_messages = get_thread_messages(client, channel, msg_thread_ts)
+                                        final_thread_ts = msg_thread_ts
                                     else:
-                                         # New top level - fetch channel context with thread summaries
-                                         _t_ctx = _slack_time.perf_counter()
-                                         channel_context = get_channel_context_with_threads(client, channel, limit=5)
-                                         _ctx_ms = (_slack_time.perf_counter() - _t_ctx) * 1000
-                                         logger.info(f"[LATENCY] Slack channel context fetch took {_ctx_ms:.1f} ms")
-                                         final_thread_ts = ts
-                                    
+                                        # New top-level message — parallelize "Thinking..." send with channel context fetch
+                                        from concurrent.futures import ThreadPoolExecutor
+                                        _t_parallel = _slack_time.perf_counter()
+                                        with ThreadPoolExecutor(max_workers=2) as pool:
+                                            thinking_future = pool.submit(
+                                                client.send_message,
+                                                channel=channel,
+                                                text=response_text,
+                                                thread_ts=thread_ts
+                                            )
+                                            context_future = pool.submit(
+                                                get_channel_context_with_threads, client, channel, 5
+                                            )
+                                            sent_msg = thinking_future.result()
+                                            channel_context = context_future.result()
+                                        _parallel_ms = (_slack_time.perf_counter() - _t_parallel) * 1000
+                                        logger.info(f"[LATENCY] Parallel 'Thinking...' + channel context took {_parallel_ms:.1f} ms")
+                                        final_thread_ts = ts
+                                else:
+                                    # Non-background response (e.g. auth error) — just send normally
+                                    sent_msg = client.send_message(
+                                        channel=channel, 
+                                        text=response_text, 
+                                        thread_ts=thread_ts
+                                    )
+                                
+                                if trigger_background and sent_msg:
                                     thinking_ts = sent_msg.get('ts')
                                     
                                     logger.info(f"Processing @Aurora mention in channel {channel}, thread {final_thread_ts}: {text[:100]}")

@@ -344,27 +344,26 @@ class Agent:
                 getattr(state, 'attachments', []),
             )
 
-            # Build modular segments
-            _t_prompt = _perf_time.perf_counter()
-            segments = build_prompt_segments(
-                provider_preference=provider_preference,
-                mode=getattr(state, "mode", None),
-                has_zip_reference=has_zip_ref,
-                state=state,
-            )
+            # Build prompt segments and get cloud tools in parallel (both CPU-bound, independent)
+            _t_parallel = _perf_time.perf_counter()
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=2) as _pool:
+                _prompt_future = _pool.submit(
+                    build_prompt_segments,
+                    provider_preference=provider_preference,
+                    mode=getattr(state, "mode", None),
+                    has_zip_reference=has_zip_ref,
+                    state=state,
+                )
+                _tools_future = _pool.submit(get_cloud_tools)
+                segments = _prompt_future.result()
+                tools = _tools_future.result()
 
-            # Assemble final system prompt from segments
             system_prompt_text = assemble_system_prompt(segments)
-            _timings['build_prompt'] = (_perf_time.perf_counter() - _t_prompt) * 1000
-            logging.info(f"[LATENCY] build_prompt_segments + assemble took {_timings['build_prompt']:.1f} ms")
+            _timings['build_prompt_and_tools'] = (_perf_time.perf_counter() - _t_parallel) * 1000
+            logging.info(f"[LATENCY] parallel build_prompt + get_cloud_tools took {_timings['build_prompt_and_tools']:.1f} ms (returned {len(tools)} tools)")
             if system_prompt_override is not None:
                 system_prompt_text = system_prompt_override
-
-            # Get cloud tools
-            _t_tools = _perf_time.perf_counter()
-            tools = get_cloud_tools()
-            _timings['get_cloud_tools'] = (_perf_time.perf_counter() - _t_tools) * 1000
-            logging.info(f"[LATENCY] get_cloud_tools took {_timings['get_cloud_tools']:.1f} ms (returned {len(tools)} tools)")
             if tool_subset is not None:
                 tools = tool_subset
 
