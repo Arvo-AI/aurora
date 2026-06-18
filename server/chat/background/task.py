@@ -483,6 +483,21 @@ def run_background_chat(
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
+    # Deduplication guard: acks_late=True can cause Redis to redeliver the same task
+    # to the worker while it's still running. Use a Redis SETNX lock on the task ID.
+    _dedup_key = f"celery:dedup:{self.request.id}"
+    try:
+        _redis = celery_app.backend.client if hasattr(celery_app.backend, 'client') else None
+        if _redis is None:
+            from celery_config import celery_app as _ca
+            _redis = _ca.broker_connection().channel().client
+        _acquired = _redis.set(_dedup_key, "1", nx=True, ex=1800)
+        if not _acquired:
+            logger.warning(f"[BackgroundChat] DEDUP: Task {self.request.id} already running, skipping duplicate execution")
+            return {"session_id": session_id, "status": "deduplicated", "error": None}
+    except Exception as _dedup_err:
+        logger.warning(f"[BackgroundChat] DEDUP check failed (proceeding anyway): {_dedup_err}")
+
     # Track overall task timing and queue wait for Slack messages
     import time as _task_time
     _task_t0 = _task_time.perf_counter()
