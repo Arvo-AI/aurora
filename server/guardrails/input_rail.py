@@ -151,9 +151,9 @@ def _build_llm() -> BaseChatModel:
     llm = create_chat_model(model_name, temperature=0.0, streaming=False)
 
     provider, _ = ModelMapper.split_provider_model(model_name)
-    provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct").lower()
-    if provider == "google" and provider_mode == "direct":
+    if provider in ("google", "vertex"):
         return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=True)
+    provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct").lower()
     if provider == "openai" and provider_mode == "direct":
         native = ModelMapper.get_native_name(model_name, "openai")
         if OpenAIProvider._supports_reasoning(native):
