@@ -529,6 +529,16 @@ def github_app_install_callback():
             exc_info=True,
         )
 
+    # Ensure tool permissions include GitHub tools for this org (idempotent).
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+        seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning(
+            "[GITHUB-APP-CALLBACK] failed to seed tool permissions",
+            exc_info=True,
+        )
+
     # Reuse the OAuth success template. App-mode has no user token to relay,
     # so token is empty; account_login takes the github_username slot so the
     # postMessage to the parent window still carries a useful identifier.
