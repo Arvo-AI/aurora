@@ -53,6 +53,18 @@ spec:
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "celery -A celery_config worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-4} --pidfile=/tmp/celery-worker.pid"]
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # Gracefully deregister from Redis before pod terminates.
+                    # This prevents ghost consumers from stealing tasks during rollouts.
+                    celery -A celery_config control cancel_consumer celery --destination="celery@$(hostname)" 2>/dev/null
+                    # Give Celery a moment to finish in-flight tasks
+                    sleep 5
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "celeryWorker" "global" $ "defaults" (dict)) | nindent 12 }}
           envFrom:
