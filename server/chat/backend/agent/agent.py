@@ -892,13 +892,6 @@ class Agent:
                                         reason=rail_result.reason,
                                         latency_ms=rail_result.latency_ms,
                                     )
-                                    # Delete optimistically persisted message
-                                    if state.session_id and state.user_id:
-                                        try:
-                                            from chat.backend.agent.utils.immediate_save_handler import delete_last_saved_message
-                                            delete_last_saved_message(state.session_id, state.user_id)
-                                        except Exception as _del_err:
-                                            logging.warning(f"Failed to delete blocked message: {_del_err}")
                                     state.guardrail_blocked = True
                                     return state
 

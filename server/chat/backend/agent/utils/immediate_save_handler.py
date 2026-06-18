@@ -42,45 +42,6 @@ def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
         return False
 
 
-def delete_last_saved_message(session_id: str, user_id: str) -> bool:
-    """Remove the last user message from chat_sessions.messages (rollback for guardrail block)."""
-    try:
-        from utils.db.db_utils import connect_to_db_as_user
-        from utils.auth.stateless_auth import set_rls_context
-
-        conn = connect_to_db_as_user()
-        cursor = conn.cursor()
-        if not set_rls_context(cursor, conn, user_id, log_prefix="[ImmediateSave:Delete]"):
-            conn.close()
-            return False
-
-        cursor.execute("""
-            SELECT messages FROM chat_sessions
-            WHERE id = %s AND user_id = %s AND is_active = true
-        """, (session_id, user_id))
-
-        result = cursor.fetchone()
-        if result and result[0]:
-            messages = result[0] if isinstance(result[0], list) else []
-            # Remove the last message only if it's a user message
-            if messages and messages[-1].get('sender') == 'user':
-                messages.pop()
-                cursor.execute("""
-                    UPDATE chat_sessions
-                    SET messages = %s, updated_at = %s
-                    WHERE id = %s AND user_id = %s
-                """, (json.dumps(messages), datetime.now(), session_id, user_id))
-                conn.commit()
-                logger.info(f"Deleted blocked user message from session {session_id}")
-
-        cursor.close()
-        conn.close()
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to delete blocked message: {e}")
-        return False
-
-
 def _save_ui_message(session_id: str, user_id: str, ui_messages: List[Dict[str, Any]]) -> bool:
     """Save UI-formatted message to database.
     
