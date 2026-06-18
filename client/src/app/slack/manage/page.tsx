@@ -118,7 +118,7 @@ export default function SlackManagePage() {
     setIsDisconnecting(true);
     try {
       await slackService.disconnect();
-      if (typeof globalThis.window !== "undefined") {
+      if (globalThis.window !== undefined) {
         localStorage.removeItem("isSlackConnected");
         globalThis.window.dispatchEvent(new CustomEvent("providerStateChanged"));
       }

@@ -193,7 +193,7 @@ def _send_emails(org_id: str, user_id: str, send_fn_name: str, payload: Any) -> 
 # ---------------------------------------------------------------------------
 
 
-def notify_investigation_started(user_id: str, incident_id: str, session_id: Optional[str] = None) -> None:  # noqa: ARG001 (session_id kept for API consistency)
+def notify_investigation_started(user_id: str, incident_id: str) -> None:
     """Send notifications for investigation started event across all enabled channels."""
     try:
         org_id = get_org_id_for_user(user_id)
@@ -281,8 +281,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         logger.exception("[Dispatcher] Error in notify_investigation_completed")
 
 
-def notify_investigation_failed(user_id: str, incident_id: str, error_message: Optional[str] = None,
-                                session_id: Optional[str] = None) -> None:  # noqa: ARG001 (session_id kept for API consistency)
+def notify_investigation_failed(user_id: str, incident_id: str, error_message: Optional[str] = None) -> None:
     """Send notifications for investigation failed event across all enabled channels."""
     try:
         org_id = get_org_id_for_user(user_id)

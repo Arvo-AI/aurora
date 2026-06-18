@@ -613,7 +613,7 @@ def run_background_chat(
                         # Send investigation started notifications via centralized dispatcher
                         if send_notifications:
                             from utils.notifications.dispatcher import notify_investigation_started
-                            notify_investigation_started(user_id, incident_id, session_id=session_id)
+                            notify_investigation_started(user_id, incident_id)
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
         
@@ -826,7 +826,7 @@ def run_background_chat(
             _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
             try:
                 from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes", session_id=session_id)
+                notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
             except Exception:
                 logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
@@ -852,7 +852,7 @@ def run_background_chat(
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
             try:
                 from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message=str(e), session_id=session_id)
+                notify_investigation_failed(user_id, incident_id, error_message=str(e))
             except Exception:
                 logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
@@ -2348,7 +2348,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             _record_rca_error(cursor, str(incident_id), uid)
                             try:
                                 from utils.notifications.dispatcher import notify_investigation_failed
-                                notify_investigation_failed(uid, str(incident_id), error_message="Investigation stalled and was cleaned up", session_id=str(session_id))
+                                notify_investigation_failed(uid, str(incident_id), error_message="Investigation stalled and was cleaned up")
                             except Exception:
                                 logger.exception("[CleanupOrphans] Failed to send stalled investigation notification for incident %s", incident_id)
                         conn.commit()
@@ -2385,7 +2385,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         dead_task_count += 1
                         try:
                             from utils.notifications.dispatcher import notify_investigation_failed
-                            notify_investigation_failed(uid, str(inc_id), error_message="Investigation worker died unexpectedly", session_id=str(session_id) if session_id else None)
+                            notify_investigation_failed(uid, str(inc_id), error_message="Investigation worker died unexpectedly")
                         except Exception:
                             logger.exception("[CleanupOrphans] Failed to send dead-task notification for incident %s", inc_id)
 
