@@ -720,13 +720,14 @@ def get_incident_suggestions(incident_id: str):
                     """
                     SELECT id, title, description, type, risk, command
                     FROM incident_suggestions
-                    WHERE incident_id = %s AND type != 'fix'
+                    WHERE incident_id = %s
                     ORDER BY 
                         CASE type
-                            WHEN 'mitigation' THEN 1
-                            WHEN 'diagnostic' THEN 2
-                            WHEN 'communication' THEN 3
-                            ELSE 4
+                            WHEN 'fix' THEN 1
+                            WHEN 'mitigation' THEN 2
+                            WHEN 'diagnostic' THEN 3
+                            WHEN 'communication' THEN 4
+                            ELSE 5
                         END,
                         created_at ASC
                     """,
@@ -873,20 +874,20 @@ def build_suggestions_blocks(incident_id: str, suggestions: list, max_suggestion
         if len(text) > SLACK_SECTION_TEXT_BUFFER:  # Leave buffer for Slack
             text = text[:SLACK_SECTION_TEXT_BUFFER] + "..."
 
-        # Build the run button — red/danger for high-risk, green/primary otherwise
-        run_button = {
-            "type": "button",
-            "text": {
-                "type": "plain_text",
-                "text": "⚠️ Run" if is_high_risk else "Run"
-            },
-            "value": f"{incident_id}:{suggestion['id']}",
-            "action_id": f"run_suggestion_{suggestion['id']}",
-            "style": "danger" if is_high_risk else "primary"
-        }
+        # Build the run button — kept as legacy for future use
+        # run_button = {
+        #     "type": "button",
+        #     "text": {
+        #         "type": "plain_text",
+        #         "text": "⚠️ Run" if is_high_risk else "Run"
+        #     },
+        #     "value": f"{incident_id}:{suggestion['id']}",
+        #     "action_id": f"run_suggestion_{suggestion['id']}",
+        #     "style": "danger" if is_high_risk else "primary"
+        # }
         
-        # Build actions with Run button and More details button
-        action_elements = [run_button]
+        # Build actions with More details button only
+        action_elements = []
         
         # Add "More details" button
         details_button = {
