@@ -397,12 +397,22 @@ https://github.com/settings/apps/new
 | Field | Value |
 |---|---|
 | GitHub App name | `aurora-<customer-slug>` (globally unique). Examples: `aurora-acme-prod`, `aurora-acme-staging`. |
-| Homepage URL | `<BASE_URL>` (the customer's Aurora hostname) |
-| Callback URL | `<BASE_URL>/github/callback` (OAuth user-authorization redirect) |
-| Setup URL | `<BASE_URL>/github/app/install/callback` (post-install redirect — a **different** route from the Callback URL) |
-| Webhook URL | `<BASE_URL>/github/webhook` |
+| Homepage URL | `<FRONTEND_URL>` (the user-facing Aurora hostname, e.g. `https://aurora.example.com`) |
+| Callback URL | `<API_URL>/github/callback` (OAuth user-authorization redirect) |
+| Setup URL | `<API_URL>/github/app/install/callback` (post-install redirect — a **different** route from the Callback URL) |
+| Webhook URL | `<API_URL>/github/webhook` |
 | Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to your secrets backend |
 | Where can be installed? | **Only on this account** (locks the App to the customer org) |
+
+:::important Webhook, Setup, and Callback URLs use the **API** host — not the frontend
+`/github/webhook`, `/github/app/install/callback`, and `/github/callback` are
+**backend** routes (the Flask server on port `5080`). GitHub posts to them
+directly and the Next.js frontend does **not** proxy `/github/*`, so they must
+point at wherever the backend is publicly reachable — `<API_URL>`. In the
+default Helm ingress that's the `api.<domain>` host (`ingress.hosts.api`, e.g.
+`api.aurora.example.com`); in local dev it's a tunnel straight to port `5080`.
+Only the **Homepage URL** uses the frontend hostname (`<FRONTEND_URL>`).
+:::
 
 **Repository permissions** (set in Permissions & events tab):
 
@@ -484,10 +494,10 @@ key data" errors when Aurora tries to sign installation tokens.
 To update a secret that already exists, swap `create-secret` for
 `put-secret-value --secret-id <name> --secret-string … --region "$AWS_SM_REGION"`.
 
-**Step 4 — Set Aurora env vars** in the customer's `.env`, with the
-`GITHUB_APP_*` URLs pointing at the customer's `<BASE_URL>`. Set
-`AURORA_ENV=production` and a rotated `INTERNAL_API_SECRET` so the runtime
-startup check enforces both.
+**Step 4 — Set Aurora env vars** in the customer's `.env`, with the webhook
+and setup URLs pointing at the customer's `<API_URL>` (the backend host — see
+the note above). Set `AURORA_ENV=production` and a rotated
+`INTERNAL_API_SECRET` so the runtime startup check enforces both.
 
 ```bash
 GITHUB_AUTH_MODE=app
@@ -495,8 +505,8 @@ GITHUB_AUTH_MODE=app
 GITHUB_APP_ID=<numeric, from App settings>
 GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
 NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
-GITHUB_APP_WEBHOOK_URL=<BASE_URL>/github/webhook
-GITHUB_APP_SETUP_URL=<BASE_URL>/github/app/install/callback
+GITHUB_APP_WEBHOOK_URL=<API_URL>/github/webhook
+GITHUB_APP_SETUP_URL=<API_URL>/github/app/install/callback
 GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
@@ -518,7 +528,7 @@ backend at `aurora/system/github-app/private-key`, so store it there
 and a stray callback-URL change in dev cannot break prod webhook
 delivery.
 
-**Verification**: open `<BASE_URL>` in a browser, click **Connectors** in
+**Verification**: open `<FRONTEND_URL>` in a browser, click **Connectors** in
 the left sidebar, find the **GitHub** card and click **Manage**, then use
 **Install GitHub App**. The popup goes to GitHub.com, you approve
 repository access, and the dialog flips
@@ -554,7 +564,7 @@ scopes and clear the pending state.
 1. Go to [GitHub > Settings > Developer settings > OAuth Apps](https://github.com/settings/developers)
 2. Click **New OAuth App**
    - Application name: `Aurora`
-   - Homepage URL: `http://localhost:3000` (or your real `BASE_URL`)
+   - Homepage URL: `http://localhost:3000` (or your real `<FRONTEND_URL>`)
    - Authorization callback URL: `http://localhost:5080/github/callback`
 3. Click **Register application** and copy the **Client ID** + a freshly-generated **Client secret**
 
