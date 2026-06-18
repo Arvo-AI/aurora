@@ -1059,8 +1059,12 @@ class Workflow:
                 last_msg.content,
             )
             # Skip rail when there is no untrusted text to evaluate (e.g.
-            # prediscovery prompts are entirely system-authored).
-            if not msg_text:
+            # prediscovery prompts are entirely system-authored), or for PR
+            # change-gating reviews (PR title/body is GitHub API data, not
+            # user input to Aurora; injection defense is handled by
+            # _escape_prompt_data in the prompt builder).
+            is_pr_review = getattr(input_state, "is_pr_review", False)
+            if not msg_text or is_pr_review:
                 rail_result = InputRailResult(blocked=False)
             else:
                 rail_result = await check_input(msg_text)
