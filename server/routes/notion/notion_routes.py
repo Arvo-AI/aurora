@@ -87,6 +87,15 @@ def _handle_oauth_callback(
         logger.exception("[NOTION] Failed to persist OAuth credentials: %s", exc)
         return jsonify({"error": "Failed to persist Notion credentials"}), 500
 
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+        if org_id:
+            seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning("[NOTION] failed to seed tool permissions", exc_info=True)
+
     return jsonify(
         {
             "success": True,
@@ -162,6 +171,15 @@ def connect(user_id):
         rc = get_redis_client()
         if rc:
             rc.delete(f"notion:status:{user_id}")
+
+        try:
+            from utils.auth.tool_registry import seed_org_tool_permissions
+            from utils.auth.stateless_auth import get_org_id_for_user
+            org_id = get_org_id_for_user(user_id)
+            if org_id:
+                seed_org_tool_permissions(org_id, user_id)
+        except Exception:
+            logger.warning("[NOTION] failed to seed tool permissions", exc_info=True)
 
         return jsonify(
             {

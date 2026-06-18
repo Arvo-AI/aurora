@@ -218,6 +218,15 @@ def bitbucket_callback():
                 frontend_url=FRONTEND_URL,
             )
 
+        try:
+            from utils.auth.tool_registry import seed_org_tool_permissions
+            from utils.auth.stateless_auth import get_org_id_for_user
+            org_id = get_org_id_for_user(user_id)
+            if org_id:
+                seed_org_tool_permissions(org_id, user_id)
+        except Exception:
+            logger.warning("[BITBUCKET-CALLBACK] failed to seed tool permissions", exc_info=True)
+
         return render_template(
             "bitbucket_callback_success.html",
             bitbucket_username=username,

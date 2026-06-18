@@ -126,6 +126,15 @@ def connect(user_id):
         logger.exception("[SPINNAKER] Failed to store credentials for user %s", user_id)
         return jsonify({"error": "Failed to store Spinnaker credentials"}), 500
 
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(user_id)
+        if org_id:
+            seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning("[SPINNAKER] failed to seed tool permissions", exc_info=True)
+
     return jsonify({
         "connected": True,
         "baseUrl": base_url,
