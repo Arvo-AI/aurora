@@ -1565,8 +1565,6 @@ async def _execute_background_chat(
                 await ContextManager._instance.async_queue.stop()
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to stop async save queue - potential resource leak: {e}")
-        
-        # Weaviate client is managed by the per-worker singleton — don't close it here
 
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})

@@ -858,7 +858,7 @@ class Agent:
                         try:
                             # --- Await the guardrails task that was fired concurrently ---
                             from chat.backend.agent.workflow import _guardrail_task_var
-                            _pending_rail = _guardrail_task_var.get(None)
+                            _pending_rail = _guardrail_task_var.get()
                             if _pending_rail is not None:
                                 from guardrails.input_rail import InputRailResult, _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
                                 rail_result: InputRailResult = await _pending_rail

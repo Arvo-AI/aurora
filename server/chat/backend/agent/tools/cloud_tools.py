@@ -1021,10 +1021,9 @@ def get_cloud_tools():
         mode = get_mode_from_context()
     mode_suffix = (mode or 'agent').lower()
 
-    # Cache key uses stable identifiers only. The tool_capture wrapper now resolves
-    # the active capture instance dynamically from thread-local context at call time,
-    # so we no longer need to key on the object identity (which guaranteed a miss every
-    # invocation since a new ToolContextCapture is created per message).
+    # Cache key uses stable identifiers — the tool_capture wrapper resolves the active
+    # capture instance dynamically at call time via get_tool_capture(), so we don't need
+    # id(tool_capture) which caused a cache miss every invocation.
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
@@ -1039,7 +1038,9 @@ def get_cloud_tools():
         cache_key in _langchain_tools_cache_expiry and
         current_time < _langchain_tools_cache_expiry[cache_key]
     ):
-        logging.info(f"get_cloud_tools cache hit for user {user_id}")
+        logging.info(
+            f"Using fully cached LangChain tools for user {user_id} (cache key: {cache_key})"
+        )
         cached_tools = _langchain_tools_cache[cache_key]
         return list(cached_tools)
     
@@ -1058,19 +1059,15 @@ def get_cloud_tools():
         return {k: v for k, v in kwargs.items() if k not in INTERNAL_CONTEXT_KEYS}
 
     def wrap_func_with_capture(func, tool_name):
-        """Wrap a function to capture its execution for LLM context.
-
-        The wrapper resolves the active tool_capture from thread-local context
-        at call time, allowing cached tools to work with any capture instance.
-        """
+        """Wrap a function to capture its execution for LLM context."""
         if not tool_capture:
             return func
             
         @wraps(func)
         def wrapped_func(**kwargs):
             # Resolve capture instance dynamically so cached tools work across sessions
-            _tc = get_tool_capture()
-            exec_lock = getattr(_tc, 'execution_lock', None) if _tc else None
+            tool_capture = get_tool_capture()
+            exec_lock = getattr(tool_capture, 'execution_lock', None) if tool_capture else None
             acquired = False
             try:
                 if exec_lock:
@@ -1080,7 +1077,7 @@ def get_cloud_tools():
                 # FIX for OpenAI models: Update signature before execution
                 # OpenAI registers tools with placeholder signatures, then populates args during execution
                 # We need to update the signature now that we have the actual kwargs
-                if _tc:
+                if tool_capture:
                     signature_payload = _sanitize_kwargs_for_signature(kwargs)
                     try:
                         serialized_payload = json.dumps(signature_payload, sort_keys=True)
@@ -1089,11 +1086,12 @@ def get_cloud_tools():
                     tool_signature = f"{tool_name}_{serialized_payload}"
                     
                     # Update the signature for any tool call with placeholder signature
-                    with _tc.lock:
-                        for call_id, call_info in _tc.current_tool_calls.items():
+                    with tool_capture.lock:
+                        for call_id, call_info in tool_capture.current_tool_calls.items():
                             if (call_info.get('signature') == f"{tool_name}___placeholder__" and
                                 call_info.get('tool_name') == tool_name and
                                 not call_info.get('completed')):
+                                # This is likely the tool we're about to execute - update its signature
                                 call_info['signature'] = tool_signature
                                 call_info['input'] = kwargs
                                 logging.info(f"Updated placeholder signature for {call_id} to {tool_signature}")
@@ -1104,7 +1102,9 @@ def get_cloud_tools():
                 
                 # FIXED: Find the matching tool call ID by signature match instead of just "incomplete" status
                 matching_tool_call_id = None
-                if _tc:
+                if tool_capture:
+                    # Create signature to match against stored tool calls
+                    logging.info(f"TOOL CAPTURE: KWARGS: {kwargs}")
                     signature_payload = _sanitize_kwargs_for_signature(kwargs)
                     try:
                         serialized_payload = json.dumps(signature_payload, sort_keys=True)
@@ -1112,7 +1112,15 @@ def get_cloud_tools():
                         serialized_payload = str(signature_payload)
                     tool_signature = f"{tool_name}_{serialized_payload}"
                     
-                    for call_id, call_info in _tc.current_tool_calls.items():
+                    # Look for a tool call that matches this exact signature
+                    # DON'T skip completed calls here - we need to match them correctly!
+                    # The 'completed' flag just prevents cleanup race conditions
+                    logging.info(f"TOOL CAPTURE: Tool capture instance found: {tool_capture}")
+                    logging.info(f"TOOL CAPTURE: Tool capture instance found: {tool_capture.current_tool_calls}")
+                    for call_id, call_info in tool_capture.current_tool_calls.items():
+                        logging.info(f"TOOL CAPTURE: Call info: {call_info}")
+                        logging.info(f"TOOL CAPTURE: Call signature right side: {tool_signature}")
+                        logging.info(f"TOOL CAPTURE: Call result: {result}")
                         if call_info.get('signature') == tool_signature:
                             matching_tool_call_id = call_id
                             logging.info(f"Found matching tool call for completion: {matching_tool_call_id}")
@@ -1120,10 +1128,11 @@ def get_cloud_tools():
                     
                     # Fallback – match by tool_name + command (provider may be missing)
                     if not matching_tool_call_id:
-                        for call_id, call_info in _tc.current_tool_calls.items():
+                        for call_id, call_info in tool_capture.current_tool_calls.items():
                             if call_info.get('tool_name') != tool_name:
                                 continue
                             ci_input = call_info.get('input', {}) or {}
+                            # Require command to match exactly; provider is optional
                             if ci_input.get('command') == kwargs.get('command'):
                                 matching_tool_call_id = call_id
                                 logging.info(
@@ -1135,16 +1144,18 @@ def get_cloud_tools():
                                 break
 
                     # As a last resort, match by oldest incomplete call for sequential execution (OpenAI)
+                    # For parallel execution (Gemini), signature matching should have already succeeded
                     if not matching_tool_call_id:
                         candidate_ids = [
                             (call_id, call_info.get('start_time'))
-                            for call_id, call_info in _tc.current_tool_calls.items()
+                            for call_id, call_info in tool_capture.current_tool_calls.items()
                             if call_info.get('tool_name') == tool_name and not call_info.get('completed')
                         ]
                         
                         if len(candidate_ids) == 1:
+                            # Only one candidate - safe to use
                             matching_tool_call_id = candidate_ids[0][0]
-                            call_info = _tc.current_tool_calls[matching_tool_call_id]
+                            call_info = tool_capture.current_tool_calls[matching_tool_call_id]
                             call_info['input'] = signature_payload
                             call_info['signature'] = tool_signature
                             logging.info(
@@ -1152,9 +1163,11 @@ def get_cloud_tools():
                                 matching_tool_call_id,
                             )
                         elif len(candidate_ids) > 1:
+                            # Multiple candidates - for sequential execution, pick the oldest
+                            # This handles OpenAI's sequential execution pattern
                             candidate_ids.sort(key=lambda x: x[1] if x[1] else datetime.min)
                             matching_tool_call_id = candidate_ids[0][0]
-                            call_info = _tc.current_tool_calls[matching_tool_call_id]
+                            call_info = tool_capture.current_tool_calls[matching_tool_call_id]
                             call_info['input'] = signature_payload
                             call_info['signature'] = tool_signature
                             logging.warning(
@@ -1163,15 +1176,21 @@ def get_cloud_tools():
                                 f"This is expected for OpenAI sequential execution."
                             )
 
-                logging.info(f"Matching tool call id: {matching_tool_call_id} and _tc: {_tc}")
-                if matching_tool_call_id and _tc:
-                    with _tc.lock:
-                        already_captured = _tc.current_tool_calls.get(matching_tool_call_id, {}).get('completed', False)
+                logging.info(f"Matching tool call id: {matching_tool_call_id} and tool_capture: {tool_capture}")
+                if matching_tool_call_id and tool_capture:
+                    # Call capture_tool_end to ensure ToolMessage is added to collected_tool_messages
+                    # This is essential for cancelled chats where get_collected_tool_messages() is called
+                    # Some tools (cloud_exec, iac_tool with action=apply) call this themselves, but other
+                    # invocations still need us to capture completion here
+                    # The wrapper must ensure it's always called for consistency
+                    # Check if capture_tool_end was already called (completed=True means it was)
+                    with tool_capture.lock:
+                        already_captured = tool_capture.current_tool_calls.get(matching_tool_call_id, {}).get('completed', False)
                     
                     if not already_captured:
                         try:
                             output_str = json.dumps(result) if isinstance(result, dict) else str(result)
-                            _tc.capture_tool_end(matching_tool_call_id, output_str, is_error=False)
+                            tool_capture.capture_tool_end(matching_tool_call_id, output_str, is_error=False)
                             logging.info(f"Wrapper called capture_tool_end for {matching_tool_call_id}")
                         except Exception as capture_error:
                             logging.error(f"Failed to capture tool end in wrapper: {capture_error}")
@@ -1179,13 +1198,15 @@ def get_cloud_tools():
                         logging.debug(f"Skipping capture_tool_end for {matching_tool_call_id} - already captured by tool implementation")
                     
                     # Now clean up by removing from current_tool_calls after successful matching and capture
-                    if matching_tool_call_id in _tc.current_tool_calls:
-                        with _tc.lock:
-                            if matching_tool_call_id in _tc.current_tool_calls:
-                                del _tc.current_tool_calls[matching_tool_call_id]
+                    if matching_tool_call_id in tool_capture.current_tool_calls:
+                        with tool_capture.lock:
+                            if matching_tool_call_id in tool_capture.current_tool_calls:
+                                del tool_capture.current_tool_calls[matching_tool_call_id]
                                 logging.info(f"Cleaned up completed tool call {matching_tool_call_id} from tracking after successful match")
                 else:
                     logging.warning(f"No matching tool call found for {tool_name} completion - tool tracking may have been lost")
+                    # Note: send_tool_completion was already called above (line 588), so the WebSocket
+                    # notification should still be sent even if backend tracking is lost
                 
                 # Cap tool output before returning to LangChain so the ReAct
                 # loop never accumulates oversized ToolMessages.
@@ -1197,7 +1218,8 @@ def get_cloud_tools():
             except Exception as e:
                 # Find matching tool call for error reporting
                 matching_tool_call_id = None
-                if _tc:
+                if tool_capture:
+                    # Try signature matching first (for consistency with success path)
                     signature_payload = _sanitize_kwargs_for_signature(kwargs)
                     try:
                         serialized_payload = json.dumps(signature_payload, sort_keys=True)
@@ -1205,16 +1227,17 @@ def get_cloud_tools():
                         serialized_payload = str(signature_payload)
                     tool_signature = f"{tool_name}_{serialized_payload}"
                     
-                    for call_id, call_info in _tc.current_tool_calls.items():
+                    for call_id, call_info in tool_capture.current_tool_calls.items():
                         if call_info.get('signature') == tool_signature and not call_info.get('completed'):
                             matching_tool_call_id = call_id
                             logging.info(f"Matched error to tool call by signature: {matching_tool_call_id}")
                             break
                     
                     # Fallback: Only match if there's exactly ONE incomplete call for this tool
+                    # This prevents parallel tool calls from sharing the same error tracking
                     if not matching_tool_call_id:
                         incomplete_calls = [
-                            call_id for call_id, call_info in _tc.current_tool_calls.items() 
+                            call_id for call_id, call_info in tool_capture.current_tool_calls.items() 
                             if call_info.get('tool_name') == tool_name and not call_info.get('completed', False)
                         ]
                         
@@ -1229,14 +1252,17 @@ def get_cloud_tools():
                         else:
                             logging.warning(f"No incomplete tool calls found for {tool_name} error")
                 
-                if matching_tool_call_id and _tc:
-                    with _tc.lock:
-                        already_captured = _tc.current_tool_calls.get(matching_tool_call_id, {}).get('completed', False)
+                if matching_tool_call_id and tool_capture:
+                    # CRITICAL: Call capture_tool_end for error case to ensure ToolMessage is added
+                    # This is essential for cancelled chats where get_collected_tool_messages() is called
+                    # Check if capture_tool_end was already called (completed=True means it was)
+                    with tool_capture.lock:
+                        already_captured = tool_capture.current_tool_calls.get(matching_tool_call_id, {}).get('completed', False)
                     
                     if not already_captured:
                         try:
                             error_str = str(e)
-                            _tc.capture_tool_end(matching_tool_call_id, error_str, is_error=True)
+                            tool_capture.capture_tool_end(matching_tool_call_id, error_str, is_error=True)
                             logging.info(f"Wrapper called capture_tool_end for error in {matching_tool_call_id}")
                         except Exception as capture_error:
                             logging.error(f"Failed to capture tool error in wrapper: {capture_error}")
@@ -1244,10 +1270,10 @@ def get_cloud_tools():
                         logging.debug(f"Skipping capture_tool_end for error in {matching_tool_call_id} - already captured by tool implementation")
                     
                     # Now clean up by removing from current_tool_calls after successful error matching and capture
-                    if matching_tool_call_id in _tc.current_tool_calls:
-                        with _tc.lock:
-                            if matching_tool_call_id in _tc.current_tool_calls:
-                                del _tc.current_tool_calls[matching_tool_call_id]
+                    if matching_tool_call_id in tool_capture.current_tool_calls:
+                        with tool_capture.lock:
+                            if matching_tool_call_id in tool_capture.current_tool_calls:
+                                del tool_capture.current_tool_calls[matching_tool_call_id]
                                 logging.info(f"Cleaned up errored tool call {matching_tool_call_id} from tracking after successful match")
                 raise
             finally:
@@ -2599,8 +2625,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Cache the fully processed LangChain tools
     _langchain_tools_cache[cache_key] = tools
     _langchain_tools_cache_expiry[cache_key] = time.time() + LANGCHAIN_TOOLS_CACHE_DURATION
-    logging.info(f"get_cloud_tools cache miss — rebuilt {len(tools)} tools for user {user_id}")
-
+    logging.info(
+        f"Cached {len(tools)} fully processed LangChain tools for user {user_id} (key: {cache_key})"
+    )
+    
     return tools 
 
 # MCP cleanup and status logging is handled in mcp_tools.py

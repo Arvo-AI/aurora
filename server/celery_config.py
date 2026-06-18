@@ -248,65 +248,48 @@ if hasattr(celery_app, 'tasks'):
 
 
 # ---------------------------------------------------------------------------
-# Worker pre-warming: initialize expensive singletons once at worker startup
-# so background chat tasks don't pay cold-start penalties on every invocation.
+# Worker pre-warming: heavy singletons are initialized once per child process
+# so the first task doesn't pay a cold-start penalty.
 # ---------------------------------------------------------------------------
 import threading
 from celery.signals import worker_process_init
 
+_prewarm_ready = threading.Event()
+
+_prewarm_logger = logging.getLogger("celery.prewarm")
+
 
 @worker_process_init.connect
 def _prewarm_worker(**kwargs):
-    """Pre-initialize expensive singletons at worker child process boot.
+    """Kick off singleton init in a background thread.
 
-    Celery's worker_process_init has a ~4s timeout — handlers that block longer
-    cause the parent to assume the child failed. We run the heavy init in a
-    background thread and expose a threading.Event that task code can wait on
-    before doing real work (avoids cold-start on first task).
+    worker_process_init has a ~4s timeout before the parent kills the child,
+    so we can't block here. Task code calls _prewarm_ready.wait() instead.
     """
-    import threading
-
-    _logger = logging.getLogger("celery.prewarm")
 
     def _do_prewarm():
-        # 1. Pre-warm NeMo Guardrails (the _rails_instance global)
         try:
-            import time as _pw_time
-            _t0 = _pw_time.perf_counter()
             import guardrails.input_rail as _rail_mod
             if _rail_mod._rails_instance is None:
                 _rail_mod._rails_instance = _rail_mod._build_rails_sync()
-                _ms = (_pw_time.perf_counter() - _t0) * 1000
-                _logger.info(f"[PREWARM] NeMo Guardrails initialized in {_ms:.0f} ms")
-            else:
-                _logger.info("[PREWARM] NeMo Guardrails already initialized")
+            _prewarm_logger.info("[PREWARM] NeMo Guardrails ready")
         except Exception as e:
-            _logger.warning(f"[PREWARM] Failed to pre-warm guardrails: {e}")
+            _prewarm_logger.warning("[PREWARM] Guardrails init failed: %s", e)
 
-        # 2. Start MCP preloader (background thread that refreshes tool schemas)
         try:
             from chat.backend.agent.tools.mcp_preloader import start_mcp_preloader
             start_mcp_preloader()
-            _logger.info("[PREWARM] MCP Preloader service started")
+            _prewarm_logger.info("[PREWARM] MCP Preloader started")
         except Exception as e:
-            _logger.warning(f"[PREWARM] Failed to start MCP preloader: {e}")
+            _prewarm_logger.warning("[PREWARM] MCP Preloader failed: %s", e)
 
-        # 3. Pre-warm the per-worker Agent singleton (avoids ~4.6s cold start)
         try:
-            import time as _pw_time2
-            _t1 = _pw_time2.perf_counter()
             from chat.background.task import _get_worker_agent
             _get_worker_agent()
-            _ms2 = (_pw_time2.perf_counter() - _t1) * 1000
-            _logger.info(f"[PREWARM] Agent singleton created in {_ms2:.0f} ms")
+            _prewarm_logger.info("[PREWARM] Agent singleton ready")
         except Exception as e:
-            _logger.warning(f"[PREWARM] Failed to pre-warm Agent singleton: {e}")
+            _prewarm_logger.warning("[PREWARM] Agent singleton failed: %s", e)
 
         _prewarm_ready.set()
 
-    t = threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True)
-    t.start()
-
-
-# Event that task code can wait on to ensure prewarm completed
-_prewarm_ready = threading.Event()
+    threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True).start()

@@ -1054,33 +1054,30 @@ class Workflow:
         # --- Input rail: fire check concurrently with persistence + LangGraph setup ---
         from guardrails.input_rail import check_input
         last_msg = input_state.messages[-1] if input_state.messages else None
-        _guardrail_task: Optional[asyncio.Task] = None
-        _rail_msg_text: Optional[str] = None
-        _is_scaffold = False
+        msg_text: Optional[str] = None
+        is_scaffold = False
 
         if last_msg and hasattr(last_msg, "type") and last_msg.type == "human":
             # Skip persistence for scaffold messages (background prompts, not user input)
-            _is_scaffold = getattr(last_msg, 'additional_kwargs', {}).get('is_rca_scaffold', False)
+            is_scaffold = getattr(last_msg, 'additional_kwargs', {}).get('is_rca_scaffold', False)
 
             # RCA chat turns may prepend internal routing instructions to the
             # HumanMessage so the agent calls trigger_rca. Guardrails and chat
             # persistence should evaluate the user's original text only.
-            _rail_msg_text = _get_input_rail_text(
+            msg_text = _get_input_rail_text(
                 getattr(input_state, "question", None),
                 last_msg.content,
             )
             # Skip guardrails for PR change-gating reviews (PR title/body is GitHub API
-            # data, not user input to Aurora). Otherwise fire concurrently.
+            # data, not user input to Aurora). Otherwise fire concurrently — the result
+            # is awaited in agent.py (agentic_tool_flow) right before the LLM call.
             is_pr_review = getattr(input_state, "is_pr_review", False)
-            if _rail_msg_text and not is_pr_review:
-                _guardrail_task = asyncio.create_task(check_input(_rail_msg_text))
-                _guardrail_task_var.set(_guardrail_task)
+            if msg_text and not is_pr_review:
+                _guardrail_task_var.set(asyncio.create_task(check_input(msg_text)))
 
-            # Persist optimistically — if guardrails blocks, we delete afterward
-            if input_state.session_id and input_state.user_id and not _is_scaffold:
+            if input_state.session_id and input_state.user_id and not is_scaffold:
                 from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
-                _persist_text = _rail_msg_text or last_msg.content
-                handle_immediate_save(input_state.session_id, input_state.user_id, _persist_text)
+                handle_immediate_save(input_state.session_id, input_state.user_id, msg_text or last_msg.content)
 
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
@@ -1316,34 +1313,6 @@ class Workflow:
                             self._last_state.update(stream_data)
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
-
-            # Check if guardrails blocked the message during agentic_tool_flow
-            if _token_count == 0 and _guardrail_task is not None:
-                # The guardrail task ran concurrently; if it blocked, agentic_tool_flow
-                # returned early with no tokens. Yield the user-facing block message.
-                try:
-                    rail_result = _guardrail_task.result() if _guardrail_task.done() else None
-                except Exception as _rail_exc:
-                    # Fail closed: if the guardrail errored, block the response
-                    logger.exception("Input rail fallback failed closed: %s", _rail_exc)
-                    yield ("token", "The AI service is temporarily unavailable. Please try again in a moment.")
-                    return
-                if rail_result and rail_result.blocked:
-                    from guardrails.input_rail import _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
-                    _RAIL_USER_MESSAGES = {
-                        _BLOCKED_REASON: "Your message was blocked by our safety system. Please rephrase your request.",
-                        _FAIL_CLOSED_AUTH: "There is an issue with the AI service configuration. Please try again later.",
-                        _FAIL_CLOSED_CONNECTIVITY: "The AI service is temporarily unavailable. Please try again in a moment.",
-                    }
-                    # Taint session for genuinely blocked foreground chats
-                    if not getattr(input_state, "is_background", False) and rail_result.reason == _BLOCKED_REASON:
-                        from utils.auth.command_gate import mark_session_tainted
-                        mark_session_tainted(
-                            getattr(input_state, "session_id", None),
-                            getattr(input_state, "user_id", None),
-                        )
-                    yield ("token", _RAIL_USER_MESSAGES.get(rail_result.reason, "Something went wrong. Please try again."))
-                    return
 
         except Exception as stream_exception:
             logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
