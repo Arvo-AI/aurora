@@ -25,6 +25,7 @@ ORG_SCOPED_PREFERENCE_KEYS = frozenset({
     'slack_investigation_complete_notifications',
     'slack_action_start_notifications',
     'slack_action_complete_notifications',
+    'google_chat_investigation_notifications',
 })
 
 EDITOR_ONLY_PREFERENCE_KEYS = ORG_SCOPED_PREFERENCE_KEYS
