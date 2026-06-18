@@ -180,7 +180,7 @@ def slack_events():
                                 if trigger_background and sent_msg:
                                     thinking_ts = sent_msg.get('ts')
                                     
-                                    logger.info(f"Processing @Aurora mention in channel {channel}, thread {final_thread_ts}: {text[:100]}")
+                                    logger.info("Processing @Aurora mention in channel %s, thread %s", channel, final_thread_ts)
                                     _t_total_slack_sync = (_slack_time.perf_counter() - _t_slack_start) * 1000
                                     logger.info(f"[LATENCY] Slack webhook total sync time before Celery dispatch: {_t_total_slack_sync:.1f} ms")
                                     

@@ -344,10 +344,11 @@ class Agent:
                 getattr(state, 'attachments', []),
             )
 
-            # Build prompt segments and get cloud tools in parallel (both CPU-bound, independent)
+            # Build prompt segments in background while getting tools on main thread
+            # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
             _t_parallel = _perf_time.perf_counter()
             from concurrent.futures import ThreadPoolExecutor as _TPE
-            with _TPE(max_workers=2) as _pool:
+            with _TPE(max_workers=1) as _pool:
                 _prompt_future = _pool.submit(
                     build_prompt_segments,
                     provider_preference=provider_preference,
@@ -355,9 +356,8 @@ class Agent:
                     has_zip_reference=has_zip_ref,
                     state=state,
                 )
-                _tools_future = _pool.submit(get_cloud_tools)
+                tools = get_cloud_tools()
                 segments = _prompt_future.result()
-                tools = _tools_future.result()
 
             system_prompt_text = assemble_system_prompt(segments)
             _timings['build_prompt_and_tools'] = (_perf_time.perf_counter() - _t_parallel) * 1000

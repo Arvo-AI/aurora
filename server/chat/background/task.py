@@ -480,6 +480,10 @@ def run_background_chat(
     """
     from celery.exceptions import SoftTimeLimitExceeded
     
+    # Block until prewarm completes (avoids cold-start on first task after child fork)
+    from celery_config import _prewarm_ready
+    _prewarm_ready.wait(timeout=30)
+
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
 
@@ -1341,7 +1345,7 @@ async def _execute_background_chat(
         
         # Create workflow for this session
         wf = Workflow(agent, session_id)
-        logger.info(f"[BackgroundChat] Created agent + workflow (singleton reuse)")
+        logger.info("[BackgroundChat] Created agent + workflow (singleton reuse)")
         
         _agent_init_ms = (_exec_time.perf_counter() - _t_agent_init) * 1000
         logger.info(f"[LATENCY] Agent + Workflow creation took {_agent_init_ms:.1f} ms")
