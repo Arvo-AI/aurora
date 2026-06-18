@@ -190,10 +190,7 @@ async def _get_rails():
         if _rails_instance is not None:
             return _rails_instance
         try:
-            _t_init = time.perf_counter()
             _rails_instance = await asyncio.to_thread(_build_rails_sync)
-            _init_ms = (time.perf_counter() - _t_init) * 1000
-            logger.info(f"[LATENCY] NeMo Guardrails initialization took {_init_ms:.1f} ms")
         except Exception:
             _last_init_failure_ts = time.monotonic()
             raise

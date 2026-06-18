@@ -627,8 +627,7 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
 
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 
                            incident_id: str = None, session_id: str = None, context_messages: list = None,
-                           channel_context: str | None = None, thinking_message_ts: str | None = None,
-                           dispatch_ts: float | None = None):
+                           channel_context: str | None = None, thinking_message_ts: str | None = None):
     """
     Route a Slack message to Aurora's chat system.
     Uses background chat task to process the message.
@@ -688,8 +687,6 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             "thread_ts": thread_ts,
             "thinking_message_ts": thinking_message_ts,  # Store the thinking message timestamp
         }
-        if dispatch_ts:
-            trigger_metadata["dispatch_ts"] = dispatch_ts
         
         # Launch background chat task
         # For Slack @mentions, link to incident but don't send "investigation started" notifications

@@ -248,9 +248,6 @@ class Agent:
         max_turns: Optional[int] = None,
     ) -> State:
         """Execute cloud tools using the agentic workflow with streaming callbacks."""
-        import time as _perf_time
-        _atf_t0 = _perf_time.perf_counter()
-        _timings: dict = {}
         
         # ------------------------------------------------------------------
         # 1. Pre-run enrichment & quick logging
@@ -278,11 +275,8 @@ class Agent:
                 provider_preference = getattr(state, 'provider_preference', None)
                 if provider_preference is None:
                     try:
-                        _t_providers = _perf_time.perf_counter()
                         from chat.background.rca_prompt_builder import get_user_providers
                         provider_preference = get_user_providers(state.user_id)
-                        _timings['get_user_providers'] = (_perf_time.perf_counter() - _t_providers) * 1000
-                        logging.info(f"[LATENCY] get_user_providers took {_timings['get_user_providers']:.1f} ms")
                     except Exception as e:
                         logging.exception(f"Error getting connected providers: {e}")
                         provider_preference = []
@@ -346,7 +340,6 @@ class Agent:
 
             # Build prompt segments in background while getting tools on main thread
             # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
-            _t_parallel = _perf_time.perf_counter()
             from concurrent.futures import ThreadPoolExecutor as _TPE
             with _TPE(max_workers=1) as _pool:
                 _prompt_future = _pool.submit(
@@ -360,8 +353,6 @@ class Agent:
                 segments = _prompt_future.result()
 
             system_prompt_text = assemble_system_prompt(segments)
-            _timings['build_prompt_and_tools'] = (_perf_time.perf_counter() - _t_parallel) * 1000
-            logging.info(f"[LATENCY] parallel build_prompt + get_cloud_tools took {_timings['build_prompt_and_tools']:.1f} ms (returned {len(tools)} tools)")
             if system_prompt_override is not None:
                 system_prompt_text = system_prompt_override
             if tool_subset is not None:
@@ -551,7 +542,6 @@ class Agent:
             logging.info(f"Provider routing: model={model_name}, detected={detected_provider}, mode={provider_mode}, use_direct={_use_direct}")
 
             effective_mode = "direct" if is_direct_only else provider_mode
-            _t_llm = _perf_time.perf_counter()
             if _use_direct:
                 streaming_llm = create_chat_model(
                     model=model_name,
@@ -628,8 +618,6 @@ class Agent:
                 system_prompt=system_prompt_text,
                 middleware=middlewares,
             )
-            _timings['create_llm_and_agent'] = (_perf_time.perf_counter() - _t_llm) * 1000
-            logging.info(f"[LATENCY] create_chat_model + create_agent took {_timings['create_llm_and_agent']:.1f} ms")
 
       
             try:         
@@ -872,12 +860,8 @@ class Agent:
                             from chat.backend.agent.workflow import _guardrail_task_var
                             _pending_rail = _guardrail_task_var.get(None)
                             if _pending_rail is not None:
-                                import time as _rail_time2
-                                _t_rail_await = _rail_time2.perf_counter()
                                 from guardrails.input_rail import InputRailResult, _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
                                 rail_result: InputRailResult = await _pending_rail
-                                _rail_await_ms = (_rail_time2.perf_counter() - _t_rail_await) * 1000
-                                logging.info(f"[LATENCY] Guardrails await (concurrent) took {_rail_await_ms:.1f} ms (blocked={rail_result.blocked})")
                                 # Clear the context var so it doesn't leak to the next turn
                                 _guardrail_task_var.set(None)
 
@@ -896,20 +880,11 @@ class Agent:
                                     return state
 
                             # Use astream_events for token-by-token streaming
-                            _timings['total_pre_llm'] = (_perf_time.perf_counter() - _atf_t0) * 1000
-                            logging.info(
-                                f"[LATENCY] === TOTAL PRE-LLM SETUP: {_timings['total_pre_llm']:.1f} ms === "
-                                f"Breakdown: providers={_timings.get('get_user_providers', 0):.0f}ms, "
-                                f"prompt+tools={_timings.get('build_prompt_and_tools', 0):.0f}ms, "
-                                f"llm+agent={_timings.get('create_llm_and_agent', 0):.0f}ms"
-                            )
                             logging.info(f"Starting agent token streaming for session {state.session_id}")
                             result = None
                             event_count = 0
                             token_count = 0
                             event_types_seen = set()
-                            _t_stream_start = _perf_time.perf_counter()
-                            _first_llm_token_logged = False
                             
                             async for event in agent_graph.astream_events(
                                 {"messages": agent_messages},
@@ -931,14 +906,6 @@ class Agent:
                                     chunk_obj = chunk_data.get("chunk")
                                     if chunk_obj and hasattr(chunk_obj, 'content') and chunk_obj.content:
                                         token_count += 1
-                                        if not _first_llm_token_logged:
-                                            _first_llm_token_logged = True
-                                            _llm_ttft = (_perf_time.perf_counter() - _t_stream_start) * 1000
-                                            _total_ttft = (_perf_time.perf_counter() - _atf_t0) * 1000
-                                            logging.info(
-                                                f"[LATENCY] === LLM TTFT (stream start → first token): {_llm_ttft:.1f} ms === "
-                                                f"Total agentic_tool_flow TTFT: {_total_ttft:.1f} ms"
-                                            )
                                         # Log first few tokens for debugging
                                         if token_count <= 5:
                                             logging.info(f"Streaming token #{token_count}: '{chunk_obj.content}'")

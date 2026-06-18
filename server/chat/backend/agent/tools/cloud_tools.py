@@ -999,7 +999,6 @@ def _is_background_rca(state_context, is_background: bool) -> bool:
 
 def get_cloud_tools():
     """Get all cloud management tools including both Aurora native tools and REAL MCP tools."""
-    _t_get_tools_start = time.time()
     # Import required classes at function start to avoid scope issues
     from langchain_core.tools import StructuredTool
     from pydantic import BaseModel, Field
@@ -1040,10 +1039,7 @@ def get_cloud_tools():
         cache_key in _langchain_tools_cache_expiry and
         current_time < _langchain_tools_cache_expiry[cache_key]
     ):
-        logging.info(
-            f"[LATENCY] get_cloud_tools CACHE HIT in {(time.time() - _t_get_tools_start)*1000:.1f} ms "
-            f"for user {user_id} (cache key: {cache_key})"
-        )
+        logging.info(f"get_cloud_tools cache hit for user {user_id}")
         cached_tools = _langchain_tools_cache[cache_key]
         return list(cached_tools)
     
@@ -2533,10 +2529,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         logging.info(f"Fetching MCP tools for user {user_id}")
         try:
-            _t_mcp = time.time()
             real_mcp_tools = run_async_in_thread(get_real_mcp_tools_for_user(user_id), timeout=90)
-            _mcp_ms = (time.time() - _t_mcp) * 1000
-            logging.info(f"[LATENCY] MCP tool fetch took {_mcp_ms:.1f} ms (got {len(real_mcp_tools) if real_mcp_tools else 0} tools)")
         except Exception as e:
             logging.warning(f" MCP tool retrieval failed: {str(e)}")
             real_mcp_tools = []
@@ -2606,11 +2599,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Cache the fully processed LangChain tools
     _langchain_tools_cache[cache_key] = tools
     _langchain_tools_cache_expiry[cache_key] = time.time() + LANGCHAIN_TOOLS_CACHE_DURATION
-    logging.info(
-        f"[LATENCY] get_cloud_tools CACHE MISS — full rebuild took {(time.time() - _t_get_tools_start)*1000:.1f} ms "
-        f"({len(tools)} tools for user {user_id}, key: {cache_key})"
-    )
-    
+    logging.info(f"get_cloud_tools cache miss — rebuilt {len(tools)} tools for user {user_id}")
+
     return tools 
 
 # MCP cleanup and status logging is handled in mcp_tools.py

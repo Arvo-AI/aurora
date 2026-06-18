@@ -78,9 +78,6 @@ def build_prompt_segments(
     has_zip_reference: bool,
     state: Optional[Any] = None,
 ) -> PromptSegments:
-    import time as _seg_time
-    _t_seg_start = _seg_time.perf_counter()
-
     _, _, provider_constraints = build_provider_constraints(provider_preference)
 
     # Detect background type: actions get full invariant, RCA gets trimmed
@@ -119,7 +116,6 @@ def build_prompt_segments(
     else:
         background_mode = build_background_mode_segment(state)
 
-    _t_skills = _seg_time.perf_counter()
     # Build skills index for interactive chat — agent calls load_skill on demand
     integration_index = ""
     if state and hasattr(state, 'user_id') and not is_background:
@@ -129,16 +125,12 @@ def build_prompt_segments(
             integration_index = registry.build_index(state.user_id)
         except Exception as e:
             logging.warning(f"Failed to build skills index: {e}")
-    _skills_ms = (_seg_time.perf_counter() - _t_skills) * 1000
 
-    _t_kb = _seg_time.perf_counter()
     # Build knowledge base memory context for authenticated users
     knowledge_base_memory = ""
     if state and hasattr(state, 'user_id'):
         knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
-    _kb_ms = (_seg_time.perf_counter() - _t_kb) * 1000
 
-    _t_policy = _seg_time.perf_counter()
     # Build org-level command policy segment
     security_policy = ""
     if state and hasattr(state, 'user_id'):
@@ -154,13 +146,6 @@ def build_prompt_segments(
                 "IMPORTANT: This organization has command policies but they could not be loaded. "
                 "Warn the user before running commands, as they may be denied by policy enforcement."
             )
-    _policy_ms = (_seg_time.perf_counter() - _t_policy) * 1000
-
-    _total_seg_ms = (_seg_time.perf_counter() - _t_seg_start) * 1000
-    logging.info(
-        f"[LATENCY] build_prompt_segments took {_total_seg_ms:.1f} ms "
-        f"(skills_index={_skills_ms:.1f}ms, knowledge_base={_kb_ms:.1f}ms, policy={_policy_ms:.1f}ms)"
-    )
 
     return PromptSegments(
         system_invariant=system_invariant,

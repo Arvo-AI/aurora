@@ -113,16 +113,11 @@ class DatabaseConnectionPool:
         that short-lived queries (sub-agents, tool callbacks) don't fail just
         because they collided at the same instant.
         """
-        _t_pool = time.monotonic()
         deadline = time.monotonic() + _POOL_WAIT_TIMEOUT
         attempt = 0
         while True:
             try:
-                conn = pool.getconn()
-                _pool_ms = (time.monotonic() - _t_pool) * 1000
-                if _pool_ms > 50:
-                    logger.warning(f"[LATENCY] DB pool getconn took {_pool_ms:.1f} ms (attempt={attempt+1})")
-                return conn
+                return pool.getconn()
             except psycopg2.pool.PoolError:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

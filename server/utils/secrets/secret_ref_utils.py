@@ -117,12 +117,7 @@ class SecretRefManager:
         if cached_secret is not None:
             return cached_secret
 
-        import time as _vault_time
-        _t_vault = _vault_time.perf_counter()
         secret_value = self.backend.get_secret(secret_ref)
-        _vault_ms = (_vault_time.perf_counter() - _t_vault) * 1000
-        if _vault_ms > 100:
-            logger.warning(f"[LATENCY] Vault get_secret took {_vault_ms:.1f} ms")
         update_secret_cache(secret_ref, secret_value)
         return secret_value
 
@@ -207,9 +202,6 @@ class SecretRefManager:
 
     def get_user_token_data(self, user_id: str, provider: str) -> Optional[Dict[str, Any]]:
         """Get user token data from Vault."""
-        import time as _td_time
-        _t_td = _td_time.perf_counter()
-        
         provider_base = provider.lower().split('_')[0]
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
             return None
@@ -256,9 +248,6 @@ class SecretRefManager:
                         except Exception as e:
                             logger.warning("Failed to retrieve AWS external_id: %s", e)
 
-                _td_ms = (_td_time.perf_counter() - _t_td) * 1000
-                if _td_ms > 200:
-                    logger.warning(f"[LATENCY] get_user_token_data({provider}) took {_td_ms:.1f} ms (DB+Vault)")
                 return token_data
 
             except json.JSONDecodeError:
