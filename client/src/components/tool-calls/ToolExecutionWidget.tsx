@@ -291,30 +291,30 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
               repo={repo}
               branch={branch}
               defaultMessage={commitMessage}
+              disabled={!sendMessage || !userId}
               onCommit={async (message) => {
-                if (sendMessage && userId) {
-                  const success = sendMessage(
-                    `Please use the github_commit tool with these exact parameters: repo="${repo}", commit_message="${message}", branch="${branch}", push=true`,
-                    userId,
-                    { 
-                      tool_suggestion: 'github_commit',
-                      session_id: 'current',
-                      direct_tool_call: {
-                        tool_name: 'github_commit',
-                        parameters: {
-                          repo: repo,
-                          commit_message: message,
-                          branch: branch,
-                          push: true
-                        }
+                if (!sendMessage || !userId) {
+                  throw new Error('Connection lost. Please refresh the page and try again.')
+                }
+                const success = sendMessage(
+                  `Please use the github_commit tool with these exact parameters: repo="${repo}", commit_message="${message}", branch="${branch}", push=true`,
+                  userId,
+                  {
+                    tool_suggestion: 'github_commit',
+                    session_id: 'current',
+                    direct_tool_call: {
+                      tool_name: 'github_commit',
+                      parameters: {
+                        repo: repo,
+                        commit_message: message,
+                        branch: branch,
+                        push: true
                       }
                     }
-                  )
-                  if (!success) {
-                    throw new Error('Failed to send commit request to backend')
                   }
-                } else {
-                  throw new Error('Unable to send commit request - no WebSocket connection')
+                )
+                if (!success) {
+                  throw new Error('Failed to send commit request. Please try again.')
                 }
               }}
               onPush={async () => {
