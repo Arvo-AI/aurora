@@ -17,16 +17,7 @@ from celery_config import celery_app
 from langchain_core.messages import HumanMessage
 from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
-from utils.notifications.email_service import get_email_service
-from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context, get_org_id_for_user, get_org_preference
-from utils.notifications.slack_notification_service import (
-    send_slack_investigation_started_notification,
-    send_slack_investigation_completed_notification,
-)
-from utils.notifications.google_chat_notification_service import (
-    send_google_chat_investigation_started_notification,
-    send_google_chat_investigation_completed_notification,
-)
+from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 from connectors.google_chat_connector.client import get_chat_app_client
 from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
@@ -498,6 +489,16 @@ def run_background_chat(
     try:
         # Link session and Celery task ID to incident if provided
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
+
+        # Send action started notification (not gated by send_notifications —
+        # that flag controls investigation-level notifications, not action-specific ones)
+        if is_action_source:
+            try:
+                from utils.notifications.dispatcher import notify_action_started
+                notify_action_started(user_id, trigger_metadata, session_id)
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to send action started notification: {e}")
+
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
@@ -609,23 +610,10 @@ def run_background_chat(
                             except Exception:
                                 logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
 
-                        # Send investigation started notifications (if enabled)
-                        # Skip notifications if explicitly disabled (e.g., for Slack @mentions)
-                        # For email: need both general notifications AND start notifications enabled
-                        # For Slack: only need general notifications (no separate start preference since start message is overwritten by end message)
-                        email_general_enabled = _is_rca_email_notification_enabled(user_id)
-                        email_start_enabled = _is_rca_email_start_notification_enabled(user_id)
-                        email_start_notification_enabled = email_general_enabled and email_start_enabled
-
-                        slack_notification_enabled = get_slack_client_for_user(user_id) is not None
-                        google_chat_notification_enabled = _has_google_chat_connected(user_id)
-
-                        if send_notifications and (email_start_notification_enabled or slack_notification_enabled or google_chat_notification_enabled):
-                            _send_rca_notification(user_id, incident_id, 'started', 
-                                email_enabled=email_start_notification_enabled,
-                                slack_enabled=slack_notification_enabled,
-                                google_chat_enabled=google_chat_notification_enabled
-                            )
+                        # Send investigation started notifications via centralized dispatcher
+                        if send_notifications:
+                            from utils.notifications.dispatcher import notify_investigation_started
+                            notify_investigation_started(user_id, incident_id, session_id=session_id)
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
         
@@ -813,9 +801,10 @@ def run_background_chat(
 
             if action_status:
                 try:
-                    _send_action_completion_notification(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
+                    from utils.notifications.dispatcher import notify_action_completed
+                    notify_action_completed(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
                 except Exception as e:
-                    logger.warning(f"[BackgroundChat] Failed to send action notification email: {e}")
+                    logger.warning(f"[BackgroundChat] Failed to send action notification: {e}")
 
         # Dispatch on_incident actions configured for after_rca timing.
         # Guarded: skip if already dispatched inside _execute_background_chat.
@@ -840,7 +829,8 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
-                _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
+                from utils.notifications.dispatcher import notify_action_completed
+                notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
             except Exception:
                 logger.debug("Failed to update action run status after timeout")
         return {
@@ -860,7 +850,8 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message=str(e), user_id=user_id)
-                _send_action_completion_notification(user_id, trigger_metadata, session_id, status='error', error_message=str(e))
+                from utils.notifications.dispatcher import notify_action_completed
+                notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message=str(e))
             except Exception:
                 logger.debug("Failed to update action run status during error handling")
         return {
@@ -1896,299 +1887,6 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
                 logger.info(f"[BackgroundChat] Skipped status update for incident {incident_id} (likely merged)")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
-
-
-def _is_rca_email_notification_enabled(user_id: str) -> bool:
-    """Check if the org has RCA email notifications enabled."""
-    try:
-        org_id = get_org_id_for_user(user_id)
-        if not org_id:
-            return False
-        return bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
-    except Exception as e:
-        logger.error(f"[EmailNotification] Error checking notification preference: {e}")
-        return False
-
-
-
-def _has_google_chat_connected(user_id: str) -> bool:
-    """Check if user's org has Google Chat connected with a service account."""
-    try:
-        config = get_credentials_from_db(user_id, "google_chat")
-        if not config or not config.get("incidents_space_name"):
-            return False
-        return get_chat_app_client() is not None
-    except Exception as e:
-        logger.error(f"[GChatNotification] Error checking Google Chat connection: {e}")
-        return False
-
-
-def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
-    """Check if the org has RCA investigation start email notifications enabled."""
-    try:
-        org_id = get_org_id_for_user(user_id)
-        if not org_id:
-            return False
-        return bool(get_org_preference(org_id, 'rca_email_start_notifications', default=False))
-    except Exception as e:
-        logger.error(f"[EmailNotification] Error checking start notification preference: {e}")
-        return False
-
-
-def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch incident data from database.
-    
-    Args:
-        incident_id: The incident UUID
-        user_id: User ID for RLS context
-        
-    Returns:
-        Dictionary with incident data or None if not found
-    """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GetIncidentData]")
-                cursor.execute(
-                    """
-                    SELECT id, user_id, source_type, status, severity, alert_title, 
-                           alert_service, aurora_status, aurora_summary, started_at, 
-                           analyzed_at, created_at, slack_message_ts, google_chat_message_name
-                    FROM incidents 
-                    WHERE id = %s
-                    """,
-                    (incident_id,)
-                )
-                result = cursor.fetchone()
-                if result:
-                    return {
-                        'incident_id': str(result[0]),
-                        'user_id': result[1],
-                        'source_type': result[2],
-                        'status': result[3],
-                        'severity': result[4] or 'unknown',
-                        'alert_title': result[5] or 'Unknown Alert',
-                        'service': result[6] or 'unknown',
-                        'aurora_status': result[7],
-                        'aurora_summary': result[8],
-                        'started_at': result[9],
-                        'analyzed_at': result[10],
-                        'created_at': result[11],
-                        'slack_message_ts': result[12] if len(result) > 12 else None,
-                        'google_chat_message_name': result[13] if len(result) > 13 else None,
-                    }
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"[EmailNotification] Error fetching incident data: {e}")
-        return None
-
-
-def _send_action_completion_notification(
-    user_id: str,
-    trigger_metadata: Dict[str, Any],
-    session_id: str,
-    status: str = 'success',
-    error_message: Optional[str] = None,
-) -> None:
-    """Send email notification when an action completes (success or error)."""
-    try:
-        org_id = get_org_id_for_user(user_id)
-        if not org_id:
-            return
-        if not get_org_preference(org_id, 'action_email_notifications', default=False):
-            return
-
-        run_id = trigger_metadata.get('run_id')
-
-        action_name = "Unknown Action"
-        started_at = None
-        if run_id:
-            try:
-                with db_pool.get_admin_connection() as conn:
-                    with conn.cursor() as cur:
-                        set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification]")
-                        cur.execute(
-                            """SELECT a.name, ar.started_at
-                               FROM action_runs ar
-                               JOIN actions a ON a.id = ar.action_id
-                               WHERE ar.id = %s""",
-                            (run_id,),
-                        )
-                        row = cur.fetchone()
-                        if row:
-                            action_name = row[0]
-                            started_at = row[1].replace(tzinfo=timezone.utc) if row[1] else None
-            except Exception as e:
-                logger.warning("[ActionNotification] Failed to fetch action run details: %s", e)
-
-        action_data = {
-            'action_name': action_name,
-            'run_id': run_id,
-            'status': status,
-            'error': error_message,
-            'started_at': started_at,
-            'completed_at': datetime.now(timezone.utc),
-            'session_id': session_id,
-        }
-
-        # Send to org-wide configured notification recipients only
-        all_emails = []
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[ActionNotification:Emails]")
-                    cur.execute(
-                        "SELECT email FROM rca_notification_emails WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE",
-                        (org_id,),
-                    )
-                    all_emails = [r[0] for r in cur.fetchall()]
-        except Exception as e:
-            logger.warning("[ActionNotification] Failed to fetch recipients for org: %s", e)
-
-        if not all_emails:
-            logger.info("[ActionNotification] No configured recipients for org %s, skipping", org_id)
-            return
-
-        email_service = get_email_service()
-        for recipient in all_emails:
-            try:
-                email_service.send_action_completed_email(recipient, action_data)
-            except Exception as e:
-                logger.warning("[ActionNotification] Failed to send to %s: %s", recipient, e)
-
-        logger.info("[ActionNotification] Sent %s notification for action '%s' to %d recipient(s)", status, action_name, len(all_emails))
-    except Exception as e:
-        logger.error("[ActionNotification] Error sending action completion notification: %s", e)
-
-
-
-
-def _send_rca_notification(user_id: str, incident_id: str, event_type: str, email_enabled: bool = False, slack_enabled: bool = False, google_chat_enabled: bool = False, session_id: Optional[str] = None) -> None:
-    """Send RCA email, Slack, and Google Chat notifications.
-    
-    Args:
-        user_id: The user ID
-        incident_id: The incident UUID
-        event_type: 'started' or 'completed'
-        email_enabled: Whether to send email notifications
-        slack_enabled: Whether to send Slack notifications
-        google_chat_enabled: Whether to send Google Chat notifications
-        session_id: Optional chat session ID (used to extract last message for 'completed' notifications)
-    """
-    # Get incident data (needed for both email and Slack)
-    incident_data = _get_incident_data(incident_id, user_id=user_id)
-    if not incident_data:
-        logger.error(f"[RCANotification] Incident {incident_id} not found")
-        return
-    
-    # For completed notifications, extract the summary section from last message if not already present
-    if event_type == 'completed' and session_id and not incident_data.get('aurora_summary'):
-        try:
-            from routes.slack.slack_events_helpers import extract_summary_section
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCANotifSummary]")
-                    cursor.execute(
-                        "SELECT messages FROM chat_sessions WHERE id = %s",
-                        (session_id,)
-                    )
-                    row = cursor.fetchone()
-                    
-                    if row and row[0]:
-                        messages = row[0]
-                        if isinstance(messages, str):
-                            messages = json.loads(messages)
-                        
-                        # Find the last assistant/bot message
-                        for msg in reversed(messages):
-                            if msg.get('sender') in ('bot', 'assistant'):
-                                last_message = msg.get('text') or msg.get('content')
-                                if last_message:
-                                    # Extract just the summary section (before Next Steps)
-                                    summary_only = extract_summary_section(last_message)
-                                    incident_data['aurora_summary'] = summary_only
-                                    logger.info(f"[RCANotification] Extracted summary section for incident {incident_id} ({len(summary_only)} chars)")
-                                break
-        except Exception as e:
-            logger.warning(f"[RCANotification] Failed to extract summary for incident {incident_id}: {e}")
-    
-    # --- EMAIL NOTIFICATIONS ---
-    if email_enabled:
-        try:
-            org_id = get_org_id_for_user(user_id)
-            all_emails = []
-            if org_id:
-                try:
-                    with db_pool.get_admin_connection() as conn:
-                        with conn.cursor() as cursor:
-                            set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:RCANotifEmails]")
-                            cursor.execute(
-                                """
-                                SELECT email FROM rca_notification_emails
-                                WHERE org_id = %s AND is_verified = TRUE AND is_enabled = TRUE
-                                ORDER BY verified_at ASC
-                                """,
-                                (org_id,)
-                            )
-                            all_emails = [row[0] for row in cursor.fetchall()]
-                except Exception as e:
-                    logger.error(f"[EmailNotification] Failed to fetch notification emails for org: {e}")
-
-            if not all_emails:
-                logger.info(f"[EmailNotification] No configured recipients for org, skipping email")
-            else:
-                logger.info(f"[EmailNotification] Sending {event_type} notification to {len(all_emails)} email(s): {', '.join(all_emails)}")
-                
-                # Send appropriate email to all recipients
-                email_service = get_email_service()
-                
-                success_count = 0
-                for recipient_email in all_emails:
-                    try:
-                        if event_type == 'started':
-                            success = email_service.send_investigation_started_email(recipient_email, incident_data)
-                            if success:
-                                success_count += 1
-                                logger.info(f"[EmailNotification] Sent 'started' email to {recipient_email} for incident {incident_id}")
-                            else:
-                                logger.warning(f"[EmailNotification] Failed to send 'started' email to {recipient_email}")
-                        elif event_type == 'completed':
-                            success = email_service.send_investigation_completed_email(recipient_email, incident_data)
-                            if success:
-                                success_count += 1
-                                logger.info(f"[EmailNotification] Sent 'completed' email to {recipient_email} for incident {incident_id}")
-                            else:
-                                logger.warning(f"[EmailNotification] Failed to send 'completed' email to {recipient_email}")
-                    except Exception as e:
-                        logger.error(f"[EmailNotification] Error sending to {recipient_email}: {e}")
-                
-                logger.info(f"[EmailNotification] Successfully sent {success_count}/{len(all_emails)} {event_type} notifications for incident {incident_id}")
-        except Exception as e:
-            # Don't fail if email fails
-            logger.error(f"[EmailNotification] Failed to send {event_type} notification: {e}")
-    
-    # --- SLACK NOTIFICATIONS ---
-    if slack_enabled:
-        try:
-            if event_type == 'started':
-                send_slack_investigation_started_notification(user_id, incident_data)
-            elif event_type == 'completed':
-                send_slack_investigation_completed_notification(user_id, incident_data)
-        except Exception as e:
-            # Don't fail if Slack fails
-            logger.error(f"[SlackNotification] Failed to send {event_type} notification: {e}", exc_info=True)
-    
-    # --- GOOGLE CHAT NOTIFICATIONS ---
-    if google_chat_enabled:
-        try:
-            if event_type == 'started':
-                send_google_chat_investigation_started_notification(user_id, incident_data)
-            elif event_type == 'completed':
-                send_google_chat_investigation_completed_notification(user_id, incident_data)
-        except Exception as e:
-            logger.error(f"[GChatNotification] Failed to send {event_type} notification: {e}", exc_info=True)
 
 
 def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:

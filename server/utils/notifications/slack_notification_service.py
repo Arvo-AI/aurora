@@ -13,27 +13,31 @@ from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
-# Slack Block Kit blocks limit per message
 SLACK_MAX_BLOCKS = 50
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-
-# Slack Block Kit blocks limit per message
-SLACK_MAX_BLOCKS = 50
 
 
 def _get_incidents_channel_id(user_id: str, client: SlackClient) -> Optional[str]:
     """
-    Get the incidents channel ID from stored credentials.
+    Get the incidents channel ID. Checks stored credentials first,
+    falls back to org preference (which survives disconnect/reconnect).
     """
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
+        from utils.auth.stateless_auth import get_credentials_from_db, get_org_id_for_user, get_org_preference
         
         slack_creds = get_credentials_from_db(user_id, "slack")
-        if not slack_creds:
-            logger.error(f"[SlackNotification] No Slack credentials found for user {user_id}")
-            return None
+        if slack_creds and slack_creds.get("incidents_channel_id"):
+            return slack_creds["incidents_channel_id"]
         
-        return slack_creds.get("incidents_channel_id")
+        # Fallback: read from org preference
+        org_id = get_org_id_for_user(user_id)
+        if org_id:
+            channel_id = get_org_preference(org_id, 'slack_incidents_channel_id')
+            if channel_id:
+                return channel_id
+        
+        logger.error(f"[SlackNotification] No Slack channel ID found for user {user_id}")
+        return None
         
     except Exception as e:
         logger.error(f"[SlackNotification] Error getting incidents channel ID: {e}", exc_info=True)
@@ -238,11 +242,23 @@ def send_slack_investigation_completed_notification(
         summary_only = extract_summary_section(aurora_summary)
         summary_for_slack = format_response_for_slack(summary_only)
         
-        # Ensure summary is not empty and under Slack's 3000 char limit for section text
+        # Show the root cause conclusion paragraph (typically the 2nd paragraph)
+        # rather than the "what happened" intro paragraph
         if not summary_for_slack:
             summary_for_slack = "Analysis completed. View full report for details."
-        elif len(summary_for_slack) > 2900:
-            summary_for_slack = summary_for_slack[:2900] + "...\n\n(See full report for complete analysis)"
+        else:
+            paragraphs = [p.strip() for p in summary_for_slack.split('\n\n') if p.strip()]
+            if len(paragraphs) >= 2:
+                # Use the 2nd paragraph (root cause conclusion) as it's the most valuable
+                summary_for_slack = paragraphs[1]
+            elif paragraphs:
+                summary_for_slack = paragraphs[0]
+            # Truncate if still too long
+            if len(summary_for_slack) > 600:
+                truncation_point = summary_for_slack.rfind(' ', 0, 600)
+                if truncation_point < 200:
+                    truncation_point = 600
+                summary_for_slack = summary_for_slack[:truncation_point] + "..."
         
         # Get owner information
         owner_name = "user"
@@ -307,18 +323,17 @@ def send_slack_investigation_completed_notification(
             }
         ]
         
-        # Add suggestion buttons if available
+        # Add only the top suggestion (most valuable next step)
         try:
             suggestions = get_incident_suggestions(incident_id)
             if suggestions:
-                logger.info(f"[SlackNotification] Found {len(suggestions)} suggestions for incident {incident_id}")
-                suggestion_blocks = build_suggestions_blocks(incident_id, suggestions, max_suggestions=5)
+                top_suggestion = suggestions[0]
+                suggestion_blocks = build_suggestions_blocks(incident_id, [top_suggestion], max_suggestions=1)
                 if suggestion_blocks:
                     blocks.extend(suggestion_blocks)
-                    logger.info(f"[SlackNotification] Added {len(suggestion_blocks)} suggestion blocks")
+                    logger.info(f"[SlackNotification] Added top suggestion block for incident {incident_id}")
         except Exception as e:
-            logger.warning(f"[SlackNotification] Failed to add suggestion blocks: {e}", exc_info=True)
-            # Continue without suggestions if they fail
+            logger.warning(f"[SlackNotification] Failed to add suggestion block: {e}", exc_info=True)
         
         # Log the blocks for debugging
         logger.debug(f"[SlackNotification] Sending {len(blocks)} blocks to Slack")
@@ -373,4 +388,157 @@ def send_slack_investigation_completed_notification(
         return False
 
 
+def send_slack_action_started_notification(user_id: str, action_data: Dict[str, Any]) -> bool:
+    """
+    Send Slack notification when an action starts running.
 
+    Args:
+        user_id: User ID
+        action_data: Dictionary with action_name, run_id, session_id, started_at
+
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return False
+
+        channel_id = _get_incidents_channel_id(user_id, client)
+        if not channel_id:
+            return False
+
+        action_name = action_data.get('action_name', 'Unknown Action')
+        session_id = action_data.get('session_id', '')
+        session_url = f"{FRONTEND_URL}/chat/{session_id}" if session_id else None
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Action Started"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Action:* {action_name}\n*Status:* Running"
+                }
+            }
+        ]
+
+        if session_url:
+            blocks[1]["accessory"] = {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "View Session"
+                },
+                "url": session_url,
+            }
+
+        from routes.slack.slack_events_helpers import validate_slack_blocks
+        if not validate_slack_blocks(blocks):
+            simple_text = f"*Action Started:* {action_name}"
+            result = client.send_message(channel=channel_id, text=simple_text)
+            return result is not None
+
+        result = client.send_message(
+            channel=channel_id,
+            text=f"Action Started: {action_name}",
+            blocks=blocks
+        )
+
+        if result:
+            logger.info(f"[SlackNotification] Sent action started notification for '{action_name}'")
+            return True
+        return False
+
+    except Exception as e:
+        logger.error(f"[SlackNotification] Error sending action started notification: {e}", exc_info=True)
+        return False
+
+
+def send_slack_action_completed_notification(user_id: str, action_data: Dict[str, Any]) -> bool:
+    """
+    Send Slack notification when an action completes (success or error).
+
+    Args:
+        user_id: User ID
+        action_data: Dictionary with action_name, run_id, status, error, session_id, completed_at
+
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return False
+
+        channel_id = _get_incidents_channel_id(user_id, client)
+        if not channel_id:
+            return False
+
+        action_name = action_data.get('action_name', 'Unknown Action')
+        status = action_data.get('status', 'unknown')
+        error_message = action_data.get('error')
+        session_id = action_data.get('session_id', '')
+        session_url = f"{FRONTEND_URL}/chat/{session_id}" if session_id else None
+
+        status_emoji = ":white_check_mark:" if status == 'success' else ":x:"
+        status_text = "Completed Successfully" if status == 'success' else f"Failed"
+
+        detail_text = f"*Action:* {action_name}\n*Status:* {status_emoji} {status_text}"
+        if error_message:
+            truncated_error = error_message[:200] + "..." if len(error_message) > 200 else error_message
+            detail_text += f"\n*Error:* {truncated_error}"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Action Complete"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": detail_text
+                }
+            }
+        ]
+
+        if session_url:
+            blocks[1]["accessory"] = {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "View Session"
+                },
+                "url": session_url,
+            }
+
+        from routes.slack.slack_events_helpers import validate_slack_blocks
+        if not validate_slack_blocks(blocks):
+            simple_text = f"*Action Complete:* {action_name} — {status_text}"
+            result = client.send_message(channel=channel_id, text=simple_text)
+            return result is not None
+
+        result = client.send_message(
+            channel=channel_id,
+            text=f"Action Complete: {action_name} — {status_text}",
+            blocks=blocks
+        )
+
+        if result:
+            logger.info(f"[SlackNotification] Sent action completed notification for '{action_name}' ({status})")
+            return True
+        return False
+
+    except Exception as e:
+        logger.error(f"[SlackNotification] Error sending action completed notification: {e}", exc_info=True)
+        return False
