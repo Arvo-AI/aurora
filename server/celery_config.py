@@ -268,10 +268,9 @@ def _prewarm_worker(**kwargs):
     try:
         import time as _pw_time
         _t0 = _pw_time.perf_counter()
-        from guardrails.input_rail import _build_rails_sync
         import guardrails.input_rail as _rail_mod
         if _rail_mod._rails_instance is None:
-            _rail_mod._rails_instance = _build_rails_sync()
+            _rail_mod._rails_instance = _rail_mod._build_rails_sync()
             _ms = (_pw_time.perf_counter() - _t0) * 1000
             _logger.info(f"[PREWARM] NeMo Guardrails initialized in {_ms:.0f} ms")
         else:

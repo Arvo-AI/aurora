@@ -171,7 +171,7 @@ def slack_events():
                                         final_thread_ts = ts
                                 else:
                                     # Non-background response (e.g. auth error) — just send normally
-                                    sent_msg = client.send_message(
+                                    client.send_message(
                                         channel=channel, 
                                         text=response_text, 
                                         thread_ts=thread_ts

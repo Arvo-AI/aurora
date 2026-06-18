@@ -122,7 +122,7 @@ class SecretRefManager:
         secret_value = self.backend.get_secret(secret_ref)
         _vault_ms = (_vault_time.perf_counter() - _t_vault) * 1000
         if _vault_ms > 100:
-            logger.warning(f"[LATENCY] Vault get_secret took {_vault_ms:.1f} ms (ref={secret_ref[:40]}...)")
+            logger.warning(f"[LATENCY] Vault get_secret took {_vault_ms:.1f} ms")
         update_secret_cache(secret_ref, secret_value)
         return secret_value
 
