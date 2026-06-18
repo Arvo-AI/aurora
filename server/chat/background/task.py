@@ -822,7 +822,8 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to generate final visualization: {e}")
         
         # Send response back to Slack if this was triggered from Slack
-        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+        # Skip if already sent inside _execute_background_chat (early send for lower latency)
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button'] and not result.get('slack_sent_early'):
             try:
                 _t_slack_send = _task_time.perf_counter()
                 _send_response_to_slack(user_id, session_id, trigger_metadata)
@@ -1467,6 +1468,18 @@ async def _execute_background_chat(
         if hasattr(wf, '_wait_for_ongoing_tool_calls'):
             await wf._wait_for_ongoing_tool_calls()
 
+        # Send Slack response immediately — don't wait for post-processing
+        _slack_early_sent = False
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+            try:
+                _t_slack_early = _exec_time.perf_counter()
+                _send_response_to_slack(user_id, session_id, trigger_metadata)
+                _slack_early_ms = (_exec_time.perf_counter() - _t_slack_early) * 1000
+                _slack_early_sent = True
+                logger.info(f"[LATENCY] _send_response_to_slack (early, inside workflow) took {_slack_early_ms:.1f} ms")
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed early Slack send: {e}", exc_info=True)
+
         # --- Phase 2: Jira action ---
         # Investigation is done. Now deterministically file in Jira.
         if rca_context and rca_context.get('integrations', {}).get('jira') \
@@ -1568,6 +1581,7 @@ async def _execute_background_chat(
             "tool_calls": tool_calls,
             "guardrail_blocked": guardrail_blocked,
             "after_rca_dispatched": True,
+            "slack_sent_early": _slack_early_sent,
         }
         
     except Exception as e:
