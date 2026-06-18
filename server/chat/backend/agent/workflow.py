@@ -1323,8 +1323,11 @@ class Workflow:
                 # returned early with no tokens. Yield the user-facing block message.
                 try:
                     rail_result = _guardrail_task.result() if _guardrail_task.done() else None
-                except Exception:
-                    rail_result = None
+                except Exception as _rail_exc:
+                    # Fail closed: if the guardrail errored, block the response
+                    logger.exception("Input rail fallback failed closed: %s", _rail_exc)
+                    yield ("token", "The AI service is temporarily unavailable. Please try again in a moment.")
+                    return
                 if rail_result and rail_result.blocked:
                     from guardrails.input_rail import _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
                     _RAIL_USER_MESSAGES = {

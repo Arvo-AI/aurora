@@ -1493,8 +1493,8 @@ async def _execute_background_chat(
                 _slack_early_ms = (_exec_time.perf_counter() - _t_slack_early) * 1000
                 _slack_early_sent = True
                 logger.info(f"[LATENCY] _send_response_to_slack (early, inside workflow) took {_slack_early_ms:.1f} ms")
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed early Slack send: {e}", exc_info=True)
+            except Exception:
+                logger.exception("[BackgroundChat] Failed early Slack send")
 
         # --- Phase 2: Jira action ---
         # Investigation is done. Now deterministically file in Jira.
