@@ -292,6 +292,18 @@ def _prewarm_worker(**kwargs):
         except Exception as e:
             _logger.warning(f"[PREWARM] Failed to start MCP preloader: {e}")
 
+        # 3. Pre-warm the per-worker Agent singleton so every child process is ready
+        # on first task (avoids ~4.6s import + init cold start)
+        try:
+            import time as _pw_time2
+            _t1 = _pw_time2.perf_counter()
+            from chat.background.task import _get_worker_agent
+            _get_worker_agent()
+            _ms2 = (_pw_time2.perf_counter() - _t1) * 1000
+            _logger.info(f"[PREWARM] Agent singleton created in {_ms2:.0f} ms")
+        except Exception as e:
+            _logger.warning(f"[PREWARM] Failed to pre-warm Agent singleton: {e}")
+
     # Run pre-warming in a daemon thread to avoid blocking worker readiness
     t = threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True)
     t.start()
