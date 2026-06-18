@@ -223,7 +223,8 @@ def notify_investigation_started(user_id: str, incident_id: str) -> None:
                 logger.exception("[Dispatcher] Slack started notification failed")
 
         # --- Google Chat ---
-        if _has_google_chat_connected(user_id):
+        google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
+        if google_chat_enabled and _has_google_chat_connected(user_id):
             try:
                 from utils.notifications.google_chat_notification_service import (
                     send_google_chat_investigation_started_notification,
@@ -268,7 +269,8 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 logger.exception("[Dispatcher] Slack completed notification failed")
 
         # --- Google Chat ---
-        if _has_google_chat_connected(user_id):
+        google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
+        if google_chat_enabled and _has_google_chat_connected(user_id):
             try:
                 from utils.notifications.google_chat_notification_service import (
                     send_google_chat_investigation_completed_notification,
@@ -315,7 +317,8 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
                 logger.exception("[Dispatcher] Slack failed notification failed")
 
         # --- Google Chat ---
-        if _has_google_chat_connected(user_id):
+        google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
+        if google_chat_enabled and _has_google_chat_connected(user_id):
             try:
                 from utils.notifications.google_chat_notification_service import (
                     send_google_chat_investigation_completed_notification,

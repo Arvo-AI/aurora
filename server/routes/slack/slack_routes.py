@@ -178,7 +178,7 @@ def slack_callback():
             
             logging.info("Incidents channel ready, Slack credentials stored successfully")
         except Exception as e:
-            logging.error("Failed to store Slack credentials", exc_info=True)
+            logging.exception("Failed to store Slack credentials")
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=storage_failed")
         
         # Redirect to frontend with success (frontend reads team name from status endpoint)

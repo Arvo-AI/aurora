@@ -490,15 +490,6 @@ def run_background_chat(
         # Link session and Celery task ID to incident if provided
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
 
-        # Send action started notification (not gated by send_notifications —
-        # that flag controls investigation-level notifications, not action-specific ones)
-        if is_action_source:
-            try:
-                from utils.notifications.dispatcher import notify_action_started
-                notify_action_started(user_id, trigger_metadata, session_id)
-            except Exception as e:
-                logger.warning(f"[BackgroundChat] Failed to send action started notification: {e}")
-
         if incident_id:
             try:
                 with db_pool.get_admin_connection() as conn:
@@ -638,6 +629,14 @@ def run_background_chat(
                 except Exception as hb_err:
                     logger.error(f"[BackgroundChat] Failed to set hook_blocked status for incident {incident_id}: {hb_err}")
             return {"session_id": session_id, "status": "hook_blocked", "error": hook_message}
+
+        # Send action started notification after hook gate passes
+        if is_action_source:
+            try:
+                from utils.notifications.dispatcher import notify_action_started
+                notify_action_started(user_id, trigger_metadata, session_id)
+            except Exception as e:
+                logger.warning(f"[BackgroundChat] Failed to send action started notification: {e}")
 
         # Run the async workflow in the sync Celery context
         logger.info(f"[BackgroundChat] Starting workflow execution for session {session_id}, incident {incident_id}")
@@ -2346,12 +2345,13 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                                 (incident_id,)
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
+                        conn.commit()
+                        if incident_id:
                             try:
                                 from utils.notifications.dispatcher import notify_investigation_failed
                                 notify_investigation_failed(uid, str(incident_id), error_message="Investigation stalled and was cleaned up")
                             except Exception:
                                 logger.exception("[CleanupOrphans] Failed to send stalled investigation notification for incident %s", incident_id)
-                        conn.commit()
 
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
                     cursor.execute("""
@@ -2413,13 +2413,14 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         if cursor.fetchone():
                             if cur_aurora not in ('complete', 'error'):
                                 _record_rca_error(cursor, str(inc_id), uid)
-                                try:
-                                    from utils.notifications.dispatcher import notify_investigation_failed
-                                    notify_investigation_failed(uid, str(inc_id), error_message="Investigation became orphaned and was cleaned up")
-                                except Exception:
-                                    logger.exception("[CleanupOrphans] Failed to send orphaned investigation notification for incident %s", inc_id)
                             orphaned_count += 1
                         conn.commit()
+                        if cur_aurora not in ('complete', 'error'):
+                            try:
+                                from utils.notifications.dispatcher import notify_investigation_failed
+                                notify_investigation_failed(uid, str(inc_id), error_message="Investigation became orphaned and was cleaned up")
+                            except Exception:
+                                logger.exception("[CleanupOrphans] Failed to send orphaned investigation notification for incident %s", inc_id)
 
                     # --- 4. Stale rca_findings: cascade from any incident already
                     # marked aurora_status='error' (immediate, catches sections 1-3
