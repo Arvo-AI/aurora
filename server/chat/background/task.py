@@ -2004,6 +2004,11 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
             logger.error(f"[BackgroundChat] Could not get Slack client for user {user_id}")
             return
         
+        # Slack messages have a ~3000 char limit for update_message
+        SLACK_MSG_LIMIT = 2900
+        if len(formatted_message) > SLACK_MSG_LIMIT:
+            formatted_message = formatted_message[:SLACK_MSG_LIMIT] + "\n\n_...truncated. See full results in Aurora._"
+
         # Update the "Thinking..." message if we have the timestamp, otherwise send a new message
         if thinking_message_ts:
             client.update_message(

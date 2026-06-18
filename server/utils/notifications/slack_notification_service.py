@@ -322,12 +322,11 @@ def send_slack_investigation_completed_notification(
             }
         ]
         
-        # Add only the top suggestion (most valuable next step)
+        # Add the top suggestion (most valuable next step — fixes prioritized)
         try:
             suggestions = get_incident_suggestions(incident_id)
             if suggestions:
-                top_suggestion = suggestions[0]
-                suggestion_blocks = build_suggestions_blocks(incident_id, [top_suggestion], max_suggestions=1)
+                suggestion_blocks = build_suggestions_blocks(incident_id, [suggestions[0]], max_suggestions=1)
                 if suggestion_blocks:
                     blocks.extend(suggestion_blocks)
                     logger.info(f"[SlackNotification] Added top suggestion block for incident {incident_id}")

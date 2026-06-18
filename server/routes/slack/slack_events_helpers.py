@@ -720,11 +720,11 @@ def get_incident_suggestions(incident_id: str):
                     """
                     SELECT id, title, description, type, risk, command
                     FROM incident_suggestions
-                    WHERE incident_id = %s
+                    WHERE incident_id = %s AND type != 'fix'
                     ORDER BY 
                         CASE type
-                            WHEN 'diagnostic' THEN 1
-                            WHEN 'mitigation' THEN 2
+                            WHEN 'mitigation' THEN 1
+                            WHEN 'diagnostic' THEN 2
                             WHEN 'communication' THEN 3
                             ELSE 4
                         END,
