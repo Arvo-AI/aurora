@@ -548,6 +548,19 @@ def send_slack_action_started_notification(user_id: str, action_data: Dict[str, 
         return None
 
 
+def _delete_start_message(client: SlackClient, action_data: Dict[str, Any], fallback_channel: str) -> None:
+    """Delete the 'Action Started' message if its ts was stored."""
+    start_msg_ts = action_data.get('start_message_ts')
+    if not start_msg_ts:
+        return
+    channel = action_data.get('start_message_channel') or fallback_channel
+    try:
+        client.delete_message(channel=channel, ts=start_msg_ts)
+        logger.info(f"[SlackNotification] Deleted action started message {start_msg_ts}")
+    except Exception as e:
+        logger.warning(f"[SlackNotification] Failed to delete started message: {e}")
+
+
 def send_slack_action_completed_notification(user_id: str, action_data: Dict[str, Any]) -> bool:
     """
     Send Slack notification when an action completes (success or error).
@@ -569,15 +582,7 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         if not channel_id:
             return False
 
-        # Delete the "Action Started" message if we have it stored
-        start_msg_ts = action_data.get('start_message_ts')
-        start_msg_channel = action_data.get('start_message_channel') or channel_id
-        if start_msg_ts:
-            try:
-                client.delete_message(channel=start_msg_channel, ts=start_msg_ts)
-                logger.info(f"[SlackNotification] Deleted action started message {start_msg_ts}")
-            except Exception as e:
-                logger.warning(f"[SlackNotification] Failed to delete started message: {e}")
+        _delete_start_message(client, action_data, channel_id)
 
         action_name = action_data.get('action_name', 'Unknown Action')
         status = action_data.get('status', 'unknown')

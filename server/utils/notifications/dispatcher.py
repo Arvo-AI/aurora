@@ -139,6 +139,55 @@ def _enrich_incident_summary(incident_data: Dict[str, Any], session_id: str, use
         logger.warning(f"[Dispatcher] Failed to enrich summary: {e}")
 
 
+def _fetch_action_run_details(run_id: str, user_id: str) -> tuple:
+    """Fetch action name and started_at from action_runs. Returns (name, started_at)."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Dispatcher:ActionData]")
+                cur.execute(
+                    """SELECT a.name, ar.started_at
+                       FROM action_runs ar
+                       JOIN actions a ON a.id = ar.action_id
+                       WHERE ar.id = %s""",
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return "Unknown Action", None
+                started = row[1]
+                if started and not started.tzinfo:
+                    started = started.replace(tzinfo=timezone.utc)
+                elif started:
+                    started = started.astimezone(timezone.utc)
+                return row[0], started
+    except Exception as e:
+        logger.warning("[Dispatcher] Failed to fetch action run details: %s", e)
+    return "Unknown Action", None
+
+
+def _fetch_last_bot_message(session_id: str, user_id: str) -> Optional[str]:
+    """Fetch the last bot message text from a chat session."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[Dispatcher:ActionResult]")
+                cur.execute(
+                    "SELECT messages FROM chat_sessions WHERE id = %s",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return None
+                messages = row[0] if isinstance(row[0], list) else json.loads(row[0])
+                for msg in reversed(messages):
+                    if msg.get('sender') == 'bot' and msg.get('text'):
+                        return msg['text']
+    except Exception as e:
+        logger.warning("[Dispatcher] Failed to fetch action result summary: %s", e)
+    return None
+
+
 def _get_action_data(user_id: str, trigger_metadata: Dict[str, Any], session_id: str,
                      status: str = 'running', error_message: Optional[str] = None) -> Dict[str, Any]:
     """Build action data dict from trigger metadata and optional DB lookup."""
@@ -148,49 +197,12 @@ def _get_action_data(user_id: str, trigger_metadata: Dict[str, Any], session_id:
     started_at = None
 
     if run_id:
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[Dispatcher:ActionData]")
-                    cur.execute(
-                        """SELECT a.name, ar.started_at
-                           FROM action_runs ar
-                           JOIN actions a ON a.id = ar.action_id
-                           WHERE ar.id = %s""",
-                        (run_id,),
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        action_name = row[0]
-                        if row[1]:
-                            started_at = row[1].astimezone(timezone.utc) if row[1].tzinfo else row[1].replace(tzinfo=timezone.utc)
-                        else:
-                            started_at = None
-        except Exception as e:
-            logger.warning("[Dispatcher] Failed to fetch action run details: %s", e)
+        action_name, started_at = _fetch_action_run_details(run_id, user_id)
 
-    # Fetch the last assistant message and summarize into key results
     if session_id and status != 'running':
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cur:
-                    set_rls_context(cur, conn, user_id, log_prefix="[Dispatcher:ActionResult]")
-                    cur.execute(
-                        "SELECT messages FROM chat_sessions WHERE id = %s",
-                        (session_id,),
-                    )
-                    row = cur.fetchone()
-                    if row and row[0]:
-                        messages = row[0] if isinstance(row[0], list) else json.loads(row[0])
-                        last_bot_text = None
-                        for msg in reversed(messages):
-                            if msg.get('sender') == 'bot' and msg.get('text'):
-                                last_bot_text = msg['text']
-                                break
-                        if last_bot_text:
-                            result_summary = _summarize_action_result(action_name, last_bot_text, user_id)
-        except Exception as e:
-            logger.warning("[Dispatcher] Failed to fetch action result summary: %s", e)
+        last_bot_text = _fetch_last_bot_message(session_id, user_id)
+        if last_bot_text:
+            result_summary = _summarize_action_result(action_name, last_bot_text, user_id)
 
     return {
         'action_name': action_name,
@@ -241,12 +253,12 @@ One-line summary:"""
         if response and response.content:
             content = response.content
             if isinstance(content, list):
-                content = "".join(
-                    p.get("text", "") if isinstance(p, dict) else str(p)
+                content = " ".join(
+                    str(p.get("text") or "") if isinstance(p, dict) else str(p)
                     for p in content
                     if not (isinstance(p, dict) and p.get("type") in ("thinking", "reasoning"))
                 )
-            summary = str(content).strip()
+            summary = " ".join(str(content).split())
             if summary:
                 return summary[:300]
         return None
