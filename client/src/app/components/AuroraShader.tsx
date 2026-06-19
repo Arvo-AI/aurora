@@ -140,7 +140,7 @@ void main()
 }
 `
 
-export default function AuroraShader({ className }: { className?: string }) {
+export default function AuroraShader({ className }: Readonly<{ className?: string }>) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number>(0)
 
