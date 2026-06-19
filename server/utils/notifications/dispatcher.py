@@ -27,6 +27,8 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
+_UNKNOWN_ACTION = "Unknown Action"
+
 
 def _get_org_email_recipients(org_id: str, user_id: str) -> list:
     """Fetch verified and enabled email recipients for an org."""
@@ -154,7 +156,7 @@ def _fetch_action_run_details(run_id: str, user_id: str) -> tuple:
                 )
                 row = cur.fetchone()
                 if not row:
-                    return "Unknown Action", None
+                    return _UNKNOWN_ACTION, None
                 started = row[1]
                 if started and not started.tzinfo:
                     started = started.replace(tzinfo=timezone.utc)
@@ -163,7 +165,7 @@ def _fetch_action_run_details(run_id: str, user_id: str) -> tuple:
                 return row[0], started
     except Exception as e:
         logger.warning("[Dispatcher] Failed to fetch action run details: %s", e)
-    return "Unknown Action", None
+    return _UNKNOWN_ACTION, None
 
 
 def _fetch_last_bot_message(session_id: str, user_id: str) -> Optional[str]:
@@ -192,7 +194,7 @@ def _get_action_data(user_id: str, trigger_metadata: Dict[str, Any], session_id:
                      status: str = 'running', error_message: Optional[str] = None) -> Dict[str, Any]:
     """Build action data dict from trigger metadata and optional DB lookup."""
     run_id = trigger_metadata.get('run_id')
-    action_name = "Unknown Action"
+    action_name = _UNKNOWN_ACTION
     result_summary = None
     started_at = None
 
