@@ -64,6 +64,11 @@ function OnboardingConnectorBarInner() {
     }
   }
 
+  const handleDismiss = () => {
+    sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
+    setState(null)
+  }
+
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
       {expanded ? (
@@ -83,10 +88,10 @@ function OnboardingConnectorBarInner() {
 
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
-              onClick={handleNext}
+              onClick={handleDismiss}
               className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5"
             >
-              Skip
+              Skip All
             </button>
             <button
               onClick={handleNext}
