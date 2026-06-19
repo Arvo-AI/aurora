@@ -1,9 +1,8 @@
 "use client";
 
-import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
+import { MutableRefObject, useCallback, useEffect, useRef, useState, startTransition } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { providerPreferencesService } from "@/lib/services/providerPreferences";
-import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 import { Message } from "../types";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
@@ -69,23 +68,12 @@ export function useChatSendHandlers({
   clearSelectedAction,
 }: ChatSendHandlerParams): ChatSendHandlerResult {
   const { toast } = useToast();
-  const { providerIds, isProviderConnected } = useConnectedAccounts();
 
   const [selectedModel, setSelectedModel] = useState("openai/gpt-5.5");
   const [selectedMode, setSelectedMode] = useState("agent");
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [isSending, setIsSending] = useState(false);
   const isSyncingRef = useRef(false);
-
-  const getConnectedProviders = useCallback(() => {
-    const infra = ['gcp', 'aws', 'azure', 'ovh', 'scaleway', 'tailscale', 'kubectl', 'onprem'];
-    return infra.filter(id => isProviderConnected(id));
-  }, [providerIds, isProviderConnected]);
-
-  const anyProviderConnected = useMemo(
-    () => getConnectedProviders().length > 0,
-    [getConnectedProviders],
-  );
 
   const syncProvidersWithMode = useCallback((modeValue: string, providers: string[]) => {
     // Prevent infinite loop - if we're already syncing, skip
@@ -306,17 +294,10 @@ export function useChatSendHandlers({
     if (!trimmed && !selectedAction) return false;
 
     const targetMode = modeOverride || selectedMode;
-    // Show warning if no providers connected
-    if (!anyProviderConnected) {
-      toast({
-        description: "No cloud provider selected. Connect a provider for reliable execution.",
-        variant: "default",
-      });
-    }
 
     // Let sendMessage handle provider enforcement and normalization
     return await sendMessage(messageText, socket, targetMode, undefined, options);
-  }, [anyProviderConnected, selectedMode, sendMessage, toast, selectedAction]);
+  }, [selectedMode, sendMessage, selectedAction]);
 
   const handleSend = useCallback(async (messageText: string, socket: ChatWebSocket, overrideMode?: string, options?: { triggerRca?: boolean }) => {
     return await initiateSend(messageText, socket, overrideMode, options);
