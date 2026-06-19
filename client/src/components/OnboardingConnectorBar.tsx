@@ -25,19 +25,30 @@ function OnboardingConnectorBarInner() {
   const [expanded, setExpanded] = useState(true)
 
   const urlOnboarding = searchParams.get("onboarding") === "1"
-  const urlQueue = searchParams.get("queue")?.split(",") || []
-  const urlCurrent = parseInt(searchParams.get("current") || "0", 10)
+  const urlQueue = (searchParams.get("queue")?.split(",") || []).filter(Boolean)
+  const parsedUrlCurrent = Number.parseInt(searchParams.get("current") || "0", 10)
 
   useEffect(() => {
     if (urlOnboarding && urlQueue.length > 0) {
-      const newState = { queue: urlQueue, current: urlCurrent }
+      const safeCurrent = Number.isFinite(parsedUrlCurrent)
+        ? Math.min(Math.max(parsedUrlCurrent, 0), urlQueue.length - 1)
+        : 0
+      const newState = { queue: urlQueue, current: safeCurrent }
       sessionStorage.setItem(ONBOARDING_QUEUE_KEY, JSON.stringify(newState))
       setState(newState)
     } else {
       const stored = sessionStorage.getItem(ONBOARDING_QUEUE_KEY)
       if (stored) {
         try {
-          setState(JSON.parse(stored))
+          const parsed = JSON.parse(stored) as Partial<OnboardingQueueState>
+          if (!Array.isArray(parsed.queue) || parsed.queue.length === 0) {
+            sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
+            return
+          }
+          const safeCurrent = Number.isInteger(parsed.current)
+            ? Math.min(Math.max(parsed.current!, 0), parsed.queue.length - 1)
+            : 0
+          setState({ queue: parsed.queue.filter(Boolean), current: safeCurrent })
         } catch {
           sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
         }
@@ -51,16 +62,16 @@ function OnboardingConnectorBarInner() {
   const { queue, current } = state
   const currentConnector = connectorRegistry.get(queue[current])
   const isLast = current >= queue.length - 1
-  const nextConnector = !isLast ? connectorRegistry.get(queue[current + 1]) : null
+  const nextConnector = isLast ? null : connectorRegistry.get(queue[current + 1])
 
   const handleNext = () => {
     if (isLast) {
       sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
-      window.location.href = "/"
+      globalThis.location.href = "/"
     } else {
       const newState = { queue, current: current + 1 }
       sessionStorage.setItem(ONBOARDING_QUEUE_KEY, JSON.stringify(newState))
-      window.location.href = getConnectorUrl(queue[current + 1], queue, current + 1)
+      globalThis.location.href = getConnectorUrl(queue[current + 1], queue, current + 1)
     }
   }
 

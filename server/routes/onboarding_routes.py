@@ -33,15 +33,17 @@ def complete_onboarding(user_id):
                     return jsonify({"error": "User not found"}), 404
                 org_id = row[0]
 
-                if selected_connectors:
-                    cur.execute(
-                        """INSERT INTO onboarding_selections (org_id, user_id, selected_connectors)
-                           VALUES (%s, %s, %s)
-                           ON CONFLICT (org_id) DO UPDATE
-                           SET selected_connectors = EXCLUDED.selected_connectors,
-                               user_id = EXCLUDED.user_id""",
-                        (org_id, user_id, selected_connectors),
-                    )
+                if not org_id:
+                    return jsonify({"error": "User is not associated with an organization"}), 400
+
+                cur.execute(
+                    """INSERT INTO onboarding_selections (org_id, user_id, selected_connectors)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (org_id) DO UPDATE
+                       SET selected_connectors = EXCLUDED.selected_connectors,
+                           user_id = EXCLUDED.user_id""",
+                    (org_id, user_id, selected_connectors),
+                )
 
                 cur.execute(
                     "UPDATE organizations SET onboarding_completed = TRUE WHERE id = %s",
@@ -51,6 +53,6 @@ def complete_onboarding(user_id):
                 conn.commit()
 
         return jsonify({"success": True, "selected": selected_connectors})
-    except Exception as e:
-        logger.error(f"Error completing onboarding: {e}")
+    except Exception:
+        logger.exception("Error completing onboarding")
         return jsonify({"error": "Internal server error"}), 500

@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   type ReactNode,
 } from "react"
 
@@ -43,7 +44,23 @@ const defaultState: OnboardingState = {
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null)
 
-export function OnboardingProvider({ children }: { children: ReactNode }) {
+function normalizeState(input: unknown): OnboardingState {
+  if (!input || typeof input !== "object") return defaultState
+  const obj = input as Partial<OnboardingState>
+  const s = (obj.selections ?? {}) as Partial<OnboardingState["selections"]>
+  const asArray = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+  return {
+    selections: {
+      monitoring: asArray(s.monitoring),
+      infrastructure: asArray(s.infrastructure),
+      alerting: asArray(s.alerting),
+      development: asArray(s.development),
+    },
+  }
+}
+
+export function OnboardingProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [state, setState] = useState<OnboardingState>(defaultState)
   const [step, setStep] = useState(0)
   const [hydrated, setHydrated] = useState(false)
@@ -52,7 +69,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     try {
       const stored = sessionStorage.getItem(STORAGE_KEY)
       if (stored) {
-        setState(JSON.parse(stored))
+        setState(normalizeState(JSON.parse(stored)))
       }
     } catch {}
     setHydrated(true)
@@ -109,21 +126,21 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     ]
   }, [state.selections])
 
+  const contextValue = useMemo(() => ({
+    state,
+    step,
+    totalSteps: TOTAL_STEPS,
+    goNext,
+    goBack,
+    addSelection,
+    removeSelection,
+    getSelectedConnectors,
+  }), [state, step, goNext, goBack, addSelection, removeSelection, getSelectedConnectors])
+
   if (!hydrated) return null
 
   return (
-    <OnboardingContext.Provider
-      value={{
-        state,
-        step,
-        totalSteps: TOTAL_STEPS,
-        goNext,
-        goBack,
-        addSelection,
-        removeSelection,
-        getSelectedConnectors,
-      }}
-    >
+    <OnboardingContext.Provider value={contextValue}>
       {children}
     </OnboardingContext.Provider>
   )

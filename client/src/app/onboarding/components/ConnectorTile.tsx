@@ -11,11 +11,13 @@ interface ConnectorTileProps {
   onToggle: () => void
 }
 
-export default function ConnectorTile({ connector, selected, onToggle }: ConnectorTileProps) {
+export default function ConnectorTile({ connector, selected, onToggle }: Readonly<ConnectorTileProps>) {
   const Icon = connector.icon
 
   return (
     <button
+      type="button"
+      aria-pressed={selected}
       onClick={onToggle}
       className={`relative flex items-start gap-3 p-4 rounded-lg border text-left transition-all duration-150 backdrop-blur-sm ${
         selected

@@ -25,22 +25,27 @@ export default function OnboardingPage() {
     setIsFinishing(true)
     const selectedIds = skip ? [] : getSelectedConnectors()
     try {
-      await fetch("/api/onboarding/complete", {
+      const res = await fetch("/api/onboarding/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ selected_connectors: selectedIds }),
       })
+      if (!res.ok) {
+        throw new Error(`Onboarding completion failed: ${res.status}`)
+      }
     } catch (e) {
       console.error("Finish onboarding error:", e)
+      setIsFinishing(false)
+      return
     }
 
     if (!skip && selectedIds.length > 0) {
       const firstConnector = connectorRegistry.get(selectedIds[0])
       const name = firstConnector?.name || selectedIds[0]
       const queueParam = `onboarding=1&queue=${selectedIds.join(",")}&current=0`
-      window.location.href = `/connectors?${queueParam}&highlight=${encodeURIComponent(name)}`
+      globalThis.location.href = `/connectors?${queueParam}&highlight=${encodeURIComponent(name)}`
     } else {
-      window.location.href = "/"
+      globalThis.location.href = "/"
     }
   }
 
@@ -307,7 +312,11 @@ export default function OnboardingPage() {
                 disabled={isFinishing}
                 className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all disabled:opacity-50"
               >
-                {isFinishing ? "Setting up..." : selectedConnectors.length > 0 ? "Start Configuration" : "Finish"}
+                {isFinishing
+                  ? "Setting up..."
+                  : selectedConnectors.length > 0
+                    ? "Start Configuration"
+                    : "Finish"}
               </button>
             )}
           </div>

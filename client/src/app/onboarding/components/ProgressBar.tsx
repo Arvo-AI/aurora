@@ -7,7 +7,7 @@ interface ProgressBarProps {
   totalVisible: number
 }
 
-export default function ProgressBar({ step, totalVisible }: ProgressBarProps) {
+export default function ProgressBar({ step, totalVisible }: Readonly<ProgressBarProps>) {
   const clamped = Math.min(step, totalVisible)
   const percent = (clamped / totalVisible) * 100
 

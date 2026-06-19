@@ -5,9 +5,9 @@ import { OnboardingProvider } from "./components/OnboardingContext"
 
 export default function OnboardingLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode
-}) {
+}>) {
   return (
     <OnboardingProvider>
       <div className="h-screen bg-[#0a0a0a] relative overflow-hidden">

@@ -155,15 +155,27 @@ export default function AuroraShader({ className }: { className?: string }) {
       const s = gl.createShader(type)!
       gl.shaderSource(s, src)
       gl.compileShader(s)
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        gl.deleteShader(s)
+        return null
+      }
       return s
     }
 
     const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER)
     const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
+    if (!vs || !fs) return
+
     const prog = gl.createProgram()!
     gl.attachShader(prog, vs)
     gl.attachShader(prog, fs)
     gl.linkProgram(prog)
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      gl.deleteProgram(prog)
+      gl.deleteShader(vs)
+      gl.deleteShader(fs)
+      return
+    }
     gl.useProgram(prog)
 
     const buf = gl.createBuffer()
@@ -199,6 +211,10 @@ export default function AuroraShader({ className }: { className?: string }) {
     return () => {
       cancelAnimationFrame(rafRef.current)
       window.removeEventListener("resize", resize)
+      gl.deleteBuffer(buf)
+      gl.deleteProgram(prog)
+      gl.deleteShader(vs)
+      gl.deleteShader(fs)
     }
   }, [])
 
