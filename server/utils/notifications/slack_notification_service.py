@@ -590,6 +590,8 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         status_text = "Completed Successfully" if status == 'success' else "Failed"
 
         detail_text = f"*Action:* {action_name}\n*Status:* {status_emoji} {status_text}"
+        if result_summary:
+            detail_text += f"\n*Result:* {result_summary}"
         if error_message:
             truncated_error = error_message[:200] + "..." if len(error_message) > 200 else error_message
             detail_text += f"\n*Error:* {truncated_error}"
@@ -620,20 +622,6 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
                 },
                 "url": session_url,
             }
-
-        # Add result summary as a separate section if available
-        if result_summary:
-            truncated_summary = result_summary[:2500] + "..." if len(result_summary) > 2500 else result_summary
-            from routes.slack.slack_events_helpers import format_response_for_slack
-            formatted_summary = format_response_for_slack(truncated_summary)
-            blocks.append({"type": "divider"})
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": formatted_summary or truncated_summary
-                }
-            })
 
         from routes.slack.slack_events_helpers import validate_slack_blocks
         if not validate_slack_blocks(blocks):

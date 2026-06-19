@@ -216,16 +216,14 @@ def _summarize_action_result(action_name: str, bot_response: str, user_id: str) 
         # Truncate input to avoid blowing context window
         truncated_response = bot_response[:4000]
 
-        prompt = f"""Action "{action_name}" completed. State the findings/outcomes only — NOT what the AI did.
+        prompt = f"""Summarize the outcome of action "{action_name}" in ONE short sentence. State counts and status, not specifics.
 
-Example: Instead of "Scanned repo for vulnerabilities" → "3 critical: SQL injection in auth.py, exposed creds in config.yml"
-
-Bullets, each <15 words.
+Example: "Found 5 critical vulnerabilities across 3 services" or "2 active EC2 instances in us-east-1, both healthy"
 
 Response:
 {truncated_response}
 
-Results:"""
+One-line summary:"""
 
         llm = create_chat_model(
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
@@ -245,23 +243,12 @@ Results:"""
         if response and response.content:
             summary = _extract_text_from_response(response.content)
             if summary:
-                summary = _normalize_bullets(summary)
-                return summary[:1500]
+                return summary[:300]
         return None
 
     except Exception as e:
         logger.warning("[Dispatcher] Failed to summarize action result: %s", e)
         return None
-
-
-def _normalize_bullets(text: str) -> str:
-    """Normalize inconsistent bullet characters to a uniform format."""
-    import re
-    lines = text.split('\n')
-    normalized = []
-    for line in lines:
-        normalized.append(re.sub(r'^[\s]*[*\-•]\s*', '• ', line))
-    return '\n'.join(normalized)
 
 
 def _store_start_message_info(run_id: str, msg_info: Dict[str, str], user_id: str) -> None:
