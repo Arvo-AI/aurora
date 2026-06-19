@@ -552,12 +552,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     const CITATION_RE = /^\[(\d+(?:,\s*\d+)*)\]$/;
     const parts = text.split(/(\[\d+(?:,\s*\d+)*\])/g);
 
-    return parts.map((part) => {
+    return parts.map((part, idx) => {
       const match = CITATION_RE.exec(part);
       if (match) {
         const keys = match[1].split(/,\s*/).map(k => k.trim());
         return (
-          <span key={`cg-${match[1]}`}>
+          <span key={`cg-${idx}-${match[1]}`}>
             {keys.map((citationKey) => {
               const citation = citations.find(c => c.key === citationKey);
               if (citation) {
@@ -574,7 +574,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           </span>
         );
       }
-      return part;
+      return <span key={`t-${idx}`}>{part}</span>;
     });
   }, [citations]);
 

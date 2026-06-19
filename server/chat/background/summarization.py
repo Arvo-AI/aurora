@@ -55,10 +55,7 @@ from chat.background.citation_extractor import (
     save_incident_citations,
 )
 from chat.background.recommender import generate_recommendations
-from chat.background.suggestion_extractor import (
-    SuggestionExtractor,
-    save_incident_suggestions,
-)
+from chat.background.suggestion_extractor import save_incident_suggestions
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
@@ -905,19 +902,6 @@ def generate_incident_summary_from_chat(
                 )
             else:
                 suggestions = []
-
-            # Fallback: if recommender returned nothing, use legacy extractor
-            if not suggestions:
-                suggestion_extractor = SuggestionExtractor()
-                suggestions = suggestion_extractor.extract_suggestions(
-                    incident_id=incident_id,
-                    summary=summary,
-                    citations=trace_citations,
-                    service=basics["service"],
-                    alert_title=basics["alert_title"],
-                    user_id=user_id,
-                    session_id=session_id,
-                )
 
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)

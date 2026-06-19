@@ -357,11 +357,13 @@ _CLI_PREFIXES = ("aws ", "kubectl ", "gcloud ", "az ", "terraform ", "helm ",
 
 
 def _parse_validated_metadata(lines: List[str]) -> tuple:
-    """Parse metadata lines (Validated by, Risk, Note) from a validated entry."""
-    validated_by, risk, undo, note = "", "medium", None, ""
+    """Parse metadata lines (Command, Validated by, Risk, Note) from a validated entry."""
+    validated_by, risk, undo, note, command = "", "medium", None, "", None
     for line in lines:
         line = line.strip()
-        if line.startswith("Validated by:"):
+        if line.startswith("Command:"):
+            command = line[len("Command:"):].strip()
+        elif line.startswith("Validated by:"):
             validated_by = line[len("Validated by:"):].strip()
         elif line.startswith("Risk:"):
             risk_undo = line[len("Risk:"):].strip()
@@ -375,7 +377,7 @@ def _parse_validated_metadata(lines: List[str]) -> tuple:
             note = line[len("Note:"):].strip()
     if risk not in _VALID_RISKS:
         risk = "medium"
-    return validated_by, risk, undo, note
+    return validated_by, risk, undo, note, command
 
 
 def _parse_validated_entry(entry: str) -> Optional[Suggestion]:
@@ -394,10 +396,12 @@ def _parse_validated_entry(entry: str) -> Optional[Suggestion]:
     title = re.sub(r'\*\*(.+?)\*\*', r'\1', title)
     command_or_desc = title_match.group(2).strip()
 
-    command = command_or_desc if any(command_or_desc.startswith(p) for p in _CLI_PREFIXES) else None
-    description = "" if command else command_or_desc
+    inline_command = command_or_desc if any(command_or_desc.startswith(p) for p in _CLI_PREFIXES) else None
+    description = "" if inline_command else command_or_desc
 
-    validated_by, risk, undo, note = _parse_validated_metadata(lines[1:])
+    validated_by, risk, undo, note, metadata_command = _parse_validated_metadata(lines[1:])
+
+    command = inline_command or metadata_command
 
     if not command and ("handler.py" in title.lower() or "code fix" in description.lower()):
         return None
@@ -409,10 +413,12 @@ def _parse_validated_entry(entry: str) -> Optional[Suggestion]:
     elif note:
         description = f"{description}\n\n{note}"
 
+    suggestion_type = "remediate" if command else "mitigation"
+
     return Suggestion(
         title=title[:200],
         description=description,
-        type="mitigation",
+        type=suggestion_type,
         risk=risk,
         command=command,
         rationale=rationale,
