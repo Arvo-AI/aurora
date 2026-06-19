@@ -860,7 +860,7 @@ class Agent:
                             from chat.backend.agent.workflow import _guardrail_task_var
                             _pending_rail = _guardrail_task_var.get()
                             if _pending_rail is not None:
-                                from guardrails.input_rail import InputRailResult, _BLOCKED_REASON, _FAIL_CLOSED_AUTH, _FAIL_CLOSED_CONNECTIVITY
+                                from guardrails.input_rail import InputRailResult
                                 rail_result: InputRailResult = await _pending_rail
                                 # Clear the context var so it doesn't leak to the next turn
                                 _guardrail_task_var.set(None)

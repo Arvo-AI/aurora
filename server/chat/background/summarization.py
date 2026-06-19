@@ -839,28 +839,9 @@ def generate_incident_summary_from_chat(
 
         _update_incident_summary(incident_id, summary, user_id=user_id)
 
-        # Send completion notifications now that summary is generated
-        from chat.background.task import (
-            _send_rca_notification,
-            _is_rca_email_notification_enabled,
-            _has_google_chat_connected,
-        )
-        from chat.backend.agent.tools.slack_tool import is_slack_connected
-
-        email_enabled = _is_rca_email_notification_enabled(user_id)
-        slack_enabled = is_slack_connected(user_id)
-        google_chat_enabled = _has_google_chat_connected(user_id)
-
-        if email_enabled or slack_enabled or google_chat_enabled:
-            _send_rca_notification(
-                user_id,
-                incident_id,
-                "completed",
-                email_enabled=email_enabled,
-                slack_enabled=slack_enabled,
-                google_chat_enabled=google_chat_enabled,
-                session_id=session_id,
-            )
+        # Send completion notifications via centralized dispatcher
+        from utils.notifications.dispatcher import notify_investigation_completed
+        notify_investigation_completed(user_id, incident_id, session_id=session_id)
 
         return {
             "incident_id": incident_id,

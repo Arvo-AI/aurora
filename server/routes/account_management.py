@@ -186,7 +186,31 @@ def get_connected_accounts(user_id, target_user_id):
                 }
 
         # ------------------------------
-        # 4) Kubectl agent connections
+        # 4) GitHub App installations (no user_tokens row)
+        # ------------------------------
+        if "github" not in accounts:
+            cursor.execute(
+                """SELECT gi.account_login
+                     FROM user_github_installations ugi
+                     JOIN github_installations gi
+                          ON gi.installation_id = ugi.installation_id
+                    WHERE ugi.user_id = %s
+                      AND ugi.disconnected_at IS NULL
+                      AND gi.suspended_at IS NULL
+                    ORDER BY gi.account_login
+                    LIMIT 1""",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                accounts["github"] = {
+                    "isConnected": True,
+                    "name": "GitHub",
+                    "displayText": row[0] or "GitHub App",
+                }
+
+        # ------------------------------
+        # 5) Kubectl agent connections
         # ------------------------------
         if "kubectl" not in accounts:
             result = _check_kubectl(user_id, org_id)
@@ -194,7 +218,7 @@ def get_connected_accounts(user_id, target_user_id):
                 accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
 
         # ------------------------------
-        # 5) On-prem VM connections
+        # 6) On-prem VM connections
         # ------------------------------
         if "onprem" not in accounts:
             result = _check_onprem(user_id, org_id)
