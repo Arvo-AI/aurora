@@ -77,6 +77,10 @@ export default function OnboardingPage() {
     .map((id) => connectorRegistry.get(id))
     .filter(Boolean)
 
+  let finishButtonLabel = "Finish"
+  if (isFinishing) finishButtonLabel = "Setting up..."
+  else if (selectedConnectors.length > 0) finishButtonLabel = "Start Configuration"
+
   return (
     <div className="h-screen flex flex-col">
       <div className="px-6 pt-6 pb-2 max-w-[640px] mx-auto w-full">
@@ -312,11 +316,7 @@ export default function OnboardingPage() {
                 disabled={isFinishing}
                 className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all disabled:opacity-50"
               >
-                {isFinishing
-                  ? "Setting up..."
-                  : selectedConnectors.length > 0
-                    ? "Start Configuration"
-                    : "Finish"}
+                {finishButtonLabel}
               </button>
             )}
           </div>

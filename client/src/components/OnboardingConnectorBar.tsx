@@ -19,6 +19,19 @@ function getConnectorUrl(id: string, queue: string[], index: number): string {
   return `/connectors?${queueParam}&highlight=${encodeURIComponent(name)}`
 }
 
+function parseStoredState(stored: string): OnboardingQueueState | null {
+  try {
+    const parsed = JSON.parse(stored) as Partial<OnboardingQueueState>
+    if (!Array.isArray(parsed.queue) || parsed.queue.length === 0) return null
+    const safeCurrent = Number.isInteger(parsed.current)
+      ? Math.min(Math.max(parsed.current!, 0), parsed.queue.length - 1)
+      : 0
+    return { queue: parsed.queue.filter(Boolean), current: safeCurrent }
+  } catch {
+    return null
+  }
+}
+
 function OnboardingConnectorBarInner() {
   const searchParams = useSearchParams()
   const [state, setState] = useState<OnboardingQueueState | null>(null)
@@ -39,17 +52,10 @@ function OnboardingConnectorBarInner() {
     } else {
       const stored = sessionStorage.getItem(ONBOARDING_QUEUE_KEY)
       if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as Partial<OnboardingQueueState>
-          if (!Array.isArray(parsed.queue) || parsed.queue.length === 0) {
-            sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
-            return
-          }
-          const safeCurrent = Number.isInteger(parsed.current)
-            ? Math.min(Math.max(parsed.current!, 0), parsed.queue.length - 1)
-            : 0
-          setState({ queue: parsed.queue.filter(Boolean), current: safeCurrent })
-        } catch {
+        const parsed = parseStoredState(stored)
+        if (parsed) {
+          setState(parsed)
+        } else {
           sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
         }
       }

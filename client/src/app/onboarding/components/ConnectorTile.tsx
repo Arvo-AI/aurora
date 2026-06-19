@@ -14,6 +14,24 @@ interface ConnectorTileProps {
 export default function ConnectorTile({ connector, selected, onToggle }: Readonly<ConnectorTileProps>) {
   const Icon = connector.icon
 
+  const renderIcon = () => {
+    if (connector.iconPath) {
+      return (
+        <Image
+          src={connector.iconPath}
+          alt={connector.name}
+          width={24}
+          height={24}
+          className="object-contain"
+        />
+      )
+    }
+    if (Icon) {
+      return <Icon className={`w-5 h-5 ${connector.iconColor || "text-white"}`} />
+    }
+    return null
+  }
+
   return (
     <button
       type="button"
@@ -40,17 +58,7 @@ export default function ConnectorTile({ connector, selected, onToggle }: Readonl
       </AnimatePresence>
 
       <div className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center overflow-hidden bg-white/[0.06]">
-        {connector.iconPath ? (
-          <Image
-            src={connector.iconPath}
-            alt={connector.name}
-            width={24}
-            height={24}
-            className="object-contain"
-          />
-        ) : Icon ? (
-          <Icon className={`w-5 h-5 ${connector.iconColor || "text-white"}`} />
-        ) : null}
+        {renderIcon()}
       </div>
 
       <div className="flex-1 min-w-0 pr-5">
