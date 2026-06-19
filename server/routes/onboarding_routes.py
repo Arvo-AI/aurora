@@ -19,6 +19,12 @@ def complete_onboarding(user_id):
         data = request.get_json() or {}
         selected_connectors = data.get("selected_connectors", [])
 
+        if not isinstance(selected_connectors, list) or len(selected_connectors) > 50:
+            return jsonify({"error": "Invalid connector selections"}), 400
+        selected_connectors = [
+            str(c)[:100] for c in selected_connectors if isinstance(c, str)
+        ]
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))

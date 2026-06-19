@@ -21,26 +21,9 @@ export default function OnboardingPage() {
   } = useOnboarding()
   const [isFinishing, setIsFinishing] = useState(false)
 
-  const handleSkipOnboarding = async () => {
+  const handleFinish = async (skip = false) => {
     setIsFinishing(true)
-    try {
-      const res = await fetch("/api/onboarding/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skip_setup: true }),
-      })
-      if (!res.ok) {
-        console.error("Skip onboarding failed:", res.status)
-      }
-    } catch (e) {
-      console.error("Skip onboarding error:", e)
-    }
-    window.location.href = "/"
-  }
-
-  const handleFinish = async () => {
-    setIsFinishing(true)
-    const selectedIds = getSelectedConnectors()
+    const selectedIds = skip ? [] : getSelectedConnectors()
     try {
       await fetch("/api/onboarding/complete", {
         method: "POST",
@@ -51,14 +34,11 @@ export default function OnboardingPage() {
       console.error("Finish onboarding error:", e)
     }
 
-    const selectedConnectors = selectedIds
-      .map((id) => connectorRegistry.get(id))
-      .filter(Boolean)
-
-    if (selectedConnectors.length > 0) {
-      const firstName = selectedConnectors[0]?.name || selectedIds[0]
+    if (!skip && selectedIds.length > 0) {
+      const firstConnector = connectorRegistry.get(selectedIds[0])
+      const name = firstConnector?.name || selectedIds[0]
       const queueParam = `onboarding=1&queue=${selectedIds.join(",")}&current=0`
-      window.location.href = `/connectors?${queueParam}&highlight=${encodeURIComponent(firstName)}`
+      window.location.href = `/connectors?${queueParam}&highlight=${encodeURIComponent(name)}`
     } else {
       window.location.href = "/"
     }
@@ -305,7 +285,7 @@ export default function OnboardingPage() {
 
           {step < totalSteps - 1 && (
             <button
-              onClick={handleSkipOnboarding}
+              onClick={() => handleFinish(true)}
               disabled={isFinishing}
               className="absolute left-1/2 -translate-x-1/2 px-3 py-2 text-xs text-[#666] hover:text-[#999] transition-colors disabled:opacity-50"
             >
@@ -323,7 +303,7 @@ export default function OnboardingPage() {
               </button>
             ) : (
               <button
-                onClick={handleFinish}
+                onClick={() => handleFinish()}
                 disabled={isFinishing}
                 className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all disabled:opacity-50"
               >
