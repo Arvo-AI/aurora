@@ -3,7 +3,10 @@ Centralized notification dispatcher.
 
 All notification events (investigation start/complete, action start/complete) route
 through this module. It handles preference checking, recipient resolution, and dispatch
-to all enabled channels (email, Slack, Google Chat).
+to enabled channels.
+
+Investigation notifications dispatch to: email, Slack, Google Chat.
+Action notifications dispatch to: email, Slack.
 
 Callers (task.py, summarization.py) make a single one-line call and remain unaware
 of which channels are enabled.
@@ -158,7 +161,10 @@ def _get_action_data(user_id: str, trigger_metadata: Dict[str, Any], session_id:
                     row = cur.fetchone()
                     if row:
                         action_name = row[0]
-                        started_at = row[1].replace(tzinfo=timezone.utc) if row[1] else None
+                        if row[1]:
+                            started_at = row[1].astimezone(timezone.utc) if row[1].tzinfo else row[1].replace(tzinfo=timezone.utc)
+                        else:
+                            started_at = None
         except Exception as e:
             logger.warning("[Dispatcher] Failed to fetch action run details: %s", e)
 
@@ -185,7 +191,7 @@ def _send_emails(org_id: str, user_id: str, send_fn_name: str, payload: Any) -> 
         try:
             send_fn(recipient, payload)
         except Exception as e:
-            logger.warning(f"[Dispatcher] Email to {recipient} failed: {e}")
+            logger.warning(f"[Dispatcher] Email dispatch failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -295,16 +301,6 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
             logger.error(f"[Dispatcher] Incident {incident_id} not found for failed notification")
             return
 
-        failed_payload = {
-            **incident_data,
-            'aurora_summary': f"Investigation failed: {error_message or 'Unknown error'}",
-        }
-
-        # --- Email ---
-        email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
-        if email_enabled:
-            _send_emails(org_id, user_id, 'send_investigation_completed_email', failed_payload)
-
         # --- Slack ---
         slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
         if slack_enabled and _has_slack_connected(user_id):
@@ -316,23 +312,12 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
             except Exception:
                 logger.exception("[Dispatcher] Slack failed notification failed")
 
-        # --- Google Chat ---
-        google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
-        if google_chat_enabled and _has_google_chat_connected(user_id):
-            try:
-                from utils.notifications.google_chat_notification_service import (
-                    send_google_chat_investigation_completed_notification,
-                )
-                send_google_chat_investigation_completed_notification(user_id, failed_payload)
-            except Exception:
-                logger.exception("[Dispatcher] Google Chat failed notification failed")
-
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_failed")
 
 
 def notify_action_started(user_id: str, trigger_metadata: Dict[str, Any], session_id: str) -> None:
-    """Send notifications for action started event across all enabled channels."""
+    """Send notifications for action started event to email and Slack."""
     try:
         org_id = get_org_id_for_user(user_id)
         if not org_id:
@@ -362,7 +347,7 @@ def notify_action_started(user_id: str, trigger_metadata: Dict[str, Any], sessio
 
 def notify_action_completed(user_id: str, trigger_metadata: Dict[str, Any], session_id: str,
                             status: str = 'success', error_message: Optional[str] = None) -> None:
-    """Send notifications for action completed event across all enabled channels."""
+    """Send notifications for action completed event to email and Slack."""
     try:
         org_id = get_org_id_for_user(user_id)
         if not org_id:

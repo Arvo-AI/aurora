@@ -342,7 +342,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 clicker_org_id = clicker_row[0] if clicker_row else None
         
         # 4. AUTHORIZE: Only members of the same org can run commands
-        if clicker_org_id != incident_org_id:
+        if clicker_org_id is None or clicker_org_id != incident_org_id:
             logger.warning(f"User {clicker_user_id} (org {clicker_org_id}) tried to run suggestion for incident in org {incident_org_id}")
             client = get_slack_client_for_user(clicker_user_id)
             if client:

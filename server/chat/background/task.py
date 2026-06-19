@@ -491,6 +491,7 @@ def run_background_chat(
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
 
         if incident_id:
+            _should_notify_investigation_started = False
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
@@ -602,11 +603,16 @@ def run_background_chat(
                                 logger.debug("[BackgroundChat] Failed to dispatch on_incident actions")
 
                         # Send investigation started notifications via centralized dispatcher
-                        if send_notifications:
-                            from utils.notifications.dispatcher import notify_investigation_started
-                            notify_investigation_started(user_id, incident_id)
+                        _should_notify_investigation_started = send_notifications
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
+
+            if _should_notify_investigation_started:
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_started
+                    notify_investigation_started(user_id, incident_id)
+                except Exception as e:
+                    logger.warning(f"[BackgroundChat] Failed to send investigation started notification: {e}")
         
         # Hook: check if LLM call is allowed
         from utils.hooks import get_hook
@@ -631,7 +637,7 @@ def run_background_chat(
             return {"session_id": session_id, "status": "hook_blocked", "error": hook_message}
 
         # Send action started notification after hook gate passes
-        if is_action_source:
+        if is_action_source and send_notifications:
             try:
                 from utils.notifications.dispatcher import notify_action_started
                 notify_action_started(user_id, trigger_metadata, session_id)
@@ -650,6 +656,7 @@ def run_background_chat(
                 incident_id=incident_id,
                 mode=mode,
                 rail_text=rail_text,
+                send_notifications=send_notifications,
             ))
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
@@ -780,30 +787,14 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
-            action_status = None
-            action_error_msg = None
-            try:
-                from services.actions.executor import update_action_run_status
-                if result.get("guardrail_blocked"):
-                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
-                    update_action_run_status(
-                        run_id=trigger_metadata['run_id'], status='error',
-                        user_id=user_id, error_message='Action blocked by safety guardrails',
-                    )
-                    action_status = 'error'
-                    action_error_msg = 'Action blocked by safety guardrails'
-                else:
-                    update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
-                    action_status = 'success'
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
-
-            if action_status:
+            if not result.get("action_notification_sent") and send_notifications:
+                action_status = 'error' if result.get("guardrail_blocked") else 'success'
+                action_error_msg = 'Action blocked by safety guardrails' if result.get("guardrail_blocked") else None
                 try:
                     from utils.notifications.dispatcher import notify_action_completed
                     notify_action_completed(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
                 except Exception as e:
-                    logger.warning(f"[BackgroundChat] Failed to send action notification: {e}")
+                    logger.warning(f"[BackgroundChat] Failed to send action notification (fallback): {e}")
 
         # Dispatch on_incident actions configured for after_rca timing.
         # Guarded: skip if already dispatched inside _execute_background_chat.
@@ -833,10 +824,13 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+            except Exception:
+                logger.debug("Failed to update action run status after timeout")
+            try:
                 from utils.notifications.dispatcher import notify_action_completed
                 notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
             except Exception:
-                logger.debug("Failed to update action run status after timeout")
+                logger.debug("[BackgroundChat] Failed to send action completed notification after timeout")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -859,10 +853,13 @@ def run_background_chat(
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
                                          error_message=str(e), user_id=user_id)
+            except Exception:
+                logger.debug("Failed to update action run status during error handling")
+            try:
                 from utils.notifications.dispatcher import notify_action_completed
                 notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message=str(e))
             except Exception:
-                logger.debug("Failed to update action run status during error handling")
+                logger.debug("[BackgroundChat] Failed to send action completed notification during error handling")
         return {
             "session_id": session_id,
             "status": "failed",
@@ -1239,6 +1236,7 @@ async def _execute_background_chat(
     incident_id: Optional[str] = None,
     mode: str = "ask",
     rail_text: Optional[str] = None,
+    send_notifications: bool = True,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1478,7 +1476,10 @@ async def _execute_background_chat(
         # never return to the caller (worker process exits during event loop teardown
         # due to MCP subprocess cleanup), so this must happen before we return.
         guardrail_blocked = getattr(state, "guardrail_blocked", False)
+        action_notification_sent = False
         if trigger_metadata and trigger_metadata.get('source') == 'action':
+            action_status = None
+            action_error_msg = None
             try:
                 from services.actions.executor import update_action_run_status
                 if guardrail_blocked:
@@ -1487,10 +1488,21 @@ async def _execute_background_chat(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message='Action blocked by safety guardrails',
                     )
+                    action_status = 'error'
+                    action_error_msg = 'Action blocked by safety guardrails'
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
+                    action_status = 'success'
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+
+            if action_status and send_notifications:
+                try:
+                    from utils.notifications.dispatcher import notify_action_completed
+                    notify_action_completed(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
+                    action_notification_sent = True
+                except Exception as e:
+                    logger.warning(f"[BackgroundChat] Failed to send action completed notification: {e}")
 
         # Dispatch after_rca actions before returning (same reason as above).
         if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
@@ -1507,6 +1519,7 @@ async def _execute_background_chat(
             "tool_calls": tool_calls,
             "guardrail_blocked": guardrail_blocked,
             "after_rca_dispatched": True,
+            "action_notification_sent": action_notification_sent,
         }
         
     except Exception as e:
