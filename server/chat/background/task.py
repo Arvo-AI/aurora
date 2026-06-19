@@ -285,6 +285,8 @@ _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 # RCA sources that use rca_context in system prompt
 _RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'action'}
 
+_GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
+
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
 if _redis_client is None:
@@ -789,7 +791,7 @@ def run_background_chat(
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             if not result.get("action_notification_sent") and send_notifications:
                 action_status = 'error' if result.get("guardrail_blocked") else 'success'
-                action_error_msg = 'Action blocked by safety guardrails' if result.get("guardrail_blocked") else None
+                action_error_msg = _GUARDRAIL_BLOCKED_MSG if result.get("guardrail_blocked") else None
                 try:
                     from utils.notifications.dispatcher import notify_action_completed
                     notify_action_completed(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
@@ -1486,10 +1488,10 @@ async def _execute_background_chat(
                     _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
                     update_action_run_status(
                         run_id=trigger_metadata['run_id'], status='error',
-                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                        user_id=user_id, error_message=_GUARDRAIL_BLOCKED_MSG,
                     )
                     action_status = 'error'
-                    action_error_msg = 'Action blocked by safety guardrails'
+                    action_error_msg = _GUARDRAIL_BLOCKED_MSG
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
                     action_status = 'success'
