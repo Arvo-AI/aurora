@@ -639,7 +639,7 @@ def run_background_chat(
             return {"session_id": session_id, "status": "hook_blocked", "error": hook_message}
 
         # Send action started notification after hook gate passes
-        if is_action_source and send_notifications:
+        if is_action_source:
             try:
                 from utils.notifications.dispatcher import notify_action_started
                 notify_action_started(user_id, trigger_metadata, session_id)
@@ -789,7 +789,7 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
-            if not result.get("action_notification_sent") and send_notifications:
+            if not result.get("action_notification_sent"):
                 action_status = 'error' if result.get("guardrail_blocked") else 'success'
                 action_error_msg = _GUARDRAIL_BLOCKED_MSG if result.get("guardrail_blocked") else None
                 try:
@@ -1498,7 +1498,7 @@ async def _execute_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
 
-            if action_status and send_notifications:
+            if action_status:
                 try:
                     from utils.notifications.dispatcher import notify_action_completed
                     notify_action_completed(user_id, trigger_metadata, session_id, status=action_status, error_message=action_error_msg)
