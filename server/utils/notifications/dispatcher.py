@@ -211,9 +211,7 @@ def _summarize_action_result(action_name: str, bot_response: str, user_id: str) 
         from chat.backend.agent.providers import create_chat_model
         from chat.backend.agent.llm import ModelConfig
         from chat.backend.agent.utils.llm_usage_tracker import tracked_invoke
-        from chat.background.summarization import _extract_text_from_response
 
-        # Truncate input to avoid blowing context window
         truncated_response = bot_response[:4000]
 
         prompt = f"""Summarize the outcome of action "{action_name}" in ONE short sentence. State counts and status, not specifics.
@@ -241,7 +239,14 @@ One-line summary:"""
         )
 
         if response and response.content:
-            summary = _extract_text_from_response(response.content)
+            content = response.content
+            if isinstance(content, list):
+                content = "".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p)
+                    for p in content
+                    if not (isinstance(p, dict) and p.get("type") in ("thinking", "reasoning"))
+                )
+            summary = str(content).strip()
             if summary:
                 return summary[:300]
         return None
