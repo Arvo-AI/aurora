@@ -96,6 +96,11 @@ class SlackClient:
         if blocks:
             data["blocks"] = blocks
         return self._make_request("POST", "chat.update", data)
+
+    def delete_message(self, channel: str, ts: str) -> bool:
+        """Delete a message from a Slack channel. Returns True if successful."""
+        result = self._make_request("POST", "chat.delete", {"channel": channel, "ts": ts})
+        return result.get("ok", False)
     
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""
