@@ -120,8 +120,8 @@ export default function OnboardingPage() {
                 your team resolve incidents faster — automatically.
               </p>
               <p className="text-[#888] text-xs leading-relaxed">
-                Let&apos;s connect your tools so Aurora can start working for your team.
-                This takes about 2 minutes — you can always change things later.
+                Let&apos;s connect your tools so Aurora can start working for your team
+                 — you can always change things later.
               </p>
             </div>
           </div>
@@ -242,9 +242,6 @@ export default function OnboardingPage() {
               >
                 Book a meeting &rarr;
               </a>
-              <p className="text-xs text-[#666]">
-                No pressure — this is completely optional.
-              </p>
             </div>
           </div>
 
