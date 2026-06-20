@@ -492,8 +492,6 @@ def send_slack_action_started_notification(user_id: str, action_data: Dict[str, 
             return None
 
         action_name = action_data.get('action_name', 'Unknown Action')
-        session_id = action_data.get('session_id', '')
-        session_url = f"{FRONTEND_URL}/chat?sessionId={session_id}" if session_id else None
 
         detail_text = f"*Action:* {action_name}\n*Status:* Running"
 
@@ -513,16 +511,6 @@ def send_slack_action_started_notification(user_id: str, action_data: Dict[str, 
                 }
             }
         ]
-
-        if session_url:
-            blocks[1]["accessory"] = {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "View Session"
-                },
-                "url": session_url,
-            }
 
         from routes.slack.slack_events_helpers import validate_slack_blocks
         if not validate_slack_blocks(blocks):
