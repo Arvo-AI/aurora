@@ -30,6 +30,8 @@ from chat.backend.agent.utils.tool_call_history import (
 from utils.metrics_periods import period_to_interval
 from utils.query_helpers import clamp, duration_ms, fetch_dicts, iso_utc
 from utils.validation import is_valid_uuid
+from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
@@ -72,17 +74,7 @@ def introspection_tool(fn: Callable[..., Any]) -> Callable[..., str]:
 
 @contextmanager
 def _cursor(user_id: str):
-    """Yield ``(cursor, org_id)`` on a pooled connection with RLS scoped to the org.
-
-    ``set_rls_context`` resolves the org and sets the RLS session vars in one
-    step (background workers have no Flask request to populate them) and returns
-    the org_id, so callers that need it get it here without a second lookup.
-    Raises if the org can't be resolved — otherwise RLS-protected queries would
-    silently return nothing.
-    """
-    from utils.db.connection_pool import db_pool
-    from utils.auth.stateless_auth import set_rls_context
-
+    """Yield ``(cursor, org_id)`` on a pooled connection with RLS scoped to the org."""
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             org_id = set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
@@ -103,7 +95,7 @@ def _require_uuid(value: Optional[str], field: str = "id") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic argument schemas
+# Incidents
 # ---------------------------------------------------------------------------
 
 class ListIncidentsArgs(BaseModel):
@@ -114,107 +106,6 @@ class ListIncidentsArgs(BaseModel):
     limit: int = Field(default=20, description="Max incidents to return (1–100, default 20).")
     offset: int = Field(default=0, description="Paging offset (>= 0, default 0).")
 
-
-class GetIncidentArgs(BaseModel):
-    incident_id: str = Field(description="The UUID of the incident to retrieve.")
-
-
-class IncidentListAlertsArgs(BaseModel):
-    incident_id: str = Field(
-        description="The UUID of the incident whose correlated alerts to list.",
-    )
-
-
-class ListServicesArgs(BaseModel):
-    resource_type: Optional[str] = Field(
-        default=None, description="Filter by resource type (e.g. 'compute', 'database')."
-    )
-    provider: Optional[str] = Field(
-        default=None, description="Filter by cloud provider (e.g. 'aws', 'gcp')."
-    )
-
-
-class ServiceImpactArgs(BaseModel):
-    name: str = Field(description="The service name exactly as it appears in the dependency graph.")
-
-
-class ListActionsArgs(BaseModel):
-    pass
-
-
-class ListActionRunsArgs(BaseModel):
-    action_id: str = Field(description="The UUID of the action whose run history to list.")
-    limit: int = Field(default=50, description="Max runs to return (1–200, default 50).")
-    offset: int = Field(default=0, description="Paging offset (>= 0, default 0).")
-
-
-class GetMetricsSummaryArgs(BaseModel):
-    period: str = Field(
-        default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d (default 30d)."
-    )
-
-
-class GetMttrArgs(BaseModel):
-    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
-    severity: Optional[str] = Field(
-        default=None, description="Filter by severity (e.g. critical, high, medium, low)."
-    )
-    service: Optional[str] = Field(default=None, description="Filter by service name.")
-
-
-class GetIncidentFrequencyArgs(BaseModel):
-    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
-    group_by: str = Field(
-        default="severity", description="Group results by: severity, service, or source_type."
-    )
-
-
-class GetChangeFailureRateArgs(BaseModel):
-    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
-
-
-class GetLlmUsageSummaryArgs(BaseModel):
-    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
-
-
-class IncidentFindingsArgs(BaseModel):
-    incident_id: str = Field(description="The UUID of the incident whose RCA findings to list.")
-
-
-class IncidentFindingDetailArgs(BaseModel):
-    incident_id: str = Field(description="The UUID of the incident.")
-    agent_id: str = Field(
-        description="The sub-agent ID (alphanumeric/dash/underscore, max 64 chars)."
-    )
-
-
-class GetActionArgs(BaseModel):
-    action_id: str = Field(description="The UUID of the action to retrieve.")
-
-
-class GraphGetServiceArgs(BaseModel):
-    name: str = Field(description="The service name exactly as it appears in the dependency graph.")
-
-
-class PostmortemListArgs(BaseModel):
-    limit: int = Field(default=50, description="Max postmortems to return (1–100, default 50).")
-    offset: int = Field(default=0, description="Paging offset (>= 0, default 0).")
-
-
-class KbGetMemoryArgs(BaseModel):
-    pass
-
-
-class GrafanaListAlertsArgs(BaseModel):
-    state: Optional[str] = Field(
-        default=None, description="Filter by alert state (e.g. 'alerting', 'ok', 'pending')."
-    )
-    limit: int = Field(default=50, description="Max alerts to return (1–100, default 50).")
-
-
-# ---------------------------------------------------------------------------
-# Incidents
-# ---------------------------------------------------------------------------
 
 @introspection_tool
 def list_incidents(status=None, limit=20, offset=0, *, user_id, **_) -> dict:
@@ -250,6 +141,10 @@ def list_incidents(status=None, limit=20, offset=0, *, user_id, **_) -> dict:
         for r in rows
     ]
     return {"incidents": incidents, "total": total}
+
+
+class GetIncidentArgs(BaseModel):
+    incident_id: str = Field(description="The UUID of the incident to retrieve.")
 
 
 @introspection_tool
@@ -308,6 +203,12 @@ def get_incident(incident_id, *, user_id, **_) -> dict:
     return {"incident": incident}
 
 
+class IncidentListAlertsArgs(BaseModel):
+    incident_id: str = Field(
+        description="The UUID of the incident whose correlated alerts to list.",
+    )
+
+
 @introspection_tool
 def incident_list_alerts(incident_id, *, user_id, **_) -> dict:
     """List the alerts correlated to an incident with correlation details."""
@@ -343,6 +244,15 @@ def incident_list_alerts(incident_id, *, user_id, **_) -> dict:
 # Service dependency graph
 # ---------------------------------------------------------------------------
 
+class ListServicesArgs(BaseModel):
+    resource_type: Optional[str] = Field(
+        default=None, description="Filter by resource type (e.g. 'compute', 'database')."
+    )
+    provider: Optional[str] = Field(
+        default=None, description="Filter by cloud provider (e.g. 'aws', 'gcp')."
+    )
+
+
 @introspection_tool
 def list_services(resource_type=None, provider=None, *, user_id, **_) -> dict:
     """List services in the infrastructure dependency graph."""
@@ -354,6 +264,10 @@ def list_services(resource_type=None, provider=None, *, user_id, **_) -> dict:
     return {"services": services, "total": len(services)}
 
 
+class ServiceImpactArgs(BaseModel):
+    name: str = Field(description="The service name exactly as it appears in the dependency graph.")
+
+
 @introspection_tool
 def service_impact(name, *, user_id, **_) -> dict:
     """Get a service's blast radius — the downstream services that depend on it."""
@@ -362,6 +276,10 @@ def service_impact(name, *, user_id, **_) -> dict:
     from services.graph.memgraph_client import get_memgraph_client
 
     return get_memgraph_client().get_impact_radius(user_id, name.strip())
+
+
+class GraphGetServiceArgs(BaseModel):
+    name: str = Field(description="The service name exactly as it appears in the dependency graph.")
 
 
 @introspection_tool
@@ -380,6 +298,10 @@ def graph_get_service(name, *, user_id, **_) -> dict:
 # ---------------------------------------------------------------------------
 # Actions (automations)
 # ---------------------------------------------------------------------------
+
+class ListActionsArgs(BaseModel):
+    pass
+
 
 @introspection_tool
 def list_actions(*, user_id, **_) -> dict:
@@ -413,6 +335,12 @@ def list_actions(*, user_id, **_) -> dict:
     return {"actions": actions, "total": len(actions)}
 
 
+class ListActionRunsArgs(BaseModel):
+    action_id: str = Field(description="The UUID of the action whose run history to list.")
+    limit: int = Field(default=50, description="Max runs to return (1–200, default 50).")
+    offset: int = Field(default=0, description="Paging offset (>= 0, default 0).")
+
+
 @introspection_tool
 def list_action_runs(action_id, limit=50, offset=0, *, user_id, **_) -> dict:
     """List an action's run history: status, timing, linked incident, and errors."""
@@ -439,6 +367,10 @@ def list_action_runs(action_id, limit=50, offset=0, *, user_id, **_) -> dict:
         for r in rows
     ]
     return {"runs": runs, "total": len(runs)}
+
+
+class GetActionArgs(BaseModel):
+    action_id: str = Field(description="The UUID of the action to retrieve.")
 
 
 @introspection_tool
@@ -490,6 +422,12 @@ def get_action(action_id, *, user_id, **_) -> dict:
 
 # Resolve/analysis latency in seconds, reused across the metrics queries.
 _MTTR_EPOCH = "EXTRACT(EPOCH FROM (COALESCE(resolved_at, analyzed_at) - started_at))"
+
+
+class GetMetricsSummaryArgs(BaseModel):
+    period: str = Field(
+        default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d (default 30d)."
+    )
 
 
 @introspection_tool
@@ -548,6 +486,14 @@ def get_metrics_summary(period="30d", *, user_id, **_) -> dict:
     }
 
 
+class GetMttrArgs(BaseModel):
+    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
+    severity: Optional[str] = Field(
+        default=None, description="Filter by severity (e.g. critical, high, medium, low)."
+    )
+    service: Optional[str] = Field(default=None, description="Filter by service name.")
+
+
 @introspection_tool
 def get_mttr(period="30d", severity=None, service=None, *, user_id, **_) -> dict:
     """Mean Time to Resolve with p50/p95, broken down by severity and trended daily."""
@@ -597,6 +543,13 @@ def get_mttr(period="30d", severity=None, service=None, *, user_id, **_) -> dict
     return {"bySeverity": by_severity, "trend": trend, "period": period}
 
 
+class GetIncidentFrequencyArgs(BaseModel):
+    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
+    group_by: str = Field(
+        default="severity", description="Group results by: severity, service, or source_type."
+    )
+
+
 @introspection_tool
 def get_incident_frequency(period="30d", group_by="severity", *, user_id, **_) -> dict:
     """Incident count over time, grouped by severity, service, or source type."""
@@ -617,6 +570,10 @@ def get_incident_frequency(period="30d", group_by="severity", *, user_id, **_) -
         data = [{"date": str(r[0]), "group": r[1], "count": r[2]} for r in cur.fetchall()]
 
     return {"data": data, "groupBy": group_by, "period": period}
+
+
+class GetChangeFailureRateArgs(BaseModel):
+    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
 
 
 @introspection_tool
@@ -656,6 +613,10 @@ def get_change_failure_rate(period="30d", *, user_id, **_) -> dict:
 # LLM usage / cost
 # ---------------------------------------------------------------------------
 
+class GetLlmUsageSummaryArgs(BaseModel):
+    period: str = Field(default="30d", description="Time period: 7d, 30d, 90d, 180d, or 365d.")
+
+
 @introspection_tool
 def get_llm_usage_summary(period="30d", *, user_id, **_) -> dict:
     """Aggregate LLM token usage and estimated cost for the org."""
@@ -694,6 +655,10 @@ def get_llm_usage_summary(period="30d", *, user_id, **_) -> dict:
 _AGENT_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
+class IncidentFindingsArgs(BaseModel):
+    incident_id: str = Field(description="The UUID of the incident whose RCA findings to list.")
+
+
 @introspection_tool
 def incident_findings(incident_id, *, user_id, **_) -> dict:
     """List RCA sub-agent findings for an incident: role, status, tools, citations."""
@@ -722,6 +687,13 @@ def incident_findings(incident_id, *, user_id, **_) -> dict:
         for f in rows
     ]
     return {"findings": findings, "count": len(findings)}
+
+
+class IncidentFindingDetailArgs(BaseModel):
+    incident_id: str = Field(description="The UUID of the incident.")
+    agent_id: str = Field(
+        description="The sub-agent ID (alphanumeric/dash/underscore, max 64 chars)."
+    )
 
 
 @introspection_tool
@@ -784,6 +756,11 @@ def _load_finding_body(storage_uri, storage_user_id, agent_id) -> Optional[str]:
 # Postmortems
 # ---------------------------------------------------------------------------
 
+class PostmortemListArgs(BaseModel):
+    limit: int = Field(default=50, description="Max postmortems to return (1–100, default 50).")
+    offset: int = Field(default=0, description="Paging offset (>= 0, default 0).")
+
+
 @introspection_tool
 def postmortem_list(limit=50, offset=0, *, user_id, **_) -> dict:
     """List all postmortems for the org with incident titles and export URLs."""
@@ -816,6 +793,10 @@ def postmortem_list(limit=50, offset=0, *, user_id, **_) -> dict:
 # Knowledge base memory
 # ---------------------------------------------------------------------------
 
+class KbGetMemoryArgs(BaseModel):
+    pass
+
+
 @introspection_tool
 def kb_get_memory(*, user_id, **_) -> dict:
     """Read the org's persistent knowledge base memory."""
@@ -835,6 +816,13 @@ def kb_get_memory(*, user_id, **_) -> dict:
 # ---------------------------------------------------------------------------
 # Grafana alerts (webhook-ingested)
 # ---------------------------------------------------------------------------
+
+class GrafanaListAlertsArgs(BaseModel):
+    state: Optional[str] = Field(
+        default=None, description="Filter by alert state (e.g. 'alerting', 'ok', 'pending')."
+    )
+    limit: int = Field(default=50, description="Max alerts to return (1–100, default 50).")
+
 
 @introspection_tool
 def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
