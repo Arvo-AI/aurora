@@ -1819,49 +1819,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     if user_id:
         try:
             from chat.backend.agent.tools.introspection_tools import (
-                list_incidents as _list_incidents,
-                get_incident as _get_incident,
-                incident_list_alerts as _incident_list_alerts,
-                list_services as _list_services,
-                service_impact as _service_impact,
-                list_actions as _list_actions,
-                list_action_runs as _list_action_runs,
-                get_metrics_summary as _get_metrics_summary,
-                get_mttr as _get_mttr,
-                get_incident_frequency as _get_incident_frequency,
-                get_change_failure_rate as _get_change_failure_rate,
-                get_llm_usage_summary as _get_llm_usage_summary,
-                incident_findings as _incident_findings,
-                incident_finding_detail as _incident_finding_detail,
-                get_action as _get_action,
-                graph_get_service as _graph_get_service,
-                postmortem_list as _postmortem_list,
-                kb_get_memory as _kb_get_memory,
-                grafana_list_alerts as _grafana_list_alerts,
-                ListIncidentsArgs,
-                GetIncidentArgs,
-                IncidentListAlertsArgs,
-                ListServicesArgs,
-                ServiceImpactArgs,
-                ListActionsArgs,
-                ListActionRunsArgs,
-                GetMetricsSummaryArgs,
-                GetMttrArgs,
-                GetIncidentFrequencyArgs,
-                GetChangeFailureRateArgs,
-                GetLlmUsageSummaryArgs,
-                IncidentFindingsArgs,
-                IncidentFindingDetailArgs,
-                GetActionArgs,
-                GraphGetServiceArgs,
-                PostmortemListArgs,
-                KbGetMemoryArgs,
-                GrafanaListAlertsArgs,
+                list_incidents, ListIncidentsArgs,
+                get_incident, GetIncidentArgs,
+                incident_list_alerts, IncidentListAlertsArgs,
+                list_services, ListServicesArgs,
+                service_impact, ServiceImpactArgs,
+                list_actions, ListActionsArgs,  
+                list_action_runs, ListActionRunsArgs,
+                get_metrics_summary, GetMetricsSummaryArgs,
+                get_mttr, GetMttrArgs,
+                get_incident_frequency, GetIncidentFrequencyArgs,
+                get_change_failure_rate, GetChangeFailureRateArgs,
+                get_llm_usage_summary, GetLlmUsageSummaryArgs,
+                incident_findings, IncidentFindingsArgs,
+                incident_finding_detail, IncidentFindingDetailArgs,
+                get_action, GetActionArgs,
+                graph_get_service, GraphGetServiceArgs,
+                postmortem_list, PostmortemListArgs,
+                kb_get_memory, KbGetMemoryArgs,
+                grafana_list_alerts, GrafanaListAlertsArgs,
             )
 
             _INTROSPECTION_TOOLS = [
                 (
-                    _list_incidents,
+                    list_incidents,
                     "list_incidents",
                     "List Aurora incidents. Optionally filter by status "
                     "(investigating/analyzed/merged/resolved) with pagination. "
@@ -1869,14 +1850,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     ListIncidentsArgs,
                 ),
                 (
-                    _get_incident,
+                    get_incident,
                     "get_incident",
                     "Get full incident details: summary, suggestions, correlated alerts, "
                     "affected services. Use this to deep-dive into a specific incident.",
                     GetIncidentArgs,
                 ),
                 (
-                    _incident_list_alerts,
+                    incident_list_alerts,
                     "incident_list_alerts",
                     "List the alerts correlated to an incident: source, title, service, "
                     "severity, and correlation score. Use to answer 'what alerts fired "
@@ -1884,7 +1865,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     IncidentListAlertsArgs,
                 ),
                 (
-                    _list_services,
+                    list_services,
                     "list_services",
                     "List services in the infrastructure dependency graph. "
                     "Optional filters: resource_type, provider. Use to enumerate "
@@ -1892,28 +1873,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     ListServicesArgs,
                 ),
                 (
-                    _service_impact,
+                    service_impact,
                     "service_impact",
                     "Get a service's blast radius — the downstream services that depend "
                     "on it. Use to answer 'what breaks if <service> goes down'.",
                     ServiceImpactArgs,
                 ),
                 (
-                    _list_actions,
+                    list_actions,
                     "list_actions",
                     "List this org's Aurora actions (automations): name, trigger type, "
                     "mode, enabled, run count, and last-run status.",
                     ListActionsArgs,
                 ),
                 (
-                    _list_action_runs,
+                    list_action_runs,
                     "list_action_runs",
                     "List an Aurora action's run history: status, timing, linked incident, "
                     "and any error. Use to check whether an automation ran and how it went.",
                     ListActionRunsArgs,
                 ),
                 (
-                    _get_metrics_summary,
+                    get_metrics_summary,
                     "get_metrics_summary",
                     "SRE dashboard overview: total/active/resolved incident counts, "
                     "average MTTR, MTTS (time to RCA), and top affected services. "
@@ -1921,28 +1902,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GetMetricsSummaryArgs,
                 ),
                 (
-                    _get_mttr,
+                    get_mttr,
                     "get_mttr",
                     "Mean Time to Resolve with p50/p95 percentiles, broken down by severity "
                     "and trended over time. Filterable by period, severity, and service.",
                     GetMttrArgs,
                 ),
                 (
-                    _get_incident_frequency,
+                    get_incident_frequency,
                     "get_incident_frequency",
                     "Incident count over time, grouped by severity, service, or source type. "
                     "Use to answer 'how many incidents this week' or 'which service has the most'.",
                     GetIncidentFrequencyArgs,
                 ),
                 (
-                    _get_change_failure_rate,
+                    get_change_failure_rate,
                     "get_change_failure_rate",
                     "DORA Change Failure Rate — percentage of deployments that caused "
                     "incidents. Correlates Jenkins/CloudBees deploy events with incidents.",
                     GetChangeFailureRateArgs,
                 ),
                 (
-                    _get_llm_usage_summary,
+                    get_llm_usage_summary,
                     "get_llm_usage_summary",
                     "Aggregate LLM token usage and estimated cost for the org: total cost, "
                     "tokens (input/output), request count, error rate, avg latency. "
@@ -1950,7 +1931,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GetLlmUsageSummaryArgs,
                 ),
                 (
-                    _incident_findings,
+                    incident_findings,
                     "incident_findings",
                     "List RCA sub-agent findings for an incident — shows each agent's role, "
                     "purpose, status, strength rating, tools used, and citations. "
@@ -1958,7 +1939,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     IncidentFindingsArgs,
                 ),
                 (
-                    _incident_finding_detail,
+                    incident_finding_detail,
                     "incident_finding_detail",
                     "Get a single RCA sub-agent's full finding body (markdown) and its "
                     "step-by-step tool call history. Use after incident_findings to "
@@ -1966,7 +1947,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     IncidentFindingDetailArgs,
                 ),
                 (
-                    _get_action,
+                    get_action,
                     "get_action",
                     "Get full action config (name, description, instructions, trigger, mode) "
                     "plus its 20 most recent runs with status and duration. "
@@ -1974,7 +1955,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GetActionArgs,
                 ),
                 (
-                    _graph_get_service,
+                    graph_get_service,
                     "graph_get_service",
                     "Get a single service with its direct upstream (dependencies) and "
                     "downstream (dependants) from the infrastructure graph. "
@@ -1982,7 +1963,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GraphGetServiceArgs,
                 ),
                 (
-                    _postmortem_list,
+                    postmortem_list,
                     "postmortem_list",
                     "List all postmortems for the organization with pagination. "
                     "Returns incident title, generation date, and export URLs "
@@ -1990,7 +1971,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     PostmortemListArgs,
                 ),
                 (
-                    _kb_get_memory,
+                    kb_get_memory,
                     "kb_get_memory",
                     "Read the org's persistent knowledge base memory — a shared context "
                     "document that teams maintain with org-specific conventions, runbook "
@@ -1998,7 +1979,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     KbGetMemoryArgs,
                 ),
                 (
-                    _grafana_list_alerts,
+                    grafana_list_alerts,
                     "grafana_list_alerts",
                     "List Grafana alerts ingested via webhook. Optionally filter by state "
                     "(alerting, ok, pending). Returns title, state, rule info, and dashboard link.",
