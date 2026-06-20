@@ -41,7 +41,7 @@ Connects directly to each provider's native API. Use this when running models lo
 LLM_PROVIDER_MODE=direct
 ```
 
-In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-2.5-flash` routes to Google AI).
+In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.5-flash` routes to Google AI).
 
 ### Provider Mode (route everything through one provider)
 
@@ -73,16 +73,10 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `google/gemini-3-flash-preview` | Fast, outperforms 2.5 Pro |
-| | `google/gemini-2.5-pro` | Strong for complex tasks |
-| | `google/gemini-2.5-flash` | Cost-effective |
-| | `google/gemini-2.5-flash-lite` | Cheapest Gemini option |
-| **Vertex AI** | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `vertex/gemini-3-flash-preview` | Fast, enterprise-grade |
-| | `vertex/gemini-2.5-pro` | Strong for complex tasks |
-| | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
-| | `vertex/gemini-2.5-flash-lite` | Cheapest Vertex option |
+| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| **Vertex AI** | `vertex/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
@@ -157,6 +151,13 @@ LLM_PROVIDER_MODE=direct
 :::tip
 The project ID is automatically extracted from the service account JSON if `VERTEX_AI_PROJECT` is not set.
 :::
+
+**Optional configuration:**
+
+```bash
+# Disable thinking mode for Gemini models (reduces latency, lowers token usage)
+GEMINI_DISABLE_THINKING=true
+```
 
 ### Ollama (Local Models)
 
@@ -265,10 +266,10 @@ RCA_MODEL=anthropic/claude-haiku-4.5
 RCA_MODEL=openai/gpt-4o
 
 # Google AI
-RCA_MODEL=google/gemini-2.5-flash
+RCA_MODEL=google/gemini-3.5-flash
 
 # Vertex AI
-RCA_MODEL=vertex/gemini-2.5-flash
+RCA_MODEL=vertex/gemini-3.5-flash
 
 # Ollama (local)
 RCA_MODEL=ollama/llama3.1
