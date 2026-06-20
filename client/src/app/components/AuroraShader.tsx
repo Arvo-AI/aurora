@@ -15,128 +15,122 @@ precision highp float;
 uniform float iTime;
 uniform vec2 iResolution;
 
-mat2 mm2(in float a){float c = cos(a), s = sin(a);return mat2(c,s,-s,c);}
-mat2 m2 = mat2(0.95534, 0.29552, -0.29552, 0.95534);
-float tri(in float x){return clamp(abs(fract(x)-.5),0.01,0.49);}
-vec2 tri2(in vec2 p){return vec2(tri(p.x)+tri(p.y),tri(p.y+tri(p.x)));}
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
 
-float triNoise2d(in vec2 p, float spd)
-{
-    float z=1.8;
-    float z2=2.5;
-    float rz = 0.;
-    p *= mm2(p.x*0.06);
-    vec2 bp = p;
-    for (float i=0.; i<5.; i++ )
-    {
-        vec2 dg = tri2(bp*1.85)*.75;
-        dg *= mm2(iTime*spd);
-        p -= dg/z2;
-        bp *= 1.3;
-        z2 *= .45;
-        z *= .42;
-        p *= 1.21 + (rz-1.0)*.02;
-        rz += tri(p.x+tri(p.y))*z;
-        p*= -m2;
+float saw(float x) { return clamp(abs(fract(x) - 0.5), 0.02, 0.48); }
+vec2 saw2(vec2 p) { return vec2(saw(p.x + saw(p.y)), saw(p.y + saw(p.x))); }
+
+float curtainNoise(vec2 p, float flow) {
+    float amp = 1.9;
+    float gain = 2.2;
+    float sum = 0.0;
+    mat2 warp = mat2(0.93, 0.37, -0.37, 0.93);
+    p *= rot(p.x * 0.04);
+    vec2 q = p;
+    for (int i = 0; i < 5; i++) {
+        vec2 d = saw2(q * 1.5) * 0.9;
+        d *= rot(iTime * flow + float(i) * 0.6);
+        p += d / gain;
+        q *= 1.25;
+        gain *= 0.44;
+        amp *= 0.46;
+        p *= 1.15 + (sum - 1.0) * 0.018;
+        sum += saw(p.x + saw(p.y)) * amp;
+        p *= -warp;
     }
-    return clamp(1./pow(rz*29., 1.3),0.,.55);
+    return clamp(1.0 / pow(sum * 22.0, 1.25), 0.0, 0.6);
 }
 
-float hash21(in vec2 n){ return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453); }
+float hash(vec2 n) { return fract(sin(dot(n, vec2(41.1, 289.7))) * 43758.5); }
 
-vec4 aurora(vec3 ro, vec3 rd)
-{
-    vec4 col = vec4(0);
-    vec4 avgCol = vec4(0);
+vec4 aurora(vec3 ro, vec3 rd) {
+    vec4 col = vec4(0.0);
+    vec4 avg = vec4(0.0);
 
-    for(float i=0.;i<50.;i++)
-    {
-        float of = 0.006*hash21(gl_FragCoord.xy)*smoothstep(0.,15., i);
-        float pt = ((.8+pow(i,1.4)*.002)-ro.y)/(rd.y*2.+0.4);
-        pt -= of;
-        vec3 bpos = ro + pt*rd;
-        vec2 p = bpos.zx;
-        float rzt = triNoise2d(p, 0.06);
-        vec4 col2 = vec4(0,0,0, rzt);
-        col2.rgb = (sin(1.-vec3(2.15,-.5, 1.2)+i*0.043)*0.5+0.5)*rzt;
-        avgCol =  mix(avgCol, col2, .5);
-        col += avgCol*exp2(-i*0.065 - 2.5)*smoothstep(0.,5., i);
+    for (float i = 0.0; i < 50.0; i++) {
+        float dither = 0.005 * hash(gl_FragCoord.xy + i) * smoothstep(0.0, 14.0, i);
+        float h = ((0.7 + pow(i, 1.4) * 0.003) - ro.y) / (rd.y * 2.0 + 0.3);
+        h -= dither;
+        vec3 sp = ro + h * rd;
+
+        float density = curtainNoise(sp.zx * 0.7, 0.065);
+        vec4 sc = vec4(0.0, 0.0, 0.0, density);
+        vec3 green = vec3(0.15, 0.9, 0.5);
+        vec3 teal = vec3(0.1, 0.6, 0.8);
+        vec3 purple = vec3(0.6, 0.15, 0.7);
+        vec3 pink = vec3(0.85, 0.2, 0.45);
+        float t = i / 50.0;
+        vec3 c = mix(green, teal, smoothstep(0.0, 0.35, t));
+        c = mix(c, purple, smoothstep(0.25, 0.6, t));
+        c = mix(c, pink, smoothstep(0.5, 0.85, t));
+        sc.rgb = c * density;
+        avg = mix(avg, sc, 0.5);
+        col += avg * exp2(-i * 0.055 - 2.2) * smoothstep(0.0, 4.0, i);
     }
 
-    col *= (clamp(rd.y*15.+.4,0.,1.));
-    return col*1.8;
+    col *= clamp(rd.y * 12.0 + 0.5, 0.0, 1.0);
+    return col * 1.85;
 }
 
-vec3 hash33(vec3 p)
-{
-    p = fract(p * vec3(443.8975,397.2973, 491.1871));
-    p += dot(p.zxy, p.yxz+19.27);
-    return fract(vec3(p.x * p.y, p.z*p.x, p.y*p.z));
+vec3 starHash(vec3 p) {
+    p = fract(p * vec3(443.9, 397.3, 491.2));
+    p += dot(p.zxy, p.yxz + 17.83);
+    return fract(vec3(p.x * p.y, p.z * p.x, p.y * p.z));
 }
 
-vec3 stars(in vec3 p)
-{
-    vec3 c = vec3(0.);
-    float res = iResolution.x*1.;
-
-    for (float i=0.;i<4.;i++)
-    {
-        vec3 q = fract(p*(.15*res))-0.5;
-        vec3 id = floor(p*(.15*res));
-        vec2 rn = hash33(id).xy;
-        float c2 = 1.-smoothstep(0.,.6,length(q));
-        c2 *= step(rn.x,.0005+i*i*0.001);
-        c += c2*(mix(vec3(1.0,0.49,0.1),vec3(0.75,0.9,1.),rn.y)*0.1+0.9);
-        p *= 1.3;
+vec3 stars(vec3 p) {
+    vec3 c = vec3(0.0);
+    float res = iResolution.x;
+    for (float i = 0.0; i < 4.0; i++) {
+        vec3 q = fract(p * (0.14 * res)) - 0.5;
+        vec3 id = floor(p * (0.14 * res));
+        vec2 rn = starHash(id).xy;
+        float s = 1.0 - smoothstep(0.0, 0.55, length(q));
+        s *= step(rn.x, 0.0005 + i * i * 0.001);
+        c += s * (mix(vec3(1.0, 0.5, 0.15), vec3(0.7, 0.9, 1.0), rn.y) * 0.12 + 0.88);
+        p *= 1.32;
     }
-    return c*c*.8;
+    return c * c * 0.75;
 }
 
-vec3 bg(in vec3 rd)
-{
-    float sd = dot(normalize(vec3(-0.5, -0.6, 0.9)), rd)*0.5+0.5;
-    sd = pow(sd, 5.);
-    vec3 col = mix(vec3(0.05,0.1,0.2), vec3(0.1,0.05,0.2), sd);
-    return col*.63;
+vec3 background(vec3 rd) {
+    float d = dot(normalize(vec3(-0.5, -0.6, 0.9)), rd) * 0.5 + 0.5;
+    d = pow(d, 5.0);
+    return mix(vec3(0.05, 0.1, 0.2), vec3(0.1, 0.05, 0.2), d) * 0.6;
 }
 
-void main()
-{
+void main() {
     vec2 q = gl_FragCoord.xy / iResolution.xy;
     vec2 p = q - 0.5;
-    p.x *= iResolution.x/iResolution.y;
+    p.x *= iResolution.x / iResolution.y;
 
-    vec3 ro = vec3(0,0,-6.7);
-    vec3 rd = normalize(vec3(p,1.3));
-    vec2 mo = vec2(-0.1, 0.1);
-    mo.x *= iResolution.x/iResolution.y;
-    rd.yz *= mm2(mo.y);
-    rd.xz *= mm2(mo.x + sin(iTime*0.05)*0.2);
+    vec3 ro = vec3(0.0, 0.0, -6.7);
+    vec3 rd = normalize(vec3(p, 1.3));
+    vec2 look = vec2(-0.1, 0.1);
+    look.x *= iResolution.x / iResolution.y;
+    rd.yz *= rot(look.y);
+    rd.xz *= rot(look.x + sin(iTime * 0.05) * 0.2);
 
-    vec3 col = vec3(0.);
-    vec3 brd = rd;
-    float fade = smoothstep(0.,0.01,abs(brd.y))*0.1+0.9;
+    vec3 col = vec3(0.0);
+    float fade = smoothstep(0.0, 0.01, abs(rd.y)) * 0.1 + 0.9;
+    col = background(rd) * fade;
 
-    col = bg(rd)*fade;
-
-    if (rd.y > 0.){
-        vec4 aur = smoothstep(0.,1.5,aurora(ro,rd))*fade;
+    if (rd.y > 0.0) {
+        vec4 aur = smoothstep(0.0, 1.5, aurora(ro, rd)) * fade;
         col += stars(rd);
-        col = col*(1.-aur.a) + aur.rgb;
-    }
-    else
-    {
+        col = col * (1.0 - aur.a) + aur.rgb;
+    } else {
         rd.y = abs(rd.y);
-        col = bg(rd)*fade*0.6;
-        vec4 aur = smoothstep(0.0,2.5,aurora(ro,rd));
-        col += stars(rd)*0.1;
-        col = col*(1.-aur.a) + aur.rgb;
-        vec3 pos = ro + ((0.5-ro.y)/rd.y)*rd;
-        float nz2 = triNoise2d(pos.xz*vec2(.5,.7), 0.);
-        col += mix(vec3(0.2,0.25,0.5)*0.08,vec3(0.3,0.3,0.5)*0.7, nz2*0.4);
+        col = background(rd) * fade * 0.55;
+        vec4 aur = smoothstep(0.0, 2.5, aurora(ro, rd));
+        col += stars(rd) * 0.08;
+        col = col * (1.0 - aur.a) + aur.rgb;
+        vec3 rpos = ro + ((0.5 - ro.y) / rd.y) * rd;
+        float nz = curtainNoise(rpos.xz * vec2(0.5, 0.7), 0.0);
+        col += mix(vec3(0.2, 0.25, 0.5) * 0.07, vec3(0.3, 0.3, 0.5) * 0.65, nz * 0.4);
     }
 
-    gl_FragColor = vec4(col, 1.);
+    gl_FragColor = vec4(col, 1.0);
 }
 `
 
