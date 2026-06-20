@@ -41,10 +41,8 @@ const modelPricing: Record<string, string> = {
   'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
   'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
   'anthropic/claude-opus-4.7': 'High Cost ($5/$25 per 1M)',
+  'vertex/gemini-3.5-flash': 'Low Cost ($0.50/$3 per 1M)',
   'vertex/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
-  'vertex/gemini-3-flash': 'Low Cost ($0.50/$3 per 1M)',
-  'vertex/gemini-2.5-pro': 'Medium Cost ($1.25/$10 per 1M)',
-  'vertex/gemini-2.5-flash': 'Low Cost ($0.30/$2.50 per 1M)',
 };
 
 const modelOptions: ModelOption[] = [
@@ -77,38 +75,20 @@ const modelOptions: ModelOption[] = [
     isSlow: true
   },
   {
+    id: 'vertex/gemini-3.5-flash',
+    name: 'gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
+    provider: 'Vertex AI',
+    tier: 'free',
+    contextLength: '1M',
+    hasReasoning: true
+  },
+  {
     id: 'vertex/gemini-3.1-pro-preview',
     name: 'gemini-3.1-pro-preview',
     displayName: 'Gemini 3.1 Pro',
     provider: 'Vertex AI',
     tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'vertex/gemini-3-flash',
-    name: 'gemini-3-flash',
-    displayName: 'Gemini 3 Flash',
-    provider: 'Vertex AI',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'vertex/gemini-2.5-pro',
-    name: 'gemini-2.5-pro',
-    displayName: 'Gemini 2.5 Pro',
-    provider: 'Vertex AI',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'vertex/gemini-2.5-flash',
-    name: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash',
-    provider: 'Vertex AI',
-    tier: 'free',
     contextLength: '1M',
     hasReasoning: true
   },
