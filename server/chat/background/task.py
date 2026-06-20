@@ -2027,7 +2027,6 @@ def _send_response_to_slack(
                 if row and row[0]:
                     messages = row[0]
                     if isinstance(messages, str):
-                        import json
                         messages = json.loads(messages)
 
                     # Find the last assistant/bot message
