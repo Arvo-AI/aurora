@@ -241,6 +241,7 @@ One-line summary:"""
             ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL,
             temperature=0.1,
             streaming=False,
+            request_timeout=25,
         )
 
         response = tracked_invoke(
