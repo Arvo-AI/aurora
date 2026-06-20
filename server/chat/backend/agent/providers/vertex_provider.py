@@ -106,8 +106,8 @@ class VertexAIProvider(BaseLLMProvider):
 
     def get_supported_models(self) -> list[str]:
         return [
+            "vertex/gemini-3.5-flash",
             "vertex/gemini-3.1-pro-preview",
-            "vertex/gemini-3-flash",
             "vertex/gemini-2.5-pro",
             "vertex/gemini-2.5-flash",
         ]
