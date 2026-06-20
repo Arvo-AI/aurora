@@ -14,6 +14,7 @@ a suggestion. Aurora must have run it (or run it in the self-execution round).
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -23,10 +24,7 @@ from langchain_core.messages import HumanMessage
 from chat.background.citation_extractor import Citation
 from chat.background.suggestion_extractor import Suggestion, is_command_safe
 
-try:
-    from chat.background.citation_extractor import _TOOL_NAME_MAPPING
-except ImportError:
-    _TOOL_NAME_MAPPING = {}
+from chat.background.citation_extractor import _TOOL_NAME_MAPPING
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ _OLDER_OUTPUT_CHARS = 200
 
 _VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
-_ENRICHMENT_MODEL = "anthropic/claude-haiku-4.5"
+_ENRICHMENT_MODEL = os.environ.get("ENRICHMENT_MODEL", "anthropic/claude-haiku-4.5")
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
@@ -71,9 +69,6 @@ class InvestigationState:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _friendly_tool_name(raw_name: str) -> str:
-    """Map internal tool names to display-friendly names."""
-    return _TOOL_NAME_MAPPING.get(raw_name, raw_name)
 
 
 _INTERNAL_REF_RE = re.compile(
@@ -179,7 +174,7 @@ def _format_citation_line(citation: Citation, output_cap: int) -> str:
     output = citation.output[:output_cap] if citation.output else "(no output)"
     if len(citation.output or "") > output_cap:
         output += "..."
-    tool_display = _friendly_tool_name(citation.tool_name)
+    tool_display = _TOOL_NAME_MAPPING.get(citation.tool_name, citation.tool_name)
     return f"[{citation.index}] {tool_display}: {citation.command}\n    → {output}"
 
 
@@ -497,7 +492,7 @@ def _self_execute_safe_diagnostics(
     # Ask the LLM what safe diagnostics it would run if it could
     trace_summary = []
     for c in citations[-10:]:
-        tool_display = _friendly_tool_name(c.tool_name)
+        tool_display = _TOOL_NAME_MAPPING.get(c.tool_name, c.tool_name)
         output_preview = (c.output or "")[:100]
         trace_summary.append(f"[{c.index}] {tool_display}: {c.command} → {output_preview}")
 

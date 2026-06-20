@@ -413,6 +413,7 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
                     transition={{ height: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }, opacity: { duration: 0.15 } }}
                     className="overflow-hidden"
                   >
+                  <div className="max-h-[50vh] overflow-y-auto">
                     {(() => {
                       const desc = suggestion.description || '';
                       const rootCauseSplit = desc.split(/\s*\*?\*?Root Cause:\*?\*?\s*/);
@@ -436,6 +437,7 @@ function NextStepsConsole({ suggestions, citations, canWrite, execCaps, onRunSug
                       </p>
                     )}
                     <button onClick={() => toggleItem(suggestion.id)} className="text-[11px] text-zinc-600 hover:text-zinc-400 mt-1.5 transition-colors">less</button>
+                  </div>
                   </motion.div>
                 )}
               </AnimatePresence>

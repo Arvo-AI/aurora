@@ -276,7 +276,7 @@ Return ONLY a valid JSON array, no markdown formatting, no explanation:
             if command is not None:
                 if not isinstance(command, str):
                     command = None
-                elif re.search(r'<[a-zA-Z][a-zA-Z0-9_-]*>', command):
+                elif re.search(r'<[a-zA-Z][a-zA-Z0-9]*[-_][a-zA-Z0-9_-]+>', command):
                     logger.info("[SuggestionExtractor] Stripped command with placeholders: %s", command[:100])
                     command = None
                 elif not is_command_safe(command):
