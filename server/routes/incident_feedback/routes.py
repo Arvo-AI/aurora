@@ -12,7 +12,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.rbac_decorators import require_permission, require_auth_only
 from routes.incident_feedback.weaviate_client import store_good_rca
-from uuid import UUID
+from utils.validation import is_valid_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +23,6 @@ AURORA_LEARN_PREFERENCE_KEY = "aurora_learn_enabled"
 
 # Valid feedback types
 VALID_FEEDBACK_TYPES = {"helpful", "not_helpful"}
-
-
-def _validate_uuid(value: str) -> bool:
-    """Validate that a string is a valid UUID."""
-    try:
-        UUID(value)
-        return True
-    except (ValueError, TypeError):
-        return False
 
 
 def _is_aurora_learn_enabled(user_id: str) -> bool:
@@ -49,7 +40,7 @@ def _is_aurora_learn_enabled(user_id: str) -> bool:
 @require_permission("incidents", "write")
 def submit_feedback(user_id, incident_id: str):
 
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
     # Check if Aurora Learn is enabled
@@ -232,7 +223,7 @@ def submit_feedback(user_id, incident_id: str):
 @require_permission("incidents", "read")
 def get_feedback(user_id, incident_id: str):
 
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
     try:

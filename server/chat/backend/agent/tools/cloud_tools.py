@@ -1332,13 +1332,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((run_iac_tool, "iac_tool"))
         tool_functions.append((cloud_exec_wrapper, "cloud_exec"))
 
-    # Only include trigger_rca when the user explicitly requested it via the UI button
-    if state_context and getattr(state_context, 'trigger_rca_requested', False):
+    # trigger_rca: available when user clicked the RCA button (UI) OR when
+    # running as a background agent (Slack, Celery) where there's no UI to gate it.
+    if is_background or (state_context and getattr(state_context, 'trigger_rca_requested', False)):
         tool_functions.append((trigger_rca, "trigger_rca"))
 
-    # Only include trigger_action when the user explicitly used /action command
+    # trigger_action: available when user used /action command (UI) OR background agent.
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
-    if _action_id:
+    if is_background or _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
 
     # Connection-gated tools — only added when user has the connector configured
@@ -1824,6 +1825,216 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added get_infrastructure_context tool for user {user_id}")
         except Exception as e:
             logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
+
+    # Introspection tools — incident/infra/actions/metrics self-audit (always available)
+    if user_id:
+        try:
+            from chat.backend.agent.tools.introspection_tools import (
+                list_incidents as _list_incidents,
+                get_incident as _get_incident,
+                incident_list_alerts as _incident_list_alerts,
+                list_services as _list_services,
+                service_impact as _service_impact,
+                list_actions as _list_actions,
+                list_action_runs as _list_action_runs,
+                get_metrics_summary as _get_metrics_summary,
+                get_mttr as _get_mttr,
+                get_incident_frequency as _get_incident_frequency,
+                get_change_failure_rate as _get_change_failure_rate,
+                get_llm_usage_summary as _get_llm_usage_summary,
+                incident_findings as _incident_findings,
+                incident_finding_detail as _incident_finding_detail,
+                get_action as _get_action,
+                graph_get_service as _graph_get_service,
+                postmortem_list as _postmortem_list,
+                kb_get_memory as _kb_get_memory,
+                grafana_list_alerts as _grafana_list_alerts,
+                ListIncidentsArgs,
+                GetIncidentArgs,
+                IncidentListAlertsArgs,
+                ListServicesArgs,
+                ServiceImpactArgs,
+                ListActionsArgs,
+                ListActionRunsArgs,
+                GetMetricsSummaryArgs,
+                GetMttrArgs,
+                GetIncidentFrequencyArgs,
+                GetChangeFailureRateArgs,
+                GetLlmUsageSummaryArgs,
+                IncidentFindingsArgs,
+                IncidentFindingDetailArgs,
+                GetActionArgs,
+                GraphGetServiceArgs,
+                PostmortemListArgs,
+                KbGetMemoryArgs,
+                GrafanaListAlertsArgs,
+            )
+
+            _INTROSPECTION_TOOLS = [
+                (
+                    _list_incidents,
+                    "list_incidents",
+                    "List Aurora incidents. Optionally filter by status "
+                    "(investigating/analyzed/merged/resolved) with pagination. "
+                    "Returns id, title, status, severity, service, summary, and timestamps.",
+                    ListIncidentsArgs,
+                ),
+                (
+                    _get_incident,
+                    "get_incident",
+                    "Get full incident details: summary, suggestions, correlated alerts, "
+                    "affected services. Use this to deep-dive into a specific incident.",
+                    GetIncidentArgs,
+                ),
+                (
+                    _incident_list_alerts,
+                    "incident_list_alerts",
+                    "List the alerts correlated to an incident: source, title, service, "
+                    "severity, and correlation score. Use to answer 'what alerts fired "
+                    "for incident X'.",
+                    IncidentListAlertsArgs,
+                ),
+                (
+                    _list_services,
+                    "list_services",
+                    "List services in the infrastructure dependency graph. "
+                    "Optional filters: resource_type, provider. Use to enumerate "
+                    "what exists before drilling into a specific service.",
+                    ListServicesArgs,
+                ),
+                (
+                    _service_impact,
+                    "service_impact",
+                    "Get a service's blast radius — the downstream services that depend "
+                    "on it. Use to answer 'what breaks if <service> goes down'.",
+                    ServiceImpactArgs,
+                ),
+                (
+                    _list_actions,
+                    "list_actions",
+                    "List this org's Aurora actions (automations): name, trigger type, "
+                    "mode, enabled, run count, and last-run status.",
+                    ListActionsArgs,
+                ),
+                (
+                    _list_action_runs,
+                    "list_action_runs",
+                    "List an Aurora action's run history: status, timing, linked incident, "
+                    "and any error. Use to check whether an automation ran and how it went.",
+                    ListActionRunsArgs,
+                ),
+                (
+                    _get_metrics_summary,
+                    "get_metrics_summary",
+                    "SRE dashboard overview: total/active/resolved incident counts, "
+                    "average MTTR, MTTS (time to RCA), and top affected services. "
+                    "Use to answer 'how are we doing operationally'. Period: 7d/30d/90d/180d/365d.",
+                    GetMetricsSummaryArgs,
+                ),
+                (
+                    _get_mttr,
+                    "get_mttr",
+                    "Mean Time to Resolve with p50/p95 percentiles, broken down by severity "
+                    "and trended over time. Filterable by period, severity, and service.",
+                    GetMttrArgs,
+                ),
+                (
+                    _get_incident_frequency,
+                    "get_incident_frequency",
+                    "Incident count over time, grouped by severity, service, or source type. "
+                    "Use to answer 'how many incidents this week' or 'which service has the most'.",
+                    GetIncidentFrequencyArgs,
+                ),
+                (
+                    _get_change_failure_rate,
+                    "get_change_failure_rate",
+                    "DORA Change Failure Rate — percentage of deployments that caused "
+                    "incidents. Correlates Jenkins/CloudBees deploy events with incidents.",
+                    GetChangeFailureRateArgs,
+                ),
+                (
+                    _get_llm_usage_summary,
+                    "get_llm_usage_summary",
+                    "Aggregate LLM token usage and estimated cost for the org: total cost, "
+                    "tokens (input/output), request count, error rate, avg latency. "
+                    "Period: 7d/30d/90d/180d/365d.",
+                    GetLlmUsageSummaryArgs,
+                ),
+                (
+                    _incident_findings,
+                    "incident_findings",
+                    "List RCA sub-agent findings for an incident — shows each agent's role, "
+                    "purpose, status, strength rating, tools used, and citations. "
+                    "Use to answer 'what did the RCA investigate' or 'which agents ran'.",
+                    IncidentFindingsArgs,
+                ),
+                (
+                    _incident_finding_detail,
+                    "incident_finding_detail",
+                    "Get a single RCA sub-agent's full finding body (markdown) and its "
+                    "step-by-step tool call history. Use after incident_findings to "
+                    "deep-dive into what a specific agent discovered.",
+                    IncidentFindingDetailArgs,
+                ),
+                (
+                    _get_action,
+                    "get_action",
+                    "Get full action config (name, description, instructions, trigger, mode) "
+                    "plus its 20 most recent runs with status and duration. "
+                    "Use to inspect a specific automation.",
+                    GetActionArgs,
+                ),
+                (
+                    _graph_get_service,
+                    "graph_get_service",
+                    "Get a single service with its direct upstream (dependencies) and "
+                    "downstream (dependants) from the infrastructure graph. "
+                    "Richer than service_impact — includes all metadata and both directions.",
+                    GraphGetServiceArgs,
+                ),
+                (
+                    _postmortem_list,
+                    "postmortem_list",
+                    "List all postmortems for the organization with pagination. "
+                    "Returns incident title, generation date, and export URLs "
+                    "(Confluence/Jira/Notion). Use to discover existing postmortems.",
+                    PostmortemListArgs,
+                ),
+                (
+                    _kb_get_memory,
+                    "kb_get_memory",
+                    "Read the org's persistent knowledge base memory — a shared context "
+                    "document that teams maintain with org-specific conventions, runbook "
+                    "references, and operational notes.",
+                    KbGetMemoryArgs,
+                ),
+                (
+                    _grafana_list_alerts,
+                    "grafana_list_alerts",
+                    "List Grafana alerts ingested via webhook. Optionally filter by state "
+                    "(alerting, ok, pending). Returns title, state, rule info, and dashboard link.",
+                    GrafanaListAlertsArgs,
+                ),
+            ]
+
+            for _fn, _name, _desc, _schema in _INTROSPECTION_TOOLS:
+                _ctx_wrapped = with_user_context(_fn)
+                _notif_wrapped = with_completion_notification(_ctx_wrapped)
+                if tool_capture:
+                    _final_fn = wrap_func_with_capture(_notif_wrapped, _name)
+                else:
+                    _final_fn = _notif_wrapped
+
+                tools.append(StructuredTool.from_function(
+                    func=_final_fn,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+
+            logging.info(f"Added introspection tools for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add introspection tools: {e}")
 
     # Add discovery finding tool for prediscovery mode
     if mode_suffix == "prediscovery":
