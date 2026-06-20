@@ -286,6 +286,13 @@ _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 _RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'action'}
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
+_GUARDRAIL_USER_MSG = (
+    "Your message was blocked by our safety system. Please rephrase your request."
+)
+_ACTION_GUARDRAIL_USER_MSG = (
+    "This action was blocked by safety guardrails. "
+    "The instructions may need to be rephrased to pass input validation."
+)
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
@@ -777,14 +784,20 @@ def run_background_chat(
         # Send response back to Slack if this was triggered from Slack
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
             try:
-                _send_response_to_slack(user_id, session_id, trigger_metadata)
+                slack_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                _send_response_to_slack(
+                    user_id, session_id, trigger_metadata, fallback_text=slack_fallback,
+                )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
         
         # Send response back to Google Chat if this was triggered from Google Chat
         if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
             try:
-                _send_response_to_google_chat(user_id, session_id, trigger_metadata)
+                gchat_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                _send_response_to_google_chat(
+                    user_id, session_id, trigger_metadata, fallback_text=gchat_fallback,
+                )
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
         
@@ -1481,6 +1494,17 @@ async def _execute_background_chat(
         # never return to the caller (worker process exits during event loop teardown
         # due to MCP subprocess cleanup), so this must happen before we return.
         guardrail_blocked = getattr(state, "guardrail_blocked", False)
+        if guardrail_blocked:
+            # Streaming copies are stripped at end of workflow; persist a real bot
+            # message so Slack/Google Chat can replace the "Thinking..." placeholder.
+            source = (trigger_metadata or {}).get("source", "")
+            block_text = (
+                _ACTION_GUARDRAIL_USER_MSG
+                if source == "action"
+                else _GUARDRAIL_USER_MSG
+            )
+            _append_block_message(session_id, user_id, block_text)
+
         action_notification_sent = False
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             action_status = None
@@ -1488,7 +1512,6 @@ async def _execute_background_chat(
             try:
                 from services.actions.executor import update_action_run_status
                 if guardrail_blocked:
-                    _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
                     update_action_run_status(
                         run_id=trigger_metadata['run_id'], status='error',
                         user_id=user_id, error_message=_GUARDRAIL_BLOCKED_MSG,
@@ -1916,7 +1939,12 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 
 
-def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
+def _send_response_to_slack(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Dict[str, Any],
+    fallback_text: Optional[str] = None,
+) -> None:
     """Send Aurora's response back to the Slack channel after background chat completes."""
     try:
         from connectors.slack_connector.client import get_slack_client_for_user
@@ -1941,25 +1969,27 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
                 )
                 row = cursor.fetchone()
                 
-                if not row or not row[0]:
-                    logger.warning(f"[BackgroundChat] No messages found in session {session_id}")
-                    return
-                
-                messages = row[0]
-                if isinstance(messages, str):
-                    import json
-                    messages = json.loads(messages)
-                
-                # Find the last assistant/bot message
                 last_assistant_message = None
-                for msg in reversed(messages):
-                    if msg.get('sender') in ('bot', 'assistant'):
-                        last_assistant_message = msg.get('text') or msg.get('content')
-                        break
-                
+                if row and row[0]:
+                    messages = row[0]
+                    if isinstance(messages, str):
+                        import json
+                        messages = json.loads(messages)
+
+                    # Find the last assistant/bot message
+                    for msg in reversed(messages):
+                        if msg.get('sender') in ('bot', 'assistant'):
+                            last_assistant_message = msg.get('text') or msg.get('content')
+                            break
+
                 if not last_assistant_message:
-                    logger.warning(f"[BackgroundChat] No assistant message found in session {session_id}")
-                    return
+                    if fallback_text:
+                        last_assistant_message = fallback_text
+                    else:
+                        logger.warning(
+                            f"[BackgroundChat] No assistant message found in session {session_id}"
+                        )
+                        return
         
         # Format the response for Slack (markdown conversion, length limits, etc.)
         formatted_message = format_response_for_slack(last_assistant_message)
@@ -2046,7 +2076,12 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
         raise
 
 
-def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
+def _send_response_to_google_chat(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Dict[str, Any],
+    fallback_text: Optional[str] = None,
+) -> None:
     """Send Aurora's response back to Google Chat after background chat completes."""
     try:
         from routes.google_chat.google_chat_events_helpers import format_response_for_google_chat
@@ -2069,23 +2104,25 @@ def _send_response_to_google_chat(user_id: str, session_id: str, trigger_metadat
                 )
                 row = cursor.fetchone()
 
-                if not row or not row[0]:
-                    logger.warning(f"[BackgroundChat] No messages found in session {session_id}")
-                    return
-
-                messages = row[0]
-                if isinstance(messages, str):
-                    messages = json.loads(messages)
-
                 last_assistant_message = None
-                for msg in reversed(messages):
-                    if msg.get('sender') in ('bot', 'assistant'):
-                        last_assistant_message = msg.get('text') or msg.get('content')
-                        break
+                if row and row[0]:
+                    messages = row[0]
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+
+                    for msg in reversed(messages):
+                        if msg.get('sender') in ('bot', 'assistant'):
+                            last_assistant_message = msg.get('text') or msg.get('content')
+                            break
 
                 if not last_assistant_message:
-                    logger.warning(f"[BackgroundChat] No assistant message found in session {session_id}")
-                    return
+                    if fallback_text:
+                        last_assistant_message = fallback_text
+                    else:
+                        logger.warning(
+                            f"[BackgroundChat] No assistant message found in session {session_id}"
+                        )
+                        return
 
         formatted_message = format_response_for_google_chat(last_assistant_message)
 
