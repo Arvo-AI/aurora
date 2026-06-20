@@ -75,8 +75,12 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
 | **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
 | | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| | `google/gemini-2.5-pro` | Strong for complex tasks |
+| | `google/gemini-2.5-flash` | Cost-effective |
 | **Vertex AI** | `vertex/gemini-3.5-flash` | Fast, cost-effective with thinking |
 | | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| | `vertex/gemini-2.5-pro` | Strong for complex tasks |
+| | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
