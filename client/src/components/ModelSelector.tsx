@@ -132,7 +132,10 @@ export default function ModelSelector({
       onModelChange(savedModel);
     } else if (!isValidModel) {
       localStorage.removeItem('selectedModel');
-      onModelChange(modelOptions[0].id);
+      const currentIsValid = modelOptions.some((model) => model.id === selectedModel);
+      if (!currentIsValid) {
+        onModelChange(modelOptions[0].id);
+      }
     }
   }, []);
 
