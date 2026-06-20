@@ -150,11 +150,14 @@ def _build_llm() -> BaseChatModel:
     model_name = gc.llm_model or ModelConfig.MAIN_MODEL
     llm = create_chat_model(model_name, temperature=0.0, streaming=False)
 
-    provider, _ = ModelMapper.split_provider_model(model_name)
-    if provider in ("google", "vertex"):
-        return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=True)
     provider_mode = os.getenv("LLM_PROVIDER_MODE", "direct").lower()
-    if provider == "openai" and provider_mode == "direct":
+
+    from chat.backend.agent.providers import get_registry
+    serving_provider = get_registry().resolve_provider_name(model_name, mode=provider_mode)
+
+    if serving_provider in ("google", "vertex"):
+        return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=True)
+    if serving_provider == "openai":
         native = ModelMapper.get_native_name(model_name, "openai")
         if OpenAIProvider._supports_reasoning(native):
             return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=False)
