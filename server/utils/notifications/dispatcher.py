@@ -201,7 +201,7 @@ def _get_action_data(user_id: str, trigger_metadata: Dict[str, Any], session_id:
     if run_id:
         action_name, started_at = _fetch_action_run_details(run_id, user_id)
 
-    if session_id and status != 'running':
+    if session_id and status == 'success' and not error_message:
         last_bot_text = _fetch_last_bot_message(session_id, user_id)
         if last_bot_text:
             result_summary = _summarize_action_result(action_name, last_bot_text, user_id)

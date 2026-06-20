@@ -570,8 +570,6 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         if not channel_id:
             return False
 
-        _delete_start_message(client, action_data, channel_id)
-
         action_name = action_data.get('action_name', 'Unknown Action')
         status = action_data.get('status', 'unknown')
         error_message = action_data.get('error')
@@ -620,7 +618,10 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         if not validate_slack_blocks(blocks):
             simple_text = f"*Action Complete:* {action_name} — {status_text}"
             result = client.send_message(channel=channel_id, text=simple_text)
-            return result is not None
+            if result is not None:
+                _delete_start_message(client, action_data, channel_id)
+                return True
+            return False
 
         result = client.send_message(
             channel=channel_id,
@@ -629,6 +630,7 @@ def send_slack_action_completed_notification(user_id: str, action_data: Dict[str
         )
 
         if result:
+            _delete_start_message(client, action_data, channel_id)
             logger.info(f"[SlackNotification] Sent action completed notification for '{action_name}' ({status})")
             return True
         return False
