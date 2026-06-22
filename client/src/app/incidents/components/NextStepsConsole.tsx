@@ -124,6 +124,7 @@ export default function NextStepsConsole({ suggestions, citations, canWrite, exe
             transition={{ height: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }, opacity: { duration: 0.2, delay: 0.05 } }}
             className="overflow-hidden"
           >
+            <div className="max-h-[70vh] overflow-y-auto">
             {suggestions.map((suggestion, idx) => {
         const isFixType = suggestion.type === 'fix';
         const wasExecuted = Boolean(suggestion.executedAt);
@@ -264,6 +265,7 @@ export default function NextStepsConsole({ suggestions, citations, canWrite, exe
           </div>
         );
       })}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

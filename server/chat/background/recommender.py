@@ -32,6 +32,12 @@ _MAX_TRACE_CHARS = 30_000
 _MAX_REASONING_CHARS = 6_000
 _RECENT_OUTPUT_CHARS = 600
 _OLDER_OUTPUT_CHARS = 200
+_CODE_OUTPUT_CHARS = 2000
+
+_CODE_TOOLS = frozenset({
+    "GitHub RCA", "MCP: Get Commit",
+    "MCP: List Commits", "MCP: List Pull Requests",
+})
 
 _VALID_TYPES = frozenset({"mitigation", "diagnostic", "remediate", "prevent"})
 _VALID_RISKS = frozenset({"safe", "low", "medium", "high"})
@@ -195,7 +201,13 @@ def _build_trace_context(
         parts.append("\nINVESTIGATION EVIDENCE (tool calls in chronological order):")
         recent_start = max(0, len(citations) - 5)
         for i, c in enumerate(citations):
-            cap = _RECENT_OUTPUT_CHARS if i >= recent_start else _OLDER_OUTPUT_CHARS
+            tool_display = _TOOL_NAME_MAPPING.get(c.tool_name, c.tool_name)
+            if tool_display in _CODE_TOOLS:
+                cap = _CODE_OUTPUT_CHARS
+            elif i >= recent_start:
+                cap = _RECENT_OUTPUT_CHARS
+            else:
+                cap = _OLDER_OUTPUT_CHARS
             parts.append(_format_citation_line(c, cap))
 
     trace = "\n\n".join(parts)

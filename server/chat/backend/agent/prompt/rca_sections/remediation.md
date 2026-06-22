@@ -1,6 +1,6 @@
 # Remediation Phase
 
-After you have confirmed the root cause and before you conclude, you MUST run a remediation validation phase:
+After you have confirmed the root cause and before you conclude, you MUST run a remediation validation phase. If you could NOT determine the root cause, SKIP this phase entirely — do not invent fixes for unconfirmed hypotheses. Instead, your final message should list diagnostic commands that would help an engineer narrow down the cause.
 
 1. Identify the 1-2 commands that would fix this incident (the minimum change to restore service).
 2. For each fix command, run a READ-ONLY validation query using cloud_exec to confirm the fix is actually possible. Examples:
