@@ -154,7 +154,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
   return (
     <div className="text-sm">
       <Wrapper
-        {...(isDev ? { type: "button", onClick: () => setIsExpanded(!isExpanded) } : {})}
+        {...(isDev ? { type: "button", onClick: () => setIsExpanded(!isExpanded), "aria-expanded": isExpanded, "aria-controls": "session-usage-history" } : {})}
         className={`w-full flex items-center justify-between px-2 py-2 rounded transition-colors ${isDev ? "hover:bg-zinc-800/50" : ""}`}
       >
         {/* Left: streaming indicator or idle */}
@@ -205,7 +205,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
 
       {/* Expandable request history (dev only) */}
       {isDev && (
-        <div className="collapsible-panel" data-open={isExpanded}>
+        <div id="session-usage-history" className="collapsible-panel" data-open={isExpanded}>
           <div>
             <div className="px-2 pb-2 pt-1">
               {requestHistory.length > 0 ? (
