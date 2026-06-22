@@ -1169,7 +1169,7 @@ export default function GitHubProviderIntegration() {
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground cursor-help">
+                              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                                 Incident Prevention
                                 <Info className="h-3 w-3" />
                               </span>
