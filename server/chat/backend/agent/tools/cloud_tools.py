@@ -1029,8 +1029,9 @@ def get_cloud_tools():
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
     is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
+    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     capture_tag = "capture" if tool_capture else "nocapture"
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}"
     
     current_time = time.time()
     if (
@@ -1338,7 +1339,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tool_functions.append((trigger_rca, "trigger_rca"))
 
     # trigger_action: only when an action id is pinned (UI /action or background action run).
-    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
 
