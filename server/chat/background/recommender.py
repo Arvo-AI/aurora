@@ -999,11 +999,7 @@ def _validate_table_name(suggestion: Suggestion, inventory_lower: str, resource_
     table_name = table_match.group(1).strip("'\"")
     if table_name.lower() in inventory_lower:
         return
-    dynamo_refs = re.findall(r'notification-dedup-\w+|[\w-]+-dedup[\w-]*', resource_inventory, flags=re.IGNORECASE)
-    if dynamo_refs:
-        suggestion.command = suggestion.command.replace(table_name, dynamo_refs[0])
-    else:
-        suggestion.rationale = (suggestion.rationale or "") + " [WARNING: table name not confirmed in investigation evidence]"
+    suggestion.rationale = (suggestion.rationale or "") + " [WARNING: table name not confirmed in investigation evidence]"
 
 
 def _should_drop_suggestion(suggestion: Suggestion, resource_inventory: str) -> bool:
