@@ -668,10 +668,10 @@ def _save_fix_suggestion(
     try:
         with db_pool.get_admin_connection() as conn:
             cursor = conn.cursor()
-            # Dedup: return existing ID if a fix for the same file already exists
+            # Dedup: return existing ID if the exact same fix already exists
             cursor.execute(
-                "SELECT id FROM incident_suggestions WHERE incident_id = %s AND file_path = %s AND type = 'fix'",
-                (incident_id, file_path),
+                "SELECT id FROM incident_suggestions WHERE incident_id = %s AND file_path = %s AND type = 'fix' AND suggested_content = %s",
+                (incident_id, file_path, suggested_content),
             )
             existing = cursor.fetchone()
             if existing:
