@@ -251,14 +251,14 @@ def _create_action_items(
     client: NotionClient,
     postmortem_md: str,
     action_items_database_id: str,
-) -> int:
+) -> Dict[str, int]:
     """Create one Notion page per unchecked action item in the target DB.
 
-    Returns the number of pages successfully created.
+    Returns counts of created/failed pages.
     """
     items = parse_action_items(postmortem_md or "")
     if not items:
-        return 0
+        return {"created": 0, "failed": 0}
 
     try:
         db_schema = client.get_database(action_items_database_id)
@@ -273,7 +273,7 @@ def _create_action_items(
             "[NOTION] Action-items DB %s has no title property",
             action_items_database_id,
         )
-        return 0
+        return {"created": 0, "failed": 0}
 
     people_key = _find_property_by_type(db_schema, "people")
     date_key = _find_property_by_type(db_schema, "date")

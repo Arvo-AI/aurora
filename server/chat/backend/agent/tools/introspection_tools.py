@@ -113,11 +113,14 @@ def list_incidents(status=None, limit=20, offset=0, *, user_id, **_) -> dict:
     limit, offset = clamp(limit, 1, 100), max(0, int(offset))
 
     with _cursor(user_id) as (cur, org_id):
-        where = "i.org_id = %s AND i.status != 'merged'"
+        where = "i.org_id = %s"
         params = [org_id]
         if status:
             where += " AND i.status = %s"
             params.append(status)
+        else:
+            # Hide merged by default unless caller explicitly filters for them
+            where += " AND i.status != 'merged'"
 
         cur.execute(f"SELECT COUNT(*) FROM incidents i WHERE {where}", tuple(params))
         total = cur.fetchone()[0]

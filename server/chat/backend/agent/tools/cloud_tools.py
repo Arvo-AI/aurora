@@ -1326,9 +1326,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     if is_background or (state_context and getattr(state_context, 'trigger_rca_requested', False)):
         tool_functions.append((trigger_rca, "trigger_rca"))
 
-    # trigger_action: available when user used /action command (UI) OR background agent.
+    # trigger_action: only when an action id is pinned (UI /action or background action run).
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
-    if is_background or _action_id:
+    if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
 
     # Connection-gated tools — only added when user has the connector configured
@@ -1819,8 +1819,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     if user_id:
         try:
             from chat.backend.agent.tools.introspection_tools import (
-                list_incidents, ListIncidentsArgs,
-                get_incident, GetIncidentArgs,
+                list_incidents, ListIncidentsArgs as IntrospectionListIncidentsArgs,
+                get_incident, GetIncidentArgs as IntrospectionGetIncidentArgs,
                 incident_list_alerts, IncidentListAlertsArgs,
                 list_services, ListServicesArgs,
                 service_impact, ServiceImpactArgs,
@@ -1847,14 +1847,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "List Aurora incidents. Optionally filter by status "
                     "(investigating/analyzed/merged/resolved) with pagination. "
                     "Returns id, title, status, severity, service, summary, and timestamps.",
-                    ListIncidentsArgs,
+                    IntrospectionListIncidentsArgs,
                 ),
                 (
                     get_incident,
                     "get_incident",
                     "Get full incident details: summary, suggestions, correlated alerts, "
                     "affected services. Use this to deep-dive into a specific incident.",
-                    GetIncidentArgs,
+                    IntrospectionGetIncidentArgs,
                 ),
                 (
                     incident_list_alerts,
