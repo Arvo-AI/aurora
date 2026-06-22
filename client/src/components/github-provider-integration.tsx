@@ -1166,13 +1166,13 @@ export default function GitHubProviderIntegration() {
                     )}
                     {repo.installation_id != null && authConfig.incident_prevention_enabled && (
                       <div className="flex items-center justify-between gap-2 pt-1">
-                        <TooltipProvider>
+                        <TooltipProvider delayDuration={0}>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                              <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
                                 Incident Prevention
                                 <Info className="h-3 w-3" />
-                              </span>
+                              </button>
                             </TooltipTrigger>
                             <TooltipContent side="top" className="max-w-xs">
                               <p>When enabled, Aurora automatically reviews pull requests for potential incident risk before they are merged, helping prevent production issues.</p>
