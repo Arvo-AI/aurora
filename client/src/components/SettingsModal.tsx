@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Settings, User, BookOpen, FileText, Building2, Shield, DollarSign } from "lucide-react";
@@ -80,6 +80,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     return allTabs.filter(t => !('adminOnly' in t && t.adminOnly));
   }, [role]);
 
+  useEffect(() => {
+    if (!tabs.some(t => t.id === activeTab)) {
+      setActiveTab(tabs[0]?.id ?? 'organization');
+    }
+  }, [tabs, activeTab]);
+
   const renderContent = () => {
     switch (activeTab) {
       case 'organization':
@@ -136,6 +142,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         );
 
       case 'usage':
+        if (!isAdmin(role)) return null;
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
             <h2 className="text-2xl font-bold mb-6 flex-shrink-0">Usage & Cost</h2>

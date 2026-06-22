@@ -400,7 +400,7 @@ export default function UsageTab({ period }: { period: Period }) {
       {/* Summary cards */}
       <div className={`grid gap-3 ${isDev ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3'}`}>
         {summaryLoading ? (
-          Array.from({ length: isDev ? 4 : 3 }).map((_, i) => <StatCardSkeleton key={i} />)
+          Array.from({ length: isDev ? 4 : 3 }).map((_, i) => <StatCardSkeleton key={`skeleton-${i}`} />)
         ) : summary ? (
           <>
             <StatCard label="Total Cost" value={formatCost(summary.total_cost)} icon={DollarSign} sub={`${period} period`} />

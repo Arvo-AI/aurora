@@ -4,6 +4,7 @@ import { auth } from '@/auth'
 export interface AuthResult {
   userId: string
   orgId?: string
+  role?: string
   headers: Record<string, string>
 }
 
@@ -38,6 +39,7 @@ export async function getAuthenticatedUser(): Promise<AuthResult | NextResponse>
   return {
     userId: session.userId,
     orgId: session.orgId,
+    role: session.user?.role,
     headers,
   }
 }

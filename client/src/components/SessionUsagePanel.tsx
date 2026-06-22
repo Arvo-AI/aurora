@@ -139,7 +139,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
 
   if (totals.request_count === 0 && !currentStreaming) {
     return (
-      <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-500">
+      <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-400">
         <Activity className={`h-3.5 w-3.5 ${isSending ? "text-zinc-400 animate-pulse" : "text-zinc-600"}`} />
         {isSending && <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>}
       </div>
@@ -149,10 +149,12 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
   const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
   const trendColor = trend === "up" ? "text-emerald-400" : trend === "down" ? "text-amber-400" : "text-zinc-500";
 
+  const Wrapper = isDev ? "button" : "div";
+
   return (
     <div className="text-sm">
-      <button
-        onClick={isDev ? () => setIsExpanded(!isExpanded) : undefined}
+      <Wrapper
+        {...(isDev ? { type: "button", onClick: () => setIsExpanded(!isExpanded) } : {})}
         className={`w-full flex items-center justify-between px-2 py-2 rounded transition-colors ${isDev ? "hover:bg-zinc-800/50" : ""}`}
       >
         {/* Left: streaming indicator or idle */}
@@ -178,7 +180,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
           ) : isSending ? (
             <>
               <Activity className="h-3.5 w-3.5 text-zinc-400 animate-pulse" />
-              <span className="text-zinc-400 text-xs transition-opacity duration-500">{thinkingMessage}</span>
+              <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>
             </>
           ) : (
             <>
@@ -199,7 +201,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
             />
           </div>
         )}
-      </button>
+      </Wrapper>
 
       {/* Expandable request history (dev only) */}
       {isDev && (
@@ -208,8 +210,8 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
             <div className="px-2 pb-2 pt-1">
               {requestHistory.length > 0 ? (
                 <div className="max-h-48 overflow-y-auto">
-                  {requestHistory.map((r, i) => (
-                    <RequestRow key={i} request={r} />
+                  {requestHistory.map((r) => (
+                    <RequestRow key={`${r.timestamp}-${r.model}`} request={r} />
                   ))}
                 </div>
               ) : (
