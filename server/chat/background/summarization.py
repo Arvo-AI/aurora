@@ -300,9 +300,7 @@ WRITING RULES:
 - Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
 - Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-After the report, add a "## Suggested Next Steps" section with concrete actions. Include only as many steps as the situation warrants — a simple confirmed issue may need one; a complex undetermined one may need several. When the root cause is confirmed, state the fix and any preventive measures. When undetermined, list the precise checks an engineer would run to determine it — not generic advice.
-
-Then add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Finally add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.).
+After the report, add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Finally add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.).
 {fix_suggestions_block}"""
     else:
         # Transcript fallback — same anti-hallucination contract.
@@ -338,10 +336,6 @@ Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not
 
 After the summary, add these sections:
 
-## Suggested Next Steps
-Concrete actions. Include only as many steps as the situation warrants. When the root cause is confirmed, state the fix. When undetermined, list the precise checks an engineer would run to determine it — not generic advice.
-
----
 ## Ruled Out
 List hypotheses that were investigated and eliminated, with the evidence that ruled them out.
 
