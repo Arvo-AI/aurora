@@ -24,6 +24,7 @@ import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { useUser } from '@/hooks/useAuthHooks';
 import { canWrite as checkCanWrite } from '@/lib/roles';
+import { getEnv } from '@/lib/env';
 import Link from 'next/link';
 import Image from 'next/image';
 import CitationBadge from './CitationBadge';
@@ -715,7 +716,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           )}
 
           {/* Token Usage button */}
-          {incident.tokenUsage && (
+          {getEnv('AURORA_ENV') === 'dev' && incident.tokenUsage && (
             <button
               onClick={() => setShowTokenUsage(!showTokenUsage)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
@@ -780,7 +781,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       </div>
 
       {/* Token Usage Panel (collapsible) */}
-      {incident.tokenUsage && (
+      {getEnv('AURORA_ENV') === 'dev' && incident.tokenUsage && (
         <div className="collapsible-panel" data-open={showTokenUsage}>
           <div>
             <div className="border-t border-zinc-800 mt-4" />
