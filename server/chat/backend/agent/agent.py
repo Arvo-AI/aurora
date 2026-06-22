@@ -860,10 +860,24 @@ class Agent:
                             from chat.backend.agent.workflow import _guardrail_task_var
                             _pending_rail = _guardrail_task_var.get()
                             if _pending_rail is not None:
-                                from guardrails.input_rail import InputRailResult
-                                rail_result: InputRailResult = await _pending_rail
-                                # Clear the context var so it doesn't leak to the next turn
-                                _guardrail_task_var.set(None)
+                                from guardrails.input_rail import InputRailResult, _FAIL_CLOSED_REASON
+                                try:
+                                    rail_result: InputRailResult = await _pending_rail
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception as rail_exc:
+                                    logging.warning(
+                                        "Input rail task failed for session %s: %s",
+                                        state.session_id,
+                                        rail_exc,
+                                    )
+                                    rail_result = InputRailResult(
+                                        blocked=True,
+                                        reason=_FAIL_CLOSED_REASON,
+                                    )
+                                finally:
+                                    # Clear the context var so it doesn't leak to the next turn
+                                    _guardrail_task_var.set(None)
 
                                 if rail_result.blocked:
                                     from utils.security.audit_events import emit_block_event

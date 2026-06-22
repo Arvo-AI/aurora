@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _rails_instance = None
 _rails_lock: asyncio.Lock | None = None
+_rails_thread_lock = threading.Lock()
 _last_init_failure_ts: float = 0.0
 _INIT_FAILURE_BACKOFF_S = 30.0
 
@@ -172,6 +174,21 @@ def _build_rails_sync():
     return LLMRails(config=rails_config, llm=_build_llm())
 
 
+def prewarm_rails_sync() -> None:
+    """Sync init for Celery worker prewarm — thread-safe with async lazy init."""
+    global _rails_instance, _last_init_failure_ts
+    if _rails_instance is not None:
+        return
+    with _rails_thread_lock:
+        if _rails_instance is not None:
+            return
+        try:
+            _rails_instance = _build_rails_sync()
+        except Exception:
+            _last_init_failure_ts = time.monotonic()
+            raise
+
+
 async def _get_rails():
     """Lazily build and cache the NeMo LLMRails instance.
 
@@ -187,13 +204,14 @@ async def _get_rails():
         raise RuntimeError("input rail init recently failed; backing off")
 
     async with _get_lock():
-        if _rails_instance is not None:
-            return _rails_instance
-        try:
-            _rails_instance = await asyncio.to_thread(_build_rails_sync)
-        except Exception:
-            _last_init_failure_ts = time.monotonic()
-            raise
+        with _rails_thread_lock:
+            if _rails_instance is not None:
+                return _rails_instance
+            try:
+                _rails_instance = await asyncio.to_thread(_build_rails_sync)
+            except Exception:
+                _last_init_failure_ts = time.monotonic()
+                raise
     return _rails_instance
 
 

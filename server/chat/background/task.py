@@ -481,12 +481,15 @@ def run_background_chat(
     # Deduplication guard: acks_late=True can cause Redis to redeliver the same task
     # to the worker while it's still running. Use a Redis SETNX lock on the task ID.
     _dedup_key = f"celery:dedup:{self.request.id}"
+    _dedup_redis = None
+    _dedup_acquired = False
     try:
-        _redis = celery_app.backend.client
-        _acquired = _redis.set(_dedup_key, "1", nx=True, ex=1800)
+        _dedup_redis = celery_app.backend.client
+        _acquired = _dedup_redis.set(_dedup_key, "1", nx=True, ex=1800)
         if not _acquired:
             logger.warning(f"[BackgroundChat] DEDUP: Task {self.request.id} already running, skipping duplicate execution")
             return {"session_id": session_id, "status": "deduplicated", "error": None}
+        _dedup_acquired = True
     except Exception as _dedup_err:
         logger.warning(f"[BackgroundChat] DEDUP check failed (proceeding anyway): {_dedup_err}")
 
@@ -919,6 +922,16 @@ def run_background_chat(
         }
     
     finally:
+        # Release dedup lock so Celery retries can re-acquire after failure
+        if _dedup_acquired and _dedup_redis is not None:
+            try:
+                _dedup_redis.delete(_dedup_key)
+            except Exception as dedup_cleanup_err:
+                logger.debug(
+                    "[BackgroundChat] Failed to release dedup key %s: %s",
+                    _dedup_key,
+                    dedup_cleanup_err,
+                )
         # Safety net: ensure session is never left in in_progress state
         if not completed_successfully:
             try:
