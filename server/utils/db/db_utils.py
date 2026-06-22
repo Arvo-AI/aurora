@@ -3008,7 +3008,7 @@ def initialize_tables():
                 logging.info("Ensured onboarding_completed column exists on organizations table.")
             except Exception as e:
                 logging.exception(
-                    "FATAL: Failed to ensure organizations.onboarding_completed: %s", e
+                    "FATAL: Failed to ensure organizations.onboarding_completed"
                 )
                 conn.rollback()
                 raise
