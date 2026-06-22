@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 _rails_instance = None
 _rails_lock: asyncio.Lock | None = None
 _rails_thread_lock = threading.Lock()
-_last_init_failure_ts: float = 0.0
+_last_init_failure_ts: float = float("-inf")
 _INIT_FAILURE_BACKOFF_S = 30.0
 
 _FAIL_CLOSED_REASON = "input rail unavailable"
@@ -50,6 +50,12 @@ def _get_lock() -> asyncio.Lock:
     if _rails_lock is None:
         _rails_lock = asyncio.Lock()
     return _rails_lock
+
+
+def _record_init_failure() -> None:
+    """Stamp failure time so concurrent callers back off briefly."""
+    global _last_init_failure_ts
+    _last_init_failure_ts = time.monotonic()
 
 
 @dataclass(frozen=True)
@@ -176,17 +182,13 @@ def _build_rails_sync():
 
 def prewarm_rails_sync() -> None:
     """Sync init for Celery worker prewarm — thread-safe with async lazy init."""
-    global _rails_instance, _last_init_failure_ts
+    global _rails_instance
     if _rails_instance is not None:
         return
     with _rails_thread_lock:
         if _rails_instance is not None:
             return
-        try:
-            _rails_instance = _build_rails_sync()
-        except Exception:
-            _last_init_failure_ts = time.monotonic()
-            raise
+        _rails_instance = _build_rails_sync()
 
 
 async def _get_rails():
@@ -210,7 +212,7 @@ async def _get_rails():
             try:
                 _rails_instance = await asyncio.to_thread(_build_rails_sync)
             except Exception:
-                _last_init_failure_ts = time.monotonic()
+                _record_init_failure()
                 raise
     return _rails_instance
 
