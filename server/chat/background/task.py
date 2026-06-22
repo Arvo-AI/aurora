@@ -2031,6 +2031,8 @@ def _send_response_to_slack(
 
                     # Find the last assistant/bot message
                     for msg in reversed(messages):
+                        if not isinstance(msg, dict):
+                            continue
                         if msg.get('sender') in ('bot', 'assistant'):
                             last_assistant_message = msg.get('text') or msg.get('content')
                             break
@@ -2167,6 +2169,8 @@ def _send_response_to_google_chat(
                         messages = json.loads(messages)
 
                     for msg in reversed(messages):
+                        if not isinstance(msg, dict):
+                            continue
                         if msg.get('sender') in ('bot', 'assistant'):
                             last_assistant_message = msg.get('text') or msg.get('content')
                             break

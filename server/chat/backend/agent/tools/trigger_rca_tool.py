@@ -73,7 +73,13 @@ def trigger_rca(
     try:
         from chat.backend.agent.tools.cloud_tools import get_state_context
         state = get_state_context()
-        if state and getattr(state, "is_background", False):
+        # Block nested RCA only — background Slack/Celery sessions without an
+        # active incident investigation may still trigger a new RCA.
+        if (
+            state
+            and getattr(state, "is_background", False)
+            and getattr(state, "incident_id", None)
+        ):
             return json.dumps({
                 "error": "Cannot trigger RCA from within a background RCA session. "
                 "This tool is only available in interactive chat."
