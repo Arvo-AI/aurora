@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { forwardRequest } from '@/lib/backend-proxy';
 
 async function handler(
@@ -6,7 +6,10 @@ async function handler(
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await params;
-  const backendPath = '/api/onboarding/' + path.join('/');
+  if (path.some((segment) => segment === '.' || segment === '..' || segment.includes('/'))) {
+    return NextResponse.json({ error: 'Invalid onboarding path' }, { status: 400 });
+  }
+  const backendPath = `/api/onboarding/${path.map(encodeURIComponent).join('/')}`;
   return forwardRequest(request, request.method, backendPath, 'onboarding');
 }
 

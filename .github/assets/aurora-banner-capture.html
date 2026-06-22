@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <title>Aurora Banner</title>
 <style>
@@ -43,7 +43,7 @@ canvas { width: 100%; height: 100%; display: block; position: absolute; top: 0; 
   <div class="overlay"></div>
   <div class="content">
     <div class="title-row">
-      <img src="aurora-logo.png" class="logo" />
+      <img src="aurora-logo.png" class="logo" alt="Aurora logo" />
       <div class="text-group">
         <span class="title">Aurora</span>
         <span class="by-text">by Arvo AI</span>
@@ -55,6 +55,9 @@ canvas { width: 100%; height: 100%; display: block; position: absolute; top: 0; 
 <script>
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl');
+if (!gl) {
+  throw new Error('WebGL is unavailable for aurora banner capture');
+}
 
 const VS = `
 attribute vec2 position;
@@ -190,7 +193,11 @@ function compile(type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src);
   gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(s);
+    gl.deleteShader(s);
+    throw new Error(`Shader compilation failed: ${log}`);
+  }
   return s;
 }
 
@@ -200,6 +207,9 @@ const prog = gl.createProgram();
 gl.attachShader(prog, vs);
 gl.attachShader(prog, fs);
 gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+  throw new Error(`Program link failed: ${gl.getProgramInfoLog(prog)}`);
+}
 gl.useProgram(prog);
 
 const buf = gl.createBuffer();

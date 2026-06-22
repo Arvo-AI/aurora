@@ -3,6 +3,7 @@ Onboarding routes for connector selection and setup flow.
 """
 import logging
 from flask import Blueprint, request, jsonify
+from werkzeug.exceptions import BadRequest
 from utils.auth.rbac_decorators import require_permission
 from utils.db.connection_pool import db_pool
 
@@ -16,7 +17,13 @@ onboarding_bp = Blueprint('onboarding', __name__)
 def complete_onboarding(user_id):
     """Save connector selections and mark onboarding complete."""
     try:
-        data = request.get_json() or {}
+        try:
+            data = request.get_json()
+        except BadRequest:
+            return jsonify({"error": "Invalid JSON body"}), 400
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid request body"}), 400
+
         selected_connectors = data.get("selected_connectors", [])
 
         if not isinstance(selected_connectors, list) or len(selected_connectors) > 50:
