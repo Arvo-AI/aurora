@@ -45,9 +45,20 @@ _ENRICHMENT_MODEL = os.environ.get("ENRICHMENT_MODEL", "anthropic/claude-haiku-4
 
 _TYPE_SORT_ORDER = {"mitigation": 0, "diagnostic": 1, "remediate": 2, "prevent": 3}
 
+_SECTION_END_MARKERS = ["\n```", "\n---", "\n# ", "\n### ", "\nLet me", "\nI'll ", "\nI will "]
+
 # Max self-execution round tool calls
 _MAX_SELF_EXEC_CALLS = 5
 _SELF_EXEC_TIMEOUT = 30  # seconds per command
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove markdown code fences wrapping JSON output."""
+    if text.startswith("```"):
+        lines = text.split("\n")
+        end_index = -1 if lines[-1].strip() == "```" else len(lines)
+        return "\n".join(lines[1:end_index]).strip()
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -259,12 +270,7 @@ Return ONLY the JSON object."""
     try:
         llm = create_chat_model(ModelConfig.SUGGESTION_MODEL, temperature=0.1)
         response = llm.invoke([HumanMessage(content=prompt)])
-        text = str(response.content).strip()
-
-        if text.startswith("```"):
-            lines = text.split("\n")
-            end_index = -1 if lines[-1].strip() == "```" else len(lines)
-            text = "\n".join(lines[1:end_index]).strip()
+        text = _strip_code_fences(str(response.content).strip())
 
         data = json.loads(text)
 
@@ -443,8 +449,7 @@ def _extract_validated_fixes(agent_reasoning: str) -> List[Suggestion]:
         return []
 
     section = agent_reasoning[start:]
-    end_markers = ["\n```", "\n---", "\n# ", "\n### ", "\nLet me"]
-    for marker in end_markers:
+    for marker in _SECTION_END_MARKERS:
         end = section.find(marker, 20)
         if end > 0:
             section = section[:end]
@@ -681,16 +686,16 @@ CONSTRAINTS:
 Return a JSON array where each item has:
 - "title": action verb + specific target. Use backticks for code terms.
 - "description": why this helps + how to verify success. Use backticks for code terms, file paths, values.
-- "type": "mitigation" | "diagnostic" | "remediate" | "prevent"
+- "type": {'"mitigation" | "remediate" | "prevent"' if rca_summary else '"mitigation" | "diagnostic" | "remediate" | "prevent"'}
 - "risk": "safe" | "low" | "medium" | "high"
 - "command": exact CLI command. Must be directly executable. For code changes, use sed/patch or describe the edit.
 - "rationale": one sentence tying this to specific evidence. Include citation numbers like [15].
 - "undo": reversal command for medium/high risk, null otherwise
-- "expected_outcome": (optional, for diagnostics) object with:
+{'''- "expected_outcome": (optional, for diagnostics) object with:
   - "if_true": what it means if the command confirms the hypothesis
   - "if_false": what it means if it doesn't
   - "then": what action to take based on the result
-
+''' if not rca_summary else ''}
 Return ONLY the JSON array."""
 
 
@@ -817,12 +822,7 @@ def _parse_recommendations(content: Any, executed_commands: set) -> List[Suggest
     if not content:
         return []
 
-    text = _extract_text_from_content(content)
-
-    if text.startswith("```"):
-        lines = text.split("\n")
-        end_index = -1 if lines[-1].strip() == "```" else len(lines)
-        text = "\n".join(lines[1:end_index]).strip()
+    text = _strip_code_fences(_extract_text_from_content(content))
 
     try:
         data = json.loads(text)
