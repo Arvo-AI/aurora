@@ -5,7 +5,6 @@ import { ROLE_ADMIN } from "@/lib/roles"
 // Public routes that don't require authentication
 const publicRoutes = [
   "/sign-in",
-  "/sign-up",
   "/change-password",
   "/terms",
   "/api/auth/callback",  // NextAuth callbacks
@@ -16,12 +15,13 @@ const publicRoutes = [
   "/api/auth/csrf",       // NextAuth CSRF
   "/api/auth/change-password", // Password change API
   "/api/auth/setup-org",  // Org setup for org-less users
+  "/api/auth/register",   // Public registration endpoint
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]
 
 // Routes that should redirect authenticated users away
-const authRoutes = ["/sign-in", "/sign-up"]
+const authRoutes = ["/sign-in"]
 
 // Strips framework/runtime fingerprint headers from every outgoing response.
 // Note: x-nextjs-* headers on cached responses are injected by Next.js after
@@ -52,6 +52,14 @@ export default auth((req) => {
   const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
   const isSetupOrgRoute = nextUrl.pathname.startsWith('/setup-org')
   const isOrgSwitching = nextUrl.pathname.startsWith('/org/switching')
+
+  // Redirect /sign-up to /sign-in?mode=signup (sign-up is now handled by the sign-in page)
+  if (nextUrl.pathname.startsWith("/sign-up")) {
+    const redirectUrl = new URL("/sign-in", nextUrl)
+    nextUrl.searchParams.forEach((value, key) => redirectUrl.searchParams.set(key, value))
+    redirectUrl.searchParams.set("mode", "signup")
+    return sanitizeResponse(NextResponse.redirect(redirectUrl))
+  }
 
   // If user is logged in and tries to access auth pages, redirect to home
   if (isAuthRoute && isLoggedIn) {

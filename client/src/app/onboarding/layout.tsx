@@ -2,12 +2,15 @@
 
 import AuroraShader from "@/app/components/AuroraShader"
 import { OnboardingProvider } from "./components/OnboardingContext"
+import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 
 export default function OnboardingLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  useDarkPageBackground()
+
   return (
     <OnboardingProvider>
       <div className="h-screen bg-[#0a0a0a] relative overflow-hidden">
