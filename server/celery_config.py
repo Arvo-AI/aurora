@@ -269,8 +269,8 @@ def _prewarm_worker(**kwargs):
 
     def _do_prewarm():
         try:
-            from guardrails.input_rail import prewarm_rails_sync
-            prewarm_rails_sync()
+            from guardrails.input_rail import _ensure_rails_in_thread
+            _ensure_rails_in_thread()
             _prewarm_logger.info("[PREWARM] NeMo Guardrails ready")
         except Exception as e:
             _prewarm_logger.warning("[PREWARM] Guardrails init failed: %s", e)

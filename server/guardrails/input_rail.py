@@ -180,15 +180,26 @@ def _build_rails_sync():
     return LLMRails(config=rails_config, llm=_build_llm())
 
 
-def prewarm_rails_sync() -> None:
-    """Sync init for Celery worker prewarm — thread-safe with async lazy init."""
+def _ensure_rails_in_thread():
+    """Build or return cached rails under ``_rails_thread_lock``.
+
+    Runs in a worker thread (``asyncio.to_thread`` or Celery prewarm) so the
+    event loop never blocks on ``threading.Lock``. Backoff is checked here, not
+    only before lock acquisition, so a caller cannot pass an outer check, wait
+    on the lock, and rebuild after a concurrent failure stamped backoff.
+    """
     global _rails_instance
-    if _rails_instance is not None:
-        return
     with _rails_thread_lock:
         if _rails_instance is not None:
-            return
-        _rails_instance = _build_rails_sync()
+            return _rails_instance
+        if time.monotonic() - _last_init_failure_ts < _INIT_FAILURE_BACKOFF_S:
+            raise RuntimeError("input rail init recently failed; backing off")
+        try:
+            _rails_instance = _build_rails_sync()
+        except Exception:
+            _record_init_failure()
+            raise
+    return _rails_instance
 
 
 async def _get_rails():
@@ -198,23 +209,20 @@ async def _get_rails():
     the event loop. Failures are negative-cached for a short window so a
     flapping provider does not block the loop on every request.
     """
-    global _rails_instance, _last_init_failure_ts
+    global _rails_instance
     if _rails_instance is not None:
         return _rails_instance
 
+    # Fast-fail without spawning a worker thread when backoff is active.
     if time.monotonic() - _last_init_failure_ts < _INIT_FAILURE_BACKOFF_S:
         raise RuntimeError("input rail init recently failed; backing off")
 
     async with _get_lock():
-        with _rails_thread_lock:
-            if _rails_instance is not None:
-                return _rails_instance
-            try:
-                _rails_instance = await asyncio.to_thread(_build_rails_sync)
-            except Exception:
-                _record_init_failure()
-                raise
-    return _rails_instance
+        if _rails_instance is not None:
+            return _rails_instance
+        if time.monotonic() - _last_init_failure_ts < _INIT_FAILURE_BACKOFF_S:
+            raise RuntimeError("input rail init recently failed; backing off")
+        return await asyncio.to_thread(_ensure_rails_in_thread)
 
 
 def _triggered_rail_name(result) -> str:
