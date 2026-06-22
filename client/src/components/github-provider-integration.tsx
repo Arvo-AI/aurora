@@ -1175,7 +1175,7 @@ export default function GitHubProviderIntegration() {
                               </button>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="max-w-xs">
-                              <p>When enabled, Aurora automatically reviews pull requests for potential incident risk before they are merged, helping prevent production issues.</p>
+                              <p>When enabled, Aurora automatically reviews pull requests for potential incident risk using knowledge of your infrastructure and other connected services, helping prevent production issues before they are merged.</p>
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
