@@ -252,43 +252,54 @@ if hasattr(celery_app, 'tasks'):
 # so the first task doesn't pay a cold-start penalty.
 # ---------------------------------------------------------------------------
 import threading
-from celery.signals import worker_process_init
+
+try:
+    from celery.signals import worker_process_init
+except (ImportError, ModuleNotFoundError):
+    # Tests stub celery as MagicMock when the package isn't installed (see
+    # tests/conftest.py), so celery.signals isn't importable outside workers.
+    worker_process_init = None
 
 _prewarm_ready = threading.Event()
 
 _prewarm_logger = logging.getLogger("celery.prewarm")
 
 
-@worker_process_init.connect
-def _prewarm_worker(**kwargs):
-    """Kick off singleton init in a background thread.
+if worker_process_init is not None:
 
-    worker_process_init has a ~4s timeout before the parent kills the child,
-    so we can't block here. Task code calls _prewarm_ready.wait() instead.
-    """
+    @worker_process_init.connect
+    def _prewarm_worker(**kwargs):
+        """Kick off singleton init in a background thread.
 
-    def _do_prewarm():
-        try:
-            from guardrails.input_rail import _ensure_rails_in_thread
-            _ensure_rails_in_thread()
-            _prewarm_logger.info("[PREWARM] NeMo Guardrails ready")
-        except Exception as e:
-            _prewarm_logger.warning("[PREWARM] Guardrails init failed: %s", e)
+        worker_process_init has a ~4s timeout before the parent kills the child,
+        so we can't block here. Task code calls _prewarm_ready.wait() instead.
+        """
 
-        try:
-            from chat.backend.agent.tools.mcp_preloader import start_mcp_preloader
-            start_mcp_preloader()
-            _prewarm_logger.info("[PREWARM] MCP Preloader started")
-        except Exception as e:
-            _prewarm_logger.warning("[PREWARM] MCP Preloader failed: %s", e)
+        def _do_prewarm():
+            try:
+                from guardrails.input_rail import _ensure_rails_in_thread
+                _ensure_rails_in_thread()
+                _prewarm_logger.info("[PREWARM] NeMo Guardrails ready")
+            except Exception as e:
+                _prewarm_logger.warning("[PREWARM] Guardrails init failed: %s", e)
 
-        try:
-            from chat.background.task import _get_worker_agent
-            _get_worker_agent()
-            _prewarm_logger.info("[PREWARM] Agent singleton ready")
-        except Exception as e:
-            _prewarm_logger.warning("[PREWARM] Agent singleton failed: %s", e)
+            try:
+                from chat.backend.agent.tools.mcp_preloader import start_mcp_preloader
+                start_mcp_preloader()
+                _prewarm_logger.info("[PREWARM] MCP Preloader started")
+            except Exception as e:
+                _prewarm_logger.warning("[PREWARM] MCP Preloader failed: %s", e)
 
-        _prewarm_ready.set()
+            try:
+                from chat.background.task import _get_worker_agent
+                _get_worker_agent()
+                _prewarm_logger.info("[PREWARM] Agent singleton ready")
+            except Exception as e:
+                _prewarm_logger.warning("[PREWARM] Agent singleton failed: %s", e)
 
-    threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True).start()
+            _prewarm_ready.set()
+
+        threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True).start()
+else:
+    # No worker signal hook (e.g. pytest stubs celery) — don't block task code.
+    _prewarm_ready.set()
