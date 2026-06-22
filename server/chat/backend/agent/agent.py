@@ -338,21 +338,23 @@ class Agent:
                 getattr(state, 'attachments', []),
             )
 
-            # Build modular segments
-            segments = build_prompt_segments(
-                provider_preference=provider_preference,
-                mode=getattr(state, "mode", None),
-                has_zip_reference=has_zip_ref,
-                state=state,
-            )
+            # Build prompt segments in background while getting tools on main thread
+            # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=1) as _pool:
+                _prompt_future = _pool.submit(
+                    build_prompt_segments,
+                    provider_preference=provider_preference,
+                    mode=getattr(state, "mode", None),
+                    has_zip_reference=has_zip_ref,
+                    state=state,
+                )
+                tools = get_cloud_tools()
+                segments = _prompt_future.result()
 
-            # Assemble final system prompt from segments
             system_prompt_text = assemble_system_prompt(segments)
             if system_prompt_override is not None:
                 system_prompt_text = system_prompt_override
-
-            # Get cloud tools
-            tools = get_cloud_tools()
             if tool_subset is not None:
                 tools = tool_subset
 
@@ -854,6 +856,43 @@ class Agent:
                     # Retry logic for network errors
                     for attempt in range(3):
                         try:
+                            # --- Await the guardrails task that was fired concurrently ---
+                            from chat.backend.agent.workflow import _guardrail_task_var
+                            _pending_rail = _guardrail_task_var.get()
+                            if _pending_rail is not None:
+                                from guardrails.input_rail import InputRailResult, _FAIL_CLOSED_REASON
+                                try:
+                                    rail_result: InputRailResult = await _pending_rail
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception as rail_exc:
+                                    logging.warning(
+                                        "Input rail task failed for session %s: %s",
+                                        state.session_id,
+                                        rail_exc,
+                                    )
+                                    rail_result = InputRailResult(
+                                        blocked=True,
+                                        reason=_FAIL_CLOSED_REASON,
+                                    )
+                                finally:
+                                    # Clear the context var so it doesn't leak to the next turn
+                                    _guardrail_task_var.set(None)
+
+                                if rail_result.blocked:
+                                    from utils.security.audit_events import emit_block_event
+                                    emit_block_event(
+                                        user_id=state.user_id or "",
+                                        session_id=state.session_id or "",
+                                        layer="input_rail",
+                                        tool="agentic_tool_flow",
+                                        subject=getattr(state, "question", ""),
+                                        reason=rail_result.reason,
+                                        latency_ms=rail_result.latency_ms,
+                                    )
+                                    state.guardrail_blocked = True
+                                    return state
+
                             # Use astream_events for token-by-token streaming
                             logging.info(f"Starting agent token streaming for session {state.session_id}")
                             result = None

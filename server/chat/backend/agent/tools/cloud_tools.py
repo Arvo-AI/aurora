@@ -1021,19 +1021,16 @@ def get_cloud_tools():
         mode = get_mode_from_context()
     mode_suffix = (mode or 'agent').lower()
 
-    # Create a cache key that accurately reflects the *specific* tool_capture instance (or lack thereof)
-    # - When no tool_capture is active we can safely cache per-user
-    # - When a tool_capture **is** active we additionally key on the `id()` of the object so each
-    #   session gets its own wrapped functions that close over the *right* capture instance.
+    # Cache key uses stable identifiers — the tool_capture wrapper resolves the active
+    # capture instance dynamically at call time via get_tool_capture(), so we don't need
+    # id(tool_capture) which caused a cache miss every invocation.
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
     is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
-    if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}"
-    else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}"
+    capture_tag = "capture" if tool_capture else "nocapture"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}"
     
     current_time = time.time()
     if (
@@ -1068,7 +1065,9 @@ def get_cloud_tools():
             
         @wraps(func)
         def wrapped_func(**kwargs):
-            exec_lock = getattr(tool_capture, 'execution_lock', None)
+            # Resolve capture instance dynamically so cached tools work across sessions
+            tool_capture = get_tool_capture()
+            exec_lock = getattr(tool_capture, 'execution_lock', None) if tool_capture else None
             acquired = False
             try:
                 if exec_lock:
@@ -1118,7 +1117,9 @@ def get_cloud_tools():
                     # The 'completed' flag just prevents cleanup race conditions
                     logging.info(f"TOOL CAPTURE: Tool capture instance found: {tool_capture}")
                     logging.info(f"TOOL CAPTURE: Tool capture instance found: {tool_capture.current_tool_calls}")
-                    for call_id, call_info in tool_capture.current_tool_calls.items():
+                    with tool_capture.lock:
+                        calls_snapshot = list(tool_capture.current_tool_calls.items())
+                    for call_id, call_info in calls_snapshot:
                         logging.info(f"TOOL CAPTURE: Call info: {call_info}")
                         logging.info(f"TOOL CAPTURE: Call signature right side: {tool_signature}")
                         logging.info(f"TOOL CAPTURE: Call result: {result}")
@@ -1129,7 +1130,9 @@ def get_cloud_tools():
                     
                     # Fallback – match by tool_name + command (provider may be missing)
                     if not matching_tool_call_id:
-                        for call_id, call_info in tool_capture.current_tool_calls.items():
+                        with tool_capture.lock:
+                            calls_snapshot = list(tool_capture.current_tool_calls.items())
+                        for call_id, call_info in calls_snapshot:
                             if call_info.get('tool_name') != tool_name:
                                 continue
                             ci_input = call_info.get('input', {}) or {}
@@ -1147,18 +1150,21 @@ def get_cloud_tools():
                     # As a last resort, match by oldest incomplete call for sequential execution (OpenAI)
                     # For parallel execution (Gemini), signature matching should have already succeeded
                     if not matching_tool_call_id:
-                        candidate_ids = [
-                            (call_id, call_info.get('start_time'))
-                            for call_id, call_info in tool_capture.current_tool_calls.items()
-                            if call_info.get('tool_name') == tool_name and not call_info.get('completed')
-                        ]
+                        with tool_capture.lock:
+                            candidate_ids = [
+                                (call_id, call_info.get('start_time'))
+                                for call_id, call_info in tool_capture.current_tool_calls.items()
+                                if call_info.get('tool_name') == tool_name and not call_info.get('completed')
+                            ]
                         
                         if len(candidate_ids) == 1:
                             # Only one candidate - safe to use
                             matching_tool_call_id = candidate_ids[0][0]
-                            call_info = tool_capture.current_tool_calls[matching_tool_call_id]
-                            call_info['input'] = signature_payload
-                            call_info['signature'] = tool_signature
+                            with tool_capture.lock:
+                                call_info = tool_capture.current_tool_calls.get(matching_tool_call_id)
+                                if call_info:
+                                    call_info['input'] = signature_payload
+                                    call_info['signature'] = tool_signature
                             logging.info(
                                 "Matched tool call by single incomplete candidate: %s (updated signature)",
                                 matching_tool_call_id,
@@ -1168,9 +1174,11 @@ def get_cloud_tools():
                             # This handles OpenAI's sequential execution pattern
                             candidate_ids.sort(key=lambda x: x[1] if x[1] else datetime.min)
                             matching_tool_call_id = candidate_ids[0][0]
-                            call_info = tool_capture.current_tool_calls[matching_tool_call_id]
-                            call_info['input'] = signature_payload
-                            call_info['signature'] = tool_signature
+                            with tool_capture.lock:
+                                call_info = tool_capture.current_tool_calls.get(matching_tool_call_id)
+                                if call_info:
+                                    call_info['input'] = signature_payload
+                                    call_info['signature'] = tool_signature
                             logging.warning(
                                 f"SEQUENTIAL FALLBACK: Found {len(candidate_ids)} incomplete {tool_name} calls, "
                                 f"matched to oldest: {matching_tool_call_id}. "
@@ -1228,7 +1236,9 @@ def get_cloud_tools():
                         serialized_payload = str(signature_payload)
                     tool_signature = f"{tool_name}_{serialized_payload}"
                     
-                    for call_id, call_info in tool_capture.current_tool_calls.items():
+                    with tool_capture.lock:
+                        calls_snapshot = list(tool_capture.current_tool_calls.items())
+                    for call_id, call_info in calls_snapshot:
                         if call_info.get('signature') == tool_signature and not call_info.get('completed'):
                             matching_tool_call_id = call_id
                             logging.info(f"Matched error to tool call by signature: {matching_tool_call_id}")
@@ -1237,10 +1247,11 @@ def get_cloud_tools():
                     # Fallback: Only match if there's exactly ONE incomplete call for this tool
                     # This prevents parallel tool calls from sharing the same error tracking
                     if not matching_tool_call_id:
-                        incomplete_calls = [
-                            call_id for call_id, call_info in tool_capture.current_tool_calls.items() 
-                            if call_info.get('tool_name') == tool_name and not call_info.get('completed', False)
-                        ]
+                        with tool_capture.lock:
+                            incomplete_calls = [
+                                call_id for call_id, call_info in tool_capture.current_tool_calls.items() 
+                                if call_info.get('tool_name') == tool_name and not call_info.get('completed', False)
+                            ]
                         
                         if len(incomplete_calls) == 1:
                             matching_tool_call_id = incomplete_calls[0]

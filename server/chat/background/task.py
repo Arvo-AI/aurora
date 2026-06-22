@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -26,6 +27,38 @@ from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-worker Agent singleton: avoids recreating PostgreSQLClient, WeaviateClient,
+# and LLMManager on every background chat task (~2s cold-start savings).
+# ---------------------------------------------------------------------------
+_worker_agent = None
+_worker_agent_lock = threading.Lock()
+
+
+def _get_worker_agent():
+    """Return a cached Agent instance for the current worker process."""
+    global _worker_agent
+    if _worker_agent is None:
+        with _worker_agent_lock:
+            # Double-checked locking: prewarm thread and task thread can race here
+            if _worker_agent is None:
+                from chat.backend.agent.agent import Agent
+                from chat.backend.agent.db import PostgreSQLClient
+                from chat.backend.agent.weaviate_client import WeaviateClient
+
+                pg = PostgreSQLClient()
+                wv = WeaviateClient(pg)
+                _worker_agent = Agent(
+                    weaviate_client=wv,
+                    postgres_client=pg,
+                    websocket_sender=None,
+                    event_loop=None,
+                    ctx_len=15,
+                )
+                logger.info("[BackgroundChat] Created per-worker singleton Agent")
+    return _worker_agent
 
 
 def _resolve_permitted_tools(user_id: str) -> Optional[set]:
@@ -445,9 +478,27 @@ def run_background_chat(
     """
     from celery.exceptions import SoftTimeLimitExceeded
     
+    # Deduplication guard: acks_late=True can cause Redis to redeliver the same task
+    # to the worker while it's still running. Use a Redis SETNX lock on the task ID.
+    _dedup_key = f"celery:dedup:{self.request.id}"
+    _dedup_redis = None
+    _dedup_acquired = False
+    try:
+        _dedup_redis = celery_app.backend.client
+        _acquired = _dedup_redis.set(_dedup_key, "1", nx=True, ex=1800)
+        if not _acquired:
+            logger.warning(f"[BackgroundChat] DEDUP: Task {self.request.id} already running, skipping duplicate execution")
+            return {"session_id": session_id, "status": "deduplicated", "error": None}
+        _dedup_acquired = True
+    except Exception as _dedup_err:
+        logger.warning(f"[BackgroundChat] DEDUP check failed (proceeding anyway): {_dedup_err}")
+
+    # Block until prewarm completes (avoids cold-start on first task after child fork)
+    from celery_config import _prewarm_ready
+    _prewarm_ready.wait(timeout=30)
+
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
-
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
     if os.environ.get("DISPLAY__RCA_USER_MSG", "").lower() in ("1", "true", "yes"):
@@ -775,7 +826,8 @@ def run_background_chat(
                 logger.error(f"[BackgroundChat] Failed to generate final visualization: {e}")
         
         # Send response back to Slack if this was triggered from Slack
-        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+        # Skip if already sent inside _execute_background_chat (early send for lower latency)
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button'] and not result.get('slack_sent_early'):
             try:
                 _send_response_to_slack(user_id, session_id, trigger_metadata)
             except Exception as e:
@@ -808,6 +860,7 @@ def run_background_chat(
                 logger.debug("[BackgroundChat] Failed to dispatch after_rca actions")
 
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
+        
         return result
     
     except SoftTimeLimitExceeded:
@@ -869,6 +922,16 @@ def run_background_chat(
         }
     
     finally:
+        # Release dedup lock so Celery retries can re-acquire after failure
+        if _dedup_acquired and _dedup_redis is not None:
+            try:
+                _dedup_redis.delete(_dedup_key)
+            except Exception as dedup_cleanup_err:
+                logger.debug(
+                    "[BackgroundChat] Failed to release dedup key %s: %s",
+                    _dedup_key,
+                    dedup_cleanup_err,
+                )
         # Safety net: ensure session is never left in in_progress state
         if not completed_successfully:
             try:
@@ -1257,32 +1320,18 @@ async def _execute_background_chat(
     from chat.background.background_websocket import BackgroundWebSocket
     from main_chatbot import process_workflow_async
     
-    weaviate_client = None
-    
     try:
-        # Initialize clients (same as handle_connection in main_chatbot.py)
-        postgres_client = PostgreSQLClient()
-        weaviate_client = WeaviateClient(postgres_client)
+        
+        # Reuse a per-worker Agent to avoid recreating PostgreSQLClient, WeaviateClient,
+        # and LLMManager on every task (~2s cold-start savings).
+        agent = _get_worker_agent()
         
         # Create background websocket (no-op, just discards messages)
         background_ws = BackgroundWebSocket()
         
-        # Create agent WITHOUT websocket_sender - tools will skip WebSocket messages
-        # Use reasonable ctx_len for RCAs - need enough history to build on previous tool calls
-        # But not too high to avoid context length errors (Azure has 128K limit)
-        # 15 is a good balance - allows agent to see its investigation progress while staying within limits
-        agent = Agent(
-            weaviate_client=weaviate_client,
-            postgres_client=postgres_client,
-            websocket_sender=None,
-            event_loop=None,
-            ctx_len=15,  # Reasonable history for RCAs - allows agent to see investigation progress
-        )
-        logger.info(f"[BackgroundChat] Created agent with ctx_len=15 (no WebSocket)")
-        
         # Create workflow for this session
         wf = Workflow(agent, session_id)
-        logger.info(f"[BackgroundChat] Created workflow for session {session_id}")
+        logger.info("[BackgroundChat] Created agent + workflow (singleton reuse)")
         
         # Build RCA context for system prompt (NOT added to user message)
         rca_context = _build_rca_context(
@@ -1409,6 +1458,14 @@ async def _execute_background_chat(
         if hasattr(wf, '_wait_for_ongoing_tool_calls'):
             await wf._wait_for_ongoing_tool_calls()
 
+        # Send Slack response immediately — don't wait for post-processing
+        _slack_early_sent = False
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+            try:
+                _slack_early_sent = _send_response_to_slack(user_id, session_id, trigger_metadata)
+            except Exception:
+                logger.exception("[BackgroundChat] Failed early Slack send")
+
         # --- Phase 2: Jira action ---
         # Investigation is done. Now deterministically file in Jira.
         if rca_context and rca_context.get('integrations', {}).get('jira') \
@@ -1524,6 +1581,7 @@ async def _execute_background_chat(
             "tool_calls": tool_calls,
             "guardrail_blocked": guardrail_blocked,
             "after_rca_dispatched": True,
+            "slack_sent_early": _slack_early_sent,
             "action_notification_sent": action_notification_sent,
         }
         
@@ -1539,13 +1597,6 @@ async def _execute_background_chat(
                 await ContextManager._instance.async_queue.stop()
         except Exception as e:
             logger.error(f"[BackgroundChat] Failed to stop async save queue - potential resource leak: {e}")
-        
-        # Clean up weaviate client
-        if weaviate_client:
-            try:
-                weaviate_client.close()
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
 
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -1916,8 +1967,11 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 
 
-def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
-    """Send Aurora's response back to the Slack channel after background chat completes."""
+def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> bool:
+    """Send Aurora's response back to the Slack channel after background chat completes.
+    
+    Returns True if a message was actually posted, False otherwise.
+    """
     try:
         from connectors.slack_connector.client import get_slack_client_for_user
         from routes.slack.slack_events_helpers import format_response_for_slack
@@ -1929,7 +1983,7 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
         
         if not channel:
             logger.warning(f"[BackgroundChat] No Slack channel in trigger_metadata for session {session_id}")
-            return
+            return False
         
         # Get the last assistant message from the chat session
         with db_pool.get_admin_connection() as conn:
@@ -1943,7 +1997,7 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
                 
                 if not row or not row[0]:
                     logger.warning(f"[BackgroundChat] No messages found in session {session_id}")
-                    return
+                    return False
                 
                 messages = row[0]
                 if isinstance(messages, str):
@@ -1959,7 +2013,7 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
                 
                 if not last_assistant_message:
                     logger.warning(f"[BackgroundChat] No assistant message found in session {session_id}")
-                    return
+                    return False
         
         # Format the response for Slack (markdown conversion, length limits, etc.)
         formatted_message = format_response_for_slack(last_assistant_message)
@@ -2019,7 +2073,7 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
         client = get_slack_client_for_user(user_id)
         if not client:
             logger.error(f"[BackgroundChat] Could not get Slack client for user {user_id}")
-            return
+            return False
         
         # Slack messages have a ~3000 char limit for update_message
         SLACK_MSG_LIMIT = 2900
@@ -2041,6 +2095,8 @@ def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dic
                 thread_ts=thread_ts
             )
         
+        return True
+
     except Exception as e:
         logger.error(f"[BackgroundChat] Error sending response to Slack: {e}", exc_info=True)
         raise

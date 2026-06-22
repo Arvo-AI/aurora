@@ -627,7 +627,7 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
 
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 
                            incident_id: str = None, session_id: str = None, context_messages: list = None,
-                           channel_context: str = None, thinking_message_ts: str = None):
+                           channel_context: str | None = None, thinking_message_ts: str | None = None):
     """
     Route a Slack message to Aurora's chat system.
     Uses background chat task to process the message.
