@@ -778,7 +778,7 @@ def _parse_item_to_suggestion(item: dict) -> Optional[Suggestion]:
         risk = "safe"
 
     command = item.get("command")
-    if command and re.search(r'<[a-zA-Z][a-zA-Z0-9_-]*>', command):
+    if command and re.search(r'<[a-zA-Z][a-zA-Z0-9]*[-_][a-zA-Z0-9_-]+>', command):
         command = None
     elif command and not is_command_safe(command):
         risk = "high"
