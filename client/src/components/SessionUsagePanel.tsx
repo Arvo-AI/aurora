@@ -172,7 +172,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
                   )}
                 </>
               ) : (
-                <span className="text-yellow-300 text-xs">{thinkingMessage}</span>
+                <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>
               )}
             </>
           ) : isSending ? (

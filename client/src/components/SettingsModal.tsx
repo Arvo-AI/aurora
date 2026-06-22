@@ -139,7 +139,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
             <h2 className="text-2xl font-bold mb-6 flex-shrink-0">Usage & Cost</h2>
-            <div className="flex-1 overflow-y-auto min-h-0">
+            <div className="flex-1 overflow-y-auto min-h-0 pr-4">
               <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading...</div>}>
                 <UsageTab period="30d" />
               </React.Suspense>
