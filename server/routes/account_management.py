@@ -197,7 +197,8 @@ def get_connected_accounts(user_id, target_user_id):
                     WHERE (ugi.user_id = %s OR ugi.org_id = %s)
                       AND ugi.disconnected_at IS NULL
                       AND gi.suspended_at IS NULL
-                    ORDER BY (ugi.user_id = %s) DESC, gi.account_login
+                    ORDER BY (ugi.user_id = %s) DESC,
+                             ugi.is_primary DESC, ugi.linked_at DESC
                     LIMIT 1""",
                 (user_id, org_id, user_id),
             )
