@@ -51,7 +51,6 @@ export default auth((req) => {
   const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
   const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
   const isSetupOrgRoute = nextUrl.pathname.startsWith('/setup-org')
-  const isOnboardingRoute = nextUrl.pathname.startsWith('/onboarding')
   const isOrgSwitching = nextUrl.pathname.startsWith('/org/switching')
 
   // Redirect /sign-up to /sign-in?mode=signup (sign-up is now handled by the sign-in page)
@@ -77,11 +76,6 @@ export default auth((req) => {
   const needsOrg = !req.auth?.user?.orgId || (orgName && orgName.toLowerCase() === "default organization")
   if (isLoggedIn && needsOrg && !isSetupOrgRoute && !isOrgSwitching && !isChangePasswordRoute && !isApiRoute) {
     return sanitizeResponse(NextResponse.redirect(new URL("/setup-org", nextUrl)))
-  }
-
-  // Redirect away from /onboarding if already completed
-  if (isOnboardingRoute && isLoggedIn && req.auth?.user?.onboardingCompleted) {
-    return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }
 
   // If user is not logged in and tries to access protected route

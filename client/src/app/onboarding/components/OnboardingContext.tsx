@@ -77,7 +77,11 @@ export function OnboardingProvider({ children }: Readonly<{ children: ReactNode 
 
   useEffect(() => {
     if (hydrated) {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+      try {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+      } catch {
+        // Keep onboarding usable even when storage is unavailable
+      }
     }
   }, [state, hydrated])
 

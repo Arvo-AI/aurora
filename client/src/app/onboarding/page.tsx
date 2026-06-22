@@ -24,11 +24,14 @@ export default function OnboardingPage() {
   const handleFinish = async (skip = false) => {
     setIsFinishing(true)
     const selectedIds = skip ? [] : getSelectedConnectors()
+    const controller = new AbortController()
+    const timeoutId = globalThis.setTimeout(() => controller.abort(), 15_000)
     try {
       const res = await fetch("/api/onboarding/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ selected_connectors: selectedIds }),
+        signal: controller.signal,
       })
       if (!res.ok) {
         throw new Error(`Onboarding completion failed: ${res.status}`)
@@ -37,13 +40,20 @@ export default function OnboardingPage() {
       console.error("Finish onboarding error:", e)
       setIsFinishing(false)
       return
+    } finally {
+      globalThis.clearTimeout(timeoutId)
     }
 
     if (!skip && selectedIds.length > 0) {
       const firstConnector = connectorRegistry.get(selectedIds[0])
       const name = firstConnector?.name || selectedIds[0]
-      const queueParam = `onboarding=1&queue=${selectedIds.join(",")}&current=0`
-      globalThis.location.href = `/connectors?${queueParam}&highlight=${encodeURIComponent(name)}`
+      const params = new URLSearchParams({
+        onboarding: "1",
+        queue: selectedIds.join(","),
+        current: "0",
+        highlight: name,
+      })
+      globalThis.location.href = `/connectors?${params.toString()}`
     } else {
       globalThis.location.href = "/"
     }

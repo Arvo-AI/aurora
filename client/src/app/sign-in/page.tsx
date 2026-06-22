@@ -5,14 +5,18 @@ import { signIn } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import Image from "next/image"
-import AuroraShader from '../components/AuroraShader'
+import AuroraShader from '@/app/components/AuroraShader'
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 
 
 function AuthPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const callbackUrl = searchParams.get("callbackUrl") || "/"
+  const rawCallbackUrl = searchParams.get("callbackUrl") || "/"
+  const callbackUrl =
+    rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//")
+      ? rawCallbackUrl
+      : "/"
   const initialMode = searchParams.get("mode") === "signup" ? "signup" : "signin"
 
   const [mode, setMode] = useState<"signin" | "signup">(initialMode)

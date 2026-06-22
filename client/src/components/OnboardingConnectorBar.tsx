@@ -22,11 +22,15 @@ function getConnectorUrl(id: string, queue: string[], index: number): string {
 function parseStoredState(stored: string): OnboardingQueueState | null {
   try {
     const parsed = JSON.parse(stored) as Partial<OnboardingQueueState>
-    if (!Array.isArray(parsed.queue) || parsed.queue.length === 0) return null
+    if (!Array.isArray(parsed.queue)) return null
+    const sanitizedQueue = parsed.queue.filter(
+      (item): item is string => typeof item === "string" && item.length > 0
+    )
+    if (sanitizedQueue.length === 0) return null
     const safeCurrent = Number.isInteger(parsed.current)
-      ? Math.min(Math.max(parsed.current!, 0), parsed.queue.length - 1)
+      ? Math.min(Math.max(parsed.current!, 0), sanitizedQueue.length - 1)
       : 0
-    return { queue: parsed.queue.filter(Boolean), current: safeCurrent }
+    return { queue: sanitizedQueue, current: safeCurrent }
   } catch {
     return null
   }
