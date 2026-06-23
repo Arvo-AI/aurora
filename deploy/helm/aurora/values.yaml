@@ -237,8 +237,15 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  # Increased from 2 workers / 4 threads (8 total) to 4 workers / 8 threads (32 total).
+  # Rationale: GKE OPTIMIZE_UTILIZATION autoscaler evicts weaviate-0 periodically.
+  # Weaviate-dependent requests block on TCP connection (5s timeout), consuming thread
+  # slots. With only 8 slots, a burst of Weaviate-blocked requests saturates the pool,
+  # leaving no capacity for the liveness probe at /health/liveness. Kubelet then sends
+  # SIGKILL after failureThreshold consecutive probe timeouts. 32 slots provides 4x
+  # headroom so Weaviate-blocked requests cannot starve the liveness probe.
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"

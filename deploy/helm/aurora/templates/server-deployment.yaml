@@ -94,7 +94,19 @@ spec:
               port: 5080
             periodSeconds: 20
             timeoutSeconds: 5
-            failureThreshold: 3
+            # Increased from 3 to 6 (60s -> 120s tolerance).
+            # Rationale: GKE OPTIMIZE_UTILIZATION autoscaler evicts weaviate-0 and
+            # memgraph-0 periodically (no PodDisruptionBudgets on those StatefulSets).
+            # During the rescheduling window (~60-90s), Weaviate-dependent requests
+            # block on TCP connection attempts (5s timeout), consuming gunicorn thread
+            # slots. With failureThreshold=3, kubelet sends SIGKILL after only 60s,
+            # which is shorter than the typical Weaviate rescheduling window. Raising
+            # to 6 gives 120s tolerance, allowing the pod to survive the eviction
+            # window without being killed. Combined with increased gunicorn capacity
+            # (GUNICORN_WORKERS=4, GUNICORN_THREADS=8 = 32 total slots), this
+            # eliminates the thread exhaustion -> liveness probe starvation -> SIGKILL
+            # kill chain that caused 11 firings of the slow requests alert.
+            failureThreshold: {{ .Values.server.livenessProbe.failureThreshold | default 6 }}
           resources:
             {{- toYaml .Values.resources.server | nindent 12 }}
       volumes:
