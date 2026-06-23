@@ -13,6 +13,7 @@ import { OrgSettings } from "@/components/OrgSettings";
 import { SecuritySettings } from "@/components/SecuritySettings";
 import { useUser, useAuth } from "@/hooks/useAuthHooks";
 import { isAdmin } from "@/lib/roles";
+import { PeriodSelector, type Period } from "@/app/monitor/components/charts";
 
 
 interface SettingsModalProps {
@@ -26,6 +27,7 @@ const UsageTab = React.lazy(() => import('@/app/monitor/components/usage-tab'));
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
+  const [usagePeriod, setUsagePeriod] = useState<Period>('30d');
   useUser();
   const { role } = useAuth();
 
@@ -145,10 +147,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         if (!isAdmin(role)) return null;
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
-            <h2 className="text-2xl font-bold mb-6 flex-shrink-0">Usage & Cost</h2>
+            <div className="flex items-center justify-between mb-6 flex-shrink-0">
+              <h2 className="text-2xl font-bold">Usage & Cost</h2>
+              <PeriodSelector value={usagePeriod} onChange={setUsagePeriod} />
+            </div>
             <div className="flex-1 overflow-y-auto min-h-0 pr-4">
               <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading...</div>}>
-                <UsageTab period="30d" />
+                <UsageTab period={usagePeriod} />
               </React.Suspense>
             </div>
           </div>
