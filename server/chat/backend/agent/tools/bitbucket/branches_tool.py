@@ -102,7 +102,7 @@ def bitbucket_branches(
                 return build_error_response("name (branch name) is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Delete branch '{name}' in {ws}/{repo}",
-                    "bitbucket_branches:delete_branch"):
+                    "bitbucket:delete_branch"):
                 return cancelled
             result = client.delete_branch(ws, repo, name)
             if err := forward_if_error(result):
