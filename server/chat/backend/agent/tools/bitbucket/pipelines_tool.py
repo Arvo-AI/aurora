@@ -111,7 +111,7 @@ def bitbucket_pipelines(
                 return build_error_response("target_branch is required")
             if cancelled := confirm_or_cancel(user_id,
                     f"Trigger pipeline on branch '{branch}' in {ws}/{repo}",
-                    "bitbucket_pipelines:trigger_pipeline"):
+                    "bitbucket:trigger_pipeline"):
                 return cancelled
             result = client.trigger_pipeline(ws, repo, branch, pattern=pattern, variables=variables)
             if err := forward_if_error(result):
@@ -127,7 +127,7 @@ def bitbucket_pipelines(
                 return build_error_response(err)
             if cancelled := confirm_or_cancel(user_id,
                     f"Stop pipeline {pipeline_uuid} in {ws}/{repo}",
-                    "bitbucket_pipelines:stop_pipeline"):
+                    "bitbucket:stop_pipeline"):
                 return cancelled
             result = client.stop_pipeline(ws, repo, pipeline_uuid)
             if err := forward_if_error(result):
