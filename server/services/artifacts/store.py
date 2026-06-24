@@ -70,8 +70,8 @@ def upsert_artifact_by_title(
     last_edited_by = "user" if source == "manual" else "agent"
 
     cursor.execute(
-        """INSERT INTO artifacts (org_id, user_id, title, content, last_edited_by, updated_at)
-           VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        """INSERT INTO artifacts (org_id, user_id, title, content, category, last_edited_by, updated_at)
+           VALUES (%s, %s, %s, %s, 'artifact', %s, CURRENT_TIMESTAMP)
            ON CONFLICT (org_id, title)
            DO UPDATE SET content = EXCLUDED.content,
                          user_id = EXCLUDED.user_id,

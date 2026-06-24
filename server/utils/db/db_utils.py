@@ -1264,6 +1264,8 @@ def initialize_tables():
                         user_id VARCHAR(255) NOT NULL,
                         title VARCHAR(500) NOT NULL,
                         content TEXT,
+                        category VARCHAR(50) NOT NULL,
+                        description TEXT,
                         last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
                         current_version_id UUID,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1271,6 +1273,7 @@ def initialize_tables():
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_org_category ON artifacts(org_id, category);
                 """,
                 "artifact_versions": """
                     CREATE TABLE IF NOT EXISTS artifact_versions (
@@ -3019,6 +3022,24 @@ def initialize_tables():
                     logging.info(f"De-duplicated {cursor.rowcount} organization name(s).")
             except Exception as e:
                 logging.warning(f"Error de-duplicating organization names: {e}")
+                conn.rollback()
+
+            # artifacts: add category + description columns for memory system
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS description TEXT;
+                """)
+                # Back-fill any rows missing a category
+                cursor.execute("""
+                    UPDATE artifacts SET category = 'artifact' WHERE category IS NULL OR category = '';
+                """)
+                # Now enforce NOT NULL
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
+                """)
+            except Exception as e:
+                logging.warning(f"Error adding memory columns to artifacts: {e}")
                 conn.rollback()
 
             conn.commit()

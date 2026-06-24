@@ -40,17 +40,11 @@ x-common-env: &common-env
   # Terraform
   TF_CLI_CONFIG_FILE: /etc/terraform-airgapped.rc
 
-  # Weaviate
-  WEAVIATE_HOST: ${WEAVIATE_HOST}
-  WEAVIATE_PORT: ${WEAVIATE_PORT}
-  WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT}
-
   # SSL/TLS for external services
   POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
   POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
   REDIS_SSL_CA_CERTS: ${REDIS_SSL_CA_CERTS:-}
   REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
-  WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
   SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-false}
 
   # AWS base credentials for role assumption
@@ -234,8 +228,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      weaviate:
-        condition: service_healthy
       redis:
         condition: service_started
       vault:
@@ -405,8 +397,6 @@ services:
       TERMINAL_IMAGE: ${TERMINAL_IMAGE}
       TERMINAL_POD_TTL: ${TERMINAL_POD_TTL}
     depends_on:
-      weaviate:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       vault:
@@ -432,47 +422,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
-    pull_policy: never
-    container_name: weaviate
-    logging: *default-logging
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command:
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-      - --scheme
-      - http
-    ports:
-      - "8080:8080"
-      - "50051:50051"
-    volumes:
-      - weaviate_data:/var/lib/weaviate
-    restart: unless-stopped
-    environment:
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
-      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
-      ENABLE_API_BASED_MODULES: "true"
-      CLUSTER_HOSTNAME: "node1"
-      ENABLE_MODULES: "text2vec-transformers"
-      TRANSFORMERS_INFERENCE_API: "http://t2v-transformers:8080"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "-q",
-          "--spider",
-          "http://localhost:8080/v1/.well-known/ready",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
   aurora-mcp:
     image: aurora_mcp:latest
@@ -686,7 +635,6 @@ services:
 
 volumes:
   postgres-data:
-  weaviate_data:
   terraform-workdir:
   seaweedfs_master_data:
   seaweedfs_volume_data:

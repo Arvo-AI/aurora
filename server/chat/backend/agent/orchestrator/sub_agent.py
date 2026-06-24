@@ -525,7 +525,6 @@ async def _run(input_dict: dict) -> FindingRef:
     try:
         from chat.backend.agent.agent import Agent
         from chat.backend.agent.db import PostgreSQLClient
-        from chat.backend.agent.weaviate_client import WeaviateClient
         from chat.backend.agent.utils.state import State
         from langchain_core.messages import HumanMessage
 
@@ -549,10 +548,8 @@ async def _run(input_dict: dict) -> FindingRef:
         )
 
         postgres_client = PostgreSQLClient()
-        weaviate_client = WeaviateClient(postgres_client)
         try:
             agent = Agent(
-                weaviate_client=weaviate_client,
                 postgres_client=postgres_client,
             )
             if tool_capture is not None:
@@ -567,10 +564,6 @@ async def _run(input_dict: dict) -> FindingRef:
 
             logger.info("sub_agent: agent completed for agent=%s incident=%s", inp.agent_id, inc_hash)
         finally:
-            try:
-                weaviate_client.close()
-            except Exception:
-                logger.exception("sub_agent: failed to close weaviate_client for agent=%s", inp.agent_id)
             try:
                 postgres_client.close()
             except Exception:

@@ -472,9 +472,9 @@ from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
 import routes.opsgenie.tasks  # noqa: F401
 app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
 
-# --- Knowledge Base Routes ---
-from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
-app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
+# --- Memory Routes ---
+from routes.memory import memory_bp  # noqa: F401
+app.register_blueprint(memory_bp, url_prefix="/api/memory")
 
 
 # --- Confluence Integration Routes ---

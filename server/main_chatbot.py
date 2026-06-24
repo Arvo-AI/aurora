@@ -42,7 +42,6 @@ from chat.backend.agent.agent import Agent
 from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.workflow import Workflow
-from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
 from utils.db.connection_pool import db_pool
@@ -944,7 +943,6 @@ async def handle_connection(websocket) -> None:
         await websocket.close(code=1008, reason="Missing or invalid authentication token")
         return
 
-    weaviate_client = None
     deployment_listener_task = None
     current_user_id = token_user_id
     session_id = None       # Initialize to avoid UnboundLocalError in exception handler
@@ -953,8 +951,6 @@ async def handle_connection(websocket) -> None:
     
     try:
         postgres_client = PostgreSQLClient()
-        weaviate_client = WeaviateClient(postgres_client)
-        # Note: Agent will be created with websocket_sender in the message processing loop
         agent = None
         wf = None 
     except Exception as e: 
@@ -967,10 +963,6 @@ async def handle_connection(websocket) -> None:
                 "session_id": session_id,
             }
         }))
-        # Close the connection to weaviate if opened
-        logger.debug(f"weaviate client is {weaviate_client}")
-        if weaviate_client:
-            weaviate_client.close()
         return
 
     # Send ready status to client
@@ -1489,7 +1481,7 @@ async def handle_connection(websocket) -> None:
 
             # Create agent and workflow with websocket sender if not already created
             if agent is None:
-                agent = Agent(weaviate_client=weaviate_client, postgres_client=postgres_client, websocket_sender=websocket_sender, event_loop=asyncio.get_event_loop())
+                agent = Agent(postgres_client=postgres_client, websocket_sender=websocket_sender, event_loop=asyncio.get_event_loop())
                 logger.info(f"Created agent with websocket sender")
             
             # Hook: check if LLM call is allowed
@@ -1642,9 +1634,6 @@ async def handle_connection(websocket) -> None:
                 await deployment_listener_task
             except asyncio.CancelledError:
                 pass
-        
-        if weaviate_client:
-            weaviate_client.close()
 
 async def main():
     """Start the WebSocket server and health check endpoint."""
