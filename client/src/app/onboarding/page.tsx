@@ -81,6 +81,8 @@ export default function OnboardingPage() {
   ]
   const alertingConnectors = [
     ...connectorRegistry.getByCategory("Incident Management"),
+  ]
+  const communicationConnectors = [
     ...connectorRegistry.getByCategory("Communication"),
   ]
   const devConnectors = [
@@ -132,7 +134,36 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Step 1: Monitoring */}
+          {/* Step 1: Alerting Platforms */}
+          <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
+            <div className="w-full max-w-[640px] space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-white">
+                  Which alerting platforms should trigger Aurora?
+                </h2>
+                <p className="text-sm text-[#aaa] mt-1.5">
+                  These tools deliver webhooks to Aurora when incidents occur. Aurora uses them to kick off root cause analysis automatically.
+                </p>
+                <div className="mt-3 rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-3">
+                  <p className="text-xs text-amber-300/90">
+                    Without at least one alerting platform connected, Aurora won&apos;t receive alerts and cannot perform automated root cause analysis.
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {alertingConnectors.map((c) => (
+                  <ConnectorTile
+                    key={c.id}
+                    connector={c}
+                    selected={state.selections.alerting.includes(c.id)}
+                    onToggle={() => toggle("alerting", c.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Step 2: Monitoring */}
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-6">
               <div>
@@ -156,7 +187,7 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Step 2: Infrastructure */}
+          {/* Step 3: Infrastructure */}
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-6">
               <div>
@@ -180,31 +211,31 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Step 3: Alerting and Communication */}
+          {/* Step 4: Communication Channels */}
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-6">
               <div>
                 <h2 className="text-xl font-semibold text-white">
-                  Where do your alerts and team notifications go?
+                  Where should Aurora send updates during incidents?
                 </h2>
                 <p className="text-sm text-[#aaa] mt-1.5">
-                  Aurora can receive alerts from your incident management tools and send updates to your team&apos;s communication channels.
+                  Communication channels let Aurora post status updates, RCA findings, and notifications to your team in real time.
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {alertingConnectors.map((c) => (
+                {communicationConnectors.map((c) => (
                   <ConnectorTile
                     key={c.id}
                     connector={c}
-                    selected={state.selections.alerting.includes(c.id)}
-                    onToggle={() => toggle("alerting", c.id)}
+                    selected={state.selections.communication.includes(c.id)}
+                    onToggle={() => toggle("communication", c.id)}
                   />
                 ))}
               </div>
             </div>
           </div>
 
-          {/* Step 4: Development and CI/CD */}
+          {/* Step 5: Development and CI/CD */}
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-6">
               <div>
@@ -228,7 +259,7 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Step 5: Book a Meeting */}
+          {/* Step 6: Book a Meeting */}
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-6">
               <div>
@@ -248,10 +279,13 @@ export default function OnboardingPage() {
               >
                 Book a meeting &rarr;
               </a>
+              <p className="text-xs text-[#666]">
+                No pressure — this is completely optional.
+              </p>
             </div>
           </div>
 
-          {/* Step 6: Review and Connect */}
+          {/* Step 7: Review and Connect */}
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-6">
               <div>

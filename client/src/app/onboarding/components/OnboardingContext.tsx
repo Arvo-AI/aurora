@@ -15,6 +15,7 @@ export interface OnboardingState {
     monitoring: string[]
     infrastructure: string[]
     alerting: string[]
+    communication: string[]
     development: string[]
   }
 }
@@ -31,13 +32,14 @@ interface OnboardingContextValue {
 }
 
 const STORAGE_KEY = "aurora_onboarding_state"
-const TOTAL_STEPS = 7
+const TOTAL_STEPS = 8
 
 const defaultState: OnboardingState = {
   selections: {
     monitoring: [],
     infrastructure: [],
     alerting: [],
+    communication: [],
     development: [],
   },
 }
@@ -55,6 +57,7 @@ function normalizeState(input: unknown): OnboardingState {
       monitoring: asArray(s.monitoring),
       infrastructure: asArray(s.infrastructure),
       alerting: asArray(s.alerting),
+      communication: asArray(s.communication),
       development: asArray(s.development),
     },
   }
@@ -126,6 +129,7 @@ export function OnboardingProvider({ children }: Readonly<{ children: ReactNode 
       ...state.selections.monitoring,
       ...state.selections.infrastructure,
       ...state.selections.alerting,
+      ...state.selections.communication,
       ...state.selections.development,
     ]
   }, [state.selections])

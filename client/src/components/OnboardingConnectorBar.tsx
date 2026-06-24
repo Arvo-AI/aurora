@@ -85,6 +85,14 @@ function OnboardingConnectorBarInner() {
     }
   }
 
+  const handleBack = () => {
+    if (current > 0) {
+      const newState = { queue, current: current - 1 }
+      sessionStorage.setItem(ONBOARDING_QUEUE_KEY, JSON.stringify(newState))
+      globalThis.location.href = getConnectorUrl(queue[current - 1], queue, current - 1)
+    }
+  }
+
   const handleDismiss = () => {
     sessionStorage.removeItem(ONBOARDING_QUEUE_KEY)
     setState(null)
@@ -93,7 +101,7 @@ function OnboardingConnectorBarInner() {
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
       {expanded ? (
-        <div className="bg-gray-900/95 backdrop-blur-md border border-white/10 rounded-xl px-5 py-3.5 shadow-2xl flex items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-2 duration-200">
+        <div className="bg-gray-900/95 backdrop-blur-md border border-white/10 rounded-xl px-5 py-2.5 shadow-2xl flex items-center gap-4 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden flex-shrink-0">
               <div
@@ -107,13 +115,24 @@ function OnboardingConnectorBarInner() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {current > 0 && (
+              <button
+                onClick={handleBack}
+                className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5"
+              >
+                Back
+              </button>
+            )}
             <button
               onClick={handleDismiss}
               className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5"
             >
               Skip All
             </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={handleNext}
               className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors"
