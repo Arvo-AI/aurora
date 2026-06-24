@@ -299,7 +299,7 @@ export default function OnboardingPage() {
       <div className="fixed bottom-0 inset-x-0 z-20">
         <div className="max-w-[640px] mx-auto px-6 py-5 flex flex-col gap-3 relative">
           {errorMessage && (
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
+            <div role="alert" aria-live="polite" className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
               <p className="text-sm text-red-400">{errorMessage}</p>
             </div>
           )}

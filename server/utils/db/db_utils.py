@@ -3007,7 +3007,7 @@ def initialize_tables():
                 conn.commit()
                 logging.info("Ensured onboarding_completed column exists on organizations table.")
             except Exception as e:
-                logging.warning(f"Error adding onboarding_completed to organizations: {e}")
+                logging.warning("Error adding onboarding_completed to organizations: %s", e)
                 conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)
