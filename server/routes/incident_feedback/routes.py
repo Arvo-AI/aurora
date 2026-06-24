@@ -11,7 +11,7 @@ from utils.auth.stateless_auth import (
     set_rls_context,
 )
 from utils.auth.rbac_decorators import require_permission, require_auth_only
-from routes.incident_feedback.weaviate_client import store_good_rca
+from routes.incident_feedback.learned_store import store_good_rca
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
