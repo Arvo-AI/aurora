@@ -81,8 +81,8 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   let command: string = tool.command || normalizedInput || defaultCliCommand
 
   // Special display names for specific tools
-  if (tool.tool_name === "knowledge_base_search") {
-    command = "Knowledge Base"
+  if (["list_memories", "read_memory", "write_memory"].includes(tool.tool_name ?? "")) {
+    command = "Memory"
   }
 
   if (tool.tool_name === "load_skill") {
