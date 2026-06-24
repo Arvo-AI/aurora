@@ -8,7 +8,7 @@ x-logging: &default-logging
 x-common-env: &common-env
   # Global
   AURORA_ENV: ${AURORA_ENV}
-  FLASK_ENV: ${FLASK_ENV:-development}
+  FLASK_ENV: ${FLASK_ENV:-production}
 
   # Database - unified credentials
   POSTGRES_USER: ${POSTGRES_USER}

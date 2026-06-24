@@ -7,7 +7,26 @@ import uuid
 import hmac
 import os
 from flask import Blueprint, request, jsonify
-from prometheus_client import Counter, Histogram
+try:
+    from prometheus_client import Counter, Histogram
+except ImportError:
+    logging.getLogger(__name__).warning(
+        "[SECURITY_HUB] prometheus_client not installed — metrics disabled"
+    )
+    class _NoOp:
+        """No-op stand-in for prometheus_client metric objects."""
+        def labels(self, **_kw): return self
+        def inc(self, *_a): pass
+        def time(self): 
+            import functools
+            def decorator(fn):
+                @functools.wraps(fn)
+                def wrapper(*a, **kw):
+                    return fn(*a, **kw)
+                return wrapper
+            return decorator
+    Counter = lambda *a, **kw: _NoOp()   # noqa: E731
+    Histogram = lambda *a, **kw: _NoOp() # noqa: E731
 from psycopg2.extras import RealDictCursor
 from utils.db.connection_pool import db_pool
 from .tasks import process_securityhub_finding
@@ -129,7 +148,7 @@ def get_findings(user_id):
                     """
                     SELECT finding_id, source, title, severity_label, 
                            payload, ai_summary, ai_risk_level, ai_suggested_fix,
-                           created_at, updated_at
+                           received_at, updated_at
                     FROM aws_security_findings
                     WHERE org_id = %s
                     ORDER BY updated_at DESC

@@ -1,9 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, DollarSign, HeartPulse, Timer, ShieldCheck, ShieldAlert } from 'lucide-react';
-import { Radar, DollarSign, HeartPulse, Timer, ShieldCheck, BookOpen } from 'lucide-react';
-import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen } from 'lucide-react';
+import { Radar, DollarSign, HeartPulse, Timer, ShieldCheck, ShieldAlert, BookOpen } from 'lucide-react';
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
 import SreTab from './components/sre-tab';

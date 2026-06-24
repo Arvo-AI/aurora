@@ -12,7 +12,7 @@ interface SecurityFinding {
   ai_summary: string;
   ai_risk_level: string;
   ai_suggested_fix: string;
-  created_at: string;
+  received_at: string;
   updated_at: string;
 }
 
