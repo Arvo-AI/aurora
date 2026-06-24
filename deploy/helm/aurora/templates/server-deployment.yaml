@@ -46,7 +46,7 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c"]
           args:
-            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads ${GUNICORN_THREADS:-4} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload
+            - gunicorn main_compute:app --bind 0.0.0.0:5080 -k gthread --threads ${GUNICORN_THREADS:-8} --workers ${GUNICORN_WORKERS:-4} --timeout 300 --preload
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "server" "global" $ "defaults" (dict)) | nindent 12 }}
           ports:
@@ -94,7 +94,11 @@ spec:
               port: 5080
             periodSeconds: 20
             timeoutSeconds: 5
-            failureThreshold: 3
+            # Increased from 3 (60s) to 6 (120s) to survive weaviate-0 eviction
+            # during GKE OPTIMIZE_UTILIZATION node scale-downs (~60-90s rescheduling).
+            # With failureThreshold=3, kubelet sent SIGKILL before weaviate recovered,
+            # causing repeated pod restarts and >10 slow requests in 5 min.
+            failureThreshold: {{ .Values.server.livenessProbe.failureThreshold | default 6 }}
           resources:
             {{- toYaml .Values.resources.server | nindent 12 }}
       volumes:

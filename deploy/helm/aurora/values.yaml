@@ -237,8 +237,13 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  # Increased from 2 workers / 4 threads (8 slots) to 4 workers / 8 threads (32 slots).
+  # Prevents thread exhaustion when Weaviate-dependent routes block on TCP connection
+  # during GKE OPTIMIZE_UTILIZATION node scale-downs (weaviate-0 eviction ~60-90s).
+  # With 32 slots, even 20 simultaneous Weaviate-blocked requests leave 12 slots free
+  # for user-facing requests and the liveness probe.
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
