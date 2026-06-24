@@ -97,7 +97,7 @@ celery_app.conf.update(
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
-        'routes.knowledge_base.tasks',
+        'services.memory.migration_task',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
@@ -116,10 +116,6 @@ celery_app.conf.update(
         'cleanup-stale-background-chats': {
             'task': 'chat.background.cleanup_stale_sessions',
             'schedule': 300.0,  # Every 5 minutes
-        },
-        'cleanup-stale-kb-documents': {
-            'task': 'knowledge_base.cleanup_stale_documents',
-            'schedule': 180.0,  # Every 3 minutes
         },
         'run-full-discovery': {
             'task': 'services.discovery.tasks.run_full_discovery',

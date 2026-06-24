@@ -130,7 +130,7 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     # Integration-specific guidance (Splunk, Datadog, GitHub, Jira, etc.)
     # now loaded from skill files above via SkillRegistry.load_skills_for_rca().
 
-    _append_background_segment(parts, "background_knowledge_base", leading_blank=True)
+    _append_background_segment(parts, "background_memory", leading_blank=True)
     _append_background_segment(parts, "background_vm_access", leading_blank=True)
     _append_background_segment(
         parts,

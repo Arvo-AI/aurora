@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from .background import build_background_mode_segment
 from .context_fetchers import (
-    build_knowledge_base_memory_segment,
+    build_memory_segment,
     build_manual_vm_access_segment,
 )
 from .provider_rules import (
@@ -62,7 +62,7 @@ def build_system_invariant(is_background: bool = False) -> str:
     return load_core_prompt(core_dir, segments=[
         "identity",
         "security",
-        "knowledge_base",
+        "memory",
         "tool_selection",
         "ssh_access",
         "cloud_access",
@@ -126,10 +126,10 @@ def build_prompt_segments(
         except Exception as e:
             logging.warning(f"Failed to build skills index: {e}")
 
-    # Build knowledge base memory context for authenticated users
-    knowledge_base_memory = ""
+    # Build memory index for authenticated users
+    memory_context = ""
     if state and hasattr(state, 'user_id'):
-        knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
+        memory_context = build_memory_segment(state.user_id)
 
     # Build org-level command policy segment
     security_policy = ""
@@ -160,7 +160,7 @@ def build_prompt_segments(
         failure_recovery=failure_recovery,
         background_mode=background_mode,
         manual_vm_access=manual_vm_access,
-        knowledge_base_memory=knowledge_base_memory,
+        knowledge_base_memory=memory_context,
         integration_index=integration_index,
         security_policy=security_policy,
         is_rca_background=is_background and not is_action,
