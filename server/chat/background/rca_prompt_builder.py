@@ -112,7 +112,7 @@ def _get_similar_good_rcas_context(
         return ""
 
     try:
-        from routes.incident_feedback.weaviate_client import search_similar_good_rcas
+        from routes.incident_feedback.learned_store import search_similar_good_rcas
 
         # Search for similar incidents with positive feedback
         matches = search_similar_good_rcas(
