@@ -4,7 +4,7 @@ Onboarding routes for connector selection and setup flow.
 import logging
 from flask import Blueprint, request, jsonify
 from werkzeug.exceptions import BadRequest
-from utils.auth.rbac_decorators import require_permission
+from utils.auth.rbac_decorators import require_auth_only
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ onboarding_bp = Blueprint('onboarding', __name__)
 
 
 @onboarding_bp.route('/complete', methods=['POST'])
-@require_permission("connectors", "write")
+@require_auth_only
 def complete_onboarding(user_id):
     """Save connector selections and mark onboarding complete."""
     try:

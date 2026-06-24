@@ -20,9 +20,11 @@ export default function OnboardingPage() {
     getSelectedConnectors,
   } = useOnboarding()
   const [isFinishing, setIsFinishing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState("")
 
   const handleFinish = async (skip = false) => {
     setIsFinishing(true)
+    setErrorMessage("")
     const selectedIds = skip ? [] : getSelectedConnectors()
     const controller = new AbortController()
     const timeoutId = globalThis.setTimeout(() => controller.abort(), 15_000)
@@ -38,6 +40,11 @@ export default function OnboardingPage() {
       }
     } catch (e) {
       console.error("Finish onboarding error:", e)
+      setErrorMessage(
+        e instanceof Error && e.name === "AbortError"
+          ? "Request timed out. Please try again."
+          : "Something went wrong. Please try again."
+      )
       setIsFinishing(false)
       return
     } finally {
@@ -290,7 +297,13 @@ export default function OnboardingPage() {
 
       {/* Fixed bottom nav */}
       <div className="fixed bottom-0 inset-x-0 z-20">
-        <div className="max-w-[640px] mx-auto px-6 py-5 flex items-center justify-between relative">
+        <div className="max-w-[640px] mx-auto px-6 py-5 flex flex-col gap-3 relative">
+          {errorMessage && (
+            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
+              <p className="text-sm text-red-400">{errorMessage}</p>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
           <div>
             {step > 0 && (
               <button
@@ -329,6 +342,7 @@ export default function OnboardingPage() {
                 {finishButtonLabel}
               </button>
             )}
+          </div>
           </div>
         </div>
       </div>
