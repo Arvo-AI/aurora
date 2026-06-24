@@ -279,9 +279,11 @@ PARAGRAPH 1 — What Happened:
 State what occurred, when, and what was affected, using only facts present in the provided sections. Report as known facts, not as an investigation log.
 
 PARAGRAPH 2 — Root Cause:
-- If the numbered evidence clearly supports a specific root cause, state it and cite the supporting evidence with numeric markers like [3], [7].
+- If the investigator notes classify the finding as CONFIRMED: state the root cause confidently and cite the supporting evidence with numeric markers like [3], [7].
   Example: "The root cause was a ConfigMap change that increased BATCH_SIZE from 1000 to 10000 [7], causing memory usage to exceed the 128Mi limit [9, 11]."
-- Otherwise the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
+- If the investigator notes classify the finding as LIKELY: begin with "The most likely cause is..." or "Evidence suggests..." and present as hypothesis, NOT as confirmed fact. Include what could not be verified.
+  Example: "The most likely cause is a stale client bundle sending requests to deprecated Server Action IDs after the 12:59 UTC deployment [7, 11], though direct confirmation that users are currently unable to log in was not obtained during the investigation."
+- If the investigator notes classify the finding as INCONCLUSIVE, or indicate the investigation was inconclusive: the paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. Do not invent a cause to fill the paragraph.
 
 PARAGRAPH 3 (if significant) — Impact & Timeline:
 Only the scope and timeline actually present in the alert or evidence.
@@ -292,6 +294,7 @@ ANTI-HALLUCINATION RULES (non-negotiable):
 - Never fabricate a [n] citation — every marker MUST reference a real numbered evidence row above.
 - Treat purely temporal correlations as correlations, not causations.
 - If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+- If the investigator notes classify the finding as LIKELY, do NOT state the root cause as confirmed fact. Use hedged language ("most likely", "evidence suggests") and note what remains unverified.
 
 CITATION RULES (non-negotiable):
 - ONLY cite numbered evidence items using their numeric index: [1], [3, 5], [7].
@@ -326,13 +329,14 @@ ALERT INFORMATION:
 INVESTIGATION TRANSCRIPT (chat log):
 {transcript}
 
-Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known.
+Write a concise 2–3 paragraph summary covering what triggered the alert, the severity and observed impact (only if explicitly present), the affected service, and the best-known root cause. If the root cause is not explicit or the investigator notes classify it as INCONCLUSIVE, the Root Cause paragraph MUST begin with "Root cause undetermined." and describe what is and isn't known. If classified as LIKELY, use hedged language ("most likely", "evidence suggests") and note what remains unverified.
 
 ANTI-HALLUCINATION RULES (non-negotiable):
 - Use only facts present in the provided sections — do not introduce services, hosts, configs, error messages, or metrics that aren't there.
 - Empty or missing output from a generic probe is NOT evidence of a specific failure mode.
 - Treat purely temporal correlations as correlations, not causations.
 - If the investigator notes indicate the investigation was inconclusive, the Root Cause paragraph MUST start with "Root cause undetermined."
+- If the investigator notes classify the finding as LIKELY, do NOT state the root cause as confirmed fact.
 
 Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
