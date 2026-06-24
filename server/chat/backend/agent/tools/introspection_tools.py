@@ -718,13 +718,15 @@ def incident_finding_detail(incident_id, agent_id, *, user_id, **_) -> dict:
         storage_uri, status, archived_history, originator_id = row
 
         # Prefer live steps; sub-agents in flight have no archived blob yet.
+        # Escape LIKE metacharacters — agent IDs may contain underscores
+        escaped_agent_id = agent_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         cur.execute(
             """SELECT tool_name, tool_input, LEFT(tool_output, %s) AS tool_output,
                       status, started_at, completed_at
                FROM execution_steps
                WHERE incident_id = %s AND session_id LIKE %s AND tool_name <> 'write_findings'
                ORDER BY step_index ASC LIMIT %s""",
-            (OUTPUT_EXCERPT_MAX_CHARS + 1, incident_id, f"%::{agent_id}", MAX_HISTORY_ENTRIES),
+            (OUTPUT_EXCERPT_MAX_CHARS + 1, incident_id, f"%::{escaped_agent_id}", MAX_HISTORY_ENTRIES),
         )
         step_rows = cur.fetchall()
 

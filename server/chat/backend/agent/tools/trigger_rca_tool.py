@@ -82,7 +82,7 @@ def trigger_rca(
         ):
             return json.dumps({
                 "error": "Cannot trigger RCA from within a background RCA session. "
-                "This tool is only available in interactive chat."
+                "Nested RCA is not supported — finish the current investigation first."
             })
     except Exception as e:
         logger.warning(f"[TriggerRCA] Could not check background state, allowing: {e}")

@@ -1030,8 +1030,9 @@ def get_cloud_tools():
     is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
+    _incident_id = getattr(state_context, 'incident_id', None) if state_context else None
     capture_tag = "capture" if tool_capture else "nocapture"
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
     
     current_time = time.time()
     if (
@@ -2313,7 +2314,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 bitbucket_fix, BitbucketFixArgs,
             )
 
-            _is_rca_background = getattr(state_context, 'is_background', False) if state_context else False
+            _is_rca_background = _is_background_rca(state_context, getattr(state_context, 'is_background', False)) if state_context else False
 
             if _is_rca_background:
                 _bb_tools = [
