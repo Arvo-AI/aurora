@@ -48,7 +48,6 @@ from .cloud_exec_tool import cloud_exec
 
 from .zip_file_tool import analyze_zip_file
 from .cloud_provider_utils import determine_target_provider_from_context
-from .rag_indexer_tool import rag_index_zip, RAGIndexZipArgs
 from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
 from .tailscale_ssh_tool import tailscale_ssh, is_tailscale_connected
@@ -1733,18 +1732,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         func=analyze_zip_file,
         name="analyze_zip_file",
         description="Analyze a ZIP attachment: list, extract a file, or detect project structure",
-    ))
-
-    # Add RAG indexer for ZIPs
-    tools.append(StructuredTool.from_function(
-        func=rag_index_zip,
-        name="rag_index_zip",
-        description=(
-            "Index code/text files from an uploaded ZIP into the RAG store (Weaviate). "
-            "Arguments: attachment_index (int)=0, max_files (int)=200, max_file_bytes (int)=750000, "
-            "include_patterns (list[str]) and exclude_dirs (list[str])."
-        ),
-        args_schema=RAGIndexZipArgs,
     ))
 
     # Add load_skill tool for on-demand integration guidance
