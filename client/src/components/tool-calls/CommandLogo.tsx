@@ -413,7 +413,8 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   }
 
   // Memory tools
-  if (tool === 'list_memories' || tool === 'read_memory' || tool === 'write_memory') {
+  if (tool === 'list_memories' || tool === 'read_memory' || tool === 'write_memory'
+      || tool === 'append_to_memory' || tool === 'edit_memory' || tool === 'grep_memories') {
     return 'knowledgeBase'
   }
 

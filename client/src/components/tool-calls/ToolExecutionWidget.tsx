@@ -81,7 +81,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   let command: string = tool.command || normalizedInput || defaultCliCommand
 
   // Special display names for specific tools
-  if (["list_memories", "read_memory", "write_memory"].includes(tool.tool_name ?? "")) {
+  if (["list_memories", "read_memory", "write_memory", "append_to_memory", "edit_memory", "grep_memories"].includes(tool.tool_name ?? "")) {
     command = "Memory"
   }
 
