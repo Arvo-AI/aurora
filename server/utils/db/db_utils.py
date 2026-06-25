@@ -3042,6 +3042,33 @@ def initialize_tables():
                 logging.warning(f"Error adding memory columns to artifacts: {e}")
                 conn.rollback()
 
+            # Auto-trigger memory migration if old KB tables still have data
+            try:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'knowledge_base_memory'
+                    )
+                """)
+                old_tables_exist = cursor.fetchone()[0]
+
+                if old_tables_exist:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM knowledge_base_memory WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                    """)
+                    has_unmigrated_data = cursor.fetchone()[0]
+
+                    if has_unmigrated_data:
+                        from services.memory.migration_task import migrate_kb_to_memory
+                        migrate_kb_to_memory.delay()
+                        logging.info("Triggered automatic KB → memory migration task")
+            except Exception as e:
+                logging.warning(f"Error checking/triggering memory migration: {e}")
+                conn.rollback()
+
             conn.commit()
             logging.info("Database tables initialized successfully.")
             cursor.close()
