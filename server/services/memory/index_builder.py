@@ -1,20 +1,19 @@
 """
 Memory Index Builder
 
-Generates the MEMORY_INDEX content from all memory-category artifacts.
-Injected into the agent's system prompt so it knows what org knowledge exists
-and can call read_memory() to load specific topics on demand.
+Generates the memory index for injection into the agent's system prompt.
+Lists all memory entries with title + description so the agent knows what
+org knowledge exists and can call read_memory() to load specific topics.
 
-SCALING: Truncation here is a non-critical safeguard. In practice, the
-relevance-ranking agent reads all entries and selects the top N
-to inject, so the raw index size barely matters. Additionally, the
-consolidation mechanism keeps memory lean by merging redundant entries.
-Long-term, we can move to a directory-style index (e.g. infrastructure/prod,
-infrastructure/staging) where the agent drills into relevant subdirectories.
+Future: A relevance-ranking agent will decide which memories to load fully
+into the prompt based on the current conversation context.
+
+SCALING: Truncation is a non-critical safeguard. The relevance-ranking agent
+reads all entries and selects the top N, and the consolidation mechanism keeps
+memory lean. Long-term, we can move to a directory-style index.
 """
 
 import logging
-from typing import Optional
 
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -27,15 +26,13 @@ MAX_INDEX_LINES = 200
 MAX_INDEX_BYTES = 25000
 
 
-def build_memory_index(user_id: str, org_id: Optional[str] = None) -> str:
-    """Build the memory index string for injection into the system prompt.
+def build_memory_index(user_id: str) -> str:
+    """Build a table-of-contents index of all org memory entries.
 
-    Queries all memory-category artifacts for the org and formats them as a
-    compact table of contents the agent can reference with read_memory().
+    Returns a formatted string listing every entry by category with its
+    description. The agent uses this to discover what knowledge exists and
+    calls read_memory() to load full content on demand.
     """
-    if not user_id:
-        return ""
-
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -45,6 +42,7 @@ def build_memory_index(user_id: str, org_id: Optional[str] = None) -> str:
                 if not resolved_org_id:
                     return ""
 
+                # Fetch all memory entries for this org (title + description only, no content)
                 cursor.execute(
                     """SELECT category, title, description, updated_at
                        FROM artifacts
@@ -57,39 +55,32 @@ def build_memory_index(user_id: str, org_id: Optional[str] = None) -> str:
         if not rows:
             return ""
 
-        lines = [
-            "ORG MEMORY — call read_memory(category, title) for full content:",
-            "",
-        ]
+        # Format as a grouped list: entries under category headers
+        lines = ["ORG MEMORY INDEX — use read_memory(category, title) for full content:\n"]
 
         current_category = None
         for category, title, description, updated_at in rows:
+            # Print a category header when we enter a new group
             if category != current_category:
                 count = sum(1 for r in rows if r[0] == category)
                 lines.append(f"## {category} ({count})")
                 current_category = category
 
+            # Each entry: path-style identifier + description as inline comment
             desc_suffix = f"  # {description}" if description else ""
-            lines.append(f"- read_memory('{category}', '{title}'){desc_suffix}")
-
-        lines.append("")
-        lines.append(
-            "Use read_memory() to load full content when investigating relevant topics."
-        )
+            lines.append(f"- {category}/{title}{desc_suffix}")
 
         result = "\n".join(lines)
 
-        # --- Budget enforcement (naive truncation — see module docstring for
-        # improvement paths). Log when truncation happens so we can track how
-        # often orgs hit this ceiling and prioritize a smarter strategy. ---
+        # Enforce line budget — prevent the index from consuming too much prompt space
         truncated = False
-
         result_lines = result.split("\n")
         if len(result_lines) > MAX_INDEX_LINES:
             result = "\n".join(result_lines[:MAX_INDEX_LINES])
-            result += "\n... (index truncated, use list_memories() to see all)"
+            result += "\n... (index truncated — use list_memories() to see all)"
             truncated = True
 
+        # Enforce byte budget — safety net for orgs with many long titles/descriptions
         if len(result.encode("utf-8")) > MAX_INDEX_BYTES:
             while len(result.encode("utf-8")) > MAX_INDEX_BYTES and "\n" in result:
                 result = result.rsplit("\n", 1)[0]
@@ -98,15 +89,12 @@ def build_memory_index(user_id: str, org_id: Optional[str] = None) -> str:
 
         if truncated:
             logger.warning(
-                "[MemoryIndex] Index truncated for org %s: %d entries, %d lines, %d bytes. "
-                "Consider implementing tiered display or per-category limits.",
-                resolved_org_id, len(rows), len(result.split("\n")), len(result.encode("utf-8")),
+                "[MemoryIndex] Index truncated for org %s: %d entries",
+                resolved_org_id, len(rows),
             )
-        else:
-            logger.debug(
-                "[MemoryIndex] Built index for org %s: %d entries, %d bytes",
-                resolved_org_id, len(rows), len(result.encode("utf-8")),
-            )
+
+        # LangChain interprets {text} as template variables — escape them
+        result = result.replace("{", "{{").replace("}", "}}")
 
         return result
 
