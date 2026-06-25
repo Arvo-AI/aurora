@@ -1814,17 +1814,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         else:
             final_wm_func = notification_wrapped_wm
 
-        tools.append(StructuredTool.from_function(
-            func=final_wm_func,
-            name="write_memory",
-            description=(
-                "Create or overwrite an org memory entry (full content replacement). "
-                "Prefer append_to_memory for adding new info to existing entries, or "
-                "edit_memory for surgical changes. Use write_memory only for new entries "
-                "or when the entire content needs replacing."
-            ),
-            args_schema=WriteMemoryArgs,
-        ))
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_wm_func,
+                name="write_memory",
+                description=(
+                    "Create or overwrite an org memory entry (full content replacement). "
+                    "Prefer append_to_memory for adding new info to existing entries, or "
+                    "edit_memory for surgical changes. Use write_memory only for new entries "
+                    "or when the entire content needs replacing."
+                ),
+                args_schema=WriteMemoryArgs,
+            ))
 
         from chat.backend.agent.tools.memory_tool import (
             append_to_memory,
@@ -1842,16 +1843,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         else:
             final_am_func = notification_wrapped_am
 
-        tools.append(StructuredTool.from_function(
-            func=final_am_func,
-            name="append_to_memory",
-            description=(
-                "Append content to the end of an existing memory entry without rewriting it. "
-                "Creates the entry if it doesn't exist. Use for incrementally adding findings, "
-                "new sections, or updates to an existing document."
-            ),
-            args_schema=AppendToMemoryArgs,
-        ))
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_am_func,
+                name="append_to_memory",
+                description=(
+                    "Append content to the end of an existing memory entry without rewriting it. "
+                    "Creates the entry if it doesn't exist. Use for incrementally adding findings, "
+                    "new sections, or updates to an existing document."
+                ),
+                args_schema=AppendToMemoryArgs,
+            ))
 
         context_wrapped_em = with_user_context(edit_memory)
         notification_wrapped_em = with_completion_notification(context_wrapped_em)
@@ -1860,16 +1862,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         else:
             final_em_func = notification_wrapped_em
 
-        tools.append(StructuredTool.from_function(
-            func=final_em_func,
-            name="edit_memory",
-            description=(
-                "Find and replace specific text within a memory entry. Like sed — make surgical "
-                "edits without rewriting the whole entry. old_text must match exactly. "
-                "Read the entry first to see current content before editing."
-            ),
-            args_schema=EditMemoryArgs,
-        ))
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_em_func,
+                name="edit_memory",
+                description=(
+                    "Find and replace specific text within a memory entry. Like sed — make surgical "
+                    "edits without rewriting the whole entry. old_text must match exactly. "
+                    "Read the entry first to see current content before editing."
+                ),
+                args_schema=EditMemoryArgs,
+            ))
 
         context_wrapped_gm = with_user_context(grep_memories)
         notification_wrapped_gm = with_completion_notification(context_wrapped_gm)

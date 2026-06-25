@@ -81,7 +81,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         return result
 
 class Agent:
-    def __init__(self, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10):
+    def __init__(self, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10) -> None:
         self.llm_manager = LLMManager()
         self.postgres_client = postgres_client
         self.ctx_len = ctx_len

@@ -34,8 +34,9 @@ def _append_segment(
     if context:
         try:
             content = resolve_template(content, context)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to render segment '%s': %s", segment_name, e)
+            return
 
     if leading_blank:
         parts.append("")

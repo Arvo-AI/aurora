@@ -74,7 +74,7 @@ for understanding the production system.
 
 ## YOUR DELIVERABLE
 
-At the END of your investigation, you MUST call save_infrastructure_context() with a single
+At the END of your investigation, you MUST call write_memory(category='infrastructure', title='Infrastructure Context', ...) with a single
 document that covers:
 - All environments (for example production, staging, dev are common) and how they relate
 - Services in each environment, their dependencies, and how they communicate

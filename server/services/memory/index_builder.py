@@ -58,6 +58,9 @@ def build_memory_index(user_id: str) -> str:
         # Format as a grouped list: entries under category headers
         lines = ["ORG MEMORY INDEX — use read_memory(category, title) for full content:\n"]
 
+        def _prompt_label(value: object, max_chars: int = 500) -> str:
+            return " ".join(str(value or "").split())[:max_chars]
+
         current_category = None
         for category, title, description, updated_at in rows:
             # Print a category header when we enter a new group
@@ -67,8 +70,10 @@ def build_memory_index(user_id: str) -> str:
                 current_category = category
 
             # Each entry: path-style identifier + description as inline comment
-            desc_suffix = f"  # {description}" if description else ""
-            lines.append(f"- {category}/{title}{desc_suffix}")
+            safe_title = _prompt_label(title)
+            safe_desc = _prompt_label(description)
+            desc_suffix = f"  # {safe_desc}" if safe_desc else ""
+            lines.append(f"- {category}/{safe_title}{desc_suffix}")
 
         result = "\n".join(lines)
 

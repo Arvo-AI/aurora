@@ -126,8 +126,13 @@ def build_prompt_segments(
 
     # Build memory index for authenticated users
     memory_context = ""
-    if state and hasattr(state, 'user_id'):
-        memory_context = build_memory_index(state.user_id)
+    user_id = getattr(state, "user_id", None) if state else None
+    if user_id:
+        try:
+            memory_context = build_memory_index(user_id) or ""
+        except Exception:
+            logging.exception("Failed to build memory index for prompt")
+            memory_context = ""
 
     # Build org-level command policy segment
     security_policy = ""

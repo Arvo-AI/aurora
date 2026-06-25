@@ -91,7 +91,7 @@ async def _do_read_memory(api_call: ApiCall, entry_id: str) -> Dict[str, Any]:
 
 
 async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict[str, Any]:
-    mem_call = api_call("GET", f"/api/memory/entries?category=runbook")
+    mem_call = api_call("GET", "/api/memory/entries?category=runbook")
     sp_call = api_call("POST", "/sharepoint/search",
                        body={"query": query, "maxResults": limit})
     mem_res, sp_res = await asyncio.gather(mem_call, sp_call, return_exceptions=True)

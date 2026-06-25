@@ -3035,15 +3035,25 @@ def initialize_tables():
                 old_tables_exist = cursor.fetchone()[0]
 
                 if old_tables_exist:
+                    # Only migrate if there are source rows AND no artifacts yet
                     cursor.execute("""
                         SELECT EXISTS (
                             SELECT 1 FROM knowledge_base_memory WHERE content IS NOT NULL AND content != ''
                             LIMIT 1
                         )
                     """)
-                    has_unmigrated_data = cursor.fetchone()[0]
+                    has_source_data = cursor.fetchone()[0]
 
-                    if has_unmigrated_data:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM artifacts
+                            WHERE category IN ('context', 'infrastructure', 'runbook')
+                            LIMIT 1
+                        )
+                    """)
+                    already_migrated = cursor.fetchone()[0]
+
+                    if has_source_data and not already_migrated:
                         from services.memory.migration_task import migrate_kb_to_memory
                         migrate_kb_to_memory.delay()
                         logging.info("Triggered automatic KB → memory migration task")

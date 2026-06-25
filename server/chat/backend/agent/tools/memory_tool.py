@@ -15,7 +15,7 @@ from contextlib import contextmanager
 
 from pydantic import BaseModel, Field
 
-from services.memory import MEMORY_CATEGORIES
+from services.memory import MEMORY_CATEGORIES, ALL_CATEGORIES
 from services.artifacts.store import create_version
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -23,6 +23,7 @@ from utils.auth.stateless_auth import set_rls_context
 logger = logging.getLogger(__name__)
 
 _MAX_CONTENT = 100000
+_CATEGORY_HELP = ", ".join(sorted(MEMORY_CATEGORIES))
 _MAX_TITLE = 500
 _GREP_MAX_RESULTS = 10
 _GREP_SNIPPET_CHARS = 200
@@ -57,9 +58,9 @@ def _validate_category(category: str, allow_empty: bool = False) -> str | None:
     """Validate category, return error JSON string if invalid, None if OK."""
     if allow_empty and not category:
         return None
-    if not category or category not in MEMORY_CATEGORIES:
+    if not category or category not in ALL_CATEGORIES:
         return json.dumps({
-            "error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"
+            "error": f"Invalid category. Must be one of: {', '.join(ALL_CATEGORIES)}"
         })
     return None
 
@@ -89,7 +90,7 @@ class ListMemoriesArgs(BaseModel):
     category: str = Field(
         default="",
         description=(
-            "Filter by category: context, runbook, infrastructure, learned, postmortem, artifact. "
+            f"Filter by category: {_CATEGORY_HELP}. "
             "Leave empty to list all memory entries."
         ),
     )
@@ -144,7 +145,7 @@ def list_memories(category: str = "", user_id: str | None = None, **kwargs) -> s
 
 
 class ReadMemoryArgs(BaseModel):
-    category: str = Field(description="The memory category (context, runbook, infrastructure, learned, postmortem, artifact)")
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
     title: str = Field(description="The exact title of the memory entry to read")
 
 
@@ -194,7 +195,7 @@ def read_memory(category: str, title: str, user_id: str | None = None, **kwargs)
 
 
 class WriteMemoryArgs(BaseModel):
-    category: str = Field(description="The memory category (context, runbook, infrastructure, learned, postmortem)")
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
     title: str = Field(description="Short descriptive title for this memory entry")
     content: str = Field(description="The full markdown content of the memory entry")
     description: str = Field(
@@ -268,7 +269,7 @@ def write_memory(
 
 
 class AppendToMemoryArgs(BaseModel):
-    category: str = Field(description="The memory category (context, runbook, infrastructure, learned, postmortem)")
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
     title: str = Field(description="The exact title of the memory entry to append to")
     content: str = Field(description="Content to append at the end of the existing entry")
 
@@ -293,7 +294,8 @@ def append_to_memory(
         with _memory_connection(user_id, "append") as (cursor, conn, org_id):
             cursor.execute(
                 """SELECT id, content FROM artifacts
-                   WHERE org_id = %s AND category = %s AND title = %s""",
+                   WHERE org_id = %s AND category = %s AND title = %s
+                   FOR UPDATE""",
                 (org_id, category, title.strip()),
             )
             row = cursor.fetchone()
@@ -380,7 +382,8 @@ def edit_memory(
         with _memory_connection(user_id, "edit") as (cursor, conn, org_id):
             cursor.execute(
                 """SELECT id, content FROM artifacts
-                   WHERE org_id = %s AND category = %s AND title = %s""",
+                   WHERE org_id = %s AND category = %s AND title = %s
+                   FOR UPDATE""",
                 (org_id, category, title.strip()),
             )
             row = cursor.fetchone()
@@ -464,6 +467,7 @@ def grep_memories(
             # Use PostgreSQL regex (~* = case-insensitive regex match)
             # Fall back to ILIKE if the pattern is invalid regex
             try:
+                cursor.execute("SAVEPOINT regex_attempt")
                 if category:
                     cursor.execute(
                         """SELECT title, category, content FROM artifacts
@@ -483,9 +487,10 @@ def grep_memories(
                         (org_id, list(MEMORY_CATEGORIES), search_pattern, _GREP_MAX_RESULTS),
                     )
                 rows = cursor.fetchall()
+                cursor.execute("RELEASE SAVEPOINT regex_attempt")
             except Exception as regex_err:
-                # Invalid regex — fall back to literal substring match
-                conn.rollback()
+                # Invalid regex — roll back only the failed statement, preserving RLS context
+                cursor.execute("ROLLBACK TO SAVEPOINT regex_attempt")
                 logger.debug(f"[MemoryTool:grep] Regex failed, falling back to ILIKE: {regex_err}")
                 if category:
                     cursor.execute(

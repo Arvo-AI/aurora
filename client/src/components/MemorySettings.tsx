@@ -331,17 +331,18 @@ export function MemorySettings() {
             <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Title</label>
+                  <label htmlFor="memory-title" className="text-sm font-medium">Title</label>
                   <Input
+                    id="memory-title"
                     value={newTitle}
                     onChange={(e) => setNewTitle(e.target.value)}
                     placeholder="e.g. Production Runbook"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Category</label>
+                  <label htmlFor="memory-category" className="text-sm font-medium">Category</label>
                   <Select value={newCategory} onValueChange={(v) => setNewCategory(v as MemoryCategory)}>
-                    <SelectTrigger>
+                    <SelectTrigger id="memory-category">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -355,16 +356,18 @@ export function MemorySettings() {
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium">Description (optional)</label>
+                <label htmlFor="memory-description" className="text-sm font-medium">Description (optional)</label>
                 <Input
+                  id="memory-description"
                   value={newDescription}
                   onChange={(e) => setNewDescription(e.target.value)}
                   placeholder="Brief summary of what this contains"
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium">Content (Markdown)</label>
+                <label htmlFor="memory-content" className="text-sm font-medium">Content (Markdown)</label>
                 <Textarea
+                  id="memory-content"
                   value={newContent}
                   onChange={(e) => setNewContent(e.target.value)}
                   placeholder="## Incident Response Runbook&#10;&#10;1. Check service health..."

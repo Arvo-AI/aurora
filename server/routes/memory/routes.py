@@ -15,6 +15,7 @@ from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.log_sanitizer import sanitize
 from services.memory import MEMORY_CATEGORIES
 from services.memory.splitter import split_content, make_part_title, make_part_description
 from services.artifacts.store import create_version
@@ -288,7 +289,7 @@ def upload_file(user_id):
             conn.commit()
 
         logger.info(
-            f"[Memory] Uploaded {file.filename} as {category}/{base_title} "
+            f"[Memory] Uploaded {sanitize(file.filename)} as {category}/{sanitize(base_title)} "
             f"({total_parts} part{'s' if total_parts > 1 else ''}) for org {org_id}"
         )
         return jsonify({"entries": created_entries, "parts": total_parts}), 201

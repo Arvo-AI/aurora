@@ -32,7 +32,13 @@ def split_content(content: str, max_size: int = MAX_PART_SIZE) -> list[str]:
         para_size = len(paragraph) + 2  # +2 for the \n\n separator
 
         # If a single paragraph exceeds max_size, force-split it at line boundaries
-        if para_size > max_size and not current_part:
+        if para_size > max_size:
+            # Flush any buffered content first
+            if current_part:
+                parts.append("\n\n".join(current_part))
+                current_part = []
+                current_size = 0
+
             lines = paragraph.split("\n")
             for line in lines:
                 if current_size + len(line) + 1 > max_size and current_part:
