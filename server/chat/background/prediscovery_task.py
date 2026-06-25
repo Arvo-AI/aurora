@@ -155,9 +155,12 @@ GOOD example:
 
 ## BEGIN EXPLORATION
 
-Investigate all connected integrations. Build toward the consolidated document.
-Call save_discovery_finding() as you go. Once your investigation is complete, call
-save_infrastructure_context() with the full synthesized document."""
+IMPORTANT: Before investigating, use list_memories(category='infrastructure') to see what is already
+documented. READ existing entries to understand what you already know. Then investigate and ONLY save
+genuinely new or changed information.
+
+For new topics, use write_memory(). For adding findings to an existing entry, use append_to_memory().
+For correcting outdated details, use edit_memory(). Do not rewrite unchanged content."""
 
 
 @celery_app.task(
