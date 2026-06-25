@@ -237,8 +237,8 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
@@ -294,7 +294,7 @@ config:
   #   - K8s API tokens mounted on server/chatbot pods
   # Optional additional hardening (manual):
   #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
-  #   - Taint nodes for untrusted workloads (set USE_UNTRUSTED_NODES)
+  #   - Taint nodes for dedicated untrusted workloads (set USE_UNTRUSTED_NODES)
   TERMINAL_NAMESPACE: "untrusted"            # Namespace for isolated terminal pods
   TERMINAL_IMAGE: ""                         # Image for terminal pods (defaults to aurora-server)
   TERMINAL_POD_TTL: "3600"                   # Terminal pod lifetime in seconds
