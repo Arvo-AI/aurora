@@ -145,8 +145,8 @@ function AuthPage() {
       {/* Aurora shader behind both panels */}
       <div className="absolute inset-0 overflow-hidden">
         <AuroraShader className="absolute inset-0 w-full h-full blur-[8px]" />
-        <div className="absolute inset-0 bg-black/55" />
-        <div className="absolute inset-0" style={{ background: 'linear-gradient(to bottom, transparent 0%, transparent 25%, rgba(0,0,0,0.5) 55%, rgba(0,0,0,0.85) 100%)' }} />
+        <div className="absolute inset-0 bg-black/30" />
+        <div className="absolute inset-0" style={{ background: 'linear-gradient(to bottom, transparent 0%, transparent 35%, rgba(0,0,0,0.35) 65%, rgba(0,0,0,0.7) 100%)' }} />
       </div>
 
       {/* Left panel - branding */}

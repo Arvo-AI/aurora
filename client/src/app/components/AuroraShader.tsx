@@ -69,7 +69,7 @@ vec4 aurora(vec3 ro, vec3 rd) {
     }
 
     col *= clamp(rd.y * 12.0 + 0.5, 0.0, 1.0);
-    return col * 1.85;
+    return col * 2.2;
 }
 
 vec3 starHash(vec3 p) {
