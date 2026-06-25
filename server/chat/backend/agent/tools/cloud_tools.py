@@ -1784,7 +1784,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             name="list_memories",
             description=(
                 "List org memory entries, optionally filtered by category "
-                "(context, runbook, infrastructure, learned, postmortem, artifact). "
                 "Use to discover available knowledge before reading specific entries."
             ),
             args_schema=ListMemoriesArgs,
