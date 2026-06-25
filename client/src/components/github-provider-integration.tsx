@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
-import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
+import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX, Info } from 'lucide-react';
 import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -1164,11 +1165,20 @@ export default function GitHubProviderIntegration() {
                       <p className="text-xs text-muted-foreground">{repo.metadata_summary.replace(/\*\*/g, '')}</p>
                     )}
                     {repo.installation_id != null && authConfig.incident_prevention_enabled && (
-                      <div
-                        className="flex items-center justify-between gap-2 pt-1"
-                        title="Incident Prevention — Aurora reviews PRs for incident risk"
-                      >
-                        <span className="text-xs text-muted-foreground">Incident Prevention</span>
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <TooltipProvider delayDuration={0}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                                Incident Prevention
+                                <Info className="h-3 w-3" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                              <p>Aurora reviews pull requests using knowledge of your infrastructure and connected services to flag changes that could cause production incidents.</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                         <Switch
                           checked={!!repo.change_gating_enabled}
                           disabled={gatingUpdating.has(repo.repo_full_name)}

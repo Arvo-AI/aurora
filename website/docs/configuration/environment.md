@@ -265,6 +265,7 @@ AGENT_RECURSION_LIMIT=240
 VERTEX_AI_PROJECT=my-gcp-project
 VERTEX_AI_LOCATION=global
 VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+LLM_PROVIDER_MODE=vertex   # route every model pick through Vertex
 ```
 
 ### Ollama (Local Models)

@@ -170,10 +170,17 @@ class Agent:
         return False
 
     def _get_github_username_for_user(self, user_id: str) -> str:
-        """Get GitHub username for ``user_id`` — primary App installation's account_login."""
+        """Get GitHub username for ``user_id`` — primary App installation's account_login.
+
+        Org-scoped so org members share the connection: an installation
+        linked by any org member resolves, with the user's own link
+        preferred for the returned account name.
+        """
         try:
             from utils.db.connection_pool import db_pool
+            from utils.auth.stateless_auth import get_org_id_for_user
 
+            org_id = get_org_id_for_user(user_id)
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -181,12 +188,13 @@ class Agent:
                              FROM user_github_installations ugi
                              JOIN github_installations gi
                                   ON gi.installation_id = ugi.installation_id
-                            WHERE ugi.user_id = %s
+                            WHERE (ugi.user_id = %s OR ugi.org_id = %s)
                               AND ugi.disconnected_at IS NULL
                               AND gi.suspended_at IS NULL
-                            ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
+                            ORDER BY (ugi.user_id = %s) DESC,
+                                     ugi.is_primary DESC, ugi.linked_at DESC
                             LIMIT 1""",
-                        (user_id,),
+                        (user_id, org_id, user_id),
                     )
                     row = cur.fetchone()
             if row:

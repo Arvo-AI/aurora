@@ -194,12 +194,13 @@ def get_connected_accounts(user_id, target_user_id):
                      FROM user_github_installations ugi
                      JOIN github_installations gi
                           ON gi.installation_id = ugi.installation_id
-                    WHERE ugi.user_id = %s
+                    WHERE (ugi.user_id = %s OR ugi.org_id = %s)
                       AND ugi.disconnected_at IS NULL
                       AND gi.suspended_at IS NULL
-                    ORDER BY gi.account_login
+                    ORDER BY (ugi.user_id = %s) DESC,
+                             ugi.is_primary DESC, ugi.linked_at DESC
                     LIMIT 1""",
-                (user_id,),
+                (user_id, org_id, user_id),
             )
             row = cursor.fetchone()
             if row:

@@ -2314,7 +2314,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 bitbucket_fix, BitbucketFixArgs,
             )
 
-            _is_rca_background = _is_background_rca(state_context, getattr(state_context, 'is_background', False)) if state_context else False
+            _is_rca_background = _is_background_rca(state_context, is_background)
 
             if _is_rca_background:
                 _bb_tools = [

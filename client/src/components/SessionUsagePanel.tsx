@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ChevronDown, Activity, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { SessionUsageState, RequestUsage } from "@/hooks/useSessionUsage";
+import { getEnv } from "@/lib/env";
 
 function formatCost(cost: number): string {
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
@@ -123,6 +124,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
   const [isExpanded, setIsExpanded] = useState(false);
   const { currentStreaming, sessionUsage: totals, requestHistory, wasCanceled } = sessionUsage;
   const thinkingMessage = useThinkingMessage();
+  const isDev = getEnv('AURORA_ENV') === 'dev';
 
   const { tokPerSec, trend } = useTokenRate(
     currentStreaming?.output_tokens ?? 0,
@@ -137,7 +139,7 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
 
   if (totals.request_count === 0 && !currentStreaming) {
     return (
-      <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-500">
+      <div className="flex items-center gap-2 px-2 py-2 text-sm text-zinc-400">
         <Activity className={`h-3.5 w-3.5 ${isSending ? "text-zinc-400 animate-pulse" : "text-zinc-600"}`} />
         {isSending && <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>}
       </div>
@@ -147,30 +149,38 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
   const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
   const trendColor = trend === "up" ? "text-emerald-400" : trend === "down" ? "text-amber-400" : "text-zinc-500";
 
+  const Wrapper = isDev ? "button" : "div";
+
   return (
     <div className="text-sm">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between px-2 py-2 hover:bg-zinc-800/50 rounded transition-colors"
+      <Wrapper
+        {...(isDev ? { type: "button", onClick: () => setIsExpanded(!isExpanded), "aria-expanded": isExpanded, "aria-controls": "session-usage-history" } : {})}
+        className={`w-full flex items-center justify-between px-2 py-2 rounded transition-colors ${isDev ? "hover:bg-zinc-800/50" : ""}`}
       >
         {/* Left: streaming indicator or idle */}
         <div className="flex items-center gap-2 text-zinc-400">
           {currentStreaming ? (
             <>
               <Activity className="h-3.5 w-3.5 text-yellow-400 animate-pulse" />
-              <span className="text-yellow-300 font-mono tabular-nums">{formatTokens(currentStreaming.output_tokens)}</span>
-              <span className="text-yellow-300/50 text-xs">chunks</span>
-              {tokPerSec > 0 && (
-                <span className={`inline-flex items-center gap-0.5 text-xs ${trendColor}`}>
-                  <TrendIcon className="h-3 w-3" />
-                  {Math.round(tokPerSec)}c/s
-                </span>
+              {isDev ? (
+                <>
+                  <span className="text-yellow-300 font-mono tabular-nums">{formatTokens(currentStreaming.output_tokens)}</span>
+                  <span className="text-yellow-300/50 text-xs">chunks</span>
+                  {tokPerSec > 0 && (
+                    <span className={`inline-flex items-center gap-0.5 text-xs ${trendColor}`}>
+                      <TrendIcon className="h-3 w-3" />
+                      {Math.round(tokPerSec)}c/s
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>
               )}
             </>
           ) : isSending ? (
             <>
               <Activity className="h-3.5 w-3.5 text-zinc-400 animate-pulse" />
-              <span className="text-zinc-400 text-xs transition-opacity duration-500">{thinkingMessage}</span>
+              <span className="text-zinc-400 transition-opacity duration-500">{thinkingMessage}</span>
             </>
           ) : (
             <>
@@ -180,33 +190,37 @@ export default function SessionUsagePanel({ sessionUsage, isSending }: SessionUs
           )}
         </div>
 
-        {/* Right: session totals */}
-        <div className="flex items-center gap-3 font-mono tabular-nums text-zinc-400">
-          <span>{formatTokens(totals.total_input_tokens + totals.total_output_tokens)} tok</span>
-          <span className="text-zinc-300">{formatCost(totals.total_cost)}</span>
-          <span className="text-zinc-500 text-xs">{totals.request_count} req</span>
-          <ChevronDown
-            className={`h-3.5 w-3.5 text-zinc-500 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
-          />
-        </div>
-      </button>
+        {/* Right: session totals (dev only) */}
+        {isDev && (
+          <div className="flex items-center gap-3 font-mono tabular-nums text-zinc-400">
+            <span>{formatTokens(totals.total_input_tokens + totals.total_output_tokens)} tok</span>
+            <span className="text-zinc-300">{formatCost(totals.total_cost)}</span>
+            <span className="text-zinc-500 text-xs">{totals.request_count} req</span>
+            <ChevronDown
+              className={`h-3.5 w-3.5 text-zinc-500 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+            />
+          </div>
+        )}
+      </Wrapper>
 
-      {/* Expandable: just the request history */}
-      <div className="collapsible-panel" data-open={isExpanded}>
-        <div>
-          <div className="px-2 pb-2 pt-1">
-            {requestHistory.length > 0 ? (
-              <div className="max-h-48 overflow-y-auto">
-                {requestHistory.map((r, i) => (
-                  <RequestRow key={i} request={r} />
-                ))}
-              </div>
-            ) : (
-              <div className="text-zinc-500 text-xs py-1">No requests yet</div>
-            )}
+      {/* Expandable request history (dev only) */}
+      {isDev && (
+        <div id="session-usage-history" className="collapsible-panel" data-open={isExpanded}>
+          <div>
+            <div className="px-2 pb-2 pt-1">
+              {requestHistory.length > 0 ? (
+                <div className="max-h-48 overflow-y-auto">
+                  {requestHistory.map((r) => (
+                    <RequestRow key={`${r.timestamp}-${r.model}`} request={r} />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-zinc-500 text-xs py-1">No requests yet</div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

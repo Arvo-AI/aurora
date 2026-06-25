@@ -964,6 +964,11 @@ def github_status(user_id):
 
     app_username: str | None = None
     if app_branch_active:
+        # Org-scoped: an installation linked by any org member marks the
+        # connector connected, so every member sees identical state
+        # (consistent with OAuth tokens and all other connectors). The
+        # user's own link is preferred for the displayed account name.
+        org_id = get_org_id_for_user(user_id)
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
@@ -972,12 +977,13 @@ def github_status(user_id):
                              FROM user_github_installations ugi
                              JOIN github_installations gi
                                   ON gi.installation_id = ugi.installation_id
-                            WHERE ugi.user_id = %s
+                            WHERE (ugi.user_id = %s OR ugi.org_id = %s)
                               AND ugi.disconnected_at IS NULL
                               AND gi.suspended_at IS NULL
-                            ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
+                            ORDER BY (ugi.user_id = %s) DESC,
+                                     ugi.is_primary DESC, ugi.linked_at DESC
                             LIMIT 1""",
-                        (user_id,),
+                        (user_id, org_id, user_id),
                     )
                     row = cur.fetchone()
                     if row:
