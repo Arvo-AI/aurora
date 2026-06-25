@@ -350,7 +350,12 @@ def list_action_runs(action_id, limit=50, offset=0, *, user_id, **_) -> dict:
     _require_uuid(action_id, "action_id")
     limit, offset = clamp(limit, 1, 200), max(0, int(offset))
 
-    with _cursor(user_id) as (cur, _org):
+    with _cursor(user_id) as (cur, org_id):
+        # Verify the action belongs to this org before exposing run history
+        cur.execute("SELECT 1 FROM actions WHERE id = %s AND org_id = %s", (action_id, org_id))
+        if not cur.fetchone():
+            raise IntrospectionError("Action not found.")
+
         cur.execute(
             """SELECT id, status, incident_id, chat_session_id, started_at, completed_at, error
                FROM action_runs WHERE action_id = %s
@@ -381,12 +386,12 @@ def get_action(action_id, *, user_id, **_) -> dict:
     """Get an action's full config plus its 20 most recent runs."""
     _require_uuid(action_id, "action_id")
 
-    with _cursor(user_id) as (cur, _org):
+    with _cursor(user_id) as (cur, org_id):
         cur.execute(
             """SELECT id, name, description, instructions, trigger_type, trigger_config,
                       mode, enabled, is_system, system_key, created_at, updated_at
-               FROM actions WHERE id = %s""",
-            (action_id,),
+               FROM actions WHERE id = %s AND org_id = %s""",
+            (action_id, org_id),
         )
         cols = [d[0] for d in cur.description]
         row = cur.fetchone()
