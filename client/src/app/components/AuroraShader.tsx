@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const VERTEX_SHADER = `
 attribute vec2 position;
@@ -137,13 +137,19 @@ void main() {
 export default function AuroraShader({ className }: Readonly<{ className?: string }>) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number>(0)
+  // When WebGL is unavailable (e.g. hardware acceleration disabled in the
+  // browser), fall back to a static aurora gradient instead of a black void.
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     const gl = canvas.getContext("webgl", { alpha: true, antialias: false })
-    if (!gl) return
+    if (!gl) {
+      setFailed(true)
+      return
+    }
 
     const compile = (type: number, src: string) => {
       const s = gl.createShader(type)!
@@ -158,7 +164,10 @@ export default function AuroraShader({ className }: Readonly<{ className?: strin
 
     const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER)
     const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
-    if (!vs || !fs) return
+    if (!vs || !fs) {
+      setFailed(true)
+      return
+    }
 
     const prog = gl.createProgram()!
     gl.attachShader(prog, vs)
@@ -168,6 +177,7 @@ export default function AuroraShader({ className }: Readonly<{ className?: strin
       gl.deleteProgram(prog)
       gl.deleteShader(vs)
       gl.deleteShader(fs)
+      setFailed(true)
       return
     }
     gl.useProgram(prog)
@@ -192,6 +202,13 @@ export default function AuroraShader({ className }: Readonly<{ className?: strin
     resize()
     window.addEventListener("resize", resize)
 
+    const onContextLost = (e: Event) => {
+      e.preventDefault()
+      cancelAnimationFrame(rafRef.current)
+      setFailed(true)
+    }
+    canvas.addEventListener("webglcontextlost", onContextLost)
+
     const start = performance.now()
     const loop = () => {
       const t = (performance.now() - start) / 1000
@@ -205,12 +222,33 @@ export default function AuroraShader({ className }: Readonly<{ className?: strin
     return () => {
       cancelAnimationFrame(rafRef.current)
       window.removeEventListener("resize", resize)
+      canvas.removeEventListener("webglcontextlost", onContextLost)
       gl.deleteBuffer(buf)
       gl.deleteProgram(prog)
       gl.deleteShader(vs)
       gl.deleteShader(fs)
     }
   }, [])
+
+  if (failed) {
+    // WebGL is unavailable (no shader possible here) — paint a minimal, dark
+    // aurora: near-black with a soft green→blue glow low on the horizon.
+    return (
+      <div
+        className={className}
+        style={{
+          backgroundColor: "#05080a",
+          backgroundImage: [
+            // Glow lives in the upper/mid band so the sign-in page's dark
+            // bottom overlay doesn't crush it. Alphas tuned to survive that overlay.
+            "radial-gradient(120% 70% at 30% 30%, rgba(38,230,128,0.45) 0%, rgba(38,230,128,0) 55%)",
+            "radial-gradient(130% 80% at 72% 40%, rgba(26,140,220,0.45) 0%, rgba(26,140,220,0) 55%)",
+            "radial-gradient(100% 60% at 50% 10%, rgba(120,60,160,0.30) 0%, rgba(120,60,160,0) 60%)",
+          ].join(", "),
+        }}
+      />
+    )
+  }
 
   return <canvas ref={canvasRef} className={className} />
 }

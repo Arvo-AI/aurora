@@ -167,8 +167,12 @@ function AuthPage() {
         <div className="relative z-10 max-w-lg">
           <div className={`transition-all duration-250 ease-in-out ${taglineVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2'}`}>
             <h1 className="text-5xl font-bold text-white leading-[1.15] tracking-tight">
-              {mode === 'signin' ? 'Incident response,' : 'Start resolving'}<br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#7dd3fc] via-[#a78bfa] to-[#f472b6]">{mode === 'signin' ? 'automated.' : 'incidents faster.'}</span>
+              <span className="block whitespace-nowrap italic font-normal" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
+                {mode === 'signin' ? 'The small hours belong to the sky,' : 'The night belongs to the sky,'}
+              </span>
+              <span className="block whitespace-nowrap text-transparent bg-clip-text bg-gradient-to-r from-[#7dd3fc] via-[#a78bfa] to-[#f472b6]">
+                {mode === 'signin' ? "We'll see to the rest." : "We'll keep the watch."}
+              </span>
             </h1>
             <p className="text-white/50 text-xl leading-relaxed mt-6">
               {mode === 'signin'
