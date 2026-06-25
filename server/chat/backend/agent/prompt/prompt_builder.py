@@ -20,7 +20,6 @@ from .composer import (
     build_system_invariant,
 )
 from .context_fetchers import (
-    build_memory_segment,
     build_manual_vm_access_segment,
 )
 from .provider_rules import (
@@ -46,7 +45,6 @@ __all__ = [
     "build_background_mode_segment",
     "build_ephemeral_rules",
     "build_failure_recovery_segment",
-    "build_memory_segment",
     "build_long_documents_note",
     "build_manual_vm_access_segment",
     "build_model_overlay_segment",

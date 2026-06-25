@@ -5,10 +5,8 @@ import os
 from typing import Any, List, Optional
 
 from .background import build_background_mode_segment
-from .context_fetchers import (
-    build_memory_segment,
-    build_manual_vm_access_segment,
-)
+from .context_fetchers import build_manual_vm_access_segment
+from services.memory.index_builder import build_memory_index
 from .provider_rules import (
     build_ephemeral_rules,
     build_failure_recovery_segment,
@@ -129,7 +127,7 @@ def build_prompt_segments(
     # Build memory index for authenticated users
     memory_context = ""
     if state and hasattr(state, 'user_id'):
-        memory_context = build_memory_segment(state.user_id)
+        memory_context = build_memory_index(state.user_id)
 
     # Build org-level command policy segment
     security_policy = ""
