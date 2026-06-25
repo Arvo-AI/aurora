@@ -577,16 +577,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         enabling_skills=(),
     ),
     DispatchEntry(
-        name="incident_submit_feedback",
-        description="Submit feedback on the RCA/postmortem of an incident.",
-        category="incidents",
-        method="POST",
-        path="/api/incidents/{incident_id}/feedback",
-        enabling_skills=(),
-        path_args=("incident_id",),
-        body_keys=("rating", "comment", "category"),
-    ),
-    DispatchEntry(
         name="incident_merge_alert",
         description="Merge an alert into an existing incident.",
         category="incidents",

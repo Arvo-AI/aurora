@@ -31,7 +31,6 @@ import CitationBadge from './CitationBadge';
 import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
-import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
@@ -762,13 +761,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           </button>
 
       </div>
-
-      {/* Feedback Section - only show when analysis is complete */}
-      {incident.auroraStatus === 'complete' && (
-        <div className="mt-6 pt-6 border-t border-zinc-800/50">
-          <IncidentFeedback incidentId={incident.id} readOnly={!canWrite} />
-        </div>
-      )}
 
       {/* Action Runs linked to this incident (collapsible, lazy-loaded) */}
       <div className="collapsible-panel" data-open={showActions}>

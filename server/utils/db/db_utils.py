@@ -1216,23 +1216,6 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_user_id ON knowledge_base_documents(user_id);
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON knowledge_base_documents(status);
                 """,
-                "incident_feedback": """
-                    CREATE TABLE IF NOT EXISTS incident_feedback (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        user_id VARCHAR(255) NOT NULL,
-                        org_id VARCHAR(255),
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-                        feedback_type VARCHAR(20) NOT NULL,
-                        comment TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_feedback_user_incident
-                    ON incident_feedback(user_id, incident_id);
-
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
-                """,
                 "postmortems": """
                     CREATE TABLE IF NOT EXISTS postmortems (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1456,7 +1439,6 @@ def initialize_tables():
             # so they don't need RLS - incident_alerts is protected separately for safety
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
-            rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
@@ -2715,7 +2697,7 @@ def initialize_tables():
                 "k8s_pod_metrics", "k8s_node_metrics",
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
-                "incident_feedback", "postmortems",
+                "postmortems",
                 "incident_lifecycle_events",
                 "connected_repos",
             ]

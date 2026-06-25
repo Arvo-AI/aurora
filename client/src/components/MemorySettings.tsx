@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -28,7 +27,6 @@ import {
   Trash2,
   FileText,
   Brain,
-  Sparkles,
   Plus,
   BookOpen,
   Server,
@@ -36,7 +34,6 @@ import {
   ScrollText,
   Package,
 } from "lucide-react";
-import { userPreferencesService } from "@/lib/services/incident-feedback";
 import { useUser } from "@/hooks/useAuthHooks";
 import { DiscoverySettings } from "@/components/DiscoverySettings";
 import { canWrite as checkCanWrite } from "@/lib/roles";
@@ -95,11 +92,6 @@ export function MemorySettings() {
   const [uploadCategory, setUploadCategory] = useState<MemoryCategory>("runbook");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Aurora Learn state
-  const [auroraLearnEnabled, setAuroraLearnEnabled] = useState(true);
-  const [isLoadingLearn, setIsLoadingLearn] = useState(true);
-  const [isTogglingLearn, setIsTogglingLearn] = useState(false);
-
   const fetchEntries = useCallback(async () => {
     if (!userId) {
       setIsLoadingEntries(false);
@@ -123,53 +115,11 @@ export function MemorySettings() {
     }
   }, [userId, filterCategory]);
 
-  const fetchAuroraLearnSetting = useCallback(async () => {
-    if (!userId) {
-      setIsLoadingLearn(false);
-      return;
-    }
-
-    try {
-      const data = await userPreferencesService.getAuroraLearnSetting();
-      setAuroraLearnEnabled(data.enabled);
-    } catch (error) {
-      console.error("Failed to fetch Aurora Learn setting:", error);
-      setAuroraLearnEnabled(true);
-    } finally {
-      setIsLoadingLearn(false);
-    }
-  }, [userId]);
-
   useEffect(() => {
     if (userId && !userLoading) {
       fetchEntries();
-      fetchAuroraLearnSetting();
     }
-  }, [userId, userLoading, fetchEntries, fetchAuroraLearnSetting]);
-
-  const handleToggleAuroraLearn = async (enabled: boolean) => {
-    if (!userId) return;
-
-    setIsTogglingLearn(true);
-    try {
-      await userPreferencesService.setAuroraLearnSetting(enabled);
-      setAuroraLearnEnabled(enabled);
-      toast({
-        title: enabled ? "Aurora Learn enabled" : "Aurora Learn disabled",
-        description: enabled
-          ? "Aurora will learn from your feedback to improve future analyses."
-          : "Aurora will no longer save or use feedback for learning.",
-      });
-    } catch (error) {
-      toast({
-        title: "Failed to update setting",
-        description: error instanceof Error ? error.message : "An error occurred",
-        variant: "destructive",
-      });
-    } finally {
-      setIsTogglingLearn(false);
-    }
-  };
+  }, [userId, userLoading, fetchEntries]);
 
   const handleCreate = async () => {
     if (!userId) return;
@@ -340,33 +290,6 @@ export function MemorySettings() {
           </p>
         </div>
       )}
-
-      {/* Aurora Learn Section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <CardTitle>Aurora Learn</CardTitle>
-            </div>
-            {isLoadingLearn ? (
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            ) : (
-              <Switch
-                checked={auroraLearnEnabled}
-                onCheckedChange={handleToggleAuroraLearn}
-                disabled={isTogglingLearn || !canWrite}
-              />
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-            <li>Stores feedback locally to improve Aurora for your system</li>
-            <li>All data remains on your infrastructure and is never sent externally</li>
-          </ul>
-        </CardContent>
-      </Card>
 
       {/* Memory Entries Section */}
       <Card>
