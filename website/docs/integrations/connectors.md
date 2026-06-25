@@ -1277,22 +1277,69 @@ See [kubectl-agent README](https://github.com/arvo-ai/aurora/blob/main/kubectl-a
 
 ### Bitbucket
 
-OAuth App authentication for Bitbucket Cloud.
+Bitbucket Cloud supports two authentication methods: **API Token** (recommended — no `.env` setup) or **OAuth** (optional — requires registering a consumer and enabling a feature flag).
 
-#### 1. Create OAuth Consumer
+:::tip Scopes need read **and** write
+Aurora's remediation features open pull requests, push branches/commits, comment on issues, and trigger pipelines. Both auth methods therefore need **write** access to repositories, pull requests, issues, and pipelines — read-only credentials will connect but block those actions.
+:::
+
+#### Option A: API Token (recommended)
+
+No environment variables are required — credentials are entered in the Aurora UI and stored in Vault.
+
+##### 1. Create a Scoped API Token
+
+Create a **scoped** API token at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Classic (unscoped) API tokens are **not** supported.
+
+Grant these scopes:
+
+- `read:user:bitbucket`
+- `read:workspace:bitbucket`
+- `read:project:bitbucket`
+- `read:repository:bitbucket`, `write:repository:bitbucket`
+- `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
+- `read:issue:bitbucket`, `write:issue:bitbucket`
+- `read:pipeline:bitbucket`, `write:pipeline:bitbucket`
+
+##### 2. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Bitbucket**
+2. Enter your Atlassian account **email** and the **API token**
+3. Click **Connect**
+
+#### Option B: OAuth (optional)
+
+Use OAuth if you prefer a per-user consent flow. This path requires both a feature flag (to show the OAuth option in the UI) and a registered OAuth consumer.
+
+##### 1. Create OAuth Consumer
 
 1. Go to **Bitbucket workspace settings** > **OAuth consumers** > **Add consumer**
    - Name: `Aurora`
    - Callback URL: `{NEXT_PUBLIC_BACKEND_URL}/bitbucket/callback` (e.g. `https://your-aurora-domain/bitbucket/callback`)
-   - Permissions: **Repositories** (Read), **Pull requests** (Read)
+   - Permissions: **Account** (Read), **Projects** (Read), **Repositories** (Read & Write), **Pull requests** (Read & Write), **Issues** (Read & Write), **Pipelines** (Read & Write)
 2. Copy the **Key** and **Secret**
 
-#### 2. Configure Environment
+##### 2. Configure Environment
 
 ```bash
+# Show the OAuth option in the Connectors UI (frontend flag, default false).
+# Without this, only the API Token form is shown.
+NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH=true
+
 BB_OAUTH_CLIENT_ID=your-bitbucket-key
 BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
 ```
+
+Restart Aurora after setting these, then connect via **Connectors** > **Bitbucket** > **OAuth**.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Authentication failed... you are using a classic API token (not supported)" | Create a **scoped** token at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens), not a classic one |
+| "Missing required scopes: ..." | Recreate the API token with all the read+write scopes listed above |
+| "Bitbucket OAuth is not available. Use an API token instead." | `BB_OAUTH_CLIENT_ID`/`BB_OAUTH_CLIENT_SECRET` are not set. Use the API token method, or configure the OAuth consumer |
+| OAuth tab not visible in the UI | `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH` is not `true`. Set it and restart |
 
 ---
 
