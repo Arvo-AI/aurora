@@ -144,16 +144,23 @@ VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","pri
 # Optional: Location (default: global)
 VERTEX_AI_LOCATION=global
 
-LLM_PROVIDER_MODE=direct
+# Route every model pick through Vertex (recommended — works with clean
+# model names like "Gemini 2.5 Pro" in the picker, no vertex/ prefix needed).
+LLM_PROVIDER_MODE=vertex
 ```
+
+:::tip Two ways to route to Vertex
+- **`LLM_PROVIDER_MODE=vertex`** (recommended) — forces every supported model pick through Vertex; models Vertex can't serve fall back to their own provider.
+- **`LLM_PROVIDER_MODE=direct`** — only routes to Vertex when the model id carries a `vertex/` prefix (e.g. `MAIN_MODEL=vertex/gemini-2.5-pro`). A clean `google/...` id goes to the Google AI provider instead, not Vertex.
+:::
 
 **Authentication options:**
 1. **Service account JSON** (recommended): Set `VERTEX_AI_SERVICE_ACCOUNT_JSON` to the full JSON contents of your service account key file.
 2. **Application Default Credentials (ADC)**: If running on GCP (Cloud Run, GKE), ADC is automatic — just set `VERTEX_AI_PROJECT`.
 3. **Credentials file path**: Set `GOOGLE_APPLICATION_CREDENTIALS` to the path of your service account key file.
 
-:::tip
-The project ID is automatically extracted from the service account JSON if `VERTEX_AI_PROJECT` is not set.
+:::note
+`VERTEX_AI_PROJECT` is required — the provider is considered unavailable without it. The service account JSON only supplies credentials, not the project id.
 :::
 
 **Optional configuration:**
