@@ -13,12 +13,36 @@ import logging
 from celery_config import celery_app
 from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
-from utils.auth.stateless_auth import set_rls_context
 from utils.storage.storage import get_storage_manager
 from services.artifacts.store import create_version
 from services.memory.splitter import split_content, make_part_title, make_part_description
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_storage_path(storage_path: str) -> str:
+    """Strip s3://bucket/ prefix from legacy KB document paths."""
+    if storage_path.startswith("s3://"):
+        parts = storage_path[5:].split("/", 1)
+        if len(parts) > 1:
+            return parts[1]
+    return storage_path
+
+
+def _resolve_user_for_org(cursor, org_id: str) -> str | None:
+    """Pick any user in the org so RLS context can be set during migration."""
+    cursor.execute(
+        "SELECT id FROM users WHERE org_id = %s ORDER BY id LIMIT 1",
+        (org_id,),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def _set_rls_for_row(cursor, org_id: str, user_id: str) -> None:
+    """Set RLS session vars without committing (set_rls_context commits and breaks savepoints)."""
+    cursor.execute("SET LOCAL myapp.current_user_id = %s;", (user_id,))
+    cursor.execute("SET LOCAL myapp.current_org_id = %s;", (org_id,))
 
 
 @celery_app.task(name="migrate_kb_to_memory", bind=True, max_retries=0)
@@ -38,7 +62,7 @@ def migrate_kb_to_memory(self):
                 for org_id, user_id, content in kb_rows:
                     cursor.execute("SAVEPOINT migrate_kb_row")
                     try:
-                        set_rls_context(cursor, conn, user_id, log_prefix="[Migration:context]")
+                        _set_rls_for_row(cursor, org_id, user_id)
                         cursor.execute(
                             """INSERT INTO artifacts
                                    (org_id, user_id, title, content, category, description,
@@ -60,15 +84,22 @@ def migrate_kb_to_memory(self):
                         cursor.execute("ROLLBACK TO SAVEPOINT migrate_kb_row")
 
                 # 2) Migrate infrastructure_context → infrastructure
+                # Table is org-scoped (org_id PK only) — resolve a user for RLS
                 cursor.execute(
-                    "SELECT org_id, user_id, content FROM infrastructure_context WHERE content IS NOT NULL AND content != ''"
+                    "SELECT org_id, content FROM infrastructure_context WHERE content IS NOT NULL AND content != ''"
                 )
                 infra_rows = cursor.fetchall()
 
-                for org_id, user_id, content in infra_rows:
+                for org_id, content in infra_rows:
+                    user_id = _resolve_user_for_org(cursor, org_id)
+                    if not user_id:
+                        logger.warning("[Migration] No user found for org %s, skipping infra context", org_id)
+                        stats["errors"] += 1
+                        continue
+
                     cursor.execute("SAVEPOINT migrate_infra_row")
                     try:
-                        set_rls_context(cursor, conn, user_id, log_prefix="[Migration:infra]")
+                        _set_rls_for_row(cursor, org_id, user_id)
                         cursor.execute(
                             """INSERT INTO artifacts
                                    (org_id, user_id, title, content, category, description,
@@ -93,7 +124,8 @@ def migrate_kb_to_memory(self):
                 cursor.execute(
                     """SELECT org_id, user_id, original_filename, storage_path
                        FROM knowledge_base_documents
-                       WHERE status = 'processed' AND storage_path IS NOT NULL"""
+                       WHERE status IN ('processed', 'ready')
+                         AND storage_path IS NOT NULL"""
                 )
                 doc_rows = cursor.fetchall()
 
@@ -101,7 +133,7 @@ def migrate_kb_to_memory(self):
                     cursor.execute("SAVEPOINT migrate_doc_row")
                     try:
                         storage = get_storage_manager()
-                        raw_bytes = storage.download_file(storage_path)
+                        raw_bytes = storage.download_bytes(_normalize_storage_path(storage_path))
 
                         if not raw_bytes:
                             cursor.execute("RELEASE SAVEPOINT migrate_doc_row")
@@ -123,7 +155,7 @@ def migrate_kb_to_memory(self):
                             cursor.execute("RELEASE SAVEPOINT migrate_doc_row")
                             continue
 
-                        set_rls_context(cursor, conn, user_id, log_prefix="[Migration:docs]")
+                        _set_rls_for_row(cursor, org_id, user_id)
 
                         base_title = filename.rsplit(".", 1)[0] if "." in filename else filename
                         base_desc = f"Migrated from uploaded document: {filename}"
