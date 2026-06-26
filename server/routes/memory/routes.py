@@ -285,10 +285,7 @@ def upload_file(user_id):
 
             conn.commit()
 
-        logger.info(
-            "[Memory] Uploaded file to %s (%d part%s) for org %s",
-            category, total_parts, "s" if total_parts > 1 else "", org_id,
-        )
+        logger.info("[Memory] Uploaded file (%d parts)", total_parts)
         return jsonify({"entries": created_entries, "parts": total_parts}), 201
 
     except Exception as e:

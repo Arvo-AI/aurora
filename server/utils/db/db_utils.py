@@ -3027,7 +3027,7 @@ def initialize_tables():
                         ON artifacts(org_id, category, title);
                 """)
             except Exception as e:
-                logging.warning(f"Error adding memory columns to artifacts: {e}")
+                logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
                 conn.rollback()
 
             # Auto-trigger memory migration if old KB tables still have data
