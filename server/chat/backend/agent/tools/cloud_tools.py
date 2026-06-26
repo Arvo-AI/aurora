@@ -1566,8 +1566,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
                     "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
                     "'flag_changes' (Feature Management flag changes; params: app_id), "
-                    "'cross_controller_deployments' (query builds across all OC-managed controllers), "
-                    "'controller_list' (list discovered controllers from Operations Center). "
+                    "'cross_controller_deployments' (query builds across all controllers — OC-managed or a manually-registered fleet), "
+                    "'controller_list' (list controllers — from Operations Center or a manually-registered fleet). "
                     "Required params vary by action: job_path+build_number for Core/wfapi, "
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),

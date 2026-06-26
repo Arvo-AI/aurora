@@ -72,14 +72,23 @@ Recent deployments are a leading indicator of root cause. Always check if a depl
 
 Recent deployments are a leading indicator of root cause.
 
-## Enterprise Actions (Operations Center)
+## Multi-Controller Actions (Operations Center OR a manually-registered fleet)
 
-These actions are ONLY available when Operations Center is connected (provider: cloudbees_oc):
+These actions work in two cases: when Operations Center is connected (provider: cloudbees_oc),
+OR when the user has manually registered multiple standalone controllers via "Multiple Controllers"
+mode (provider: cloudbees_fleet — for clients that run several controllers but have no OC):
 
-- `controller_list` — List all managed Jenkins controllers and their status
-- `cross_controller_deployments` — Query recent builds across ALL managed controllers
+- `controller_list` — List all controllers and their status (online/offline)
+- `cross_controller_deployments` — Query recent builds across ALL controllers
 
-Only use these if you have confirmed OC is connected. They will return a helpful error if not.
+In fleet mode, controllers were registered individually (each with its own URL + token), since
+standalone CloudBees CI controllers cannot be discovered automatically without Operations Center.
+
+For per-build introspection (`build_detail`, `pipeline_stages`, `build_logs`, etc.) in either OC or
+fleet mode, pass `controller_url` — get the URL from `controller_list` or
+`cross_controller_deployments` (the `_controller_url` field) first.
+
+These return a helpful error if neither OC nor a fleet is connected.
 
 ## Enterprise Actions (Feature Management)
 

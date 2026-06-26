@@ -1,15 +1,17 @@
 "use client";
 
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Trash2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
 import type { CIProviderStatus } from "@/lib/services/ci-provider";
 
 interface DiscoveredController {
+  id?: string;
   name: string;
   url: string;
   status: string;
+  last_error?: string | null;
 }
 
 interface ConnectedDashboardProps {
@@ -18,6 +20,8 @@ interface ConnectedDashboardProps {
   webhookInfo: any;
   deployments: any[];
   controllers: DiscoveredController[];
+  isFleetMode?: boolean;
+  onRemoveController?: (controllerId: string) => void;
   rcaEnabled: boolean;
   rcaLoading: boolean;
   loading: boolean;
@@ -41,6 +45,7 @@ function timeAgo(dateStr: string | null | undefined): string {
 
 export function ConnectedDashboard({
   status, summary, webhookInfo, deployments, controllers,
+  isFleetMode = false, onRemoveController,
   rcaEnabled, rcaLoading, loading,
   onDisconnect, onRcaToggle,
 }: Readonly<ConnectedDashboardProps>) {
@@ -197,20 +202,36 @@ export function ConnectedDashboard({
         </div>
       )}
 
-      {/* Managed controllers (OC mode) */}
+      {/* Controllers — OC-managed (read-only) or fleet (removable) */}
       {controllers.length > 0 && (
         <div className="mt-8 pt-6 border-t border-white/[0.04]">
-          <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">Managed Controllers</p>
+          <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">
+            {isFleetMode ? "Controllers" : "Managed Controllers"}
+          </p>
           <div className="space-y-1">
             {controllers.map((ctrl) => (
-              <div key={ctrl.url} className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/[0.02]">
+              <div key={ctrl.id ?? ctrl.url} className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/[0.02]">
                 <div className="flex-1 min-w-0">
                   <p className="text-[14px] truncate">{ctrl.name}</p>
                   <p className="text-[12px] text-[#555] truncate">{ctrl.url}</p>
+                  {ctrl.status !== "online" && ctrl.last_error && (
+                    <p className="text-[11px] text-red-400/80 truncate mt-0.5">{ctrl.last_error}</p>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 ml-3 flex-shrink-0">
                   <span className={`h-2 w-2 rounded-full ${ctrl.status === "online" ? "bg-green-500" : "bg-[#555]"}`} />
                   <span className="text-[12px] text-[#777]">{ctrl.status}</span>
+                  {isFleetMode && onRemoveController && ctrl.id && (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveController(ctrl.id as string)}
+                      disabled={loading}
+                      className="ml-2 text-[#666] hover:text-red-400 transition-colors disabled:opacity-50"
+                      aria-label={`Remove ${ctrl.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

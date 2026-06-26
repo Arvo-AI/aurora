@@ -1,9 +1,16 @@
 "use client";
 
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-type ConnectionMode = "oc" | "single" | "pat";
+type ConnectionMode = "oc" | "single" | "fleet" | "pat";
+
+export interface FleetControllerInput {
+  name: string;
+  url: string;
+  username: string;
+  token: string;
+}
 
 interface CredentialFormsProps {
   mode: ConnectionMode;
@@ -34,6 +41,7 @@ interface CredentialFormsProps {
   onOCConnect: (e: React.FormEvent<HTMLFormElement>) => void;
   onSingleConnect: (e: React.FormEvent<HTMLFormElement>) => void;
   onPATConnect: (e: React.FormEvent<HTMLFormElement>) => void;
+  onFleetConnect: (controllers: FleetControllerInput[]) => void;
   onBack: () => void;
 }
 
@@ -43,12 +51,74 @@ export function CredentialForms({
   rolloutToken, setRolloutToken,
   baseUrl, setBaseUrl, username, setUsername, apiToken, setApiToken,
   platformUrl, setPlatformUrl, pat, setPat,
-  onOCConnect, onSingleConnect, onPATConnect, onBack,
+  onOCConnect, onSingleConnect, onPATConnect, onFleetConnect, onBack,
 }: Readonly<CredentialFormsProps>) {
   const [showOcToken, setShowOcToken] = useState(false);
   const [showRolloutToken, setShowRolloutToken] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [showPat, setShowPat] = useState(false);
+
+  // Fleet (multiple standalone controllers) state
+  const [fleetControllers, setFleetControllers] = useState<FleetControllerInput[]>([]);
+  const [fcName, setFcName] = useState("");
+  const [fcUrl, setFcUrl] = useState("");
+  const [fcUsername, setFcUsername] = useState("");
+  const [fcToken, setFcToken] = useState("");
+  const [fcError, setFcError] = useState("");
+  const [bulkJson, setBulkJson] = useState("");
+  const [bulkError, setBulkError] = useState("");
+
+  const addFleetController = () => {
+    setFcError("");
+    if (!fcUrl.startsWith("http://") && !fcUrl.startsWith("https://")) {
+      setFcError("URL must start with http:// or https://");
+      return;
+    }
+    if (!fcUsername || !fcToken) {
+      setFcError("Username and token are required");
+      return;
+    }
+    setFleetControllers((prev) => [
+      ...prev,
+      { name: fcName.trim() || fcUrl, url: fcUrl.trim(), username: fcUsername.trim(), token: fcToken },
+    ]);
+    setFcName(""); setFcUrl(""); setFcUsername(""); setFcToken("");
+  };
+
+  const removeFleetController = (idx: number) => {
+    setFleetControllers((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const applyBulkJson = () => {
+    setBulkError("");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bulkJson);
+    } catch {
+      setBulkError("Invalid JSON. Expected an array of {name, url, username, token}.");
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      setBulkError("JSON must be an array of controller objects.");
+      return;
+    }
+    const valid: FleetControllerInput[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const url = String(o.url ?? o.base_url ?? "").trim();
+      const username = String(o.username ?? "").trim();
+      const token = String(o.token ?? o.api_token ?? "");
+      if (!url || !username || !token) continue;
+      valid.push({ name: String(o.name ?? url).trim() || url, url, username, token });
+    }
+    if (valid.length === 0) {
+      setBulkError("No valid controllers found. Each needs url, username, and token.");
+      return;
+    }
+    setFleetControllers((prev) => [...prev, ...valid]);
+    setBulkJson("");
+  };
 
   return (
     <div className="animate-step-in">
@@ -201,6 +271,126 @@ export function CredentialForms({
               </button>
             </div>
           </form>
+        </>
+      )}
+
+      {mode === "fleet" && (
+        <>
+          <h1 className="text-[28px] font-bold tracking-tight mb-3">Add your controllers</h1>
+          <p className="text-[15px] text-[#777] mb-10">
+            Add each standalone controller with its own URL, username, and API token. We&apos;ll
+            validate each one as you connect — unreachable controllers are still saved and marked
+            offline so the rest of the fleet stays usable.
+          </p>
+
+          {fcError && <p className="text-[13px] text-red-500 mb-4">{fcError}</p>}
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="text"
+                value={fcName}
+                onChange={(e) => setFcName(e.target.value)}
+                placeholder="Name (optional)"
+                disabled={loading}
+                className="px-4 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[14px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+              />
+              <input
+                type="text"
+                value={fcUrl}
+                onChange={(e) => setFcUrl(e.target.value)}
+                placeholder="https://controller.example.com"
+                disabled={loading}
+                className="px-4 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[14px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+              />
+              <input
+                type="text"
+                value={fcUsername}
+                onChange={(e) => setFcUsername(e.target.value)}
+                placeholder="username"
+                disabled={loading}
+                className="px-4 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[14px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+              />
+              <input
+                type="password"
+                value={fcToken}
+                onChange={(e) => setFcToken(e.target.value)}
+                placeholder="API token"
+                disabled={loading}
+                className="px-4 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[14px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={addFleetController}
+              disabled={loading}
+              className="flex items-center gap-2 text-[14px] text-[#999] hover:text-white transition-colors disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" /> Add controller
+            </button>
+          </div>
+
+          {/* Added controllers */}
+          {fleetControllers.length > 0 && (
+            <div className="mt-6 space-y-2">
+              {fleetControllers.map((c, idx) => (
+                <div key={`${c.url}-${idx}`} className="flex items-center justify-between py-2.5 px-4 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                  <div className="min-w-0">
+                    <p className="text-[14px] truncate">{c.name}</p>
+                    <p className="text-[12px] text-[#555] truncate">{c.url} · {c.username}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeFleetController(idx)}
+                    disabled={loading}
+                    className="text-[#666] hover:text-red-400 transition-colors ml-3 flex-shrink-0"
+                    aria-label="Remove controller"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Bulk import */}
+          <details className="mt-6">
+            <summary className="text-[13px] text-[#777] cursor-pointer hover:text-[#999] transition-colors">
+              Bulk import (JSON)
+            </summary>
+            <div className="mt-4">
+              <textarea
+                value={bulkJson}
+                onChange={(e) => setBulkJson(e.target.value)}
+                placeholder={'[\n  {"name": "ctrl-a", "url": "https://a.example.com", "username": "user", "token": "11a..."},\n  {"name": "ctrl-b", "url": "https://b.example.com", "username": "user", "token": "11b..."}\n]'}
+                rows={6}
+                disabled={loading}
+                className="w-full px-4 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[12px] font-mono placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+              />
+              {bulkError && <p className="text-[13px] text-red-500 mt-2">{bulkError}</p>}
+              <button
+                type="button"
+                onClick={applyBulkJson}
+                disabled={loading || !bulkJson.trim()}
+                className="mt-2 text-[13px] text-[#999] hover:text-white transition-colors disabled:opacity-40"
+              >
+                Add from JSON
+              </button>
+            </div>
+          </details>
+
+          <div className="flex items-center gap-3 pt-8">
+            <button type="button" onClick={onBack} className="text-[15px] text-[#777] hover:text-white transition-colors px-4 py-3">Back</button>
+            <button
+              type="button"
+              onClick={() => onFleetConnect(fleetControllers)}
+              disabled={loading || fleetControllers.length === 0}
+              className="flex-1 py-3.5 rounded-xl bg-white text-black font-medium text-[15px] hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              {loading ? "Connecting..." : `Connect ${fleetControllers.length || ""} controller${fleetControllers.length === 1 ? "" : "s"}`.trim()}
+            </button>
+          </div>
         </>
       )}
 

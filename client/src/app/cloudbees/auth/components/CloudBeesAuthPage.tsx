@@ -8,11 +8,11 @@ import { cloudbeesService } from "@/lib/services/ci-provider";
 import type { CIProviderStatus } from "@/lib/services/ci-provider";
 import { apiRequest } from "@/lib/services/api-client";
 import { ModeSelector } from "./ModeSelector";
-import { CredentialForms } from "./CredentialForms";
+import { CredentialForms, type FleetControllerInput } from "./CredentialForms";
 import { WebhookSetup } from "./WebhookSetup";
 import { ConnectedDashboard } from "./ConnectedDashboard";
 
-type ConnectionMode = "oc" | "single" | "pat";
+type ConnectionMode = "oc" | "single" | "fleet" | "pat";
 
 type Step = 1 | 2 | 3 | "connected";
 
@@ -51,6 +51,7 @@ export default function CloudBeesAuthPage() {
   const [ocApiToken, setOcApiToken] = useState("");
   const [rolloutToken, setRolloutToken] = useState("");
   const [controllers, setControllers] = useState<DiscoveredController[]>([]);
+  const [isFleetMode, setIsFleetMode] = useState(false);
 
   // Personal Access Token fields
   const [platformUrl, setPlatformUrl] = useState("");
@@ -88,8 +89,17 @@ export default function CloudBeesAuthPage() {
           localStorage.setItem(CONNECTED_KEY, "true");
           setStep("connected");
           if (result.summary) setSummary(result.summary);
+          if (result.mode === "fleet") setIsFleetMode(true);
+          // Fleet controllers (standalone, no OC) — only present in fleet mode
+          apiRequest<{ controllers?: DiscoveredController[]; connected?: boolean }>("/api/cloudbees/fleet/controllers", { method: "GET", cache: "no-store" }).then(d => {
+            if (d?.connected && d?.controllers?.length) {
+              setIsFleetMode(true);
+              setControllers(d.controllers);
+            }
+          }).catch(() => {});
+          // OC-discovered controllers (only present when OC connected)
           apiRequest<{ controllers?: DiscoveredController[] }>("/api/cloudbees/controllers", { method: "GET", cache: "no-store" }).then(d => {
-            if (d?.controllers) setControllers(d.controllers);
+            if (d?.controllers?.length) setControllers(d.controllers);
           }).catch(() => {});
           apiRequest<any>("/api/cloudbees/webhook-url", { method: "GET", cache: "no-store" }).then(setWebhookInfo).catch(() => {});
           apiRequest<any>("/api/cloudbees/deployments", { method: "GET", cache: "no-store" }).then(d => setDeployments(d?.deployments || [])).catch(() => {});
@@ -271,6 +281,73 @@ export default function CloudBeesAuthPage() {
     }
   };
 
+  const handleFleetConnect = async (fleetControllers: FleetControllerInput[]) => {
+    if (fleetControllers.length === 0) return;
+    setLoading(true);
+    try {
+      const result = await apiRequest<{ controllers?: DiscoveredController[]; failed?: unknown[] }>(
+        "/api/cloudbees/fleet/controllers",
+        { method: "POST", body: JSON.stringify({ controllers: fleetControllers }), cache: "no-store" }
+      );
+
+      if (result?.controllers) setControllers(result.controllers);
+      setIsFleetMode(true);
+
+      const newStatus: CIProviderStatus = { connected: true };
+      setStatus(newStatus);
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true }));
+      localStorage.setItem(CONNECTED_KEY, "true");
+      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
+
+      try {
+        await apiRequest("/api/provider-preferences", {
+          method: "POST",
+          body: JSON.stringify({ action: "add", provider: "cloudbees" }),
+        });
+      } catch { /* best-effort */ }
+
+      const total = result?.controllers?.length ?? fleetControllers.length;
+      const failedCount = result?.failed?.length ?? 0;
+      toast({
+        title: "Controllers Connected",
+        description: failedCount > 0
+          ? `${total} controller(s) saved, ${failedCount} could not be validated (marked offline).`
+          : `${total} controller(s) connected successfully.`,
+        variant: failedCount > 0 ? "destructive" : undefined,
+      });
+      setStep(3);
+    } catch (err: unknown) {
+      console.error("CloudBees fleet connection failed", err);
+      toast({ title: "Connection Failed", description: getUserFriendlyError(err), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveController = async (controllerId: string) => {
+    try {
+      const result = await apiRequest<{ controllers?: DiscoveredController[]; count?: number }>(
+        `/api/cloudbees/fleet/controllers/${controllerId}`,
+        { method: "DELETE", cache: "no-store" }
+      );
+      setControllers(result?.controllers ?? []);
+      if ((result?.count ?? 0) === 0) {
+        // Last controller removed — fleet is gone
+        setIsFleetMode(false);
+        setStatus({ connected: false });
+        localStorage.removeItem(CACHE_KEY);
+        localStorage.removeItem(CONNECTED_KEY);
+        globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
+        setStep(1);
+        toast({ title: "Controller removed", description: "All controllers removed. CloudBees disconnected." });
+      } else {
+        toast({ title: "Controller removed" });
+      }
+    } catch (err) {
+      toast({ title: "Failed to remove controller", description: getUserFriendlyError(err), variant: "destructive" });
+    }
+  };
+
   const handleDisconnect = async () => {
     setLoading(true);
     try {
@@ -288,6 +365,7 @@ export default function CloudBeesAuthPage() {
       setPlatformUrl("");
       setRolloutToken("");
       setControllers([]);
+      setIsFleetMode(false);
       localStorage.removeItem(CACHE_KEY);
       localStorage.removeItem(CONNECTED_KEY);
       globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -409,6 +487,7 @@ export default function CloudBeesAuthPage() {
           onOCConnect={handleOCConnect}
           onSingleConnect={handleSingleControllerConnect}
           onPATConnect={handlePATConnect}
+          onFleetConnect={handleFleetConnect}
           onBack={() => { setStep(1); setUrlError(""); }}
         />
       )}
@@ -427,6 +506,8 @@ export default function CloudBeesAuthPage() {
           webhookInfo={webhookInfo}
           deployments={deployments}
           controllers={controllers}
+          isFleetMode={isFleetMode}
+          onRemoveController={handleRemoveController}
           rcaEnabled={rcaEnabled}
           rcaLoading={rcaLoading}
           loading={loading}

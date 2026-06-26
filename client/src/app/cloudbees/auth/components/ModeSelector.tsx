@@ -2,7 +2,7 @@
 
 import { ChevronRight } from "lucide-react";
 
-type ConnectionMode = "oc" | "single" | "pat";
+type ConnectionMode = "oc" | "single" | "fleet" | "pat";
 
 interface ModeSelectorProps {
   onSelect: (mode: ConnectionMode) => void;
@@ -40,6 +40,20 @@ export function ModeSelector({ onSelect }: Readonly<ModeSelectorProps>) {
             <p className="text-[15px] font-medium mb-1">Single Controller</p>
             <p className="text-[13px] text-[#777] leading-relaxed">
               Connect directly to one CloudBees CI or Jenkins instance.
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-[#555] flex-shrink-0 ml-4 group-hover:translate-x-1 transition-transform" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onSelect("fleet")}
+          className="group w-full p-6 rounded-2xl border border-white/[0.06] hover:border-white/[0.12] bg-white/[0.01] hover:bg-white/[0.02] transition-all text-left flex items-center justify-between"
+        >
+          <div>
+            <p className="text-[15px] font-medium mb-1">Multiple Controllers</p>
+            <p className="text-[13px] text-[#777] leading-relaxed">
+              Connect several standalone controllers individually. Use this when you have multiple controllers but no Operations Center — each controller needs its own URL and API token.
             </p>
           </div>
           <ChevronRight className="h-4 w-4 text-[#555] flex-shrink-0 ml-4 group-hover:translate-x-1 transition-transform" />
