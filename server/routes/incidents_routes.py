@@ -2,17 +2,17 @@
 
 import json
 import logging
-from datetime import timezone
 from routes.audit_routes import record_audit_event as _record_audit_event
 from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
+from utils.query_helpers import iso_utc
 from utils.auth.token_management import get_token_data
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.log_sanitizer import hash_for_log, sanitize
 from chat.background.task import run_background_chat
 from typing import List, Dict, Any, Optional
-from uuid import UUID
+from utils.validation import is_valid_uuid
 from chat.background.task import create_background_chat_session, run_background_chat
 
 logger = logging.getLogger(__name__)
@@ -24,25 +24,6 @@ _LOG_PREFIX = "[Incidents]"
 
 # Maximum length for chat session titles (in characters)
 TITLE_MAX_LENGTH = 50
-
-
-def _format_timestamp(ts) -> Optional[str]:
-    """Format timestamp ensuring UTC timezone."""
-    if not ts:
-        return None
-    # If naive datetime, assume it's UTC (PostgreSQL TIMESTAMP without timezone)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.isoformat()
-
-
-def _validate_uuid(value: str) -> bool:
-    """Validate that a string is a valid UUID."""
-    try:
-        UUID(value)
-        return True
-    except (ValueError, TypeError):
-        return False
 
 
 def _parse_suggestion_id(suggestion_id: str) -> Optional[int]:
@@ -247,12 +228,12 @@ def _format_incident_response(
         if aurora_chat_session_id
         else None,
         "activeTab": active_tab or "thoughts",
-        "startedAt": _format_timestamp(started_at),
-        "analyzedAt": _format_timestamp(analyzed_at),
-        "resolvedAt": _format_timestamp(resolved_at),
-        "alertFiredAt": _format_timestamp(alert_fired_at),
-        "createdAt": _format_timestamp(created_at),
-        "updatedAt": _format_timestamp(updated_at),
+        "startedAt": iso_utc(started_at),
+        "analyzedAt": iso_utc(analyzed_at),
+        "resolvedAt": iso_utc(resolved_at),
+        "alertFiredAt": iso_utc(alert_fired_at),
+        "createdAt": iso_utc(created_at),
+        "updatedAt": iso_utc(updated_at),
     }
 
     # Add metadata fields to alert object if available
@@ -357,7 +338,7 @@ def get_incidents(user_id):
 def get_incident(user_id, incident_id: str):
 
     # Validate incident_id is a valid UUID
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
     org_id = get_org_id_from_request()
@@ -650,7 +631,7 @@ def get_incident(user_id, incident_id: str):
                             "correlationDetails": arow[7]
                             if isinstance(arow[7], dict)
                             else {},
-                            "receivedAt": _format_timestamp(arow[8]),
+                            "receivedAt": iso_utc(arow[8]),
                         }
                     )
                 incident["correlatedAlerts"] = correlated_alerts
@@ -686,8 +667,8 @@ def get_incident(user_id, incident_id: str):
                         "type": srow[S_TYPE] or "diagnostic",
                         "risk": srow[S_RISK] or "safe",
                         "command": srow[S_CMD],
-                        "createdAt": _format_timestamp(srow[S_CREATED]),
-                        "executedAt": _format_timestamp(srow[S_EXECUTED_AT]),
+                        "createdAt": iso_utc(srow[S_CREATED]),
+                        "executedAt": iso_utc(srow[S_EXECUTED_AT]),
                         "executionSessionId": str(srow[S_EXEC_SESSION]) if srow[S_EXEC_SESSION] else None,
                         "executionStatus": srow[S_EXEC_STATUS],
                     }
@@ -703,7 +684,7 @@ def get_incident(user_id, incident_id: str):
                                 "prUrl": srow[S_PR_URL],
                                 "prNumber": srow[S_PR_NUM],
                                 "createdBranch": srow[S_BRANCH],
-                                "appliedAt": _format_timestamp(srow[S_APPLIED]),
+                                "appliedAt": iso_utc(srow[S_APPLIED]),
                             }
                         )
                     suggestions.append(suggestion)
@@ -725,10 +706,10 @@ def get_incident(user_id, incident_id: str):
                     thoughts.append(
                         {
                             "id": str(trow[0]),
-                            "timestamp": _format_timestamp(trow[2]),
+                            "timestamp": iso_utc(trow[2]),
                             "content": trow[3],
                             "type": trow[4] or "analysis",
-                            "createdAt": _format_timestamp(trow[5]),
+                            "createdAt": iso_utc(trow[5]),
                         }
                     )
 
@@ -762,8 +743,8 @@ def get_incident(user_id, incident_id: str):
                             "toolName": crow[2] or "Unknown",
                             "command": crow[3] or "",
                             "output": crow[4] or "",
-                            "executedAt": _format_timestamp(crow[5]),
-                            "createdAt": _format_timestamp(crow[6]),
+                            "executedAt": iso_utc(crow[5]),
+                            "createdAt": iso_utc(crow[6]),
                         }
                     )
 
@@ -795,8 +776,8 @@ def get_incident(user_id, incident_id: str):
                             "title": csrow[1],
                             "messages": csrow[2] if csrow[2] else [],
                             "status": csrow[3] or "active",
-                            "createdAt": _format_timestamp(csrow[4]),
-                            "updatedAt": _format_timestamp(csrow[5]),
+                            "createdAt": iso_utc(csrow[4]),
+                            "updatedAt": iso_utc(csrow[5]),
                         }
                     )
 
@@ -945,7 +926,7 @@ def get_incident(user_id, incident_id: str):
 @require_permission("incidents", "read")
 def get_incident_alerts(user_id, incident_id: str):
 
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
     org_id = get_org_id_from_request()
@@ -986,7 +967,7 @@ def get_incident_alerts(user_id, incident_id: str):
                             "correlationDetails": arow[7]
                             if isinstance(arow[7], dict)
                             else {},
-                            "receivedAt": _format_timestamp(arow[8]),
+                            "receivedAt": iso_utc(arow[8]),
                         }
                     )
 
@@ -1014,7 +995,7 @@ ALLOWED_ACTIVE_TAB = {"thoughts", "chat"}
 def update_incident(user_id, incident_id: str):
 
     # Validate incident_id is a valid UUID
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
     org_id = get_org_id_from_request()
@@ -1154,7 +1135,7 @@ def update_incident(user_id, incident_id: str):
 @require_permission("incidents", "write")
 def incident_chat(user_id, incident_id: str):
 
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID format"}), 400
 
     org_id = get_org_id_from_request()
@@ -1184,7 +1165,7 @@ def incident_chat(user_id, incident_id: str):
         sanitize(existing_session_id),
     )
 
-    if existing_session_id and not _validate_uuid(existing_session_id):
+    if existing_session_id and not is_valid_uuid(existing_session_id):
         return jsonify({"error": "Invalid session ID format"}), 400
 
     try:
@@ -1705,7 +1686,7 @@ def apply_fix_suggestion(user_id, suggestion_id: str):
 @require_permission("incidents", "write")
 def merge_alert_to_incident(user_id, target_incident_id: str):
 
-    if not _validate_uuid(target_incident_id):
+    if not is_valid_uuid(target_incident_id):
         return jsonify({"error": "Invalid target incident ID format"}), 400
 
     org_id = get_org_id_from_request()
@@ -1715,7 +1696,7 @@ def merge_alert_to_incident(user_id, target_incident_id: str):
         return jsonify({"error": "Missing request body"}), 400
 
     source_incident_id = data.get("sourceIncidentId")
-    if not source_incident_id or not _validate_uuid(source_incident_id):
+    if not source_incident_id or not is_valid_uuid(source_incident_id):
         return jsonify({"error": "Invalid or missing sourceIncidentId"}), 400
 
     if source_incident_id == target_incident_id:
@@ -1995,7 +1976,7 @@ def get_recent_unlinked_incidents(user_id):
                 """
                 params = [org_id]
 
-                if exclude_id and _validate_uuid(exclude_id):
+                if exclude_id and is_valid_uuid(exclude_id):
                     query += " AND id != %s"
                     params.append(exclude_id)
 
@@ -2014,7 +1995,7 @@ def get_recent_unlinked_incidents(user_id):
                         "sourceType": row[4],
                         "status": row[5],
                         "auroraStatus": row[6],
-                        "createdAt": _format_timestamp(row[7]),
+                        "createdAt": iso_utc(row[7]),
                     })
 
                 return jsonify({"incidents": incidents}), 200
@@ -2031,7 +2012,7 @@ _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
 @require_permission("incidents", "read")
 def get_incident_action_runs(user_id, incident_id: str):
     """Return action runs linked to a specific incident."""
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
 
     org_id = get_org_id_from_request()
@@ -2058,8 +2039,8 @@ def get_incident_action_runs(user_id, incident_id: str):
             r["chat_session_id"] = str(r["chat_session_id"]) if r["chat_session_id"] else None
             if r["started_at"] and r["completed_at"]:
                 r["duration_ms"] = max(0, int((r["completed_at"] - r["started_at"]).total_seconds() * 1000))
-            r["started_at"] = _format_timestamp(r["started_at"])
-            r["completed_at"] = _format_timestamp(r["completed_at"])
+            r["started_at"] = iso_utc(r["started_at"])
+            r["completed_at"] = iso_utc(r["completed_at"])
 
         return jsonify({"runs": rows})
     except Exception:
