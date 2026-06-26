@@ -3041,10 +3041,22 @@ def initialize_tables():
                 old_tables_exist = cursor.fetchone()[0]
 
                 if old_tables_exist:
-                    # Only migrate if there are source rows AND no artifacts yet
+                    # Migrate if any legacy source has rows and nothing migrated yet
                     cursor.execute("""
                         SELECT EXISTS (
-                            SELECT 1 FROM knowledge_base_memory WHERE content IS NOT NULL AND content != ''
+                            SELECT 1 FROM knowledge_base_memory
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM infrastructure_context
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM knowledge_base_documents
+                            WHERE status IN ('processed', 'ready')
+                              AND storage_path IS NOT NULL
                             LIMIT 1
                         )
                     """)
