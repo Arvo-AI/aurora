@@ -21,12 +21,16 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from connectors.jenkins_connector.api_client import JenkinsClient
+from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 MAX_CONTROLLERS = 20
 MAX_JOBS_PER_CONTROLLER = 50
 MAX_BUILDS_PER_CONTROLLER = 5
+# Shorter timeout for registration-time validation so a bulk import of
+# unreachable controllers can't stack up many 30s timeouts on one request.
+VALIDATE_TIMEOUT = 8.0
 
 
 class CloudBeesFleetClient:
@@ -76,6 +80,9 @@ class CloudBeesFleetClient:
         if not base_url or not username or not api_token:
             return False, None, "Controller is missing base_url, username, or api_token."
         client = JenkinsClient(base_url=base_url, username=username, api_token=api_token)
+        # Bound the probe so a bulk import of unreachable controllers can't stack
+        # up many long timeouts on one request thread.
+        client.timeout = VALIDATE_TIMEOUT
         return client.get_server_info()
 
     # ------------------------------------------------------------------
@@ -118,14 +125,21 @@ class CloudBeesFleetClient:
 
         all_builds: List[Dict] = []
         errors: List[str] = []
+        queried = 0
 
         for controller in self.controllers[:MAX_CONTROLLERS]:
+            queried += 1
             ctrl_builds, ctrl_error = self._query_single_controller(
                 controller, service, cutoff_ms
             )
             all_builds.extend(ctrl_builds)
             if ctrl_error:
                 errors.append(ctrl_error)
+
+        # If every controller we tried failed, surface a failure rather than a
+        # misleading empty result — otherwise the caller reports "0 builds".
+        if queried > 0 and len(errors) == queried:
+            return False, [], "; ".join(errors)
 
         all_builds.sort(key=lambda b: b.get("timestamp", 0), reverse=True)
         return True, all_builds, "; ".join(errors) if errors else None
@@ -150,7 +164,10 @@ class CloudBeesFleetClient:
                 return [], f"{controller_name}: Failed to query controller"
 
             if service:
-                jobs = [j for j in jobs if service.lower() in (j.get("name", "") or "").lower()]
+                jobs = [
+                    j for j in jobs
+                    if service.lower() in (j.get("fullName") or j.get("name") or "").lower()
+                ]
 
             builds: List[Dict] = []
             for job in jobs[:MAX_JOBS_PER_CONTROLLER]:
@@ -160,15 +177,19 @@ class CloudBeesFleetClient:
             return builds, None
 
         except Exception as e:
-            logger.warning("Failed to query fleet controller %s: %s", controller_name, e)
+            logger.warning("Failed to query fleet controller %s: %s", sanitize(controller_name), sanitize(e))
             return [], f"{controller_name}: Failed to query controller"
 
     @staticmethod
     def _collect_job_builds(
         client: JenkinsClient, job: Dict, controller_name: str, controller_url: str, cutoff_ms: int
     ) -> List[Dict]:
-        """Return recent builds for a single job, annotated with controller/job context."""
-        job_name = job.get("name") or job.get("fullName")
+        """Return recent builds for a single job, annotated with controller/job context.
+
+        Uses ``fullName`` (e.g. ``folder/job``) when present so foldered jobs are
+        queried at their real path; falls back to the leaf ``name``.
+        """
+        job_name = job.get("fullName") or job.get("name")
         if not job_name:
             return []
 

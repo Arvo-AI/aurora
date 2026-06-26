@@ -70,17 +70,18 @@ export function CredentialForms({
 
   const addFleetController = () => {
     setFcError("");
-    if (!fcUrl.startsWith("http://") && !fcUrl.startsWith("https://")) {
+    const url = fcUrl.trim();
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
       setFcError("URL must start with http:// or https://");
       return;
     }
-    if (!fcUsername || !fcToken) {
+    if (!fcUsername.trim() || !fcToken) {
       setFcError("Username and token are required");
       return;
     }
     setFleetControllers((prev) => [
       ...prev,
-      { name: fcName.trim() || fcUrl, url: fcUrl.trim(), username: fcUsername.trim(), token: fcToken },
+      { name: fcName.trim() || url, url, username: fcUsername.trim(), token: fcToken },
     ]);
     setFcName(""); setFcUrl(""); setFcUsername(""); setFcToken("");
   };

@@ -325,6 +325,7 @@ export default function CloudBeesAuthPage() {
   };
 
   const handleRemoveController = async (controllerId: string) => {
+    setLoading(true);
     try {
       const result = await apiRequest<{ controllers?: DiscoveredController[]; count?: number }>(
         `/api/cloudbees/fleet/controllers/${controllerId}`,
@@ -345,6 +346,8 @@ export default function CloudBeesAuthPage() {
       }
     } catch (err) {
       toast({ title: "Failed to remove controller", description: getUserFriendlyError(err), variant: "destructive" });
+    } finally {
+      setLoading(false);
     }
   };
 

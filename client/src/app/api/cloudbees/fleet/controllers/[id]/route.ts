@@ -22,10 +22,19 @@ export async function DELETE(
       return NextResponse.json({ error: "BACKEND_URL is not configured" }, { status: 500 });
     }
 
-    const response = await fetch(
-      `${API_BASE_URL.replace(/\/$/, "")}/cloudbees/fleet/controllers/${encodeURIComponent(id)}`,
-      { method: "DELETE", headers: authHeaders, cache: "no-store" }
-    );
+    // Bound the backend call so a slow/hung Flask backend can't tie up the
+    // request indefinitely (matches fetchWithTimeout in ci-api-handler).
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let response: Response;
+    try {
+      response = await fetch(
+        `${API_BASE_URL.replace(/\/$/, "")}/cloudbees/fleet/controllers/${encodeURIComponent(id)}`,
+        { method: "DELETE", headers: authHeaders, cache: "no-store", signal: controller.signal }
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       await response.text();

@@ -56,7 +56,7 @@ Recent deployments are a leading indicator of root cause. Always check if a depl
 - Use `build_detail` to get SCM changes and build causes before reading logs.
 - Use `pipeline_stages` for stage-level breakdown to narrow which stage failed.
 - Do NOT call `flag_changes` unless Feature Management is known to be connected.
-- Do NOT call `cross_controller_deployments` unless Operations Center is known to be connected.
+- Do NOT call `cross_controller_deployments` or `controller_list` unless Operations Center OR a manually-registered controller fleet (Multiple Controllers mode) is connected.
 
 ## Recent Deployments
 {cloudbees_deploys_section}
