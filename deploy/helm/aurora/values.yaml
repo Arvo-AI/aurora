@@ -237,8 +237,12 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  # Increased from WORKERS=2/THREADS=4 (8 slots) to WORKERS=4/THREADS=8 (32 slots)
+  # to prevent Weaviate TCP timeout bursts from exhausting all gunicorn thread slots
+  # and starving the liveness probe → SIGKILL → pod restart → slow request alert.
+  # See: github.com/Arvo-AI/aurora/pull/557 (39 firings of slow-requests alert)
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
