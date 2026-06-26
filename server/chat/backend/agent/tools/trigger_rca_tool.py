@@ -1,10 +1,9 @@
 """
 Trigger RCA Tool
 
-LLM-callable tool that bridges interactive chat with the background RCA pipeline.
-When the user describes an operational incident in chat, the LLM calls this tool
-to create an incident and dispatch a full automated RCA investigation using all
-connected integrations.
+LLM-callable tool that creates an incident and dispatches a full automated RCA
+investigation using all connected integrations. Can be invoked from any agent
+session (interactive chat, Slack, MCP, etc.).
 """
 
 import json
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class TriggerRCAArgs(BaseModel):
-    """Arguments for triggering an RCA investigation from chat."""
+    """Arguments for triggering an RCA investigation."""
 
     issue_description: str = Field(
         description="What the user described — the operational issue or symptoms they're seeing"
@@ -46,7 +45,7 @@ def trigger_rca(
     **kwargs,
 ) -> str:
     """
-    Trigger a full background RCA investigation from an interactive chat session.
+    Trigger a full background RCA investigation.
 
     Creates an incident, broadcasts an SSE update, and dispatches the background
     RCA pipeline (same one used by webhook-triggered alerts) with all connected
