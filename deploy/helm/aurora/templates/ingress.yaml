@@ -11,6 +11,11 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.nginx.proxySendTimeout | default "3600" | quote }}
     nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.nginx.proxyBodySize | default "50m" | quote }}
     nginx.ingress.kubernetes.io/proxy-http-version: {{ .Values.ingress.nginx.proxyHttpVersion | default "1.1" | quote }}
+    # Strip duplicate Transfer-Encoding header sent by Next.js when proxying chunked upstream responses.
+    # Without this, nginx returns 502 with "upstream sent duplicate header line: Transfer-Encoding: chunked".
+    # nginx hot-reloads this annotation — no pod restart required.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_hide_header Transfer-Encoding;
     {{- if and .Values.ingress.nginx.sessionAffinity .Values.ingress.nginx.sessionAffinity.enabled }}
     # Cookie-based session affinity for WebSocket sticky sessions
     # Ensures HTTP upgrade request hits the same pod; once established, WebSocket stays connected
