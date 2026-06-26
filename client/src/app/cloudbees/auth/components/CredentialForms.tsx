@@ -89,6 +89,21 @@ export function CredentialForms({
     setFleetControllers((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  // Coerce a JSON value to a trimmed string only when it's a string/number;
+  // anything else (objects, arrays) becomes "" rather than "[object Object]".
+  const strField = (v: unknown): string =>
+    typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+
+  const parseFleetItem = (item: unknown): FleetControllerInput | null => {
+    if (!item || typeof item !== "object") return null;
+    const o = item as Record<string, unknown>;
+    const url = strField(o.url ?? o.base_url);
+    const username = strField(o.username);
+    const token = strField(o.token ?? o.api_token);
+    if (!url || !username || !token) return null;
+    return { name: strField(o.name) || url, url, username, token };
+  };
+
   const applyBulkJson = () => {
     setBulkError("");
     let parsed: unknown;
@@ -102,16 +117,7 @@ export function CredentialForms({
       setBulkError("JSON must be an array of controller objects.");
       return;
     }
-    const valid: FleetControllerInput[] = [];
-    for (const item of parsed) {
-      if (!item || typeof item !== "object") continue;
-      const o = item as Record<string, unknown>;
-      const url = String(o.url ?? o.base_url ?? "").trim();
-      const username = String(o.username ?? "").trim();
-      const token = String(o.token ?? o.api_token ?? "");
-      if (!url || !username || !token) continue;
-      valid.push({ name: String(o.name ?? url).trim() || url, url, username, token });
-    }
+    const valid = parsed.map(parseFleetItem).filter((c): c is FleetControllerInput => c !== null);
     if (valid.length === 0) {
       setBulkError("No valid controllers found. Each needs url, username, and token.");
       return;
@@ -119,6 +125,16 @@ export function CredentialForms({
     setFleetControllers((prev) => [...prev, ...valid]);
     setBulkJson("");
   };
+
+  const fleetCount = fleetControllers.length;
+  let fleetConnectLabel: string;
+  if (loading) {
+    fleetConnectLabel = "Connecting...";
+  } else if (fleetCount === 0) {
+    fleetConnectLabel = "Connect controllers";
+  } else {
+    fleetConnectLabel = `Connect ${fleetCount} controller${fleetCount === 1 ? "" : "s"}`;
+  }
 
   return (
     <div className="animate-step-in">
@@ -388,7 +404,7 @@ export function CredentialForms({
               className="flex-1 py-3.5 rounded-xl bg-white text-black font-medium text-[15px] hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {loading ? "Connecting..." : `Connect ${fleetControllers.length || ""} controller${fleetControllers.length === 1 ? "" : "s"}`.trim()}
+              {fleetConnectLabel}
             </button>
           </div>
         </>

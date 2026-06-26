@@ -473,12 +473,15 @@ MAX_FLEET_CONTROLLERS = 20
 
 
 def _public_controller(ctrl: Dict[str, Any]) -> Dict[str, Any]:
-    """Strip credentials from a stored controller for API responses."""
+    """Strip credentials from a stored controller for API responses.
+
+    Omits both the API token AND the username — the username is the auth
+    principal for the token, so it is not exposed to the frontend.
+    """
     return {
         "id": ctrl.get("id"),
         "name": ctrl.get("name") or ctrl.get("base_url", ""),
         "url": ctrl.get("base_url", ""),
-        "username": ctrl.get("username", ""),
         "status": ctrl.get("status", "unknown"),
         "last_error": ctrl.get("last_error"),
     }
