@@ -68,10 +68,12 @@ export function CredentialForms({
   const [bulkJson, setBulkJson] = useState("");
   const [bulkError, setBulkError] = useState("");
 
+  const isHttpUrl = (u: string) => u.startsWith("http://") || u.startsWith("https://");
+
   const addFleetController = () => {
     setFcError("");
     const url = fcUrl.trim();
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    if (!isHttpUrl(url)) {
       setFcError("URL must start with http:// or https://");
       return;
     }
@@ -101,7 +103,9 @@ export function CredentialForms({
     const url = strField(o.url ?? o.base_url);
     const username = strField(o.username);
     const token = strField(o.token ?? o.api_token);
-    if (!url || !username || !token) return null;
+    // Apply the same http(s):// scheme check as manual entry so bulk import
+    // doesn't defer a preventable validation error to connect time.
+    if (!isHttpUrl(url) || !username || !token) return null;
     return { name: strField(o.name) || url, url, username, token };
   };
 
