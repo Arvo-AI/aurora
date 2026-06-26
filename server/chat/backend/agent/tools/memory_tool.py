@@ -3,7 +3,7 @@ Memory Tools
 
 Agent-callable tools for listing, reading, and writing org memory.
 Memory lives in the same artifacts table but is scoped to memory categories
-(context, runbook, infrastructure, learned, postmortem).
+defined in services.memory.MEMORY_CATEGORIES.
 
 Reuses services/artifacts/store.py for persistence and versioning.
 """
@@ -230,9 +230,8 @@ def write_memory(
                        (org_id, user_id, title, content, category, description,
                         last_edited_by, updated_at)
                    VALUES (%s, %s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
-                   ON CONFLICT (org_id, title)
+                   ON CONFLICT (org_id, category, title)
                    DO UPDATE SET content = EXCLUDED.content,
-                                 category = EXCLUDED.category,
                                  description = EXCLUDED.description,
                                  user_id = EXCLUDED.user_id,
                                  last_edited_by = 'agent',
@@ -355,7 +354,7 @@ def append_to_memory(
 
 
 class EditMemoryArgs(BaseModel):
-    category: str = Field(description="The memory category of the entry to edit")
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
     title: str = Field(description="The exact title of the memory entry to edit")
     old_text: str = Field(description="The exact text to find in the entry (must match precisely)")
     new_text: str = Field(description="The replacement text (use empty string to delete the matched section)")
@@ -444,7 +443,10 @@ class GrepMemoriesArgs(BaseModel):
     query: str = Field(description="Search pattern — supports regex (e.g. 'redis.*timeout', '(5xx|500)'). Plain strings work too.")
     category: str = Field(
         default="",
-        description="Optionally limit search to a specific category",
+        description=(
+            f"Optionally limit search to a specific category: {_CATEGORY_HELP}. "
+            "Leave empty to search all."
+        ),
     )
 
 

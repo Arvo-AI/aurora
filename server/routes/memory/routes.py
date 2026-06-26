@@ -120,9 +120,8 @@ def create_entry(user_id):
                        (org_id, user_id, title, content, category, description,
                         last_edited_by, updated_at)
                    VALUES (%s, %s, %s, %s, %s, %s, 'user', CURRENT_TIMESTAMP)
-                   ON CONFLICT (org_id, title)
+                   ON CONFLICT (org_id, category, title)
                    DO UPDATE SET content = EXCLUDED.content,
-                                 category = EXCLUDED.category,
                                  description = EXCLUDED.description,
                                  last_edited_by = 'user',
                                  updated_at = CURRENT_TIMESTAMP
@@ -268,9 +267,8 @@ def upload_file(user_id):
                            (org_id, user_id, title, content, category, description,
                             last_edited_by, updated_at)
                        VALUES (%s, %s, %s, %s, %s, %s, 'user', CURRENT_TIMESTAMP)
-                       ON CONFLICT (org_id, title)
+                       ON CONFLICT (org_id, category, title)
                        DO UPDATE SET content = EXCLUDED.content,
-                                     category = EXCLUDED.category,
                                      description = EXCLUDED.description,
                                      last_edited_by = 'user',
                                      updated_at = CURRENT_TIMESTAMP

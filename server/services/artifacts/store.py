@@ -61,9 +61,9 @@ def upsert_artifact_by_title(
     source: str,
     session_id: Optional[str] = None,
 ) -> Tuple[str, int]:
-    """Create or replace an artifact addressed by (org_id, title) and version it.
+    """Create or replace an artifact addressed by (org_id, category, title) and version it.
 
-    Relies on the unique index idx_artifacts_org_title for an atomic upsert.
+    Relies on the unique index idx_artifacts_org_cat_title for an atomic upsert.
     last_edited_by is derived from source: a 'manual' write came from a human
     (the UI), anything else from the agent. Returns (artifact_id, version_number).
     """
@@ -72,7 +72,7 @@ def upsert_artifact_by_title(
     cursor.execute(
         """INSERT INTO artifacts (org_id, user_id, title, content, category, last_edited_by, updated_at)
            VALUES (%s, %s, %s, %s, 'artifact', %s, CURRENT_TIMESTAMP)
-           ON CONFLICT (org_id, title)
+           ON CONFLICT (org_id, category, title)
            DO UPDATE SET content = EXCLUDED.content,
                          user_id = EXCLUDED.user_id,
                          last_edited_by = EXCLUDED.last_edited_by,

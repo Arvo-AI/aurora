@@ -1255,7 +1255,7 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
 
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title ON artifacts(org_id, category, title);
                     CREATE INDEX IF NOT EXISTS idx_artifacts_org_category ON artifacts(org_id, category);
                 """,
                 "artifact_versions": """

@@ -45,7 +45,7 @@ def migrate_kb_to_memory(self):
                                     last_edited_by, updated_at)
                                VALUES (%s, %s, 'Org Context', %s, 'context',
                                        'User-provided org context (migrated from knowledge base)', 'user', CURRENT_TIMESTAMP)
-                               ON CONFLICT (org_id, title) DO NOTHING
+                               ON CONFLICT (org_id, category, title) DO NOTHING
                                RETURNING id""",
                             (org_id, user_id, content),
                         )
@@ -75,7 +75,7 @@ def migrate_kb_to_memory(self):
                                     last_edited_by, updated_at)
                                VALUES (%s, %s, 'Infrastructure Context', %s, 'infrastructure',
                                        'Auto-discovered infrastructure topology (migrated)', 'system', CURRENT_TIMESTAMP)
-                               ON CONFLICT (org_id, title) DO NOTHING
+                               ON CONFLICT (org_id, category, title) DO NOTHING
                                RETURNING id""",
                             (org_id, user_id, content),
                         )
@@ -146,7 +146,7 @@ def migrate_kb_to_memory(self):
                                         last_edited_by, updated_at)
                                    VALUES (%s, %s, %s, %s, 'runbook',
                                            %s, 'user', CURRENT_TIMESTAMP)
-                                   ON CONFLICT (org_id, title) DO NOTHING
+                                   ON CONFLICT (org_id, category, title) DO NOTHING
                                    RETURNING id""",
                                 (org_id, user_id, title, part_content, desc),
                             )
