@@ -3,7 +3,7 @@ Celery task for running prediscovery agent sessions.
 
 The prediscovery agent autonomously explores connected integrations (GitHub, Jenkins,
 cloud providers, monitoring tools) to map how services are interconnected. Findings
-are saved to the knowledge base for fast retrieval during RCA investigations.
+are saved to org memory for fast retrieval during RCA investigations.
 """
 
 import logging

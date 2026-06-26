@@ -1919,7 +1919,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 get_action, GetActionArgs,
                 graph_get_service, GraphGetServiceArgs,
                 postmortem_list, PostmortemListArgs,
-                kb_get_memory, KbGetMemoryArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
             )
 
@@ -2054,14 +2053,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     PostmortemListArgs,
                 ),
                 (
-                    kb_get_memory,
-                    "kb_get_memory",
-                    "Read the org's persistent knowledge base memory — a shared context "
-                    "document that teams maintain with org-specific conventions, runbook "
-                    "references, and operational notes.",
-                    KbGetMemoryArgs,
-                ),
-                (
                     grafana_list_alerts,
                     "grafana_list_alerts",
                     "List Grafana alerts ingested via webhook. Optionally filter by state "
@@ -2088,32 +2079,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added introspection tools for user {user_id}")
         except Exception as e:
             logging.warning(f"Failed to add introspection tools: {e}")
-
-    # Add discovery finding tool for prediscovery mode
-    if mode_suffix == "prediscovery":
-        try:
-            from chat.backend.agent.tools.discovery_finding_tool import (
-                save_discovery_finding,
-                DiscoveryFindingArgs,
-                DISCOVERY_FINDING_DESCRIPTION,
-            )
-
-            context_wrapped_df = with_user_context(save_discovery_finding)
-            notification_wrapped_df = with_completion_notification(context_wrapped_df)
-            if tool_capture:
-                final_df_func = wrap_func_with_capture(notification_wrapped_df, "save_discovery_finding")
-            else:
-                final_df_func = notification_wrapped_df
-
-            tools.append(StructuredTool.from_function(
-                func=final_df_func,
-                name="save_discovery_finding",
-                description=DISCOVERY_FINDING_DESCRIPTION,
-                args_schema=DiscoveryFindingArgs,
-            ))
-            logging.info(f"Added save_discovery_finding tool for prediscovery mode")
-        except Exception as e:
-            logging.warning(f"Failed to add save_discovery_finding tool: {e}")
 
     # Add Splunk tools if connected
     if is_splunk_connected(user_id):

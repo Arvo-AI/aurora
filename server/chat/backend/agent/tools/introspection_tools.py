@@ -800,30 +800,6 @@ def postmortem_list(limit=50, offset=0, *, user_id, **_) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Knowledge base memory
-# ---------------------------------------------------------------------------
-
-class KbGetMemoryArgs(BaseModel):
-    pass
-
-
-@introspection_tool
-def kb_get_memory(*, user_id, **_) -> dict:
-    """Read the org's persistent knowledge base memory."""
-    with _cursor(user_id) as (cur, org_id):
-        cur.execute(
-            """SELECT content, updated_at FROM knowledge_base_memory
-               WHERE org_id = %s ORDER BY updated_at DESC LIMIT 1""",
-            (org_id,),
-        )
-        row = cur.fetchone()
-
-    if row and row[0]:
-        return {"content": row[0], "updated_at": iso_utc(row[1])}
-    return {"content": "", "updated_at": None}
-
-
-# ---------------------------------------------------------------------------
 # Grafana alerts (webhook-ingested)
 # ---------------------------------------------------------------------------
 

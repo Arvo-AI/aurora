@@ -606,24 +606,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         enabling_skills=(),
         path_args=("suggestion_id",),
     ),
-    # ----- Knowledge base reads -----
-    DispatchEntry(
-        name="kb_get_memory",
-        description="Read the org's persistent memory / context content.",
-        category="docs",
-        method="GET",
-        path="/api/knowledge-base/memory",
-        enabling_skills=(),
-    ),
-    DispatchEntry(
-        name="kb_get_document",
-        description="Fetch a knowledge-base document's metadata and status.",
-        category="docs",
-        method="GET",
-        path="/api/knowledge-base/documents/{doc_id}",
-        enabling_skills=(),
-        path_args=("doc_id",),
-    ),
     # ----- Splunk async search workflow -----
     DispatchEntry(
         name="splunk_create_search_job",

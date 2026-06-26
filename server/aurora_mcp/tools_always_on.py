@@ -308,7 +308,7 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
 
     @mcp.tool()
     async def search_runbooks(query: str, limit: int = 5) -> Dict[str, Any]:
-        """Search runbooks/docs across the Aurora knowledge base and SharePoint
+        """Search runbooks/docs across org memory and SharePoint
         (when connected). Confluence has no search endpoint — fetch specific
         Confluence pages via call_tool('confluence_fetch_page', { url })."""
         return await _do_search_runbooks(api_call, query, limit)
