@@ -137,16 +137,10 @@ def status(user_id):
     fleet_creds = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER)
     fleet_controllers = (fleet_creds or {}).get("controllers") or []
     if fleet_controllers and not get_token_data(user_id, CLOUDBEES_PROVIDER):
-        online = sum(1 for c in fleet_controllers if c.get("status") == "online")
         return jsonify({
             "connected": True,
             "mode": "fleet",
             "controllerCount": len(fleet_controllers),
-            "summary": {
-                "controllerCount": len(fleet_controllers),
-                "controllersOnline": online,
-                "controllersOffline": len(fleet_controllers) - online,
-            },
         })
 
     creds = _get_stored_cloudbees_credentials(user_id)
