@@ -15,7 +15,6 @@ from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
-from utils.log_sanitizer import sanitize
 from services.memory import MEMORY_CATEGORIES
 from services.memory.splitter import split_content, make_part_title, make_part_description
 from services.artifacts.store import create_version
@@ -287,12 +286,11 @@ def upload_file(user_id):
             conn.commit()
 
         logger.info(
-            "[Memory] Uploaded %s as %s/%s (%d part%s) for org %s",
-            sanitize(file.filename), category, sanitize(base_title),
-            total_parts, "s" if total_parts > 1 else "", org_id,
+            "[Memory] Uploaded file to %s (%d part%s) for org %s",
+            category, total_parts, "s" if total_parts > 1 else "", org_id,
         )
         return jsonify({"entries": created_entries, "parts": total_parts}), 201
 
     except Exception as e:
-        logger.exception(f"[Memory] Error uploading file: {e}")
+        logger.exception("[Memory] Error uploading file")
         return jsonify({"error": "Failed to upload file"}), 500
