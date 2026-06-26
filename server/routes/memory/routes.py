@@ -289,8 +289,9 @@ def upload_file(user_id):
             conn.commit()
 
         logger.info(
-            f"[Memory] Uploaded {sanitize(file.filename)} as {category}/{sanitize(base_title)} "
-            f"({total_parts} part{'s' if total_parts > 1 else ''}) for org {org_id}"
+            "[Memory] Uploaded %s as %s/%s (%d part%s) for org %s",
+            sanitize(file.filename), category, sanitize(base_title),
+            total_parts, "s" if total_parts > 1 else "", org_id,
         )
         return jsonify({"entries": created_entries, "parts": total_parts}), 201
 
