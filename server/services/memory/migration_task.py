@@ -10,7 +10,7 @@ One-time Celery task to migrate existing data into the new memory system:
 import io
 import logging
 
-from celery_worker import celery
+from celery_config import celery_app
 from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -21,7 +21,7 @@ from services.memory.splitter import split_content, make_part_title, make_part_d
 logger = logging.getLogger(__name__)
 
 
-@celery.task(name="migrate_kb_to_memory", bind=True, max_retries=0)
+@celery_app.task(name="migrate_kb_to_memory", bind=True, max_retries=0)
 def migrate_kb_to_memory(self):
     """Migrate all existing KB data into memory artifacts."""
     stats = {"context": 0, "infrastructure": 0, "documents": 0, "errors": 0}
