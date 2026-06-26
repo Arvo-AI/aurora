@@ -5,8 +5,12 @@ import { signIn } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import Image from "next/image"
-import AuroraShader from '@/app/components/AuroraShader'
+import dynamic from "next/dynamic"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
+
+const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), {
+  ssr: false,
+})
 
 
 function AuthPage() {
