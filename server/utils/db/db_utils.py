@@ -3020,6 +3020,12 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
                 """)
+                # Replace legacy (org_id, title) uniqueness with (org_id, category, title)
+                cursor.execute("""
+                    DROP INDEX IF EXISTS idx_artifacts_org_title;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title
+                        ON artifacts(org_id, category, title);
+                """)
             except Exception as e:
                 logging.warning(f"Error adding memory columns to artifacts: {e}")
                 conn.rollback()
