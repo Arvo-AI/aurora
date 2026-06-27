@@ -4,7 +4,7 @@ sidebar_position: 5
 
 # Jira
 
-Aurora integrates with [Jira](https://www.atlassian.com/software/jira) to automatically trigger root cause analysis when bugs are filed. When a Bug issue is created in Jira, Aurora creates an incident and runs its full RCA pipeline — the same investigation flow triggered by Datadog, Grafana, or PagerDuty alerts.
+Aurora integrates with [Jira](https://www.atlassian.com/software/jira) to automatically trigger root cause analysis when supported issue types (Bug, Incident, Problem, Defect, Production Issue) are created. When such an issue is created in Jira, Aurora creates an incident and runs its full RCA pipeline — the same investigation flow triggered by Datadog, Grafana, or PagerDuty alerts.
 
 ## What You Get
 

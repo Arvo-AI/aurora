@@ -173,8 +173,17 @@ def process_jira_webhook(
                     alert_title, service, severity, alert_metadata,
                 )
 
-                if incident_was_inserted:
-                    _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id)
+                # Duplicate webhook delivery (issue upsert hit the existing row):
+                # the incident already exists and RCA is already running, so skip
+                # lifecycle/summary/RCA dispatch to avoid duplicate work.
+                if not incident_was_inserted:
+                    logger.info(
+                        "[JIRA][WEBHOOK] Updated existing incident %s for %s; skipping duplicate RCA dispatch",
+                        incident_id, sanitize(issue_key),
+                    )
+                    return
+
+                _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id)
 
                 logger.info("[JIRA][WEBHOOK] Created incident %s for %s", incident_id, sanitize(issue_key))
                 _notify_and_summarize(
@@ -210,8 +219,11 @@ def _record_primary_alert(
             (service, incident_id),
         )
         conn.commit()
-    except Exception as e:
-        logger.warning("[JIRA] Failed to record primary alert: %s", e)
+    except Exception:
+        # Re-raise so the Celery task retries: an incident without its primary
+        # alert row is an inconsistent state we don't want to leave behind.
+        logger.exception("[JIRA] Failed to record primary alert for incident %s", incident_id)
+        raise
 
 
 def _record_lifecycle_event(cursor, conn, user_id: str, org_id: str, incident_id) -> None:
@@ -314,6 +326,8 @@ def _dispatch_rca(
     issue_key: str, payload: Dict[str, Any],
 ) -> None:
     """Kick off the background RCA chat for a freshly-created Jira incident."""
+    session_id = None
+    task = None
     try:
         from chat.background.task import (
             run_background_chat,
@@ -355,3 +369,14 @@ def _dispatch_rca(
         )
     except Exception:
         logger.exception("[JIRA][WEBHOOK] Failed to trigger RCA")
+        # If the session was created but the task never got enqueued, mark it
+        # failed so it doesn't sit forever as in_progress with no worker.
+        if session_id and task is None:
+            try:
+                cursor.execute(
+                    "UPDATE chat_sessions SET status = %s WHERE id = %s",
+                    ("failed", session_id),
+                )
+                conn.commit()
+            except Exception:
+                logger.debug("[JIRA][WEBHOOK] Failed to mark RCA session failed", exc_info=True)

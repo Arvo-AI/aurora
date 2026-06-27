@@ -385,7 +385,14 @@ def webhook(user_id: str):
         return jsonify({"status": "ignored", "reason": "issue type not configured for RCA"}), 200
 
     from routes.jira.tasks import process_jira_webhook
-    process_jira_webhook.delay(payload=payload, user_id=user_id)
+    try:
+        process_jira_webhook.delay(payload=payload, user_id=user_id)
+    except Exception:
+        # Broker/registration failure is on our side, not the sender's — return
+        # 503 so Jira retries rather than treating it as a malformed webhook (500).
+        logger.exception("[JIRA][WEBHOOK] Failed to enqueue task for user %s (issue=%s)",
+                         sanitize(user_id), sanitize(issue.get("key", "?")))
+        return jsonify({"status": "error", "reason": "could not enqueue webhook for processing"}), 503
 
     return jsonify({"status": "accepted", "issue": issue.get("key", "unknown")}), 202
 
@@ -401,4 +408,6 @@ def get_webhook_url(user_id):
     import os
     backend_url = os.environ.get("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
     url = f"{backend_url}/jira/webhook/{user_id}"
-    return jsonify({"webhook_url": url, "events": ["jira:issue_created", "jira:issue_updated"]})
+    # These are the recommended Jira events to subscribe the webhook to — not a
+    # server-enforced allowlist. The handler filters by issue type, not event name.
+    return jsonify({"webhook_url": url, "recommended_events": ["jira:issue_created", "jira:issue_updated"]})

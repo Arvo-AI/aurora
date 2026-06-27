@@ -309,10 +309,14 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      navigator.clipboard.writeText(webhookUrl);
-                      setWebhookCopied(true);
-                      setTimeout(() => setWebhookCopied(false), 2000);
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(webhookUrl);
+                        setWebhookCopied(true);
+                        setTimeout(() => setWebhookCopied(false), 2000);
+                      } catch {
+                        toast({ title: "Couldn't copy to clipboard", description: "Copy the webhook URL manually.", variant: "destructive" });
+                      }
                     }}
                   >
                     {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
