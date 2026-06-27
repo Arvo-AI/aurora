@@ -13,7 +13,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { canExecuteCommand, type ExecutionCapabilities } from '@/hooks/use-execution-capabilities';
 
-const CODE_PILL = "font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap";
+const CODE_PILL = "font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px [overflow-wrap:anywhere] break-words";
 
 const TOKEN_RE = /(`[^`]+`|\*\*[^*]+\*\*|\[\d+(?:,\s*\d+)*\])/g;
 
@@ -155,8 +155,8 @@ export default function NextStepsConsole({ suggestions, citations, canWrite, exe
             <div className={`pt-3.5 pb-3.5 pl-3 pr-2.5 text-right font-mono text-[11px] select-none ${sevColor}`}>
               {sevGlyph}
             </div>
-            <div className="py-3.5 pr-2 min-w-0">
-              <p className="text-[13px] font-semibold text-zinc-100 tracking-[-0.01em] mb-1">{formatDescriptionWithCode(suggestion.title)}</p>
+            <div className="py-3.5 pr-2 min-w-0 [overflow-wrap:anywhere]">
+              <p className="text-[13px] font-semibold text-zinc-100 tracking-[-0.01em] mb-1 break-words">{formatDescriptionWithCode(suggestion.title)}</p>
               {!expandedItems.has(suggestion.id) && (
                 <p className="text-[12.5px] text-zinc-400 leading-[1.55]">
                   {formatDescriptionWithCode(suggestion.summary || suggestion.description)}

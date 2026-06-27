@@ -31,7 +31,7 @@ function renderRuledOutItemText(
   return parts.map((part, i) => {
     if (!part) return null;
     const codeMatch = /^`([^`]+)`$/.exec(part);
-    if (codeMatch) return <code key={`code-${i}`} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px whitespace-nowrap">{codeMatch[1]}</code>;
+    if (codeMatch) return <code key={`code-${i}`} className="font-mono text-[0.86em] bg-white/[.055] text-[#AEB4BE] border border-white/[.06] rounded-[6px] px-1.5 py-px [overflow-wrap:anywhere] break-words">{codeMatch[1]}</code>;
     const citeMatch = /^\[(\d+(?:,\s*\d+)*)\]$/.exec(part);
     if (citeMatch) {
       const keys = citeMatch[1].split(/,\s*/);
