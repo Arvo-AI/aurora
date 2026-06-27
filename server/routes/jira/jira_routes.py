@@ -370,6 +370,17 @@ def webhook(user_id: str):
     Jira Automation rules that POST to this URL on issue creation.
     Accepts standard Jira webhook payloads (issue_created, issue_updated).
     """
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    # Guard: only accept webhooks for users who actually have Jira connected.
+    # Without this, any POST to /jira/webhook/<user_id> would enqueue Celery
+    # work and dispatch an LLM-backed RCA for any (guessable) user_id — the
+    # same connector-existence check the PagerDuty/OpsGenie handlers enforce.
+    if not get_token_data(user_id, "jira"):
+        logger.warning("[JIRA][WEBHOOK] Webhook for user %s with no Jira connection", sanitize(user_id))
+        return jsonify({"error": "Jira not connected for this user"}), 404
+
     payload = request.get_json(silent=True)
     if not payload:
         return jsonify({"error": "Invalid or missing JSON payload"}), 400
@@ -406,8 +417,17 @@ def webhook(user_id: str):
 def get_webhook_url(user_id):
     """Return the Jira webhook URL for the authenticated user."""
     import os
-    backend_url = os.environ.get("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
-    url = f"{backend_url}/jira/webhook/{user_id}"
+    # NEXT_PUBLIC_BACKEND_URL can be a cluster-internal address (e.g.
+    # http://aurora-server:5080) that Jira can't reach. Prefer NGROK_URL in
+    # local dev, then a public URL, matching the PagerDuty handler.
+    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
+    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080").rstrip("/")
+    public_url = os.getenv("PUBLIC_API_URL", "").rstrip("/")
+    if ngrok_url and backend_url.startswith("http://localhost"):
+        base_url = ngrok_url
+    else:
+        base_url = public_url or backend_url
+    url = f"{base_url}/jira/webhook/{user_id}"
     # These are the recommended Jira events to subscribe the webhook to — not a
     # server-enforced allowlist. The handler filters by issue type, not event name.
     return jsonify({"webhook_url": url, "recommended_events": ["jira:issue_created", "jira:issue_updated"]})
