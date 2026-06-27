@@ -128,39 +128,11 @@ def process_jira_webhook(
                 # source_alert_id in incidents is an integer — stable hash of issue key
                 issue_id_int = int(hashlib.sha256(f"{org_id}:{issue_key}".encode()).hexdigest()[:8], 16) % (2**31)
 
-                try:
-                    correlator = AlertCorrelator()
-                    correlation_result = correlator.correlate(
-                        cursor=cursor,
-                        user_id=user_id,
-                        source_type="jira",
-                        source_alert_id=issue_id_int,
-                        alert_title=alert_title,
-                        alert_service=service,
-                        alert_severity=severity,
-                        alert_metadata=alert_metadata,
-                        org_id=org_id,
-                    )
-
-                    if correlation_result.is_correlated:
-                        handle_correlated_alert(
-                            cursor=cursor,
-                            user_id=user_id,
-                            incident_id=correlation_result.incident_id,
-                            source_type="jira",
-                            source_alert_id=issue_id_int,
-                            alert_title=alert_title,
-                            alert_service=service,
-                            alert_severity=severity,
-                            correlation_result=correlation_result,
-                            alert_metadata=alert_metadata,
-                            raw_payload=payload,
-                            org_id=org_id,
-                        )
-                        conn.commit()
-                        return
-                except Exception as corr_exc:
-                    logger.warning("[JIRA] Correlation check failed: %s", corr_exc)
+                if _try_correlate(
+                    cursor, conn, user_id, org_id, issue_id_int,
+                    alert_title, service, severity, alert_metadata, payload,
+                ):
+                    return
 
                 cursor.execute(
                     """
@@ -196,118 +168,190 @@ def process_jira_webhook(
                     logger.error("[JIRA][WEBHOOK] Failed to create incident for %s", sanitize(issue_key))
                     return
 
-                try:
-                    cursor.execute(
-                        """INSERT INTO incident_alerts
-                           (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
-                            alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (
-                            user_id, org_id, incident_id, "jira", issue_id_int,
-                            alert_title, service, severity, "primary", 1.0,
-                            json.dumps(alert_metadata),
-                        ),
-                    )
-                    cursor.execute(
-                        "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
-                        (service, incident_id),
-                    )
-                    conn.commit()
-                except Exception as e:
-                    logger.warning("[JIRA] Failed to record primary alert: %s", e)
+                _record_primary_alert(
+                    cursor, conn, user_id, org_id, incident_id, issue_id_int,
+                    alert_title, service, severity, alert_metadata,
+                )
 
-                if incident_id and incident_was_inserted:
-                    try:
-                        cursor.execute("SAVEPOINT sp_jira_lifecycle")
-                        cursor.execute(
-                            """INSERT INTO incident_lifecycle_events
-                               (incident_id, user_id, org_id, event_type, new_value)
-                               VALUES (%s, %s, %s, %s, %s)""",
-                            (incident_id, user_id, org_id, 'created', 'investigating'),
-                        )
-                        cursor.execute("RELEASE SAVEPOINT sp_jira_lifecycle")
-                        conn.commit()
-                    except Exception as e:
-                        try:
-                            cursor.execute("ROLLBACK TO SAVEPOINT sp_jira_lifecycle")
-                        except Exception as rb_exc:
-                            logger.debug("[JIRA] Savepoint rollback failed: %s", rb_exc)
-                        logger.warning("[JIRA] Failed to record lifecycle event: %s", e)
+                if incident_was_inserted:
+                    _record_lifecycle_event(cursor, conn, user_id, org_id, incident_id)
 
-                if incident_id:
-                    logger.info("[JIRA][WEBHOOK] Created incident %s for %s", incident_id, sanitize(issue_key))
-
-                    try:
-                        from routes.incidents_sse import broadcast_incident_update_to_user_connections
-                        broadcast_incident_update_to_user_connections(
-                            user_id,
-                            {"type": "incident_update", "incident_id": str(incident_id), "source": "jira"},
-                            org_id=org_id,
-                        )
-                    except Exception as e:
-                        logger.warning("[JIRA][WEBHOOK] Failed to notify SSE: %s", e)
-
-                    from chat.background.summarization import generate_incident_summary
-                    generate_incident_summary.delay(
-                        incident_id=str(incident_id),
-                        user_id=user_id,
-                        source_type="jira",
-                        alert_title=alert_title,
-                        severity=severity,
-                        service=service,
-                        raw_payload=payload,
-                        alert_metadata=alert_metadata,
-                    )
-
-                    try:
-                        from chat.background.task import (
-                            run_background_chat,
-                            create_background_chat_session,
-                            is_background_chat_allowed,
-                        )
-
-                        if not is_background_chat_allowed(user_id):
-                            logger.info("[JIRA][WEBHOOK] Skipping RCA - rate limited for user %s", user_id)
-                        else:
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {alert_title}",
-                                trigger_metadata={
-                                    "source": "jira",
-                                    "issue_key": issue_key,
-                                },
-                                incident_id=str(incident_id),
-                            )
-
-                            rca_prompt, rail_text = build_rca_prompt(
-                                "jira", alert_title, payload, user_id=user_id
-                            )
-
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "jira",
-                                    "issue_key": issue_key,
-                                },
-                                incident_id=str(incident_id),
-                                rail_text=rail_text,
-                            )
-
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id))
-                            )
-                            conn.commit()
-
-                            logger.info(
-                                "[JIRA][WEBHOOK] Triggered RCA for %s session=%s task=%s",
-                                sanitize(issue_key), session_id, task.id,
-                            )
-                    except Exception as e:
-                        logger.error("[JIRA][WEBHOOK] Failed to trigger RCA: %s", e)
+                logger.info("[JIRA][WEBHOOK] Created incident %s for %s", incident_id, sanitize(issue_key))
+                _notify_and_summarize(
+                    user_id, org_id, incident_id, alert_title, severity, service,
+                    payload, alert_metadata,
+                )
+                _dispatch_rca(cursor, conn, user_id, incident_id, alert_title, issue_key, payload)
 
     except Exception as exc:
         logger.exception("[JIRA][WEBHOOK] Failed to process webhook")
         raise self.retry(exc=exc)
+
+
+def _record_primary_alert(
+    cursor, conn, user_id: str, org_id: str, incident_id, issue_id_int: int,
+    alert_title: str, service: str, severity: str, alert_metadata: Dict[str, Any],
+) -> None:
+    """Insert the primary incident_alerts row and set affected_services."""
+    try:
+        cursor.execute(
+            """INSERT INTO incident_alerts
+               (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
+                alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                user_id, org_id, incident_id, "jira", issue_id_int,
+                alert_title, service, severity, "primary", 1.0,
+                json.dumps(alert_metadata),
+            ),
+        )
+        cursor.execute(
+            "UPDATE incidents SET affected_services = ARRAY[%s] WHERE id = %s",
+            (service, incident_id),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning("[JIRA] Failed to record primary alert: %s", e)
+
+
+def _record_lifecycle_event(cursor, conn, user_id: str, org_id: str, incident_id) -> None:
+    """Record the 'created' lifecycle event inside a savepoint."""
+    try:
+        cursor.execute("SAVEPOINT sp_jira_lifecycle")
+        cursor.execute(
+            """INSERT INTO incident_lifecycle_events
+               (incident_id, user_id, org_id, event_type, new_value)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (incident_id, user_id, org_id, 'created', 'investigating'),
+        )
+        cursor.execute("RELEASE SAVEPOINT sp_jira_lifecycle")
+        conn.commit()
+    except Exception as e:
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT sp_jira_lifecycle")
+        except Exception as rb_exc:
+            logger.debug("[JIRA] Savepoint rollback failed: %s", rb_exc)
+        logger.warning("[JIRA] Failed to record lifecycle event: %s", e)
+
+
+def _notify_and_summarize(
+    user_id: str, org_id: str, incident_id, alert_title: str, severity: str,
+    service: str, payload: Dict[str, Any], alert_metadata: Dict[str, Any],
+) -> None:
+    """Broadcast the SSE update and dispatch background summary generation."""
+    try:
+        from routes.incidents_sse import broadcast_incident_update_to_user_connections
+        broadcast_incident_update_to_user_connections(
+            user_id,
+            {"type": "incident_update", "incident_id": str(incident_id), "source": "jira"},
+            org_id=org_id,
+        )
+    except Exception as e:
+        logger.warning("[JIRA][WEBHOOK] Failed to notify SSE: %s", e)
+
+    from chat.background.summarization import generate_incident_summary
+    generate_incident_summary.delay(
+        incident_id=str(incident_id),
+        user_id=user_id,
+        source_type="jira",
+        alert_title=alert_title,
+        severity=severity,
+        service=service,
+        raw_payload=payload,
+        alert_metadata=alert_metadata,
+    )
+
+
+def _try_correlate(
+    cursor, conn, user_id: str, org_id: str, issue_id_int: int,
+    alert_title: str, service: str, severity: str,
+    alert_metadata: Dict[str, Any], payload: Dict[str, Any],
+) -> bool:
+    """Attach this Jira alert to an existing open incident if it correlates.
+
+    Returns True if the alert was correlated (caller should stop), else False.
+    """
+    try:
+        correlator = AlertCorrelator()
+        correlation_result = correlator.correlate(
+            cursor=cursor,
+            user_id=user_id,
+            source_type="jira",
+            source_alert_id=issue_id_int,
+            alert_title=alert_title,
+            alert_service=service,
+            alert_severity=severity,
+            alert_metadata=alert_metadata,
+            org_id=org_id,
+        )
+
+        if not correlation_result.is_correlated:
+            return False
+
+        handle_correlated_alert(
+            cursor=cursor,
+            user_id=user_id,
+            incident_id=correlation_result.incident_id,
+            source_type="jira",
+            source_alert_id=issue_id_int,
+            alert_title=alert_title,
+            alert_service=service,
+            alert_severity=severity,
+            correlation_result=correlation_result,
+            alert_metadata=alert_metadata,
+            raw_payload=payload,
+            org_id=org_id,
+        )
+        conn.commit()
+        return True
+    except Exception as corr_exc:
+        logger.warning("[JIRA] Correlation check failed: %s", corr_exc)
+        return False
+
+
+def _dispatch_rca(
+    cursor, conn, user_id: str, incident_id, alert_title: str,
+    issue_key: str, payload: Dict[str, Any],
+) -> None:
+    """Kick off the background RCA chat for a freshly-created Jira incident."""
+    try:
+        from chat.background.task import (
+            run_background_chat,
+            create_background_chat_session,
+            is_background_chat_allowed,
+        )
+
+        if not is_background_chat_allowed(user_id):
+            logger.info("[JIRA][WEBHOOK] Skipping RCA - rate limited for user %s", user_id)
+            return
+
+        session_id = create_background_chat_session(
+            user_id=user_id,
+            title=f"RCA: {alert_title}",
+            trigger_metadata={"source": "jira", "issue_key": issue_key},
+            incident_id=str(incident_id),
+        )
+
+        rca_prompt, rail_text = build_rca_prompt("jira", alert_title, payload, user_id=user_id)
+
+        task = run_background_chat.delay(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=rca_prompt,
+            trigger_metadata={"source": "jira", "issue_key": issue_key},
+            incident_id=str(incident_id),
+            rail_text=rail_text,
+        )
+
+        cursor.execute(
+            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+            (task.id, str(incident_id)),
+        )
+        conn.commit()
+
+        logger.info(
+            "[JIRA][WEBHOOK] Triggered RCA for %s session=%s task=%s",
+            sanitize(issue_key), session_id, task.id,
+        )
+    except Exception:
+        logger.exception("[JIRA][WEBHOOK] Failed to trigger RCA")
