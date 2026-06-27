@@ -291,6 +291,8 @@ def _ensure_llm_context_history(
 _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
+_GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
+
 # RCA sources that use rca_context in system prompt
 _RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
 
@@ -785,15 +787,15 @@ def run_background_chat(
                     _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
                     update_action_run_status(
                         run_id=trigger_metadata['run_id'], status='error',
-                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                        user_id=user_id, error_message=_GUARDRAIL_BLOCKED_MSG,
                     )
                     action_status = 'error'
-                    action_error_msg = 'Action blocked by safety guardrails'
+                    action_error_msg = _GUARDRAIL_BLOCKED_MSG
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
                     action_status = 'success'
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+            except Exception:
+                logger.exception("[BackgroundChat] Failed to update action run status")
 
             if action_status:
                 try:
@@ -1260,7 +1262,7 @@ async def _execute_background_chat(
             event_loop=None,
             ctx_len=15,  # Reasonable history for RCAs - allows agent to see investigation progress
         )
-        logger.info(f"[BackgroundChat] Created agent with ctx_len=15 (no WebSocket)")
+        logger.info("[BackgroundChat] Created agent with ctx_len=15 (no WebSocket)")
         
         # Create workflow for this session
         wf = Workflow(agent, session_id)
@@ -1445,7 +1447,7 @@ async def _execute_background_chat(
                     user_id=user_id,
                     session_id=session_id,
                 )
-            except Exception as e:
+            except Exception:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
 
@@ -1465,12 +1467,12 @@ async def _execute_background_chat(
                     _append_block_message(session_id, user_id, "This action was blocked by safety guardrails. The instructions may need to be rephrased to pass input validation.")
                     update_action_run_status(
                         run_id=trigger_metadata['run_id'], status='error',
-                        user_id=user_id, error_message='Action blocked by safety guardrails',
+                        user_id=user_id, error_message=_GUARDRAIL_BLOCKED_MSG,
                     )
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to update action run status: {e}")
+            except Exception:
+                logger.exception("[BackgroundChat] Failed to update action run status")
 
         # Dispatch after_rca actions before returning (same reason as above).
         if incident_id and trigger_metadata and trigger_metadata.get('source') != 'action':
@@ -1505,8 +1507,8 @@ async def _execute_background_chat(
         if weaviate_client:
             try:
                 weaviate_client.close()
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to close weaviate client - potential connection leak: {e}")
+            except Exception:
+                logger.exception("[BackgroundChat] Failed to close weaviate client - potential connection leak")
 
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -1884,8 +1886,8 @@ def _is_rca_email_notification_enabled(user_id: str) -> bool:
         if not org_id:
             return False
         return bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
-    except Exception as e:
-        logger.error(f"[EmailNotification] Error checking notification preference: {e}")
+    except Exception:
+        logger.exception("[EmailNotification] Error checking notification preference")
         return False
 
 
@@ -1897,8 +1899,8 @@ def _has_google_chat_connected(user_id: str) -> bool:
         if not config or not config.get("incidents_space_name"):
             return False
         return get_chat_app_client() is not None
-    except Exception as e:
-        logger.error(f"[GChatNotification] Error checking Google Chat connection: {e}")
+    except Exception:
+        logger.exception("[GChatNotification] Error checking Google Chat connection")
         return False
 
 
@@ -1909,8 +1911,8 @@ def _is_rca_email_start_notification_enabled(user_id: str) -> bool:
         if not org_id:
             return False
         return bool(get_org_preference(org_id, 'rca_email_start_notifications', default=False))
-    except Exception as e:
-        logger.error(f"[EmailNotification] Error checking start notification preference: {e}")
+    except Exception:
+        logger.exception("[EmailNotification] Error checking start notification preference")
         return False
 
 
@@ -1959,8 +1961,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
         
         return None
         
-    except Exception as e:
-        logger.error(f"[EmailNotification] Error fetching incident data: {e}")
+    except Exception:
+        logger.exception("[EmailNotification] Error fetching incident data")
         return None
 
 
@@ -2038,8 +2040,8 @@ def _send_action_completion_notification(
                 logger.warning("[ActionNotification] Failed to send to %s: %s", recipient, e)
 
         logger.info("[ActionNotification] Sent %s notification for action '%s' to %d recipient(s)", status, action_name, len(all_emails))
-    except Exception as e:
-        logger.error("[ActionNotification] Error sending action completion notification: %s", e)
+    except Exception:
+        logger.exception("[ActionNotification] Error sending action completion notification")
 
 
 
@@ -2112,11 +2114,11 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                                 (org_id,)
                             )
                             all_emails = [row[0] for row in cursor.fetchall()]
-                except Exception as e:
-                    logger.error(f"[EmailNotification] Failed to fetch notification emails for org: {e}")
+                except Exception:
+                    logger.exception("[EmailNotification] Failed to fetch notification emails for org")
 
             if not all_emails:
-                logger.info(f"[EmailNotification] No configured recipients for org, skipping email")
+                logger.info("[EmailNotification] No configured recipients for org, skipping email")
             else:
                 logger.info(f"[EmailNotification] Sending {event_type} notification to {len(all_emails)} email(s): {', '.join(all_emails)}")
                 
@@ -2140,13 +2142,13 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                                 logger.info(f"[EmailNotification] Sent 'completed' email to {recipient_email} for incident {incident_id}")
                             else:
                                 logger.warning(f"[EmailNotification] Failed to send 'completed' email to {recipient_email}")
-                    except Exception as e:
-                        logger.error(f"[EmailNotification] Error sending to {recipient_email}: {e}")
+                    except Exception:
+                        logger.exception("[EmailNotification] Error sending to %s", recipient_email)
                 
                 logger.info(f"[EmailNotification] Successfully sent {success_count}/{len(all_emails)} {event_type} notifications for incident {incident_id}")
-        except Exception as e:
+        except Exception:
             # Don't fail if email fails
-            logger.error(f"[EmailNotification] Failed to send {event_type} notification: {e}")
+            logger.exception("[EmailNotification] Failed to send %s notification", event_type)
     
     # --- SLACK NOTIFICATIONS ---
     if slack_enabled:
@@ -2155,9 +2157,9 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                 send_slack_investigation_started_notification(user_id, incident_data)
             elif event_type == 'completed':
                 send_slack_investigation_completed_notification(user_id, incident_data)
-        except Exception as e:
+        except Exception:
             # Don't fail if Slack fails
-            logger.error(f"[SlackNotification] Failed to send {event_type} notification: {e}", exc_info=True)
+            logger.exception("[SlackNotification] Failed to send %s notification", event_type)
     
     # --- GOOGLE CHAT NOTIFICATIONS ---
     if google_chat_enabled:
@@ -2166,8 +2168,8 @@ def _send_rca_notification(user_id: str, incident_id: str, event_type: str, emai
                 send_google_chat_investigation_started_notification(user_id, incident_data)
             elif event_type == 'completed':
                 send_google_chat_investigation_completed_notification(user_id, incident_data)
-        except Exception as e:
-            logger.error(f"[GChatNotification] Failed to send {event_type} notification: {e}", exc_info=True)
+        except Exception:
+            logger.exception("[GChatNotification] Failed to send %s notification", event_type)
 
 
 def _send_response_to_slack(user_id: str, session_id: str, trigger_metadata: Dict[str, Any]) -> None:
