@@ -89,3 +89,25 @@ class SecretsBackend(ABC):
             True if this backend can handle the reference
         """
         return False
+
+    def build_system_ref(self, logical_name: str) -> str:
+        """Build a reference to a system-scoped (non per-user) secret.
+
+        System secrets (e.g. the GitHub App private key + webhook secret) are
+        operator-provisioned and read-only at runtime. They have no per-user
+        DB row to hold a stored reference, so callers pass a backend-agnostic
+        logical name (e.g. ``github-app/private-key``) and each backend maps it
+        to a reference in its own format. This keeps callers from hardcoding a
+        backend-specific prefix (which only worked with Vault).
+
+        Args:
+            logical_name: Backend-agnostic system-secret name
+                (e.g. ``github-app/private-key``)
+
+        Returns:
+            A reference string accepted by this backend's ``get_secret()``
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support system secrets "
+            f"(requested '{logical_name}')"
+        )

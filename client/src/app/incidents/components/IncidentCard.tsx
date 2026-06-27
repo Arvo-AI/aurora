@@ -16,6 +16,7 @@ import {
   FileText,
   Coins,
   Activity,
+  Check,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -23,6 +24,7 @@ import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { useUser } from '@/hooks/useAuthHooks';
 import { canWrite as checkCanWrite } from '@/lib/roles';
+import { getEnv } from '@/lib/env';
 import Link from 'next/link';
 import Image from 'next/image';
 import CitationBadge from './CitationBadge';
@@ -34,6 +36,7 @@ import CorrelatedAlertsSection from './CorrelatedAlertsSection';
 import RecentAlertsSection from './RecentAlertsSection';
 import PostmortemPanel from './PostmortemPanel';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
+import IncidentActionRuns from './IncidentActionRuns';
 import ExecutionWaterfall from './ExecutionWaterfall';
 import { ReactFlowProvider } from '@xyflow/react';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
@@ -113,6 +116,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showPostmortem, setShowPostmortem] = useState(false);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [showWaterfall, setShowWaterfall] = useState(false);
+  const [showActions, setShowActions] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
   const router = useRouter();
@@ -232,6 +236,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       if (suggestionMatch) {
         const suggestion = findFixSuggestionById(suggestionMatch[1]);
         if (suggestion) {
+          const hasPR = Boolean(suggestion.prUrl);
           return (
             <button
               key={`suggestion-marker-${index}`}
@@ -241,10 +246,14 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                 e.stopPropagation();
                 if (canWrite) setSelectedFixSuggestion(suggestion);
               }}
-              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${canWrite ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400 cursor-pointer' : 'bg-green-500/10 text-green-400/50 cursor-not-allowed'}`}
-              title={canWrite ? `Create PR: ${suggestion.filePath || 'Fix suggestion'}` : 'Editors and admins can create PRs'}
+              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${
+                hasPR
+                  ? canWrite ? 'bg-green-500/30 hover:bg-green-500/50 text-green-300 cursor-pointer' : 'bg-green-500/20 text-green-300/50 cursor-not-allowed'
+                  : canWrite ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400 cursor-pointer' : 'bg-green-500/10 text-green-400/50 cursor-not-allowed'
+              }`}
+              title={hasPR ? 'View PR' : canWrite ? `Create PR: ${suggestion.filePath || 'Fix suggestion'}` : 'Editors and admins can create PRs'}
             >
-              <GitBranch className="w-3 h-3" />
+              {hasPR ? <Check className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
             </button>
           );
         }
@@ -355,7 +364,9 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                   }}
                   className={`inline-flex items-center justify-center rounded transition-colors align-middle ml-1.5 ${
                     isFixType
-                      ? 'w-5 h-5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
+                      ? matchingSuggestion.prUrl
+                        ? 'w-5 h-5 bg-green-500/30 hover:bg-green-500/50 text-green-300'
+                        : 'w-5 h-5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
                       : wasExecuted
                         ? execStatus === 'completed'
                           ? 'h-5 gap-1 px-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
@@ -365,14 +376,16 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
                         : 'w-5 h-5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
                   }`}
                   title={isFixType
-                    ? `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
+                    ? matchingSuggestion.prUrl
+                      ? 'View PR'
+                      : `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
                     : wasExecuted
                       ? `View output (${execStatus || 'executed'})`
                       : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
                   }
                 >
                   {isFixType ? (
-                    <GitBranch className="w-3 h-3" />
+                    matchingSuggestion.prUrl ? <Check className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />
                   ) : wasExecuted ? (
                     <>
                       {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
@@ -703,7 +716,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           )}
 
           {/* Token Usage button */}
-          {incident.tokenUsage && (
+          {getEnv('AURORA_ENV') === 'dev' && incident.tokenUsage && (
             <button
               onClick={() => setShowTokenUsage(!showTokenUsage)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
@@ -734,6 +747,20 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             </button>
           )}
 
+          {/* Actions button */}
+          <button
+            onClick={() => setShowActions(!showActions)}
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+              showActions
+                ? 'text-orange-300 bg-orange-500/10'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            }`}
+          >
+            <Play className="w-3 h-3" />
+            Actions
+            <ChevronRight className={`w-3 h-3 transition-transform ${showActions ? 'rotate-90' : ''}`} />
+          </button>
+
       </div>
 
       {/* Feedback Section - only show when analysis is complete */}
@@ -743,8 +770,18 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         </div>
       )}
 
+      {/* Action Runs linked to this incident (collapsible, lazy-loaded) */}
+      <div className="collapsible-panel" data-open={showActions}>
+        <div>
+          <div className="border-t border-zinc-800 mt-4" />
+          <div className="mt-4">
+            {showActions && <IncidentActionRuns incidentId={incident.id} />}
+          </div>
+        </div>
+      </div>
+
       {/* Token Usage Panel (collapsible) */}
-      {incident.tokenUsage && (
+      {getEnv('AURORA_ENV') === 'dev' && incident.tokenUsage && (
         <div className="collapsible-panel" data-open={showTokenUsage}>
           <div>
             <div className="border-t border-zinc-800 mt-4" />
@@ -867,6 +904,13 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
         suggestion={selectedFixSuggestion}
         isOpen={selectedFixSuggestion !== null}
         onClose={() => setSelectedFixSuggestion(null)}
+        onPRCreated={(prUrl) => {
+          // Update local suggestion state so reopening the modal shows the PR URL
+          if (selectedFixSuggestion) {
+            setSelectedFixSuggestion({ ...selectedFixSuggestion, prUrl });
+          }
+          onRefresh?.();
+        }}
       />
     </div>
   );

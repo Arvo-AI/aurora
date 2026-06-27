@@ -16,7 +16,6 @@ from typing import Literal
 
 from .jenkins_rca_tool import (
     _action_recent_deployments,
-    _action_trace_context,
 )
 
 
@@ -33,7 +32,9 @@ class CloudBeesRCAArgs(BaseModel):
         "test_results",
         "blue_ocean_run",
         "blue_ocean_steps",
-        "trace_context",
+        "flag_changes",
+        "cross_controller_deployments",
+        "controller_list",
     ] = Field(description="Investigation action to perform")
     job_path: Optional[str] = Field(default=None, description="Job path (e.g. 'folder/job-name')")
     build_number: Optional[int] = Field(default=None, description="Build number to investigate")
@@ -43,19 +44,22 @@ class CloudBeesRCAArgs(BaseModel):
     node_id: Optional[str] = Field(default=None, description="Node/stage ID for stage-level log or steps")
     service: Optional[str] = Field(default=None, description="Service name filter for recent_deployments")
     time_window_hours: Optional[int] = Field(default=24, description="Lookback window in hours for recent_deployments")
-    deployment_event_id: Optional[int] = Field(default=None, description="Deployment event ID for trace_context lookup")
+    app_id: Optional[str] = Field(default=None, description="Feature Management application ID for flag_changes")
+    controller_url: Optional[str] = Field(default=None, description="Controller URL for OC mode (from controller_list or cross_controller_deployments results). Required for build introspection when connected via Operations Center.")
 
 
 def is_cloudbees_connected(user_id: str) -> bool:
-    """Check if CloudBees CI is connected for a user."""
+    """Check if CloudBees CI is connected for a user (legacy single-controller OR OC/PAT)."""
     from utils.auth.token_management import get_token_data
+    # Legacy single-controller credentials
     creds = get_token_data(user_id, "cloudbees")
-    return bool(
-        creds
-        and creds.get("base_url")
-        and creds.get("username")
-        and creds.get("api_token")
-    )
+    if creds and creds.get("base_url") and creds.get("username") and creds.get("api_token"):
+        return True
+    # OC/PAT enterprise credentials
+    oc_creds = get_token_data(user_id, "cloudbees_oc")
+    if oc_creds and oc_creds.get("base_url") and oc_creds.get("api_token"):
+        return True
+    return False
 
 
 def _get_client_for_cloudbees_user(user_id: str):
@@ -77,6 +81,43 @@ def _get_client_for_cloudbees_user(user_id: str):
     return JenkinsClient(base_url=base_url, username=username, api_token=api_token)
 
 
+def _get_oc_client_for_user(user_id: str):
+    """Build a CloudBeesOCClient from the user's stored OC credentials."""
+    from utils.auth.token_management import get_token_data
+    from connectors.cloudbees_connector.oc_client import CloudBeesOCClient
+
+    creds = get_token_data(user_id, "cloudbees_oc")
+    if not creds:
+        logger.debug("[CLOUDBEES_RCA] No OC credentials for user %s", user_id)
+        return None
+    base_url = creds.get("base_url")
+    username = creds.get("username", "")
+    api_token = creds.get("api_token")
+    auth_mode = creds.get("auth_mode", "basic")
+    if not base_url or not api_token:
+        logger.debug("[CLOUDBEES_RCA] Incomplete OC credentials for user %s (missing %s)", user_id,
+                     "base_url" if not base_url else "api_token")
+        return None
+    if auth_mode == "basic" and not username:
+        logger.debug("[CLOUDBEES_RCA] Basic auth requires username for user %s", user_id)
+        return None
+    return CloudBeesOCClient(base_url=base_url, username=username, api_token=api_token, auth_mode=auth_mode)
+
+
+def _get_fm_client_for_user(user_id: str):
+    """Build a CloudBeesFMClient from the user's stored FM credentials."""
+    from utils.auth.token_management import get_token_data
+    from connectors.cloudbees_connector.fm_client import CloudBeesFMClient
+
+    creds = get_token_data(user_id, "cloudbees_fm")
+    if not creds:
+        return None
+    api_token = creds.get("api_token")
+    if not api_token:
+        return None
+    return CloudBeesFMClient(api_token=api_token)
+
+
 def cloudbees_rca(
     action: str,
     job_path: Optional[str] = None,
@@ -87,7 +128,8 @@ def cloudbees_rca(
     node_id: Optional[str] = None,
     service: Optional[str] = None,
     time_window_hours: int = 24,
-    deployment_event_id: Optional[int] = None,
+    app_id: Optional[str] = None,
+    controller_url: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Unified CloudBees CI investigation tool for RCA.
@@ -100,14 +142,70 @@ def cloudbees_rca(
     if not user_id:
         return json.dumps({"error": "No user context. Run this from an authenticated session."})
 
-    if action == "recent_deployments":
-        return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
-    elif action == "trace_context":
-        return _action_trace_context(user_id, deployment_event_id, job_path, build_number)
+    # --- Enterprise actions (OC / FM) ---
+    if action == "flag_changes":
+        if not app_id:
+            return json.dumps({"error": "app_id is required for flag_changes action."})
+        fm_client = _get_fm_client_for_user(user_id)
+        if not fm_client:
+            return json.dumps({
+                "error": "Feature Management is not connected. Connect it in Connectors → CloudBees to enable flag change queries."
+            })
+        with fm_client:
+            success, changes, error = fm_client.get_recent_flag_changes(
+                app_id, since_hours=time_window_hours
+            )
+            if not success:
+                return json.dumps({"error": error or "Failed to query Feature Management."})
+            return json.dumps({"flag_changes": changes, "count": len(changes), "time_window_hours": time_window_hours})
 
+    elif action == "cross_controller_deployments":
+        oc_client = _get_oc_client_for_user(user_id)
+        if not oc_client:
+            return json.dumps({
+                "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
+            })
+        with oc_client:
+            success, builds, error = oc_client.query_recent_builds_across_controllers(
+                service=service, time_window_hours=time_window_hours
+            )
+            if not success:
+                return json.dumps({"error": error or "Failed to query Operations Center."})
+            return json.dumps({"builds": builds, "count": len(builds), "time_window_hours": time_window_hours, "warnings": error})
+
+    elif action == "controller_list":
+        oc_client = _get_oc_client_for_user(user_id)
+        if not oc_client:
+            return json.dumps({
+                "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
+            })
+        with oc_client:
+            success, controllers, error = oc_client.discover_controllers()
+            if not success:
+                return json.dumps({"error": error or "Failed to discover controllers."})
+            return json.dumps({"controllers": controllers, "count": len(controllers)})
+
+    # --- Existing single-controller actions ---
+    elif action == "recent_deployments":
+        return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
+
+    # Resolve client: prefer legacy single-controller, then OC per-controller
     client = _get_client_for_cloudbees_user(user_id)
     if not client:
-        return json.dumps({"error": "CloudBees CI is not connected. Configure credentials in Settings > Connectors > CloudBees CI."})
+        oc_client = _get_oc_client_for_user(user_id)
+        if not oc_client:
+            return json.dumps({"error": "CloudBees CI is not connected. Configure credentials in Settings > Connectors > CloudBees CI."})
+        # OC mode: route build introspection through a per-controller JenkinsClient
+        if not controller_url:
+            return json.dumps({
+                "error": "controller_url is required for build introspection in Operations Center mode. "
+                "Use controller_list or cross_controller_deployments first to discover controller URLs, "
+                "then pass the relevant controller_url for this action."
+            })
+        try:
+            client = oc_client.get_controller_client(controller_url)
+        except ValueError as e:
+            return json.dumps({"error": str(e)})
 
     from .jenkins_rca_tool import (
         _action_build_detail,

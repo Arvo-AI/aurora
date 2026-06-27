@@ -1,5 +1,5 @@
-import { Github, Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled } from "@/lib/feature-flags";
+import { Server } from "lucide-react";
+import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -259,8 +259,8 @@ class ConnectorRegistry {
       id: "github",
       name: "GitHub",
       description: "Integrate with GitHub to manage repositories, track issues, and automate workflows. Connect your GitHub account to enable seamless code collaboration.",
-      icon: Github,
-      iconColor: "text-gray-800 dark:text-gray-300",
+      iconPath: "/github-mark.svg",
+      iconClassName: "dark:invert",
       iconBgColor: "bg-gray-200 dark:bg-gray-800",
       category: "Development",
       useCustomConnection: true,
@@ -415,16 +415,18 @@ class ConnectorRegistry {
       storageKey: "isJenkinsConnected",
     });
 
-    this.register({
-      id: "cloudbees",
-      name: "CloudBees CI",
-      description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
-      iconPath: "/cloudbees.svg",
-      iconBgColor: "bg-muted",
-      category: "CI/CD",
-      path: "/cloudbees/auth",
-      storageKey: "isCloudBeesConnected",
-    });
+    if (isCloudBeesEnabled()) {
+      this.register({
+        id: "cloudbees",
+        name: "CloudBees CI",
+        description: "Connect to CloudBees CI to view jobs, builds, pipeline status, and build agents. Enterprise Jenkins with Operations Center support.",
+        iconPath: "/cloudbees.svg",
+        iconBgColor: "bg-muted",
+        category: "CI/CD",
+        path: "/cloudbees/auth",
+        storageKey: "isCloudBeesConnected",
+      });
+    }
 
     if (isSpinnakerEnabled()) {
       this.register({

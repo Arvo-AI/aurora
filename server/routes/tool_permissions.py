@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request
 
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
-from utils.auth.tool_registry import TOOL_REGISTRY, get_default_enabled_tools, get_tools_by_connector
+from utils.auth.tool_registry import TOOL_REGISTRY, get_tools_by_connector
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -98,25 +98,13 @@ def toggle_permission(user_id: str, tool_key: str):
 @require_permission("admin", "access")
 def seed_defaults(user_id: str):
     """Seed default tool permissions for this org (idempotent)."""
+    from utils.auth.tool_registry import seed_org_tool_permissions
+
     org_id = get_org_id_from_request()
     if not org_id:
         return jsonify({"error": _ERR_NO_ORG}), 400
 
-    defaults = get_default_enabled_tools()
-    now = datetime.now(timezone.utc)
-
-    with db_pool.get_connection() as conn:
-        with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[ToolPerms:seed]")
-            for tool_key in TOOL_REGISTRY:
-                enabled = tool_key in defaults
-                cur.execute(
-                    """INSERT INTO org_tool_permissions (org_id, tool_key, enabled, updated_by, updated_at)
-                       VALUES (%s, %s, %s, %s, %s)
-                       ON CONFLICT (org_id, tool_key) DO NOTHING""",
-                    (org_id, tool_key, enabled, user_id, now),
-                )
-            conn.commit()
+    count = seed_org_tool_permissions(org_id, user_id)
 
     _invalidate_permissions_cache(org_id)
-    return jsonify({"seeded": len(TOOL_REGISTRY)})
+    return jsonify({"seeded": count})

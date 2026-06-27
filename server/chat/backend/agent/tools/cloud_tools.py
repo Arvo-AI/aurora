@@ -1021,18 +1021,18 @@ def get_cloud_tools():
         mode = get_mode_from_context()
     mode_suffix = (mode or 'agent').lower()
 
-    # Create a cache key that accurately reflects the *specific* tool_capture instance (or lack thereof)
-    # - When no tool_capture is active we can safely cache per-user
-    # - When a tool_capture **is** active we additionally key on the `id()` of the object so each
-    #   session gets its own wrapped functions that close over the *right* capture instance.
+    # Cache key uses stable identifiers — the tool_capture wrapper resolves the active
+    # capture instance dynamically at call time via get_tool_capture(), so we don't need
+    # id(tool_capture) which caused a cache miss every invocation.
     rca_flag = getattr(state_context, 'trigger_rca_requested', False) if state_context else False
     is_background = getattr(state_context, 'is_background', False) if state_context else False
     is_postmortem_action = getattr(state_context, 'is_postmortem_action', False) if state_context else False
+    is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
-    if tool_capture is None:
-        cache_key = f"{user_id}:nocapture:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}"
-    else:
-        cache_key = f"{user_id}:capture:{id(tool_capture)}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}"
+    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
+    _incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+    capture_tag = "capture" if tool_capture else "nocapture"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
     
     current_time = time.time()
     if (
@@ -1067,7 +1067,9 @@ def get_cloud_tools():
             
         @wraps(func)
         def wrapped_func(**kwargs):
-            exec_lock = getattr(tool_capture, 'execution_lock', None)
+            # Resolve capture instance dynamically so cached tools work across sessions
+            tool_capture = get_tool_capture()
+            exec_lock = getattr(tool_capture, 'execution_lock', None) if tool_capture else None
             acquired = False
             try:
                 if exec_lock:
@@ -1117,7 +1119,9 @@ def get_cloud_tools():
                     # The 'completed' flag just prevents cleanup race conditions
                     logging.info(f"TOOL CAPTURE: Tool capture instance found: {tool_capture}")
                     logging.info(f"TOOL CAPTURE: Tool capture instance found: {tool_capture.current_tool_calls}")
-                    for call_id, call_info in tool_capture.current_tool_calls.items():
+                    with tool_capture.lock:
+                        calls_snapshot = list(tool_capture.current_tool_calls.items())
+                    for call_id, call_info in calls_snapshot:
                         logging.info(f"TOOL CAPTURE: Call info: {call_info}")
                         logging.info(f"TOOL CAPTURE: Call signature right side: {tool_signature}")
                         logging.info(f"TOOL CAPTURE: Call result: {result}")
@@ -1128,7 +1132,9 @@ def get_cloud_tools():
                     
                     # Fallback – match by tool_name + command (provider may be missing)
                     if not matching_tool_call_id:
-                        for call_id, call_info in tool_capture.current_tool_calls.items():
+                        with tool_capture.lock:
+                            calls_snapshot = list(tool_capture.current_tool_calls.items())
+                        for call_id, call_info in calls_snapshot:
                             if call_info.get('tool_name') != tool_name:
                                 continue
                             ci_input = call_info.get('input', {}) or {}
@@ -1146,18 +1152,21 @@ def get_cloud_tools():
                     # As a last resort, match by oldest incomplete call for sequential execution (OpenAI)
                     # For parallel execution (Gemini), signature matching should have already succeeded
                     if not matching_tool_call_id:
-                        candidate_ids = [
-                            (call_id, call_info.get('start_time'))
-                            for call_id, call_info in tool_capture.current_tool_calls.items()
-                            if call_info.get('tool_name') == tool_name and not call_info.get('completed')
-                        ]
+                        with tool_capture.lock:
+                            candidate_ids = [
+                                (call_id, call_info.get('start_time'))
+                                for call_id, call_info in tool_capture.current_tool_calls.items()
+                                if call_info.get('tool_name') == tool_name and not call_info.get('completed')
+                            ]
                         
                         if len(candidate_ids) == 1:
                             # Only one candidate - safe to use
                             matching_tool_call_id = candidate_ids[0][0]
-                            call_info = tool_capture.current_tool_calls[matching_tool_call_id]
-                            call_info['input'] = signature_payload
-                            call_info['signature'] = tool_signature
+                            with tool_capture.lock:
+                                call_info = tool_capture.current_tool_calls.get(matching_tool_call_id)
+                                if call_info:
+                                    call_info['input'] = signature_payload
+                                    call_info['signature'] = tool_signature
                             logging.info(
                                 "Matched tool call by single incomplete candidate: %s (updated signature)",
                                 matching_tool_call_id,
@@ -1167,9 +1176,11 @@ def get_cloud_tools():
                             # This handles OpenAI's sequential execution pattern
                             candidate_ids.sort(key=lambda x: x[1] if x[1] else datetime.min)
                             matching_tool_call_id = candidate_ids[0][0]
-                            call_info = tool_capture.current_tool_calls[matching_tool_call_id]
-                            call_info['input'] = signature_payload
-                            call_info['signature'] = tool_signature
+                            with tool_capture.lock:
+                                call_info = tool_capture.current_tool_calls.get(matching_tool_call_id)
+                                if call_info:
+                                    call_info['input'] = signature_payload
+                                    call_info['signature'] = tool_signature
                             logging.warning(
                                 f"SEQUENTIAL FALLBACK: Found {len(candidate_ids)} incomplete {tool_name} calls, "
                                 f"matched to oldest: {matching_tool_call_id}. "
@@ -1227,7 +1238,9 @@ def get_cloud_tools():
                         serialized_payload = str(signature_payload)
                     tool_signature = f"{tool_name}_{serialized_payload}"
                     
-                    for call_id, call_info in tool_capture.current_tool_calls.items():
+                    with tool_capture.lock:
+                        calls_snapshot = list(tool_capture.current_tool_calls.items())
+                    for call_id, call_info in calls_snapshot:
                         if call_info.get('signature') == tool_signature and not call_info.get('completed'):
                             matching_tool_call_id = call_id
                             logging.info(f"Matched error to tool call by signature: {matching_tool_call_id}")
@@ -1236,10 +1249,11 @@ def get_cloud_tools():
                     # Fallback: Only match if there's exactly ONE incomplete call for this tool
                     # This prevents parallel tool calls from sharing the same error tracking
                     if not matching_tool_call_id:
-                        incomplete_calls = [
-                            call_id for call_id, call_info in tool_capture.current_tool_calls.items() 
-                            if call_info.get('tool_name') == tool_name and not call_info.get('completed', False)
-                        ]
+                        with tool_capture.lock:
+                            incomplete_calls = [
+                                call_id for call_id, call_info in tool_capture.current_tool_calls.items() 
+                                if call_info.get('tool_name') == tool_name and not call_info.get('completed', False)
+                            ]
                         
                         if len(incomplete_calls) == 1:
                             matching_tool_call_id = incomplete_calls[0]
@@ -1315,16 +1329,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     ]
 
     # Cloud provider tools (only if at least one provider is connected)
-    if get_connected_providers(user_id):
+    # PR review is read-only: exclude exec/write tools.
+    if get_connected_providers(user_id) and not is_pr_review:
         tool_functions.append((run_iac_tool, "iac_tool"))
         tool_functions.append((cloud_exec_wrapper, "cloud_exec"))
 
-    # Only include trigger_rca when the user explicitly requested it via the UI button
-    if state_context and getattr(state_context, 'trigger_rca_requested', False):
+    # trigger_rca: available when user clicked the RCA button (UI) OR when
+    # running as a background agent (Slack, Celery) where there's no UI to gate it.
+    if is_background or (state_context and getattr(state_context, 'trigger_rca_requested', False)):
         tool_functions.append((trigger_rca, "trigger_rca"))
 
-    # Only include trigger_action when the user explicitly used /action command
-    _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
+    # trigger_action: only when an action id is pinned (UI /action or background action run).
     if _action_id:
         tool_functions.append((trigger_action, "trigger_action"))
 
@@ -1340,7 +1355,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             return False
 
     if _safe_connected(is_github_connected, "GitHub"):
-        tool_functions.append((github_commit, "github_commit"))
+        if not is_pr_review:
+            tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
         tool_functions.append((github_rca, "github_rca"))
         # github_fix saves suggestions for user review in the incident card UI.
@@ -1351,11 +1367,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             tool_functions.append((github_fix, "github_fix"))
         logging.info(f"Added GitHub tools for user {user_id} (github_fix={'included' if is_rca_context else 'excluded (not RCA)'})")
 
-    if _safe_connected(is_tailscale_connected, "Tailscale"):
+    if _safe_connected(is_tailscale_connected, "Tailscale") and not is_pr_review:
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
         logging.info(f"Added Tailscale SSH tool for user {user_id}")
 
-    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem"):
+    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem") and not is_pr_review:
         tool_functions.append((get_connected_clusters, "get_connected_clusters"))
         tool_functions.append((on_prem_kubectl, "on_prem_kubectl"))
         logging.info(f"Added on-prem kubectl tools for user {user_id}")
@@ -1395,6 +1411,18 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             tool_functions.append((save_postmortem, "save_postmortem"))
     except ImportError:
         logger.warning("Postmortem tools not available — import failed")
+
+    # Artifacts: persistent markdown documents Aurora maintains across runs.
+    # Unconditional (no connector gating) so any agent surface — chat, scheduled
+    # Actions, background RCA, MCP — can list/read/write them. Steering lives
+    # entirely in the tool descriptions below; never in a system prompt.
+    try:
+        from .artifact_tool import list_artifacts, read_artifact, write_artifact
+        tool_functions.append((list_artifacts, "list_artifacts"))
+        tool_functions.append((read_artifact, "read_artifact"))
+        tool_functions.append((write_artifact, "write_artifact"))
+    except ImportError:
+        logger.warning("Artifact tools not available — import failed")
 
     # Process Aurora native tools
     for func, name in tool_functions:
@@ -1539,7 +1567,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "'test_results' (Core API: test report with failure details), "
                     "'blue_ocean_run' (Blue Ocean API: run data with changeSet and commit info), "
                     "'blue_ocean_steps' (Blue Ocean API: step-level detail for a pipeline node), "
-                    "'trace_context' (extract OTel W3C Trace Context; params: deployment_event_id or job_path+build_number). "
+                    "'flag_changes' (Feature Management flag changes; params: app_id), "
+                    "'cross_controller_deployments' (query builds across all OC-managed controllers), "
+                    "'controller_list' (list discovered controllers from Operations Center). "
                     "Required params vary by action: job_path+build_number for Core/wfapi, "
                     "pipeline_name+run_number for Blue Ocean. service is optional for recent_deployments."
                 ),
@@ -1612,6 +1642,54 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "structured markdown (Summary, Timeline, Root Cause, Impact, etc.)."
                 ),
                 args_schema=SavePostmortemArgs,
+            )
+        elif name == 'list_artifacts':
+            from .artifact_tool import ListArtifactsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List all persistent documents (artifacts) maintained for this workspace, "
+                    "with titles, versions, and last-updated times. Call this to discover what "
+                    "documents already exist before deciding whether to read, update, or create "
+                    "one — especially when instructions reference maintaining/updating a document "
+                    "but don't say it's new. Metadata only, not content."
+                ),
+                args_schema=ListArtifactsArgs,
+            )
+        elif name == 'read_artifact':
+            from .artifact_tool import ReadArtifactArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Read the full current markdown of one artifact by exact title. Call after "
+                    "list_artifacts to get a document's current state — e.g. to see what you "
+                    "reported last run before producing an update, or to respect a user's edits. "
+                    "Returns content, version, and last-updated time, or that it doesn't exist."
+                ),
+                args_schema=ReadArtifactArgs,
+            )
+        elif name == 'write_artifact':
+            from .artifact_tool import WriteArtifactArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Create or update a persistent markdown document by title. If the title "
+                    "exists, its content is replaced and a new version recorded; otherwise it's "
+                    "created. Use when instructions ask you to maintain/update/record findings in "
+                    "a document that persists across runs (a living findings list, cost report, "
+                    "runbook) — not for one-off chat answers. ALWAYS read the existing artifact "
+                    "first and reconcile rather than regenerate: keep items the user edited or "
+                    "added, remove findings that are now resolved or no longer reproduce, do not "
+                    "re-add anything the user deleted, and avoid duplicates. Honor any "
+                    "user-maintained 'False positives', 'Suppressed', or 'Won't fix' section: "
+                    "preserve it verbatim and never re-report or re-add the items it lists, even "
+                    "if a fresh scan surfaces them again. If the existing doc was last edited by "
+                    "the user, treat their version as authoritative and change it minimally."
+                ),
+                args_schema=WriteArtifactArgs,
             )
         elif name == 'list_slack_channels':
             from .slack_tool import ListSlackChannelsArgs
@@ -1748,6 +1826,197 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added get_infrastructure_context tool for user {user_id}")
         except Exception as e:
             logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
+
+    # Introspection tools — incident/infra/actions/metrics self-audit (always available)
+    if user_id:
+        try:
+            from chat.backend.agent.tools.introspection_tools import (
+                list_incidents, ListIncidentsArgs as IntrospectionListIncidentsArgs,
+                get_incident, GetIncidentArgs as IntrospectionGetIncidentArgs,
+                incident_list_alerts, IncidentListAlertsArgs,
+                list_services, ListServicesArgs,
+                service_impact, ServiceImpactArgs,
+                list_actions, ListActionsArgs,  
+                list_action_runs, ListActionRunsArgs,
+                get_metrics_summary, GetMetricsSummaryArgs,
+                get_mttr, GetMttrArgs,
+                get_incident_frequency, GetIncidentFrequencyArgs,
+                get_change_failure_rate, GetChangeFailureRateArgs,
+                get_llm_usage_summary, GetLlmUsageSummaryArgs,
+                incident_findings, IncidentFindingsArgs,
+                incident_finding_detail, IncidentFindingDetailArgs,
+                get_action, GetActionArgs,
+                graph_get_service, GraphGetServiceArgs,
+                postmortem_list, PostmortemListArgs,
+                kb_get_memory, KbGetMemoryArgs,
+                grafana_list_alerts, GrafanaListAlertsArgs,
+            )
+
+            _INTROSPECTION_TOOLS = [
+                (
+                    list_incidents,
+                    "list_incidents",
+                    "List Aurora incidents. Optionally filter by status "
+                    "(investigating/analyzed/merged/resolved) with pagination. "
+                    "Returns id, title, status, severity, service, summary, and timestamps.",
+                    IntrospectionListIncidentsArgs,
+                ),
+                (
+                    get_incident,
+                    "get_incident",
+                    "Get full incident details: summary, suggestions, correlated alerts, "
+                    "affected services. Use this to deep-dive into a specific incident.",
+                    IntrospectionGetIncidentArgs,
+                ),
+                (
+                    incident_list_alerts,
+                    "incident_list_alerts",
+                    "List the alerts correlated to an incident: source, title, service, "
+                    "severity, and correlation score. Use to answer 'what alerts fired "
+                    "for incident X'.",
+                    IncidentListAlertsArgs,
+                ),
+                (
+                    list_services,
+                    "list_services",
+                    "List services in the infrastructure dependency graph. "
+                    "Optional filters: resource_type, provider. Use to enumerate "
+                    "what exists before drilling into a specific service.",
+                    ListServicesArgs,
+                ),
+                (
+                    service_impact,
+                    "service_impact",
+                    "Get a service's blast radius — the downstream services that depend "
+                    "on it. Use to answer 'what breaks if <service> goes down'.",
+                    ServiceImpactArgs,
+                ),
+                (
+                    list_actions,
+                    "list_actions",
+                    "List this org's Aurora actions (automations): name, trigger type, "
+                    "mode, enabled, run count, and last-run status.",
+                    ListActionsArgs,
+                ),
+                (
+                    list_action_runs,
+                    "list_action_runs",
+                    "List an Aurora action's run history: status, timing, linked incident, "
+                    "and any error. Use to check whether an automation ran and how it went.",
+                    ListActionRunsArgs,
+                ),
+                (
+                    get_metrics_summary,
+                    "get_metrics_summary",
+                    "SRE dashboard overview: total/active/resolved incident counts, "
+                    "average MTTR, MTTS (time to RCA), and top affected services. "
+                    "Use to answer 'how are we doing operationally'. Period: 7d/30d/90d/180d/365d.",
+                    GetMetricsSummaryArgs,
+                ),
+                (
+                    get_mttr,
+                    "get_mttr",
+                    "Mean Time to Resolve with p50/p95 percentiles, broken down by severity "
+                    "and trended over time. Filterable by period, severity, and service.",
+                    GetMttrArgs,
+                ),
+                (
+                    get_incident_frequency,
+                    "get_incident_frequency",
+                    "Incident count over time, grouped by severity, service, or source type. "
+                    "Use to answer 'how many incidents this week' or 'which service has the most'.",
+                    GetIncidentFrequencyArgs,
+                ),
+                (
+                    get_change_failure_rate,
+                    "get_change_failure_rate",
+                    "DORA Change Failure Rate — percentage of deployments that caused "
+                    "incidents. Correlates Jenkins/CloudBees deploy events with incidents.",
+                    GetChangeFailureRateArgs,
+                ),
+                (
+                    get_llm_usage_summary,
+                    "get_llm_usage_summary",
+                    "Aggregate LLM token usage and estimated cost for the org: total cost, "
+                    "tokens (input/output), request count, error rate, avg latency. "
+                    "Period: 7d/30d/90d/180d/365d.",
+                    GetLlmUsageSummaryArgs,
+                ),
+                (
+                    incident_findings,
+                    "incident_findings",
+                    "List RCA sub-agent findings for an incident — shows each agent's role, "
+                    "purpose, status, strength rating, tools used, and citations. "
+                    "Use to answer 'what did the RCA investigate' or 'which agents ran'.",
+                    IncidentFindingsArgs,
+                ),
+                (
+                    incident_finding_detail,
+                    "incident_finding_detail",
+                    "Get a single RCA sub-agent's full finding body (markdown) and its "
+                    "step-by-step tool call history. Use after incident_findings to "
+                    "deep-dive into what a specific agent discovered.",
+                    IncidentFindingDetailArgs,
+                ),
+                (
+                    get_action,
+                    "get_action",
+                    "Get full action config (name, description, instructions, trigger, mode) "
+                    "plus its 20 most recent runs with status and duration. "
+                    "Use to inspect a specific automation.",
+                    GetActionArgs,
+                ),
+                (
+                    graph_get_service,
+                    "graph_get_service",
+                    "Get a single service with its direct upstream (dependencies) and "
+                    "downstream (dependants) from the infrastructure graph. "
+                    "Richer than service_impact — includes all metadata and both directions.",
+                    GraphGetServiceArgs,
+                ),
+                (
+                    postmortem_list,
+                    "postmortem_list",
+                    "List all postmortems for the organization with pagination. "
+                    "Returns incident title, generation date, and export URLs "
+                    "(Confluence/Jira/Notion). Use to discover existing postmortems.",
+                    PostmortemListArgs,
+                ),
+                (
+                    kb_get_memory,
+                    "kb_get_memory",
+                    "Read the org's persistent knowledge base memory — a shared context "
+                    "document that teams maintain with org-specific conventions, runbook "
+                    "references, and operational notes.",
+                    KbGetMemoryArgs,
+                ),
+                (
+                    grafana_list_alerts,
+                    "grafana_list_alerts",
+                    "List Grafana alerts ingested via webhook. Optionally filter by state "
+                    "(alerting, ok, pending). Returns title, state, rule info, and dashboard link.",
+                    GrafanaListAlertsArgs,
+                ),
+            ]
+
+            for _fn, _name, _desc, _schema in _INTROSPECTION_TOOLS:
+                _ctx_wrapped = with_user_context(_fn)
+                _notif_wrapped = with_completion_notification(_ctx_wrapped)
+                if tool_capture:
+                    _final_fn = wrap_func_with_capture(_notif_wrapped, _name)
+                else:
+                    _final_fn = _notif_wrapped
+
+                tools.append(StructuredTool.from_function(
+                    func=_final_fn,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+
+            logging.info(f"Added introspection tools for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add introspection tools: {e}")
 
     # Add discovery finding tool for prediscovery mode
     if mode_suffix == "prediscovery":
@@ -2042,35 +2311,81 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 bitbucket_pull_requests, BitbucketPullRequestsArgs,
                 bitbucket_issues, BitbucketIssuesArgs,
                 bitbucket_pipelines, BitbucketPipelinesArgs,
+                bitbucket_fix, BitbucketFixArgs,
             )
 
-            _bb_tools = [
-                (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
-                 "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                 "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                 "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
-                 "from saved selection if not specified."),
-                (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
-                 "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
-                 "delete_branch, list_commits, get_commit, get_diff, compare."),
-                (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
-                 "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
-                 "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
-                 "get_pr_diff, get_pr_activity."),
-                (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
-                 "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
-                 "update_issue, list_issue_comments, add_issue_comment."),
-                (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
-                 "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
-                 "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
-            ]
+            _is_rca_background = _is_background_rca(state_context, is_background)
+
+            if _is_rca_background:
+                _bb_tools = [
+                    (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                     "Query Bitbucket repositories and files (READ-ONLY during RCA). "
+                     "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. "
+                     "Do NOT use create_or_update_file — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                     "Query Bitbucket branches and commits (READ-ONLY during RCA). "
+                     "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
+                     "Do NOT create branches manually — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                     "Query Bitbucket pull requests (READ-ONLY during RCA). "
+                     "Actions: list_prs, get_pr, list_pr_comments, get_pr_diff, get_pr_activity. "
+                     "Do NOT create PRs manually — use bitbucket_fix to propose code changes instead."),
+                    (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                     "Query Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                     "list_pipeline_steps, get_step_log, get_pipeline_step."),
+                ]
+            else:
+                _bb_tools = [
+                    (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
+                     "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
+                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
+                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
+                     "from saved selection if not specified."),
+                    (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
+                     "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
+                     "delete_branch, list_commits, get_commit, get_diff, compare."),
+                    (bitbucket_pull_requests, "bitbucket_pull_requests", BitbucketPullRequestsArgs,
+                     "Manage Bitbucket pull requests. Actions: list_prs, get_pr, create_pr, update_pr, "
+                     "merge_pr, approve_pr, unapprove_pr, decline_pr, list_pr_comments, add_pr_comment, "
+                     "get_pr_diff, get_pr_activity."),
+                    (bitbucket_issues, "bitbucket_issues", BitbucketIssuesArgs,
+                     "Manage Bitbucket issues. Actions: list_issues, get_issue, create_issue, "
+                     "update_issue, list_issue_comments, add_issue_comment."),
+                    (bitbucket_pipelines, "bitbucket_pipelines", BitbucketPipelinesArgs,
+                     "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
+                     "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
+                ]
             for _func, _name, _schema, _desc in _bb_tools:
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
                 tools.append(StructuredTool.from_function(
                     func=_final, name=_name, description=_desc, args_schema=_schema))
-            logging.info(f"Added {len(_bb_tools)} Bitbucket tools for user {user_id}")
+
+            # bitbucket_fix needs forced context (incident_id injection) like github_fix
+            _bb_fix_ctx = with_forced_context(bitbucket_fix)
+            _bb_fix_notif = with_completion_notification(_bb_fix_ctx)
+            _bb_fix_final = wrap_func_with_capture(_bb_fix_notif, "bitbucket_fix") if tool_capture else _bb_fix_notif
+            tools.append(StructuredTool.from_function(
+                func=_bb_fix_final,
+                name="bitbucket_fix",
+                description=(
+                    "Suggest a code fix or create a new file for an identified issue during RCA. "
+                    "Use this when you identify a specific code change that would fix the root cause "
+                    "and the repository is on Bitbucket. "
+                    "The fix is stored for user review before being applied as a PR. "
+                    "Parameters: file_path (path in repo), "
+                    "edits (list of anchored search-and-replace edits: each has old_string + new_string; "
+                    "old_string must match the current file exactly, with enough surrounding context to be unique; "
+                    "set replace_all=true if you want every occurrence replaced; "
+                    "to CREATE a new file, use old_string='' with the full content in new_string), "
+                    "fix_description (what this fix does), root_cause_summary (why this change is needed). "
+                    "Optional: repo (workspace/repo_slug format), commit_message, branch."
+                ),
+                args_schema=BitbucketFixArgs,
+            ))
+            logging.info(f"Added {len(_bb_tools) + 1} Bitbucket tools for user {user_id} (rca_background={_is_rca_background})")
     except Exception as e:
         logging.warning(f"Failed to add Bitbucket tools: {e}")
 

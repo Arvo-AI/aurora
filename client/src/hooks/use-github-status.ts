@@ -42,7 +42,7 @@ export function computeInstallationState(
  * - isAuthenticated: OAuth credentials exist
  * - isConnected: OAuth done AND at least one repo connected
  */
-export function useGitHubStatus(userId: string | null) {
+export function useGitHubStatus() {
   const [status, setStatus] = useState<GitHubStatus>({
     isAuthenticated: false,
     isConnected: false,
@@ -93,7 +93,6 @@ export function useGitHubStatus(userId: string | null) {
   useEffect(() => { checkStatus(); }, [checkStatus]);
 
   useEffect(() => {
-    if (!userId) return;
     const allowedOrigins = new Set<string>();
     allowedOrigins.add(window.location.origin);
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
@@ -108,20 +107,13 @@ export function useGitHubStatus(userId: string | null) {
         checkStatus();
       }
     };
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') checkStatus();
-    };
     window.addEventListener('providerStateChanged', handleProviderChange);
     window.addEventListener('message', handleAuthMessage);
-    window.addEventListener('focus', checkStatus);
-    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       window.removeEventListener('providerStateChanged', handleProviderChange);
       window.removeEventListener('message', handleAuthMessage);
-      window.removeEventListener('focus', checkStatus);
-      document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [userId, checkStatus]);
+  }, [checkStatus]);
 
   return { ...status, refresh: checkStatus };
 }

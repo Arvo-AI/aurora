@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request
 from utils.db.connection_pool import db_pool
+from utils.query_helpers import iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +45,6 @@ def record_audit_event(org_id, user_id, action, resource_type,
         logger.exception("[AUDIT] Failed to record audit event: %s/%s", action, resource_type)
 
 
-def _iso(val):
-    return val.isoformat() if hasattr(val, "isoformat") else val
-
-
 def _synthetic_events(cur, org_id, pg_interval):
     """Pull activity from core tables to fill gaps in the audit_log."""
     events = []
@@ -63,7 +60,7 @@ def _synthetic_events(cur, org_id, pg_interval):
             "action": "member_joined", "resource_type": "user",
             "resource_id": row[0],
             "detail": {"email": row[1], "name": row[2], "role": row[3] or "viewer"},
-            "ip_address": None, "created_at": _iso(row[4]),
+            "ip_address": None, "created_at": iso_utc(row[4]),
         })
 
     cur.execute("""
@@ -78,7 +75,7 @@ def _synthetic_events(cur, org_id, pg_interval):
             "action": "incident_created", "resource_type": "incident",
             "resource_id": str(row[0]),
             "detail": {"source": row[1], "title": row[2], "severity": row[3], "status": row[4]},
-            "ip_address": None, "created_at": _iso(row[5]),
+            "ip_address": None, "created_at": iso_utc(row[5]),
         })
 
     cur.execute("""
@@ -96,7 +93,7 @@ def _synthetic_events(cur, org_id, pg_interval):
             "action": "connector_added", "resource_type": "connector",
             "resource_id": row[0],
             "detail": {"provider": row[0], "user_name": row[3] or row[4]},
-            "ip_address": None, "created_at": _iso(row[1]),
+            "ip_address": None, "created_at": iso_utc(row[1]),
         })
 
     cur.execute("""
@@ -116,7 +113,7 @@ def _synthetic_events(cur, org_id, pg_interval):
                 "action": "connector_added", "resource_type": "connector",
                 "resource_id": row[0],
                 "detail": {"provider": row[0], "user_name": row[3] or row[4]},
-                "ip_address": None, "created_at": _iso(row[1]),
+                "ip_address": None, "created_at": iso_utc(row[1]),
             })
 
     return events
@@ -178,7 +175,7 @@ def get_audit_log(user_id):
         for row in audit_rows:
             for k, v in row.items():
                 if hasattr(v, "isoformat"):
-                    row[k] = v.isoformat()
+                    row[k] = iso_utc(v)
 
         all_events = audit_rows + synthetic
 

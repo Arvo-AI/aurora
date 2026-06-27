@@ -143,15 +143,7 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6
 RCA_MODEL=anthropic/claude-haiku-4.5
 ```
 
-The multi-agent RCA orchestrator is **on by default** (`ORCHESTRATOR_ENABLED=true`) and bypasses `RCA_MODEL`. Both sub-model env vars are required — if you don't set them, RCAs gracefully degrade to the legacy single-agent path on each run:
-
-```bash
-ORCHESTRATOR_ENABLED=true                        # default; set false to opt out
-RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7 # triage + synthesis
-RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6   # sub-agent investigators
-```
-
-See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider, and [LLM Providers — Multi-agent orchestrator](/docs/integrations/llm-providers#multi-agent-orchestrator) for the orchestrator split.
+See [LLM Providers](/docs/integrations/llm-providers#supported-models) for the full list of valid model names per provider. *Optional:* set `ORCHESTRATOR_ENABLED=true` to use the multi-agent RCA path — requires `RCA_ORCHESTRATOR_MODEL` and `RCA_SUBAGENT_MODEL` ([details](/docs/integrations/llm-providers#multi-agent-orchestrator)).
 
 **VM URLs** — replace `YOUR_VM_IP` with your VM's public IP (or internal/VPN IP — see note below):
 
@@ -265,6 +257,36 @@ http://YOUR_VM_IP:3000
 ```
 
 You must include the `:3000` port — plain `http://YOUR_VM_IP/` (port 80) will not work.
+
+### Reverse Proxy & TLS (optional)
+
+To serve Aurora over HTTPS behind one hostname — required for GitHub App
+webhook delivery, and cleaner than exposing raw ports — terminate TLS at a
+reverse proxy and forward to Aurora. Minimal nginx sketch (proxy runs on the
+VM host and forwards to the published backend port; add a matching
+`location` for the frontend on `:3000` if you want the UI on the same
+domain):
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name aurora.example.com;
+    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://localhost:5080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+Traefik labels achieve the same; the only requirements are TLS termination
+and Host-header preservation.
 
 ### Verify Health
 

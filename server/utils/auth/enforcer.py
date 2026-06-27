@@ -15,15 +15,18 @@ import threading
 
 import casbin
 from casbin_sqlalchemy_adapter import Adapter
+from sqlalchemy import create_engine
 
+from utils.cache.redis_client import get_redis_client
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 _enforcer: casbin.Enforcer | None = None
 _lock = threading.RLock()
-_last_reload: float = 0.0
-_RELOAD_INTERVAL = 300.0
+
+POLICY_VERSION_KEY = "casbin:policy_version"
+_cached_version: str | None = None
 
 # Default permission policies seeded on first run.
 # Format: (role, domain, resource, action)
@@ -32,6 +35,7 @@ _DEFAULT_POLICIES = [
     # --- viewer permissions (read-only) ---
     ("viewer", "*", "incidents", "read"),
     ("viewer", "*", "postmortems", "read"),
+    ("viewer", "*", "artifacts", "read"),
     ("viewer", "*", "dashboards", "read"),
     ("viewer", "*", "connectors", "read"),
     ("viewer", "*", "chat", "read"),
@@ -50,6 +54,7 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "connectors", "write"),
     ("editor", "*", "incidents", "write"),
     ("editor", "*", "postmortems", "write"),
+    ("editor", "*", "artifacts", "write"),
     ("editor", "*", "knowledge_base", "write"),
     ("editor", "*", "ssh_keys", "write"),
     ("editor", "*", "vms", "write"),
@@ -150,21 +155,9 @@ def _seed_default_policies(enforcer: casbin.Enforcer) -> None:
 
 
 def get_enforcer() -> casbin.Enforcer:
-    """Return the module-level Casbin enforcer, creating it on first call.
-
-    Periodically reloads policies from the DB (every 5 min) as a safety net
-    for role revocations.  For role *grants*, callers should use
-    ``enforce_with_reload`` which reloads on deny for instant propagation.
-    """
-    global _enforcer, _last_reload
+    """Return the module-level Casbin enforcer, creating it on first call."""
+    global _enforcer
     if _enforcer is not None:
-        import time
-        now = time.monotonic()
-        if now - _last_reload > _RELOAD_INTERVAL:
-            with _lock:
-                if now - _last_reload > _RELOAD_INTERVAL:
-                    _enforcer.load_policy()
-                    _last_reload = now
         return _enforcer
 
     with _lock:
@@ -175,60 +168,73 @@ def get_enforcer() -> casbin.Enforcer:
         model_path = _model_path()
         logger.info("Initialising Casbin enforcer (model=%s)", model_path)
 
-        adapter = Adapter(db_url)
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
+        adapter = Adapter(engine)
         _enforcer = casbin.Enforcer(model_path, adapter)
 
         def _domain_match(key1: str, key2: str) -> bool:
-            """Match org (domain) in Casbin grouping policies.
-
-            Supports exact match and wildcard ``*`` (used for policies that
-            apply across all organisations, e.g. the built-in role definitions).
-            """
             return key1 == key2 or key2 == "*"
 
         _enforcer.add_named_domain_matching_func("g", _domain_match)
 
         _seed_default_policies(_enforcer)
         _enforcer.load_policy()
-        import time
-        _last_reload = time.monotonic()
 
         logger.info("Casbin enforcer ready.")
         return _enforcer
 
 
+def reload_if_stale() -> None:
+    """Reload policy from DB if the Redis version counter indicates staleness."""
+    global _cached_version
+    try:
+        redis_client = get_redis_client()
+        version = (redis_client.get(POLICY_VERSION_KEY) or "0") if redis_client else None
+    except Exception:
+        version = None
+
+    if version is None or version != _cached_version:
+        with _lock:
+            try:
+                redis_client = get_redis_client()
+                version = (redis_client.get(POLICY_VERSION_KEY) or "0") if redis_client else None
+            except Exception:
+                version = None
+            if version is None or version != _cached_version:
+                get_enforcer().load_policy()
+                _cached_version = version
+
+
 def enforce_with_reload(user_id: str, org_id: str, resource: str, action: str) -> bool:
-    """Enforce a permission check, reloading from DB on first denial.
+    """Enforce a permission check, reloading policy only when the Redis version
+    counter indicates another worker has written changes.
 
-    Handles the common case where a role was just granted: the in-memory
-    cache says deny, but the DB says allow.  One reload + retry keeps
-    the hot path fast (no DB hit) while making grants take effect instantly.
+    Falls back to always-reload when Redis is unavailable (correctness over
+    performance).
     """
-    enforcer = get_enforcer()
-    if enforcer.enforce(user_id, org_id, resource, action):
-        return True
-    reload_policies()
-    return enforcer.enforce(user_id, org_id, resource, action)
-
-
-def reload_policies() -> None:
-    """Reload all policies from the database into memory.
-
-    Call this after any admin mutation (role assign / revoke) so that the
-    in-process enforcer cache stays current.
-
-    Thread-safe: acquires _lock so concurrent reloads cannot corrupt the
-    enforcer's in-memory policy cache.
-    """
+    reload_if_stale()
     with _lock:
-        enforcer = get_enforcer()
-        enforcer.load_policy()
-        logger.info("Casbin policies reloaded from database.")
+        return get_enforcer().enforce(user_id, org_id, resource, action)
+
+
+def increment_policy_version() -> None:
+    """Bump the Redis policy version counter so other workers know to reload."""
+    global _cached_version
+    with _lock:
+        redis_client = get_redis_client()
+        if redis_client:
+            new_version = str(redis_client.incr(POLICY_VERSION_KEY))
+            _cached_version = new_version
 
 
 def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
     """Replace all roles for a user in an org with a single new role."""
     with _lock:
+        reload_if_stale()
         enforcer = get_enforcer()
         current_roles = enforcer.get_roles_for_user_in_domain(user_id, org_id)
         for old_role in current_roles:
@@ -237,21 +243,46 @@ def assign_role_to_user(user_id: str, role: str, org_id: str) -> None:
         if role not in current_roles:
             enforcer.add_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
-        enforcer.load_policy()
+    increment_policy_version()
     logger.info("Assigned role %s to user %s in org %s (replaced: %s)", sanitize(role), sanitize(user_id), sanitize(org_id), current_roles)
 
 
 def remove_role_from_user(user_id: str, role: str, org_id: str) -> None:
     """Remove a role from a user within an org (domain)."""
     with _lock:
+        reload_if_stale()
         enforcer = get_enforcer()
         enforcer.remove_grouping_policy(user_id, role, org_id)
         enforcer.save_policy()
-        enforcer.load_policy()
+    increment_policy_version()
     logger.info("Removed role %s from user %s in org %s", sanitize(role), sanitize(user_id), sanitize(org_id))
 
 
 def get_user_roles_in_org(user_id: str, org_id: str) -> list[str]:
     """Get all roles assigned to a user in a specific org."""
-    enforcer = get_enforcer()
-    return enforcer.get_roles_for_user_in_domain(user_id, org_id)
+    reload_if_stale()
+    with _lock:
+        enforcer = get_enforcer()
+        return enforcer.get_roles_for_user_in_domain(user_id, org_id)
+
+
+def revoke_role_from_user(user_id: str, role: str, org_id: str, fallback: str = "viewer") -> str:
+    """Revoke a specific role from a user in an org, assigning fallback if none remain.
+
+    Returns the user's effective role after the revocation.
+    """
+    with _lock:
+        reload_if_stale()
+        enforcer = get_enforcer()
+        enforcer.remove_grouping_policy(user_id, role, org_id)
+        remaining = enforcer.get_roles_for_user_in_domain(user_id, org_id)
+        if not remaining:
+            enforcer.add_grouping_policy(user_id, fallback, org_id)
+            effective_role = fallback
+        else:
+            effective_role = remaining[0]
+        enforcer.save_policy()
+    increment_policy_version()
+    logger.info("Revoked role %s from user %s in org %s (now: %s)",
+                sanitize(role), sanitize(user_id), sanitize(org_id), sanitize(effective_role))
+    return effective_role

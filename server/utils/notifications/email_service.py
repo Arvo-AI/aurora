@@ -517,6 +517,67 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
         
         return self._send_email(to_email, subject, html_body, text_body)
 
+    def send_action_started_email(
+        self,
+        to_email: str,
+        action_data: Dict[str, Any],
+    ) -> bool:
+        """Send email notification when an Aurora Action starts running.
+
+        Args:
+            to_email: Recipient email address
+            action_data: Dictionary containing action details
+                - action_name: Name of the action
+                - run_id: Action run UUID
+                - session_id: Chat session ID (for link)
+
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        action_name = str(action_data.get('action_name', 'Unknown Action'))
+        action_name_html = html.escape(action_name)
+        session_id = action_data.get('session_id')
+
+        subject = f"[Aurora] Action Started - {action_name}"
+
+        session_url = f"{self.frontend_url}/chat?sessionId={session_id}" if session_id else f"{self.frontend_url}/actions"
+        logo_url = self._get_logo_url()
+
+        text_body = f"""ACTION STARTED
+
+Action: {action_name}
+Status: Running
+
+Aurora has started executing this action.
+
+View details: {session_url}{self._text_footer()}"""
+
+        html_body = f"""{self._email_header_html(logo_url)}
+{self._status_banner_html("Action Started", "Aurora is executing this action")}
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 48px 40px;">
+                            {self._alert_title_card_html("Action", action_name_html)}
+
+                            <!-- Status -->
+                            <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
+                                <tr>
+                                    <td style="padding: 20px 16px 20px 0; vertical-align: top; border-top: 1px solid #e5e5e5;">
+                                        <div style="font-size: 11px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px;">Status</div>
+                                        <div style="font-size: 15px; font-weight: 600; color: #2563eb;">Running</div>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- CTA Button -->
+                            {self._cta_button_html(session_url, "View Action")}
+                        </td>
+                    </tr>
+{self._email_footer_html()}"""
+
+        return self._send_email(to_email, subject, html_body, text_body)
+
     def send_action_completed_email(
         self,
         to_email: str,

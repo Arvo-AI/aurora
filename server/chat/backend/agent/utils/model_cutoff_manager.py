@@ -64,10 +64,31 @@ class ModelCutoffManager:
             ),
         }
 
-        # Google Models (via OpenRouter)
+        # Google / Vertex AI Models
         google_models = {
+            "google/gemini-3.5-flash": ModelInfo(
+                "gemini-3.5-flash", "google", cutoff_date(2025, 4, 1), True, True
+            ),
             "google/gemini-3.1-pro-preview": ModelInfo(
                 "gemini-3.1-pro-preview", "google", cutoff_date(2025, 4, 1), True, True
+            ),
+            "google/gemini-2.5-pro": ModelInfo(
+                "gemini-2.5-pro", "google", cutoff_date(2025, 3, 1), True, True
+            ),
+            "google/gemini-2.5-flash": ModelInfo(
+                "gemini-2.5-flash", "google", cutoff_date(2025, 3, 1), True, True
+            ),
+            "vertex/gemini-3.5-flash": ModelInfo(
+                "gemini-3.5-flash", "vertex", cutoff_date(2025, 4, 1), True, True
+            ),
+            "vertex/gemini-3.1-pro-preview": ModelInfo(
+                "gemini-3.1-pro-preview", "vertex", cutoff_date(2025, 4, 1), True, True
+            ),
+            "vertex/gemini-2.5-pro": ModelInfo(
+                "gemini-2.5-pro", "vertex", cutoff_date(2025, 3, 1), True, True
+            ),
+            "vertex/gemini-2.5-flash": ModelInfo(
+                "gemini-2.5-flash", "vertex", cutoff_date(2025, 3, 1), True, True
             ),
         }
 

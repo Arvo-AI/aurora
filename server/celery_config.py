@@ -1,6 +1,7 @@
 from celery import Celery
 import importlib
 import os
+import sys
 import logging
 from dotenv import load_dotenv
 
@@ -8,12 +9,17 @@ from dotenv import load_dotenv
 # Configure root logger BEFORE Celery starts.
 # Uses stdout-only logging for container-native log aggregation.
 # Logs are accessible via `docker logs` or `kubectl logs`.
+#
+# IMPORTANT: sys.stdout must be passed explicitly to StreamHandler.
+# The default (no argument) routes to sys.stderr, which causes GCP
+# Cloud Logging to classify ALL log lines — including INFO — as ERROR
+# severity, generating false-positive error-log-spike alerts (INC-445).
 # ------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
+    handlers=[logging.StreamHandler(sys.stdout)],
     force=True  # Remove any existing handlers set by other modules to avoid duplicate logs
 )
 
@@ -97,7 +103,9 @@ celery_app.conf.update(
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
         'tasks.github_webhook_tasks',
+        'tasks.change_gating',
         'routes.github.github_repo_metadata',
+        'utils.repo_metadata',
         'services.actions.scheduler',
     ],
     # Periodic task schedule
@@ -238,3 +246,61 @@ except ImportError as e:
 if hasattr(celery_app, 'tasks'):
     non_celery_tasks = [t for t in celery_app.tasks.keys() if not t.startswith('celery.')]
     logging.info("Registered %d custom tasks: %s", len(non_celery_tasks), non_celery_tasks)
+
+
+# ---------------------------------------------------------------------------
+# Worker pre-warming: heavy singletons are initialized once per child process
+# so the first task doesn't pay a cold-start penalty.
+# ---------------------------------------------------------------------------
+import threading
+
+try:
+    from celery.signals import worker_process_init
+except (ImportError, ModuleNotFoundError):
+    # Tests stub celery as MagicMock when the package isn't installed (see
+    # tests/conftest.py), so celery.signals isn't importable outside workers.
+    worker_process_init = None
+
+_prewarm_ready = threading.Event()
+
+_prewarm_logger = logging.getLogger("celery.prewarm")
+
+
+if worker_process_init is not None:
+
+    @worker_process_init.connect
+    def _prewarm_worker(**kwargs):
+        """Kick off singleton init in a background thread.
+
+        worker_process_init has a ~4s timeout before the parent kills the child,
+        so we can't block here. Task code calls _prewarm_ready.wait() instead.
+        """
+
+        def _do_prewarm():
+            try:
+                from guardrails.input_rail import _ensure_rails_in_thread
+                _ensure_rails_in_thread()
+                _prewarm_logger.info("[PREWARM] NeMo Guardrails ready")
+            except Exception as e:
+                _prewarm_logger.warning("[PREWARM] Guardrails init failed: %s", e)
+
+            try:
+                from chat.backend.agent.tools.mcp_preloader import start_mcp_preloader
+                start_mcp_preloader()
+                _prewarm_logger.info("[PREWARM] MCP Preloader started")
+            except Exception as e:
+                _prewarm_logger.warning("[PREWARM] MCP Preloader failed: %s", e)
+
+            try:
+                from chat.background.task import _get_worker_agent
+                _get_worker_agent()
+                _prewarm_logger.info("[PREWARM] Agent singleton ready")
+            except Exception as e:
+                _prewarm_logger.warning("[PREWARM] Agent singleton failed: %s", e)
+
+            _prewarm_ready.set()
+
+        threading.Thread(target=_do_prewarm, name="celery-prewarm", daemon=True).start()
+else:
+    # No worker signal hook (e.g. pytest stubs celery) — don't block task code.
+    _prewarm_ready.set()

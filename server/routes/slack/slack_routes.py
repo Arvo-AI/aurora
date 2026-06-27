@@ -6,11 +6,17 @@ Handles OAuth flow, connection status, and disconnection.
 import logging
 import os
 import time
+from urllib.parse import quote
 from flask import Blueprint, request, jsonify, redirect
 import requests
 from connectors.slack_connector.oauth import get_auth_url, exchange_code_for_token
-from connectors.slack_connector.client import create_incidents_channel, get_slack_client_for_user
-from utils.auth.stateless_auth import get_credentials_from_db
+from connectors.slack_connector.client import create_incidents_channel, join_existing_incidents_channel
+from utils.auth.stateless_auth import (
+    get_credentials_from_db,
+    get_org_id_for_user,
+    get_org_preference,
+    store_org_preference,
+)
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -124,68 +130,61 @@ def slack_callback():
             logging.error(f"No access token in Slack response (keys: {list(token_data.keys())})")
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=no_token")
         
-        # Create incidents channel first (blocking - OAuth fails if channel can't be created)
+        # Create incidents channel first — connection is only valid with a working channel
         installer_slack_user_id = authed_user.get('id')
-        channel_result = create_incidents_channel(
-            access_token, 
-            team_info.get('name', 'Unknown'),
-            installer_slack_user_id
-        )
+        team_name = team_info.get('name', 'Unknown')
+        
+        # On reconnect, reuse the previously-stored channel from org preferences
+        # (survives disconnect since it's stored separately from OAuth credentials)
+        channel_result = None
+        org_id = get_org_id_for_user(user_id)
+        existing_channel_id = None
+        if org_id:
+            existing_channel_id = get_org_preference(org_id, 'slack_incidents_channel_id')
+        
+        if existing_channel_id:
+            channel_result = join_existing_incidents_channel(access_token, existing_channel_id)
+            if not channel_result.get('ok'):
+                channel_result = None
+        
+        if not channel_result:
+            channel_result = create_incidents_channel(access_token, team_name, installer_slack_user_id)
         if not channel_result.get('ok'):
             error_msg = channel_result.get('error', 'Unknown error')
             logging.error(f"Failed to create incidents channel: {error_msg}")
-            return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=channel_creation_failed")
+            user_hint = (
+                "Aurora could not create an incidents channel in your workspace. "
+                "Please check the bot's permissions and retry."
+            )
+            return redirect(f"{FRONTEND_URL}?slack_auth=failed&error={quote(user_hint)}")
         
         # Store the token in the database (including channel info)
         try:
             slack_token_data = {
                 "access_token": access_token,
-                "team_name": team_info.get('name', 'Unknown'),
+                "team_name": team_name,
                 "team_id": team_info.get('id'),
                 "user_id": authed_user.get('id'),
                 "connected_at": int(time.time()),
                 "incidents_channel_id": channel_result.get('channel_id'),
                 "incidents_channel_name": channel_result.get('channel_name'),
             }
-            
             store_tokens_in_db(user_id, slack_token_data, "slack")
-            logging.info(f"Incidents channel ready in {team_info.get('name')} workspace, channel: #{channel_result.get('channel_name')}")
             
+            # Persist channel ID as org preference so it survives disconnect/reconnect
+            if org_id and channel_result.get('channel_id'):
+                store_org_preference(org_id, 'slack_incidents_channel_id', channel_result['channel_id'])
+                store_org_preference(org_id, 'slack_incidents_channel_name', channel_result.get('channel_name', ''))
+            
+            logging.info("Incidents channel ready, Slack credentials stored successfully")
         except Exception as e:
-            logging.error(f"Failed to store Slack credentials: {e}", exc_info=True)
+            logging.exception("Failed to store Slack credentials")
             return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=storage_failed")
         
-        # Redirect to frontend with success
-        return redirect(f"{FRONTEND_URL}?slack_auth=success&team={team_info.get('name', 'Unknown')}")
+        # Redirect to frontend with success (frontend reads team name from status endpoint)
+        return redirect(f"{FRONTEND_URL}/slack/manage?slack_auth=success")
     
     except Exception as e:
-        logging.error(f"Error during Slack callback: {e}", exc_info=True)
+        logging.error("Error during Slack callback", exc_info=True)
         return redirect(f"{FRONTEND_URL}?slack_auth=failed&error=unexpected_error")
-
-
-@slack_bp.route("/channels", methods=["GET"])
-@require_permission("connectors", "read")
-def list_channels(user_id):
-    """List Slack channels the bot can see (may include channels the bot is not a member of)."""
-    try:
-        client = get_slack_client_for_user(user_id)
-        if not client:
-            return jsonify({"error": "Slack not connected"}), 401
-        
-        channels = client.list_channels()
-        
-        # Format channel list for frontend
-        formatted_channels = [{
-            "id": ch.get("id"),
-            "name": ch.get("name"),
-            "is_member": ch.get("is_member"),
-            "is_private": ch.get("is_private"),
-            "num_members": ch.get("num_members")
-        } for ch in channels]
-        
-        return jsonify({"channels": formatted_channels})
-        
-    except Exception as e:
-        logging.error(f"Error listing Slack channels: {e}", exc_info=True)
-        return jsonify({"error": "Failed to list Slack channels"}), 500
 

@@ -52,7 +52,7 @@ spec:
         - name: celery-worker
           image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag }}"
           imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "celery -A celery_config worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-4} --pidfile=/tmp/celery-worker.pid"]
+          command: ["sh", "-c", "exec celery -A celery_config worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-4} --pidfile=/tmp/celery-worker.pid"]
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "celeryWorker" "global" $ "defaults" (dict)) | nindent 12 }}
           envFrom:
@@ -66,6 +66,10 @@ spec:
                 name: {{ include "aurora.secretName.app" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.llm" . }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir

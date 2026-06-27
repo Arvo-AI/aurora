@@ -24,6 +24,7 @@ def fake_enforcer(monkeypatch):
     fake = MagicMock(name="casbin_enforcer")
     fake.get_roles_for_user_in_domain.return_value = []
     monkeypatch.setattr(enforcer_module, "get_enforcer", lambda: fake)
+    monkeypatch.setattr(enforcer_module, "get_redis_client", lambda: None)
     return fake
 
 
@@ -165,7 +166,6 @@ class TestDomainMatch:
     def domain_match(self, monkeypatch):
         """Run ``get_enforcer`` and return the domain matcher closure it registers."""
         monkeypatch.setattr(enforcer_module, "_enforcer", None)
-        monkeypatch.setattr(enforcer_module, "_last_reload", 0.0)
 
         fake = MagicMock(name="casbin_enforcer")
         fake.get_policy.return_value = []

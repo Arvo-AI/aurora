@@ -47,7 +47,46 @@ MODEL_MAPPINGS = {
     "google/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",
         "google": "gemini-3.1-pro-preview",
+        "vertex": "gemini-3.1-pro-preview",
         "provider": "google",
+    },
+    "vertex/gemini-3.1-pro-preview": {
+        "openrouter": "google/gemini-3.1-pro-preview",
+        "vertex": "gemini-3.1-pro-preview",
+        "provider": "vertex",
+    },
+    "google/gemini-3.5-flash": {
+        "openrouter": "google/gemini-3.5-flash",
+        "google": "gemini-3.5-flash",
+        "vertex": "gemini-3.5-flash",
+        "provider": "google",
+    },
+    "vertex/gemini-3.5-flash": {
+        "openrouter": "google/gemini-3.5-flash",
+        "vertex": "gemini-3.5-flash",
+        "provider": "vertex",
+    },
+    "google/gemini-2.5-pro": {
+        "openrouter": "google/gemini-2.5-pro",
+        "google": "gemini-2.5-pro",
+        "vertex": "gemini-2.5-pro",
+        "provider": "google",
+    },
+    "vertex/gemini-2.5-pro": {
+        "openrouter": "google/gemini-2.5-pro",
+        "vertex": "gemini-2.5-pro",
+        "provider": "vertex",
+    },
+    "google/gemini-2.5-flash": {
+        "openrouter": "google/gemini-2.5-flash",
+        "google": "gemini-2.5-flash",
+        "vertex": "gemini-2.5-flash",
+        "provider": "google",
+    },
+    "vertex/gemini-2.5-flash": {
+        "openrouter": "google/gemini-2.5-flash",
+        "vertex": "gemini-2.5-flash",
+        "provider": "vertex",
     },
     "anthropic/claude-sonnet-4.6": {
         "openrouter": "anthropic/claude-sonnet-4.6",

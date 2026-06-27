@@ -88,16 +88,17 @@ def mint_app_jwt_with_config(config: "GitHubAppConfig", private_key: str) -> str
 
 
 def mint_app_jwt() -> str:
-    """Mint a GitHub App JWT using process config + Vault-stored private key.
+    """Mint a GitHub App JWT using process config + the backend-stored private key.
 
     Composes :func:`mint_app_jwt_with_config` with the real config loader and
-    the Vault private-key helper. Intended for production runtime use.
+    the secrets-backend private-key helper (Vault or AWS Secrets Manager,
+    selected by ``SECRETS_BACKEND``). Intended for production runtime use.
 
     Returns:
         Encoded JWT (string).
 
     Raises:
-        GitHubAppJWTError: If config or Vault helpers are unavailable, or if
+        GitHubAppJWTError: If config or secret helpers are unavailable, or if
             JWT minting fails for any reason. The original error is chained.
     """
     # Lazy imports keep this module importable while the parallel Wave 1
@@ -109,7 +110,7 @@ def mint_app_jwt() -> str:
         from connectors.github_connector.vault_keys import get_app_private_key
     except ImportError as exc:
         raise GitHubAppJWTError(
-            f"GitHub App config or vault helpers are unavailable: {exc}"
+            f"GitHub App config or secret helpers are unavailable: {exc}"
         ) from exc
 
     try:

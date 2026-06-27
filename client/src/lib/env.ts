@@ -7,7 +7,10 @@ type EnvKey =
   | 'NEXT_PUBLIC_ENABLE_SHAREPOINT'
   | 'NEXT_PUBLIC_ENABLE_JIRA'
   | 'NEXT_PUBLIC_ENABLE_NOTION'
-  | 'NEXT_PUBLIC_ENABLE_SPINNAKER';
+  | 'NEXT_PUBLIC_ENABLE_SPINNAKER'
+  | 'NEXT_PUBLIC_ENABLE_CLOUDBEES'
+  | 'NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH'
+  | 'AURORA_ENV';
 
 declare global {
   interface Window {
@@ -16,7 +19,7 @@ declare global {
 }
 
 /**
- * Read a NEXT_PUBLIC_* env var at runtime.
+ * Read an env var at runtime.
  * In the browser, prefers the value injected by /env-config.js (set at container startup).
  * Falls back to the build-time value from process.env for dev mode / SSR.
  */

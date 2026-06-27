@@ -410,7 +410,8 @@ pre code {
   border: none !important;
   font-size: 0.85rem;
   line-height: 1.6;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
   color: #fafafa;
 }
 

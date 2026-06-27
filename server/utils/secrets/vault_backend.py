@@ -120,6 +120,17 @@ class VaultSecretsBackend(SecretsBackend):
         """Check if this is a Vault secret reference."""
         return secret_ref.startswith(VAULT_REF_PREFIX)
 
+    def build_system_ref(self, logical_name: str) -> str:
+        """Build a Vault reference for a system-scoped secret.
+
+        System secrets live under a ``system/`` base path (distinct from the
+        per-user ``base_path``) at ``vault:kv/data/{mount}/system/{logical_name}``.
+        For the default mount ``aurora`` and ``github-app/private-key`` this
+        yields ``vault:kv/data/aurora/system/github-app/private-key`` — the
+        same path operators already provision with ``vault kv put``.
+        """
+        return f"{VAULT_REF_PREFIX}{self.mount_point}/system/{logical_name}"
+
     def store_secret(self, secret_name: str, secret_value: str, **kwargs) -> str:
         """Store a secret in Vault KV v2.
 

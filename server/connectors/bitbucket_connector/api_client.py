@@ -212,8 +212,18 @@ class BitbucketAPIClient:
 
         Returns:
             User profile dict on success, or a dict with ``"error"`` key on failure.
+            On success, includes ``"_granted_scopes"`` from the response header.
         """
-        return self._get(f"{BITBUCKET_API_BASE}/user")
+        url = f"{BITBUCKET_API_BASE}/user"
+        _validate_bitbucket_url(url)
+        response = requests.get(url, headers=self._get_headers(), timeout=self.REQUEST_TIMEOUT)
+        if response.status_code != 200:
+            return self._handle_error(response)
+        data = response.json()
+        # Piggyback scope info from the response header — avoids a second API call
+        raw_scopes = response.headers.get("x-oauth-scopes", "")
+        data["_granted_scopes"] = [s.strip() for s in raw_scopes.split(",") if s.strip()]
+        return data
 
     # ------------------------------------------------------------------
     # Workspaces / Projects / Repos
@@ -255,8 +265,21 @@ class BitbucketAPIClient:
 
     def _resolve_commit(self, workspace, repo_slug, ref):
         """Resolve a branch/tag name to a commit hash. Returns the ref unchanged if resolution fails."""
-        if ref == "HEAD" or len(ref) >= 12 and ref.isalnum():
+        # "HEAD" isn't a valid ref in Bitbucket's API — resolve to the repo's default branch
+        if ref == "HEAD":
+            repo_info = self._get(
+                f"{BITBUCKET_API_BASE}/repositories/"
+                f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
+            )
+            if isinstance(repo_info, dict) and not repo_info.get("error"):
+                main_branch = repo_info.get("mainbranch", {}).get("name")
+                if main_branch:
+                    return main_branch
             return ref
+        # Already a commit SHA — no resolution needed
+        if len(ref) >= 12 and ref.isalnum():
+            return ref
+        # Branch/tag name — resolve to its commit hash
         result = self._get(
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
@@ -315,7 +338,7 @@ class BitbucketAPIClient:
         }
         return self._post(url, data=form_data)
 
-    def get_directory_tree(self, workspace, repo_slug, path="", commit="HEAD"):
+    def get_directory_tree(self, workspace, repo_slug, path="", commit="HEAD", list_files=False):
         """Get directory listing at a path."""
         commit = self._resolve_commit(workspace, repo_slug, commit)
         url = (
@@ -323,7 +346,8 @@ class BitbucketAPIClient:
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}"
             f"/src/{commit}/{quote(path, safe='/')}"
         )
-        params = {"format": "meta"}
+        # format=meta returns directory metadata; omitting it returns the file listing
+        params = None if list_files else {"format": "meta"}
         return self._get(url, params=params)
 
     def search_code(self, workspace, query):

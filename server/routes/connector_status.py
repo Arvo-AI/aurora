@@ -19,7 +19,11 @@ import requests
 from flask import Blueprint, jsonify
 
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
+from utils.auth.stateless_auth import (
+    get_org_id_for_user,
+    get_org_id_from_request,
+    set_rls_context,
+)
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
 
@@ -270,13 +274,19 @@ def _check_google_chat(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str, Any]:
+def _check_github(
+    creds_or_user_id, app_runtime_ready: bool = True, org_id: str | None = None
+) -> Dict[str, Any]:
     """Mirrors /github/status — App-aware AND OAuth-aware (hybrid mode).
 
     Accepts either a credentials dict (with ``_user_id``) for generic
     PROVIDER_CHECKERS dispatch, or a plain user_id string for direct callers.
+
+    The App check is org-scoped: an installation linked by any member of the
+    user's org marks the connector connected, so every org member sees the
+    same state (consistent with OAuth tokens and all other connectors).
     """
-    from utils.auth.github_auth_mode import is_app_enabled, is_oauth_enabled
+    from utils.auth.github_auth_mode import is_app_enabled, is_oauth_token_honored
 
     if isinstance(creds_or_user_id, dict):
         user_id = creds_or_user_id.get("_user_id", "")
@@ -284,6 +294,8 @@ def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str,
         user_id = creds_or_user_id
 
     if is_app_enabled() and app_runtime_ready:
+        if org_id is None:
+            org_id = get_org_id_for_user(user_id)
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
@@ -292,11 +304,11 @@ def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str,
                              FROM user_github_installations ugi
                              JOIN github_installations gi
                                   ON gi.installation_id = ugi.installation_id
-                            WHERE ugi.user_id = %s
+                            WHERE (ugi.user_id = %s OR ugi.org_id = %s)
                               AND ugi.disconnected_at IS NULL
                               AND gi.suspended_at IS NULL
                             LIMIT 1""",
-                        (user_id,),
+                        (user_id, org_id),
                     )
                     row = cur.fetchone()
             if row:
@@ -304,7 +316,7 @@ def _check_github(creds_or_user_id, app_runtime_ready: bool = True) -> Dict[str,
         except Exception as exc:
             logger.debug("[STATUS] github App check failed: %s", exc)
 
-    if is_oauth_enabled():
+    if is_oauth_token_honored():
         try:
             from utils.auth.token_management import get_token_data
             creds = get_token_data(user_id, "github")
@@ -858,7 +870,7 @@ def _check_all_connectors(
         if provider == "grafana":
             return provider, _check_grafana(user_id, org_id)
         if provider == "github":
-            return provider, _check_github(user_id, app_runtime_ready)
+            return provider, _check_github(user_id, app_runtime_ready, org_id)
         creds = get_token_data(token_owner_id, provider)
         if not creds:
             with db_pool.get_admin_connection() as fallback_conn:
@@ -899,6 +911,14 @@ def _check_all_connectors(
                 prov = futures[future]
                 logger.warning("[STATUS] %s check timed out: %s", prov, exc)
                 results[prov] = {"connected": False}
+
+    # CloudBees OC/PAT (cloudbees_oc) and FM (cloudbees_fm) are stored as separate
+    # providers but surface under the single "cloudbees" connector card in the UI.
+    if not results.get("cloudbees", {}).get("connected") and (
+        results.get("cloudbees_oc", {}).get("connected")
+        or results.get("cloudbees_fm", {}).get("connected")
+    ):
+        results["cloudbees"] = {"connected": True}
 
     return results
 

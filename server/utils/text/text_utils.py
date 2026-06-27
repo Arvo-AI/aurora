@@ -2,6 +2,21 @@
 
 import re
 
+_TRUNCATION_SUFFIX = "...[truncated]"
+
+
+def truncate(value, limit: int, suffix: str = _TRUNCATION_SUFFIX) -> str:
+    """Coerce ``value`` to text and cap it at ``limit`` characters.
+
+    Returns "" for ``None``, leaves short values untouched, and appends
+    ``suffix`` only when content was actually cut. Consolidates the many
+    copy-pasted ``_truncate``/``_excerpt`` helpers across routes and agent tools.
+    """
+    if value is None:
+        return ""
+    s = value if isinstance(value, str) else str(value)
+    return s if len(s) <= limit else s[:limit] + suffix
+
 
 def clean_markdown(text: str) -> str:
     """Strip markdown formatting from text for clean thought display.

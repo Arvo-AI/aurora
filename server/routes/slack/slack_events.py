@@ -120,18 +120,10 @@ def slack_events():
                     if client:
                         if response_text:
                             try:
-                                sent_msg = client.send_message(
-                                    channel=channel, 
-                                    text=response_text, 
-                                    thread_ts=thread_ts
-                                )
-                                
-                                if trigger_background and sent_msg:
-                                    # Proceed with background task
-                                    # Determine session logic
-                                    msg_thread_ts = event.get('thread_ts') # Use original thread_ts for logic
+                                if trigger_background:
+                                    # Determine session logic early to know if we need channel context
+                                    msg_thread_ts = event.get('thread_ts')
                                     
-                                    # Logic for new session vs thread
                                     incident_id = None
                                     session_id = None
                                     context_messages = []
@@ -139,18 +131,43 @@ def slack_events():
                                     final_thread_ts = None
                                     
                                     if msg_thread_ts and msg_thread_ts != ts:
-                                         # Reply in thread
-                                         session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
-                                         context_messages = get_thread_messages(client, channel, msg_thread_ts)
-                                         final_thread_ts = msg_thread_ts
+                                        # Reply in thread — send "Thinking..." then fetch thread context
+                                        sent_msg = client.send_message(
+                                            channel=channel, 
+                                            text=response_text, 
+                                            thread_ts=thread_ts
+                                        )
+                                        session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
+                                        context_messages = get_thread_messages(client, channel, msg_thread_ts)
+                                        final_thread_ts = msg_thread_ts
                                     else:
-                                         # New top level - fetch channel context with thread summaries
-                                         channel_context = get_channel_context_with_threads(client, channel, limit=5)
-                                         final_thread_ts = ts
-                                    
+                                        # New top-level message — parallelize "Thinking..." send with channel context fetch
+                                        from concurrent.futures import ThreadPoolExecutor
+                                        with ThreadPoolExecutor(max_workers=2) as pool:
+                                            thinking_future = pool.submit(
+                                                client.send_message,
+                                                channel=channel,
+                                                text=response_text,
+                                                thread_ts=thread_ts
+                                            )
+                                            context_future = pool.submit(
+                                                get_channel_context_with_threads, client, channel, 5
+                                            )
+                                            sent_msg = thinking_future.result()
+                                            channel_context = context_future.result()
+                                        final_thread_ts = ts
+                                else:
+                                    # Non-background response (e.g. auth error) — just send normally
+                                    client.send_message(
+                                        channel=channel, 
+                                        text=response_text, 
+                                        thread_ts=thread_ts
+                                    )
+                                
+                                if trigger_background and sent_msg:
                                     thinking_ts = sent_msg.get('ts')
                                     
-                                    logger.info(f"Processing @Aurora mention in channel {channel}, thread {final_thread_ts}: {text[:100]}")
+                                    logger.info("Processing @Aurora mention in channel %s, thread %s", channel, final_thread_ts)
                                     
                                     send_message_to_aurora(
                                         user_id=user_id,
@@ -161,7 +178,7 @@ def slack_events():
                                         session_id=session_id,
                                         context_messages=context_messages,
                                         channel_context=channel_context,
-                                        thinking_message_ts=thinking_ts
+                                        thinking_message_ts=thinking_ts,
                                     )
                             except Exception as e:
                                 logger.error(f"Failed to send message to Slack: {e}")
@@ -320,7 +337,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 set_rls_context(cursor, conn, clicker_user_id, log_prefix="[SlackEvents:run_suggestion]")
                 cursor.execute(
                     """
-                    SELECT s.command, s.title, s.risk, i.user_id, i.aurora_chat_session_id, u.email
+                    SELECT s.command, s.title, s.risk, i.user_id, i.org_id, i.aurora_chat_session_id, u.email
                     FROM incident_suggestions s
                     JOIN incidents i ON s.incident_id = i.id
                     LEFT JOIN users u ON i.user_id = u.id
@@ -334,14 +351,16 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                     logger.error(f"Suggestion {suggestion_id} not found for incident {incident_id}")
                     return jsonify({"text": "WARNING: Suggestion not found"}), 200
                 
-                command, title, risk, incident_owner_id, chat_session_id, owner_email = row
+                command, title, risk, _incident_owner_id, incident_org_id, chat_session_id, _owner_email = row
+
+                # Fetch the clicker's org_id
+                cursor.execute("SELECT org_id FROM users WHERE id = %s", (clicker_user_id,))
+                clicker_row = cursor.fetchone()
+                clicker_org_id = clicker_row[0] if clicker_row else None
         
-        # 4. AUTHORIZE: Only incident owner can run commands
-        owner_name = owner_email.split('@')[0] if owner_email else "the incident owner"
-        
-        if clicker_user_id != incident_owner_id:
-            logger.warning(f"User {clicker_user_id} tried to run suggestion for incident owned by {incident_owner_id}")
-            # Use ephemeral message for better UX
+        # 4. AUTHORIZE: Only members of the same org can run commands
+        if clicker_org_id is None or clicker_org_id != incident_org_id:
+            logger.warning(f"User {clicker_user_id} (org {clicker_org_id}) tried to run suggestion for incident in org {incident_org_id}")
             client = get_slack_client_for_user(clicker_user_id)
             if client:
                 try:
@@ -351,7 +370,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                         {
                             "channel": channel_id,
                             "user": slack_user_id,
-                            "text": f"WARNING: Unauthorized\n\nThis investigation belongs to {owner_name}. Only the incident owner can run suggested commands."
+                            "text": "WARNING: Unauthorized\n\nYou don't have access to this incident. Only members of the same organization can run suggested commands."
                         }
                     )
                 except Exception as e:

@@ -1257,6 +1257,38 @@ def initialize_tables():
                     CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
+                "artifacts": """
+                    CREATE TABLE IF NOT EXISTS artifacts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        title VARCHAR(500) NOT NULL,
+                        content TEXT,
+                        last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        current_version_id UUID,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
+                """,
+                "artifact_versions": """
+                    CREATE TABLE IF NOT EXISTS artifact_versions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        artifact_id UUID NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        content TEXT NOT NULL,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        source VARCHAR(50) NOT NULL DEFAULT 'agent',
+                        generation_session_id VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_versions_artifact
+                        ON artifact_versions(artifact_id, version_number DESC);
+                    CREATE INDEX IF NOT EXISTS idx_artifact_versions_org ON artifact_versions(org_id);
+                """,
                 "incident_lifecycle_events": """
                     CREATE TABLE IF NOT EXISTS incident_lifecycle_events (
                         id SERIAL PRIMARY KEY,
@@ -1433,6 +1465,8 @@ def initialize_tables():
             rls_tables.append("actions")
             rls_tables.append("action_runs")
             rls_tables.append("postmortem_versions")
+            rls_tables.append("artifacts")
+            rls_tables.append("artifact_versions")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1561,6 +1595,22 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding installation_id column/FK to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add change_gating_enabled to connected_repos so
+            # existing deployments can enroll repos in PR change gating.
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS change_gating_enabled BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured change_gating_enabled column exists on connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding change_gating_enabled column to connected_repos: {e}"
                 )
                 conn.rollback()
 

@@ -171,6 +171,10 @@ _MARK_DELIVERY_PROCESSED_SQL = (
     "WHERE delivery_id = %s"
 )
 
+# Clears the per-connection RLS GUCs before a pooled admin connection is
+# handed back / reused. Referenced from every place we set RLS context manually.
+_RESET_RLS_SQL = "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+
 
 def _handle_installation_event(
     payload: dict[str, Any],
@@ -314,7 +318,7 @@ def _handle_installation_event(
                     connected_repos_unbound += cur.rowcount
 
                 cur.execute(
-                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    _RESET_RLS_SQL
                 )
                 cur.execute(
                     _MARK_DELIVERY_PROCESSED_SQL,
@@ -522,7 +526,7 @@ def _handle_installation_repositories_event(
                 # is not RLS-protected but leaving stale per-user vars on
                 # the connection just hides bugs in adjacent code.
                 cur.execute(
-                    "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                    _RESET_RLS_SQL
                 )
                 cur.execute(
                     _MARK_DELIVERY_PROCESSED_SQL,
@@ -611,17 +615,235 @@ def _extract_installation_id(payload: dict[str, Any]) -> int | None:
     return value if isinstance(value, int) else None
 
 
+_CHANGE_GATING_ACTIONS = frozenset(
+    {"opened", "reopened", "ready_for_review", "synchronize"}
+)
+
+
+def _resolve_change_gating_owner(installation_id: int, repo_full_name: str) -> tuple[str, str | None]:
+    """Resolve change-gating eligibility; returns ``(status, owner_user_id)``.
+
+    ``status`` is ``"ok"`` (owner found), ``"suspended"``, or
+    ``"not_enrolled"``. One pooled connection covers both the suspension
+    check and the owner probes.
+
+    Owner resolution mirrors the per-user RLS iteration in
+    ``_handle_installation_repositories_event``: list active linked users
+    for the installation, then probe ``connected_repos`` (RLS-FORCED)
+    under each user's RLS context. First enrolled user wins.
+    ``user_github_installations`` has no ``created_at`` column, so we
+    order by ``linked_at`` (its creation timestamp) with ``user_id`` as a
+    deterministic tie-break. The ``connected_repos`` RLS policy is
+    org-scoped, so once one user of an org has been probed, every
+    same-org sibling would return the identical result — those are
+    skipped (the first user of the winning org is still the winner, same
+    as the naive loop).
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    owner: str | None = None
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT suspended_at FROM github_installations WHERE installation_id = %s",
+                (installation_id,),
+            )
+            row = cur.fetchone()
+            if row is not None and row[0] is not None:
+                return ("suspended", None)
+
+            cur.execute(
+                """SELECT user_id
+                     FROM user_github_installations
+                    WHERE installation_id = %s
+                      AND disconnected_at IS NULL
+                    ORDER BY linked_at ASC, user_id ASC""",
+                (installation_id,),
+            )
+            linked_users = [row[0] for row in cur.fetchall() if row[0]]
+
+            probed_orgs: set[str] = set()
+            for linked_user_id in linked_users:
+                org_id = set_rls_context(
+                    cur,
+                    conn,
+                    linked_user_id,
+                    log_prefix="[gh_webhook:change_gating]",
+                )
+                if not org_id:
+                    logger.warning(
+                        "change_gating: owner_probe_skipped installation_id=%s "
+                        "user=%s reason=no_org_context",
+                        installation_id,
+                        linked_user_id,
+                    )
+                    continue
+                if org_id in probed_orgs:
+                    continue  # org-scoped RLS: same org ⇒ same probe result
+                probed_orgs.add(org_id)
+                cur.execute(
+                    """SELECT 1
+                         FROM connected_repos
+                        WHERE repo_full_name = %s
+                          AND installation_id = %s
+                          AND change_gating_enabled = TRUE
+                        LIMIT 1""",
+                    (repo_full_name, installation_id),
+                )
+                if cur.fetchone():
+                    owner = linked_user_id
+                    break
+            if linked_users:
+                cur.execute(
+                    _RESET_RLS_SQL
+                )
+    return ("ok", owner) if owner else ("not_enrolled", None)
+
+
+def _maybe_enqueue_change_gating(
+    payload: dict[str, Any],
+    action: str | None,
+    delivery_id: str,
+) -> None:
+    """Enqueue ``investigate_pr`` when a pull_request delivery qualifies.
+
+    Filter chain (each rejection logs ``change_gating: skipped reason=<x>``):
+    action gate → draft → default-branch base → installation present →
+    Redis dedupe (``SET NX``, BEFORE any DB work so redeliveries are
+    dropped cheaply) → installation not suspended → repo enrolled by a
+    linked user → ``investigate_pr.delay``. If the enqueue itself fails,
+    the dedupe key is deleted so the dispatcher's Celery retry can
+    re-attempt instead of skipping as a duplicate.
+    """
+    repo = _safe_get(payload, "repository", "full_name")
+    pr_number = _safe_get(payload, "pull_request", "number")
+    head_sha = _safe_get(payload, "pull_request", "head", "sha")
+
+    def _skip(reason: str) -> None:
+        logger.info(
+            "change_gating: skipped reason=%s repo=%s pr=%s action=%s delivery_id=%s",
+            reason,
+            _fmt_field(repo),
+            _fmt_field(pr_number),
+            _fmt_field(action),
+            delivery_id,
+        )
+
+    from utils.flags.feature_flags import is_incident_prevention_enabled
+
+    if not is_incident_prevention_enabled():
+        _skip("feature_disabled")
+        return
+    if action not in _CHANGE_GATING_ACTIONS:
+        _skip("action_not_gated")
+        return
+    if _safe_get(payload, "pull_request", "draft"):
+        _skip("draft")
+        return
+    base_ref = _safe_get(payload, "pull_request", "base", "ref")
+    default_branch = _safe_get(payload, "repository", "default_branch")
+    if not base_ref or not default_branch or base_ref != default_branch:
+        _skip("non_default_base")
+        return
+    installation_id = _extract_installation_id(payload)
+    if installation_id is None:
+        _skip("missing_installation")
+        return
+    if not repo or pr_number is None or not head_sha:
+        _skip("missing_pr_fields")
+        return
+
+    # Dedupe on (repo, pr, head_sha) BEFORE any DB work: GitHub redelivers
+    # and an opened + synchronize pair can race for the same head — those
+    # duplicates must not each pay the suspension/enrollment queries.
+    # Redis being down is non-fatal — investigate_pr has its own
+    # idempotency keys.
+    from tasks.change_gating import change_gating_keys, investigate_pr
+    from utils.cache.redis_client import get_redis_client
+
+    dedupe_key = change_gating_keys(repo, pr_number, head_sha)["seen"]
+    redis_client = None
+    dedupe_claimed = False
+    try:
+        redis_client = get_redis_client()
+        if redis_client is not None:
+            if not redis_client.set(dedupe_key, delivery_id, nx=True, ex=86400):
+                _skip("duplicate_delivery")
+                return
+            dedupe_claimed = True
+        else:
+            logger.warning(
+                "change_gating: redis unavailable, dedupe skipped delivery_id=%s",
+                delivery_id,
+            )
+    except Exception as exc:
+        logger.warning(
+            "change_gating: dedupe check failed (%s), proceeding delivery_id=%s",
+            type(exc).__name__,
+            delivery_id,
+        )
+
+    def _release_dedupe_key() -> None:
+        """Free the seen-key when no task was enqueued for this delivery,
+        so a Celery retry of the dispatcher (or a GitHub redelivery) is
+        not swallowed as duplicate_delivery."""
+        if dedupe_claimed and redis_client is not None:
+            try:
+                redis_client.delete(dedupe_key)
+            except Exception as exc:
+                logger.warning(
+                    "change_gating: dedupe key release failed (%s) delivery_id=%s",
+                    type(exc).__name__,
+                    delivery_id,
+                )
+
+    try:
+        status, owner_user_id = _resolve_change_gating_owner(installation_id, repo)
+        if status != "ok" or not owner_user_id:
+            _skip(status if status != "ok" else "not_enrolled")
+            # No task enqueued — free the seen-key so a later redelivery
+            # (e.g. after the repo is enrolled or the install unsuspended)
+            # isn't swallowed as duplicate_delivery for the next 24h.
+            _release_dedupe_key()
+            return
+
+        investigate_pr.delay(
+            user_id=owner_user_id,
+            installation_id=installation_id,
+            repo_full_name=repo,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            action=action,
+            delivery_id=delivery_id,
+        )
+    except Exception:
+        _release_dedupe_key()
+        raise
+    logger.info(
+        "change_gating: enqueued repo=%s pr=%s head_sha=%s action=%s user=%s delivery_id=%s",
+        _fmt_field(repo),
+        _fmt_field(pr_number),
+        _fmt_field(head_sha),
+        _fmt_field(action),
+        owner_user_id,
+        delivery_id,
+    )
+
+
 def _handle_pull_request_event(
     payload: dict[str, Any],
     action: str | None,
     delivery_id: str,
 ) -> None:
-    """Log a ``pull_request.<action>`` webhook for RCA correlation.
+    """Log a ``pull_request.<action>`` webhook and enqueue change gating.
 
-    MVP: structured-log only (no DB write beyond ``webhook_deliveries``
-    audit, no GitHub API call). Fields per the Task 14 spec:
-    ``repo, pr_number, action, state, merged_at, head_sha, base_sha,
-    author, title``.
+    Structured-log first (no DB write beyond ``webhook_deliveries`` audit).
+    Fields per the Task 14 spec: ``repo, pr_number, action, state,
+    merged_at, head_sha, base_sha, author, title``. Then, when the
+    delivery passes the change-gating filter chain (enrolled repo,
+    default-branch, non-draft — see ``_maybe_enqueue_change_gating``),
+    enqueues ``tasks.change_gating.investigate_pr``.
     """
     repo = _safe_get(payload, "repository", "full_name")
     pr_number = _safe_get(payload, "pull_request", "number")
@@ -649,6 +871,9 @@ def _handle_pull_request_event(
         _fmt_field(installation_id),
         delivery_id,
     )
+
+    _maybe_enqueue_change_gating(payload, action, delivery_id)
+
     _update_delivery_status(delivery_id, status="processed")
 
 

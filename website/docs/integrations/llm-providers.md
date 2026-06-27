@@ -10,13 +10,13 @@ Aurora requires an LLM provider for its AI-powered investigation and Root Cause 
 
 | Provider | Mode | Environment Variable | Get API Key |
 |----------|------|---------------------|-------------|
-| **OpenRouter** | Gateway | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **OpenRouter** | `openrouter` | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | **OpenAI** | Direct | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) |
 | **Anthropic** | Direct | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) |
 | **Google AI** | Direct | `GOOGLE_AI_API_KEY` | [ai.google.dev](https://ai.google.dev/) |
-| **Vertex AI** | Direct | `VERTEX_AI_PROJECT` + credentials | [console.cloud.google.com](https://console.cloud.google.com/) |
+| **Vertex AI** | `vertex` | `VERTEX_AI_PROJECT` + credentials | [console.cloud.google.com](https://console.cloud.google.com/) |
 | **Ollama** | Direct | `OLLAMA_BASE_URL` | [ollama.com](https://ollama.com/) (free, local) |
-| **AWS Bedrock** | Direct | `BEDROCK_BASE_URL` (gateway) or `BEDROCK_REGION` (native) | [aws.amazon.com/bedrock](https://aws.amazon.com/bedrock/) |
+| **AWS Bedrock** | `bedrock` | `BEDROCK_BASE_URL` (gateway) or `BEDROCK_REGION` (native) | [aws.amazon.com/bedrock](https://aws.amazon.com/bedrock/) |
 
 Only **one** provider is required.
 
@@ -41,7 +41,7 @@ Connects directly to each provider's native API. Use this when running models lo
 LLM_PROVIDER_MODE=direct
 ```
 
-In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-2.5-flash` routes to Google AI).
+In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.5-flash` routes to Google AI).
 
 ### Provider Mode (route everything through one provider)
 
@@ -73,16 +73,14 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `google/gemini-3-flash-preview` | Fast, outperforms 2.5 Pro |
+| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
 | | `google/gemini-2.5-flash` | Cost-effective |
-| | `google/gemini-2.5-flash-lite` | Cheapest Gemini option |
-| **Vertex AI** | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `vertex/gemini-3-flash-preview` | Fast, enterprise-grade |
+| **Vertex AI** | `vertex/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
 | | `vertex/gemini-2.5-pro` | Strong for complex tasks |
 | | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
-| | `vertex/gemini-2.5-flash-lite` | Cheapest Vertex option |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
@@ -90,7 +88,7 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `bedrock/us.anthropic.claude-haiku-4-5-v1:0` | Faster, cheaper Claude on Bedrock |
 | | Gateway: the model name your gateway expects | Gateway mode passes the suffix through to your OpenAI-compatible endpoint |
 
-Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`, `RCA_ORCHESTRATOR_MODEL`, `RCA_SUBAGENT_MODEL`) or select chat models in the UI.
+Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`) or select chat models in the UI.
 
 ## Provider Setup
 
@@ -146,17 +144,31 @@ VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","pri
 # Optional: Location (default: global)
 VERTEX_AI_LOCATION=global
 
-LLM_PROVIDER_MODE=direct
+# Route every model pick through Vertex (recommended — works with clean
+# model names like "Gemini 2.5 Pro" in the picker, no vertex/ prefix needed).
+LLM_PROVIDER_MODE=vertex
 ```
+
+:::tip Two ways to route to Vertex
+- **`LLM_PROVIDER_MODE=vertex`** (recommended) — forces every supported model pick through Vertex; models Vertex can't serve fall back to their own provider.
+- **`LLM_PROVIDER_MODE=direct`** — only routes to Vertex when the model id carries a `vertex/` prefix (e.g. `MAIN_MODEL=vertex/gemini-2.5-pro`). A clean `google/...` id goes to the Google AI provider instead, not Vertex.
+:::
 
 **Authentication options:**
 1. **Service account JSON** (recommended): Set `VERTEX_AI_SERVICE_ACCOUNT_JSON` to the full JSON contents of your service account key file.
 2. **Application Default Credentials (ADC)**: If running on GCP (Cloud Run, GKE), ADC is automatic — just set `VERTEX_AI_PROJECT`.
 3. **Credentials file path**: Set `GOOGLE_APPLICATION_CREDENTIALS` to the path of your service account key file.
 
-:::tip
-The project ID is automatically extracted from the service account JSON if `VERTEX_AI_PROJECT` is not set.
+:::note
+`VERTEX_AI_PROJECT` is required — the provider is considered unavailable without it. The service account JSON only supplies credentials, not the project id.
 :::
+
+**Optional configuration:**
+
+```bash
+# Disable thinking mode for Gemini models (reduces latency, lowers token usage)
+GEMINI_DISABLE_THINKING=true
+```
 
 ### Ollama (Local Models)
 
@@ -244,12 +256,9 @@ Gateway and native are the **same** `bedrock` provider — set `BEDROCK_BASE_URL
 
 ## RCA Model Configuration
 
-Aurora ships two RCA paths and the env vars differ between them:
+Background RCA uses the single-agent path by default (`ORCHESTRATOR_ENABLED=false`), configured via `RCA_MODEL`. An opt-in multi-agent orchestrator is also available — see [Multi-agent orchestrator](#multi-agent-orchestrator) below.
 
-- **Multi-agent RCA orchestrator** (`ORCHESTRATOR_ENABLED=true`, default): a lead orchestrator triages each incident and may fan out parallel read-only sub-agents. Configured via `RCA_ORCHESTRATOR_MODEL` (triage + synthesis) and `RCA_SUBAGENT_MODEL` (sub-agents). When orchestration is enabled, `RCA_MODEL` is ignored.
-- **Legacy single-agent RCA** (`ORCHESTRATOR_ENABLED=false`): one ReAct loop drives the entire investigation. Configured via `RCA_MODEL`.
-
-### Single-agent RCA
+### Single-agent RCA (default)
 
 By default, Aurora uses `anthropic/claude-haiku-4.5` for background Root Cause Analysis. You can change this to any supported provider/model.
 
@@ -268,10 +277,10 @@ RCA_MODEL=anthropic/claude-haiku-4.5
 RCA_MODEL=openai/gpt-4o
 
 # Google AI
-RCA_MODEL=google/gemini-2.5-flash
+RCA_MODEL=google/gemini-3.5-flash
 
 # Vertex AI
-RCA_MODEL=vertex/gemini-2.5-flash
+RCA_MODEL=vertex/gemini-3.5-flash
 
 # Ollama (local)
 RCA_MODEL=ollama/llama3.1
@@ -286,22 +295,15 @@ When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
 
 ### Multi-agent orchestrator
 
-When `ORCHESTRATOR_ENABLED=true` (default), the legacy `RCA_MODEL` is bypassed and the orchestrator splits work across two distinct models. Both env vars are **required** — there is no fallback, and unset values cause orchestrator nodes to fail loudly and the run gracefully degrades to single-agent mode.
+Opt-in via `ORCHESTRATOR_ENABLED=true`. A lead orchestrator triages each incident and may fan out parallel read-only sub-agents. When enabled, `RCA_MODEL` is bypassed and two additional models are required:
 
 ```bash
-ORCHESTRATOR_ENABLED=true                        # default
-
-# Brain: triage + synthesis. Needs reliable structured-output JSON.
-RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7
-
-# Investigator: sub-agents. Needs reliable tool-calling — must always
-# end its turn with a tool call (including the terminal `write_findings`).
-RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6
+ORCHESTRATOR_ENABLED=true
+RCA_ORCHESTRATOR_MODEL=anthropic/claude-opus-4.7   # * triage + synthesis
+RCA_SUBAGENT_MODEL=anthropic/claude-sonnet-4.6     # * sub-agent investigators
 ```
 
-The split exists because the two workloads have independent requirements: triage/synthesis must emit valid JSON for downstream decisions, while sub-agents must call tools every turn until they finalize their findings. A single model rarely excels at both, so each is tuned independently.
-
-Per-role overrides are also supported — set `model:` in the frontmatter of `server/chat/backend/agent/orchestrator/roles/*.md` to override `RCA_SUBAGENT_MODEL` for a single role.
+The split exists because triage/synthesis needs reliable structured-output JSON while sub-agents need reliable tool-calling. Per-role overrides are supported — set `model:` in the frontmatter of `server/chat/backend/agent/orchestrator/roles/*.md`.
 
 ## Cost Considerations
 

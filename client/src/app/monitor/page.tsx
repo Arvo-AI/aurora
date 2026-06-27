@@ -1,19 +1,19 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, DollarSign, HeartPulse, Timer, ShieldCheck } from 'lucide-react';
+import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen } from 'lucide-react';
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
-import UsageTab from './components/usage-tab';
 import SreTab from './components/sre-tab';
 import WaterfallTab from './components/waterfall-tab';
 import AuditTab from './components/audit-tab';
+import ArtifactsTab from './components/artifacts-tab';
 
 const TABS = [
   { id: 'fleet', label: 'Fleet', icon: Radar },
-  { id: 'usage', label: 'Usage & Cost', icon: DollarSign },
   { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
   { id: 'waterfall', label: 'Execution', icon: Timer },
+  { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
 ] as const;
 
@@ -59,9 +59,9 @@ export default function MonitorPage() {
       {/* Tab content */}
       <div>
         {tab === 'fleet' && <FleetTab period={period} />}
-        {tab === 'usage' && <UsageTab period={period} />}
         {tab === 'sre' && <SreTab period={period} />}
         {tab === 'waterfall' && <WaterfallTab period={period} />}
+        {tab === 'artifacts' && <ArtifactsTab />}
         {tab === 'audit' && <AuditTab period={period} />}
       </div>
     </div>

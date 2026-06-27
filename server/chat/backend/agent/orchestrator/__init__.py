@@ -8,7 +8,7 @@ subset. Each sub-agent writes a schema-validated ``findings.md`` artifact
 to object storage; the lead reads only those artifacts (never their
 transcripts) and synthesizes.
 
-Gated by the ``ORCHESTRATOR_ENABLED`` env var (default: true). When set
+Gated by the ``ORCHESTRATOR_ENABLED`` env var (default: false). When set
 to false, ``is_orchestrator_enabled()`` returns False and
 ``workflow._create_workflow`` returns the existing single-node graph
 unchanged.
@@ -24,7 +24,7 @@ def is_orchestrator_enabled() -> bool:
     not at module import — toggling the env var and restarting the worker
     picks up the new value.
     """
-    return os.getenv("ORCHESTRATOR_ENABLED", "true").strip().lower() == "true"
+    return os.getenv("ORCHESTRATOR_ENABLED", "false").strip().lower() == "true"
 
 
 __all__ = ["is_orchestrator_enabled"]

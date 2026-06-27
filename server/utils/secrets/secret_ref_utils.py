@@ -57,7 +57,6 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "sharepoint", # SharePoint connector tokens
     "coroot",   # Coroot connector tokens
     "bitbucket", # Bitbucket connector tokens
-    "bitbucket_workspace_selection",  # Bitbucket selected workspace and repo
     "dynatrace", # Dynatrace connector tokens
     "bigpanda", # BigPanda connector tokens
     "thousandeyes", # ThousandEyes connector tokens

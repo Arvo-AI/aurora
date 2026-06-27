@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 from .utils import (
     get_bb_client_for_user,
-    resolve_workspace_repo,
     require_repo,
     forward_if_error,
     build_error_response,
@@ -27,8 +26,8 @@ class BitbucketIssuesArgs(BaseModel):
         "list_issue_comments",
         "add_issue_comment",
     ] = Field(description="The operation to perform.")
-    workspace: Optional[str] = Field(None, description="Workspace slug. Auto-resolves from saved selection if omitted.")
-    repo_slug: Optional[str] = Field(None, description="Repository slug. Auto-resolves from saved selection if omitted.")
+    workspace: str = Field(description="Workspace slug.")
+    repo_slug: str = Field(description="Repository slug.")
     issue_id: Optional[int] = Field(None, description="Issue ID (required for single-issue operations).")
     title: Optional[str] = Field(None, description="Issue title (for create_issue, update_issue).")
     content: Optional[str] = Field(None, description="Issue body or comment content.")
@@ -67,7 +66,7 @@ def bitbucket_issues(
     if not client:
         return build_error_response("Bitbucket not connected. Please connect Bitbucket first.")
 
-    ws, repo, saved_branch, source = resolve_workspace_repo(user_id, workspace, repo_slug)
+    ws, repo = workspace, repo_slug
 
     try:
         if action == "list_issues":

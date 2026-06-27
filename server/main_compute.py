@@ -11,6 +11,7 @@ load_dotenv()
 
 import logging
 import os
+import sys
 import hmac
 import secrets
 from flask import Flask, request, jsonify
@@ -19,8 +20,17 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.db.db_utils import ensure_database_exists, initialize_tables
 from utils.log_sanitizer import sanitize
 
-# Configure logging first, before importing any modules
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# Configure logging first, before importing any modules.
+#
+# IMPORTANT: sys.stdout must be passed explicitly to StreamHandler.
+# The default (no argument) routes to sys.stderr, which causes GCP
+# Cloud Logging to classify ALL log lines — including INFO/DEBUG — as
+# ERROR severity, generating false-positive error-log-spike alerts (INC-445).
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 # Silence verbose loggers
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('utils.auth.stateless_auth').setLevel(logging.INFO)
@@ -199,6 +209,7 @@ _OPEN_PREFIXES = (
     "/bitbucket/callback",
     "/slack/callback",
     "/slack/events",
+    "/slack/interactions",
     "/pagerduty/oauth/callback",
     "/google-chat/callback",
     "/google-chat/events",
@@ -517,6 +528,9 @@ app.register_blueprint(actions_bp, url_prefix="/api/actions")
 
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
+
+from routes.artifact_routes import artifact_bp
+app.register_blueprint(artifact_bp)
 
 # --- SRE Metrics Routes ---
 from routes.metrics_routes import metrics_bp

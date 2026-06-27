@@ -265,6 +265,7 @@ AGENT_RECURSION_LIMIT=240
 VERTEX_AI_PROJECT=my-gcp-project
 VERTEX_AI_LOCATION=global
 VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+LLM_PROVIDER_MODE=vertex   # route every model pick through Vertex
 ```
 
 ### Ollama (Local Models)
@@ -320,11 +321,11 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6  # auto-translated to us.anthropic.claude
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Used by the legacy single-agent RCA path; ignored when `ORCHESTRATOR_ENABLED=true`. |
+| `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Default RCA path when `ORCHESTRATOR_ENABLED=false`. |
 | `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-4.6` |
-| `ORCHESTRATOR_ENABLED` | `true` | Multi-agent RCA orchestrator. When `true` (default), a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents. When `false`, RCA falls back to the legacy single-agent path with `RCA_MODEL`. |
-| `RCA_ORCHESTRATOR_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Brain model used for triage + synthesis decisions. Needs reliable structured-output JSON. No fallback — orchestrator nodes error out if unset and gracefully degrade to single-agent mode. Format: `provider/model`. |
-| `RCA_SUBAGENT_MODEL` | - | **Required when `ORCHESTRATOR_ENABLED=true`.** Sub-agent investigator model. Needs reliable tool-calling — must always end its turn with a tool call (including the terminal `write_findings`). Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
+| `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator (opt-in). When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents; `RCA_MODEL` is ignored. When `false` (default), RCA uses the single-agent path with `RCA_MODEL`. |
+| `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
+| `RCA_SUBAGENT_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Sub-agent investigator model. Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
 | `GEMINI_DISABLE_THINKING` | - | Disable Gemini thinking mode |
 
 ### AI Safety Guardrails
@@ -393,7 +394,7 @@ on-prem deployments that cannot expose a public webhook URL.
 | `NEXT_PUBLIC_GITHUB_APP_SLUG` | | The App's URL slug (e.g. `aurora-acme`). Used by the frontend to build install management URLs. |
 | `GITHUB_APP_WEBHOOK_URL` | | Public URL Aurora exposes for webhooks. Must match what's configured on the App. Example: `https://aurora.example.com/github/webhook`. |
 | `GITHUB_APP_SETUP_URL` | | Post-install redirect URL. Example: `https://aurora.example.com/github/app/install/callback`. |
-| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — Vault path `aurora/system/github-app/webhook-secret` takes precedence. |
+| `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — the secrets backend path `aurora/system/github-app/webhook-secret` (Vault or AWS Secrets Manager) takes precedence. |
 | `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 | `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 
@@ -407,7 +408,8 @@ NEXT_PUBLIC_GITHUB_APP_SLUG=aurora-acme
 GITHUB_APP_WEBHOOK_URL=https://aurora.example.com/github/webhook
 GITHUB_APP_SETUP_URL=https://aurora.example.com/github/app/install/callback
 GITHUB_APP_WEBHOOK_SECRET=
-# (private key PEM lives in Vault at aurora/system/github-app/private-key)
+# (private key PEM lives in your secrets backend — Vault or AWS Secrets
+#  Manager — at aurora/system/github-app/private-key, not in .env)
 ```
 
 Hybrid (App + OAuth, e.g. for a migration window):

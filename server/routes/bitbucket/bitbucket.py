@@ -11,6 +11,20 @@ from flask import Blueprint, jsonify, render_template, request
 from utils.auth.stateless_auth import get_credentials_from_db
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
+from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.db.connection_pool import db_pool
+
+_REQUIRED_SCOPES = {
+    "read:user:bitbucket", "read:workspace:bitbucket", "read:project:bitbucket",
+    "read:repository:bitbucket", "write:repository:bitbucket",
+    "read:pullrequest:bitbucket", "write:pullrequest:bitbucket",
+    "read:issue:bitbucket", "write:issue:bitbucket",
+    "read:pipeline:bitbucket", "write:pipeline:bitbucket",
+}
+from utils.auth.stateless_auth import set_rls_context
+from connectors.bitbucket_connector.api_client import BitbucketAPIClient
+from connectors.bitbucket_connector.oauth_utils import exchange_code_for_token, get_auth_url, validate_oauth_state, refresh_token_if_needed
+from utils.auth.token_management import store_tokens_in_db
 
 bitbucket_bp = Blueprint("bitbucket", __name__)
 logger = logging.getLogger(__name__)
@@ -34,8 +48,6 @@ def bitbucket_login(user_id):
         if api_token and email:
             # --- API token flow ---
             try:
-                from connectors.bitbucket_connector.api_client import BitbucketAPIClient
-
                 client = BitbucketAPIClient(
                     access_token=api_token,
                     auth_type="api_token",
@@ -45,19 +57,34 @@ def bitbucket_login(user_id):
                 # Validate credentials by fetching user profile
                 user_data = client.get_current_user()
                 if not user_data or user_data.get("error"):
-                    logger.error("Bitbucket API token validation failed")
+                    status_code = user_data.get("status") if user_data else None
+                    error_msg = user_data.get("message", "") if user_data else ""
+                    logger.error(f"Bitbucket API token validation failed: status={status_code} message={error_msg}")
+
                     if user_data and user_data.get("missing_scopes"):
                         missing = ", ".join(user_data["missing_scopes"])
                         return jsonify({
                             "error": f"Missing required scopes: {missing}. "
                                      "Please create a new API token that includes these scopes.",
                         }), 400
+
+                    if status_code in (401, 403):
+                        return jsonify({
+                            "error": "Authentication failed. Either your email/token is incorrect, "
+                                     "or you are using a classic API token (not supported). "
+                                     "Create a scoped token at id.atlassian.com/manage-profile/security/api-tokens"
+                        }), 400
+
                     return jsonify({"error": "Invalid Bitbucket credentials. Check your email and API token."}), 400
 
                 username = user_data.get("username")
                 display_name = user_data.get("display_name")
 
-                from utils.auth.token_management import store_tokens_in_db
+                # Validate token has all required scopes (read from same /user response)
+                granted = set(user_data.get("_granted_scopes", []))
+                missing = _REQUIRED_SCOPES - granted
+                if missing:
+                    logger.warning(f"Bitbucket token for {sanitize(email)} missing scopes: {missing}")
 
                 token_data = {
                     "access_token": api_token,
@@ -72,8 +99,10 @@ def bitbucket_login(user_id):
 
                 return jsonify({
                     "success": True,
-                    "message": f"Successfully connected to Bitbucket as {username}",
                     "username": username,
+                    "display_name": display_name,
+                    "auth_type": "api_token",
+                    **({"missing_scopes": sorted(missing)} if missing else {}),
                 })
 
             except Exception as e:
@@ -87,12 +116,9 @@ def bitbucket_login(user_id):
             if not client_id or not client_secret:
                 logger.error("Bitbucket OAuth client ID or secret not configured")
                 return jsonify({
-                    "error": "Bitbucket OAuth is not configured",
-                    "error_code": "BITBUCKET_NOT_CONFIGURED",
-                    "message": "Bitbucket OAuth environment variables (BB_OAUTH_CLIENT_ID and BB_OAUTH_CLIENT_SECRET) are not configured.",
+                    "error": "Bitbucket OAuth is not available. Use an API token instead.",
+                    "error_code": "OAUTH_NOT_CONFIGURED",
                 }), 400
-
-            from connectors.bitbucket_connector.oauth_utils import get_auth_url
 
             oauth_url = get_auth_url(user_id)
 
@@ -121,8 +147,6 @@ def bitbucket_callback():
 
         logger.info(f"Received Bitbucket code: {sanitize(code)[:5]}...")
 
-        from connectors.bitbucket_connector.oauth_utils import exchange_code_for_token
-
         token_response = exchange_code_for_token(code)
         if not token_response:
             return render_template(
@@ -141,8 +165,6 @@ def bitbucket_callback():
             )
 
         # Fetch user info using the API client
-        from connectors.bitbucket_connector.api_client import BitbucketAPIClient
-
         client = BitbucketAPIClient(access_token=access_token)
         user_data = client.get_current_user()
 
@@ -166,7 +188,6 @@ def bitbucket_callback():
         state = request.args.get("state")
         user_id = None
         if state:
-            from connectors.bitbucket_connector.oauth_utils import validate_oauth_state
             user_id = validate_oauth_state(state)
 
         if not user_id:
@@ -178,8 +199,6 @@ def bitbucket_callback():
             )
 
         try:
-            from utils.auth.token_management import store_tokens_in_db
-
             bb_token_data = {
                 "access_token": access_token,
                 "refresh_token": token_response.get("refresh_token"),
@@ -227,8 +246,6 @@ def bitbucket_status(user_id):
 
         # Auto-refresh OAuth tokens
         if auth_type == "oauth":
-            from connectors.bitbucket_connector.oauth_utils import refresh_token_if_needed
-
             old_access_token = bb_creds.get("access_token")
             bb_creds = refresh_token_if_needed(bb_creds)
 
@@ -241,8 +258,6 @@ def bitbucket_status(user_id):
                     logger.warning(f"Failed to persist refreshed Bitbucket token: {e}")
 
         # Validate by making an API call
-        from connectors.bitbucket_connector.api_client import BitbucketAPIClient
-
         client = BitbucketAPIClient(
             access_token=bb_creds["access_token"],
             auth_type=auth_type,
@@ -253,11 +268,16 @@ def bitbucket_status(user_id):
         if not user_data or user_data.get("error"):
             return jsonify({"connected": False, "error": "Invalid or expired token"})
 
+        # Check for missing scopes (piggybacks on the /user call we just made)
+        granted = set(user_data.get("_granted_scopes", []))
+        missing = _REQUIRED_SCOPES - granted if granted else set()
+
         return jsonify({
             "connected": True,
             "username": user_data.get("username"),
             "display_name": user_data.get("display_name"),
             "auth_type": auth_type,
+            **({"missing_scopes": sorted(missing)} if missing else {}),
         })
 
     except Exception as e:
@@ -270,11 +290,27 @@ def bitbucket_status(user_id):
 def bitbucket_disconnect(user_id):
     """Disconnect Bitbucket account for a user."""
     try:
-        from utils.secrets.secret_ref_utils import delete_user_secret
-
         # Delete both bitbucket credentials and workspace selection
         delete_user_secret(user_id, "bitbucket")
-        delete_user_secret(user_id, "bitbucket_workspace_selection")
+
+        # Also clean up legacy vault entry if it exists
+        try:
+            delete_user_secret(user_id, "bitbucket_workspace_selection")
+        except Exception as e:
+            logger.debug(f"Legacy Bitbucket workspace selection cleanup skipped: {e}")
+
+        # Clear connected repos
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cur:
+                    set_rls_context(cur, conn, user_id, log_prefix="[Bitbucket:disconnect]")
+                    cur.execute(
+                        "DELETE FROM connected_repos WHERE user_id = %s AND provider = 'bitbucket'",
+                        (user_id,),
+                    )
+                    conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to clear connected_repos on disconnect: {e}")
 
         logger.info("Disconnected Bitbucket account")
         return jsonify({"success": True, "message": "Bitbucket account disconnected"})

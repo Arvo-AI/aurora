@@ -78,6 +78,20 @@ image:
   #   - name: regcred
 
 # ------------------------------------------------------------------------------
+# Frontend image override
+# ------------------------------------------------------------------------------
+# When set, the frontend deployment uses this image instead of the default
+# aurora-frontend from image.registry. Useful for custom frontend builds
+# (e.g. with additional analytics or SaaS overlay features).
+# Deploy with: helm upgrade --reuse-values --set frontendImage.tag=sha-abc1234
+frontendImage: {}
+  # registry: "ghcr.io/your-org"
+  # repository: "aurora-frontend-custom"
+  # tag: "sha-abc1234"
+  # pullSecrets:
+  #   - name: ghcr-pull
+
+# ------------------------------------------------------------------------------
 # Autoscaling (HPA)
 # ------------------------------------------------------------------------------
 autoscaling:
@@ -92,6 +106,17 @@ autoscaling:
     minReplicas: 2
     maxReplicas: 6
     targetCPU: 70
+
+# ------------------------------------------------------------------------------
+# Extra environment variables (for marketplace metering, custom integrations, etc.)
+# ------------------------------------------------------------------------------
+extraEnv: []
+# Example:
+#   extraEnv:
+#     - name: AWS_MP_PRODUCT_CODE
+#       value: "prod-abc123"
+#     - name: GCP_MP_SERVICE_NAME
+#       value: "aurora-marketplace.endpoints.project.cloud.goog"
 
 # ------------------------------------------------------------------------------
 # Celery worker pod settings
@@ -225,17 +250,15 @@ config:
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
 
-  # --- Multi-agent RCA orchestrator ---
-  # When "true" (default), a lead orchestrator triages each background RCA and
-  # may fan out parallel read-only sub-agents. When "false", background RCA
-  # falls back to the legacy single-agent path. Operational kill-switch: set
-  # to "false" and restart celery workers to fully revert.
-  ORCHESTRATOR_ENABLED: "true"
-  # Triage + synthesis brain. Required when ORCHESTRATOR_ENABLED=true.
-  # Provider/model format (e.g. anthropic/claude-sonnet-4.6).
+  # --- Multi-agent RCA orchestrator (opt-in) ---
+  # When "false" (default), background RCA uses the legacy single-agent path.
+  # When "true", a lead orchestrator triages each RCA and may fan out parallel
+  # read-only sub-agents. Set RCA_ORCHESTRATOR_MODEL and RCA_SUBAGENT_MODEL
+  # when enabling.
+  ORCHESTRATOR_ENABLED: "false"
+  # * Only when ORCHESTRATOR_ENABLED=true — triage + synthesis brain.
   RCA_ORCHESTRATOR_MODEL: ""
-  # Sub-agent investigator model. Required when ORCHESTRATOR_ENABLED=true.
-  # Needs reliable tool-calling.
+  # * Only when ORCHESTRATOR_ENABLED=true — sub-agent investigator model.
   RCA_SUBAGENT_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
@@ -338,7 +361,17 @@ secrets:
     GOOGLE_CHAT_CLIENT_SECRET: ""          # OAuth client secret (for setup flow)
     GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ""    # JSON key for the Chat app service account (for messaging)
 
-    # --- Optional: GitHub OAuth ---
+    # --- GitHub App (default, recommended) ---
+    GITHUB_AUTH_MODE: "app"                # app (default) | oauth | hybrid
+    NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: "true"  # false = disable PR change-gating entirely
+    GITHUB_APP_ID: ""                      # Numeric App ID from App settings
+    GITHUB_APP_CLIENT_ID: ""               # Starts with Iv23l...
+    NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
+    GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
+    GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
+    GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
+
+    # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
     GH_OAUTH_CLIENT_SECRET: ""
 

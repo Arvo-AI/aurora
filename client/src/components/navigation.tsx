@@ -188,6 +188,24 @@ export default function Navigation({
               </Link>
             </li>
 
+          {/* Actions Navigation Item */}
+          <li>
+            <Link
+              href="/actions"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/actions")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <Workflow size={16} />
+                <span className="ml-2">Actions</span>
+              </div>
+            </Link>
+          </li>
+
           {/* Monitor Navigation Item */}
           <li>
             <Link
@@ -220,24 +238,6 @@ export default function Navigation({
               <div className="flex items-center">
                 <Plug size={16} />
                 <span className="ml-2">Connectors</span>
-              </div>
-            </Link>
-          </li>
-
-          {/* Actions Navigation Item */}
-          <li>
-            <Link
-              href="/actions"
-              className={cn(
-                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
-                pathname?.startsWith("/actions")
-                  ? "bg-card rounded-lg border border-border shadow-sm"
-                  : "text-muted-foreground"
-              )}
-            >
-              <div className="flex items-center">
-                <Workflow size={16} />
-                <span className="ml-2">Actions</span>
               </div>
             </Link>
           </li>

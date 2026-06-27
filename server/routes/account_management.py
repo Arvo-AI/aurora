@@ -14,6 +14,14 @@ import os
 account_management_bp = Blueprint("account_management", __name__)
 _DELETE_LOG_PREFIX = "[AccountMgmt:delete_connected_account]"
 
+# Providers that should appear under a single connector card in the UI.
+# E.g. "cloudbees_oc" and "cloudbees_fm" are stored separately but the
+# frontend only has one "cloudbees" card.
+_PROVIDER_UI_ALIAS = {
+    "cloudbees_oc": "cloudbees",
+    "cloudbees_fm": "cloudbees",
+}
+
 
 def _validate_provider_connection(provider: str, token_data: dict) -> bool:
     """Return True only if the stored credentials actually work.
@@ -112,7 +120,9 @@ def get_connected_accounts(user_id, target_user_id):
                     result = future.result(timeout=12)
                     if result:
                         provider, account_info = result
-                        accounts[provider] = account_info
+                        ui_key = _PROVIDER_UI_ALIAS.get(provider, provider)
+                        if ui_key not in accounts:
+                            accounts[ui_key] = account_info
                 except Exception as exc:
                     logging.warning("connected-accounts check for %s raised: %s", futures[future], exc)
         finally:
@@ -176,7 +186,32 @@ def get_connected_accounts(user_id, target_user_id):
                 }
 
         # ------------------------------
-        # 4) Kubectl agent connections
+        # 4) GitHub App installations (no user_tokens row)
+        # ------------------------------
+        if "github" not in accounts:
+            cursor.execute(
+                """SELECT gi.account_login
+                     FROM user_github_installations ugi
+                     JOIN github_installations gi
+                          ON gi.installation_id = ugi.installation_id
+                    WHERE (ugi.user_id = %s OR ugi.org_id = %s)
+                      AND ugi.disconnected_at IS NULL
+                      AND gi.suspended_at IS NULL
+                    ORDER BY (ugi.user_id = %s) DESC,
+                             ugi.is_primary DESC, ugi.linked_at DESC
+                    LIMIT 1""",
+                (user_id, org_id, user_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                accounts["github"] = {
+                    "isConnected": True,
+                    "name": "GitHub",
+                    "displayText": row[0] or "GitHub App",
+                }
+
+        # ------------------------------
+        # 5) Kubectl agent connections
         # ------------------------------
         if "kubectl" not in accounts:
             result = _check_kubectl(user_id, org_id)
@@ -184,7 +219,7 @@ def get_connected_accounts(user_id, target_user_id):
                 accounts["kubectl"] = {"isConnected": True, "name": "Kubernetes", "displayText": "Kubernetes Cluster"}
 
         # ------------------------------
-        # 5) On-prem VM connections
+        # 6) On-prem VM connections
         # ------------------------------
         if "onprem" not in accounts:
             result = _check_onprem(user_id, org_id)
