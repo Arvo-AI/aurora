@@ -761,6 +761,17 @@ def _check_gitlab(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_prometheus(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Credential-existence check for Prometheus (live validation handled by dedicated route)."""
+    if not creds.get("prometheus_url"):
+        return {"connected": False}
+    return {
+        "connected": True,
+        "prometheusUrl": creds.get("prometheus_url"),
+        "instanceLabel": creds.get("instance_label", "default"),
+    }
+
+
 # ── Provider checker registry ──────────────────────────────────────
 
 
@@ -794,6 +805,7 @@ PROVIDER_CHECKERS = {
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
+    "prometheus": _check_prometheus,
     "gcp": _check_gcp_credentials,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,
