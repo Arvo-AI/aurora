@@ -671,7 +671,7 @@ CONSTRAINTS:
 - If the alert is invalid/phantom (no real service or resource), return []
 - No project management (tickets, status updates, notifications) — technical actions only
 - Medium/high risk items MUST have an "undo" command showing how to reverse the action
-- Output the FEWEST suggestions that fully cover what the human must do — often just 1. Hard cap 4. Never pad to fill the range; every suggestion must move the incident closer to resolution.
+- Output one suggestion per DISTINCT action the human must take. Hard cap 4. Do not pad toward the cap, and do not split one action into sequential steps (e.g. "apply the fix" + "open the PR for the fix" is ONE suggestion). If a single action resolves the incident, return exactly one. Every suggestion must independently move the incident closer to resolution.
 - STRONG PREFERENCE for suggestions with runnable commands. Only omit the command for class "human_knowledge" (decisions, conversations, org context). If you can't write a command for a diagnostic/mitigation/remediate suggestion, drop it.
 - For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, gh, docker, sed, grep, python3 (available in sandbox)
 - Commands MUST use real values from the RESOURCE INVENTORY above — NEVER use placeholders like <bucket-name> or <timestamp>. If the inventory doesn't contain the value you need, set command to null.
