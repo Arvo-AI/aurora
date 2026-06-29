@@ -927,11 +927,24 @@ def _augment_execution_capability(
     user_id: str,
     org_id: str,
 ) -> None:
-    """Add canExecute field to cloud providers based on role configuration.
+    """Add canExecute field to cloud providers, per provider.
 
-    AWS: has role_arn (not just read_only_role_arn) → can execute write commands.
-    GCP: OAuth with full scopes or SA with write perms → can execute.
-    kubectl: connected → can execute (kubectl apply, etc.).
+    AWS: has a real write role (role_arn present and distinct from
+    read_only_role_arn) → can execute write commands. This is the only provider
+    with a connection-level read-only marker (the read_only_role_arn column).
+
+    GCP/Azure: read-only is a *runtime* downgrade applied at execution time based
+    on chat mode (the read-only SA / token read_only block), not a connection-level
+    state — a connected account is provisioned write-capable. So connected →
+    canExecute=true is correct at this layer. There is no cheap connection-level
+    flag to distinguish further without decrypting token blobs or hitting IAM.
+
+    kubectl: no read-only concept exists in the connection model, so connected →
+    canExecute=true.
+
+    The frontend matches each command to its provider (providerForCommand) and
+    checks that provider's flag here, so a write-capable AWS no longer makes a
+    GCP/kubectl command falsely show "Run".
     """
     if results.get("aws", {}).get("connected"):
         try:
