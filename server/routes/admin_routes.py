@@ -8,6 +8,7 @@ from routes.audit_routes import record_audit_event
 import logging
 
 import bcrypt
+import secrets
 import psycopg2.errors
 from flask import Blueprint, request, jsonify
 import uuid as _uuid
@@ -25,6 +26,7 @@ from utils.auth.enforcer import (
 )
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.db_utils import connect_to_db_as_user
+from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -212,6 +214,31 @@ def create_user(user_id):
         logger.info("Admin %s created user %s (%s) with role '%s'", sanitize(user_id), sanitize(new_user_id), sanitize(email), sanitize(role))
         record_audit_event(org_id or "", user_id, "create_user", "user", new_user_id,
                            {"email": email, "role": role}, request)
+
+        # Send email verification code
+        try:
+            from utils.notifications.email_service import get_email_service
+            email_svc = get_email_service()
+            code = f"{secrets.randbelow(1000000):06d}"
+            expires = datetime.now() + timedelta(minutes=15)
+            with db_pool.get_admin_connection() as vconn:
+                with vconn.cursor() as vcur:
+                    vcur.execute(
+                        "UPDATE users SET email_verification_code = %s, "
+                        "email_verification_code_expires_at = %s WHERE id = %s",
+                        (code, expires, new_user_id),
+                    )
+                    vconn.commit()
+            email_svc.send_verification_code_email(email, code)
+        except ValueError:
+            # SMTP not configured — auto-verify
+            with db_pool.get_admin_connection() as vconn:
+                with vconn.cursor() as vcur:
+                    vcur.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (new_user_id,))
+                    vconn.commit()
+        except Exception as e:
+            logger.warning("Failed to send verification email to %s: %s", sanitize(email), e)
+
         return jsonify({
             "id": row[0],
             "email": row[1],

@@ -3023,6 +3023,22 @@ def initialize_tables():
                 logging.warning("Error adding onboarding_completed to organizations: %s", e)
                 conn.rollback()
 
+            # Migration: Add email verification columns to users table
+            try:
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code VARCHAR(6);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code_expires_at TIMESTAMP;
+                """)
+                cursor.execute(
+                    "UPDATE users SET email_verified = TRUE WHERE email_verified = FALSE;"
+                )
+                conn.commit()
+                logging.info("Ensured email verification columns exist on users table.")
+            except Exception as e:
+                logging.warning("Error adding email verification columns to users: %s", e)
+                conn.rollback()
+
             # Create k8s_clusters view (after org_id migration so the column exists)
             # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view
             try:

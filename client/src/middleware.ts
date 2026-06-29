@@ -16,6 +16,8 @@ const publicRoutes = [
   "/api/auth/change-password", // Password change API
   "/api/auth/setup-org",  // Org setup for org-less users
   "/api/auth/register",   // Public registration endpoint
+  "/api/auth/verify-email", // Email verification
+  "/api/auth/resend-verification", // Resend verification code
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]
@@ -69,6 +71,13 @@ export default auth((req) => {
   // Force password change: redirect to /change-password if flag is set
   if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
     return sanitizeResponse(NextResponse.redirect(new URL("/change-password", nextUrl)))
+  }
+
+  // Force email verification: redirect to /verify-email if not verified
+  const isVerifyEmailRoute = nextUrl.pathname.startsWith('/verify-email')
+  if (isLoggedIn && req.auth?.user?.emailVerified === false
+      && !isVerifyEmailRoute && !isChangePasswordRoute && !isApiRoute) {
+    return sanitizeResponse(NextResponse.redirect(new URL("/verify-email", nextUrl)))
   }
 
   // Force org setup: redirect users without an org (or in Default Org) to create one

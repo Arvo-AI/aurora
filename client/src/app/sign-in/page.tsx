@@ -206,7 +206,7 @@ function AuthPage() {
       </div>
 
       {/* Right panel - auth forms */}
-      <div className="w-full lg:w-[45%] flex items-center justify-center p-8 bg-[#0a0a0a]/80 backdrop-blur-sm relative overflow-y-auto">
+      <div className="w-full lg:w-[45%] flex items-center justify-center p-8 bg-[#0a0a0a]/80 backdrop-blur-sm relative overflow-y-auto hide-scrollbar">
         <div className="w-full max-w-[360px]">
           {/* Mobile logo */}
           <div className="lg:hidden flex flex-col items-center gap-3 mb-8">
