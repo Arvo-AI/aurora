@@ -84,7 +84,7 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
 
     try:
         from utils.db.connection_pool import db_pool
-        from utils.auth.stateless_auth import get_user_preference
+        from utils.auth.stateless_auth import get_org_preference
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
@@ -112,9 +112,15 @@ def _fetch(org_id: str) -> Tuple[List[PolicyRule], List[PolicyRule], ListStates]
                     else:
                         deny_rules.append(rule)
 
-        org_pref_key = f"__org__{org_id}"
-        al_raw = get_user_preference(org_pref_key, "command_policy_allowlist") or "off"
-        dl_raw = get_user_preference(org_pref_key, "command_policy_denylist") or "off"
+        # Read org-scoped list states written via store_org_preference().
+        # These rows use a synthetic "__org__<uuid>" user id, so they must be
+        # read with get_org_preference() (RLS configured from org_id directly).
+        # The old get_user_preference("__org__<uuid>", ...) path tried to
+        # resolve that pseudo-id against the users table, which always failed
+        # ("Missing org_id ... cannot set RLS context") and silently defaulted
+        # both lists to "off" — disabling policy enforcement.
+        al_raw = get_org_preference(org_id, "command_policy_allowlist") or "off"
+        dl_raw = get_org_preference(org_id, "command_policy_denylist") or "off"
         states = ListStates(
             allowlist_enabled=(str(al_raw).lower() == "on"),
             denylist_enabled=(str(dl_raw).lower() == "on"),
