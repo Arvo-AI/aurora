@@ -126,6 +126,17 @@ celeryWorker:
   terminationGracePeriodSeconds: 1860
 
 # ------------------------------------------------------------------------------
+# Server pod settings
+# ------------------------------------------------------------------------------
+server:
+  livenessProbe:
+    # Number of consecutive liveness probe failures before kubelet kills the pod.
+    # Default 6 = 6 × 20s = 120s tolerance, which exceeds the typical Weaviate
+    # rescheduling window (~60-90s) caused by GKE OPTIMIZE_UTILIZATION scale-downs.
+    # Increase further if Weaviate restarts take longer in your environment.
+    failureThreshold: 6
+
+# ------------------------------------------------------------------------------
 # Replica counts per service
 # ------------------------------------------------------------------------------
 replicaCounts:
@@ -237,8 +248,12 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  # Increased from 2 workers / 4 threads (8 slots) to 4 workers / 8 threads (32 slots).
+  # This prevents Weaviate TCP timeouts (5s each) from exhausting the gunicorn thread
+  # pool and starving the liveness probe, which was causing SIGKILL restarts and
+  # user-facing slow requests. See: https://github.com/Arvo-AI/aurora/pull/561
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
@@ -294,7 +309,7 @@ config:
   #   - K8s API tokens mounted on server/chatbot pods
   # Optional additional hardening (manual):
   #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
-  #   - Taint nodes for untrusted workloads (set USE_UNTRUSTED_NODES)
+  #   - Taint nodes for dedicated untrusted workloads (set USE_UNTRUSTED_NODES)
   TERMINAL_NAMESPACE: "untrusted"            # Namespace for isolated terminal pods
   TERMINAL_IMAGE: ""                         # Image for terminal pods (defaults to aurora-server)
   TERMINAL_POD_TTL: "3600"                   # Terminal pod lifetime in seconds
