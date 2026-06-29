@@ -1254,9 +1254,6 @@ def initialize_tables():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title ON artifacts(org_id, category, title);
-                    CREATE INDEX IF NOT EXISTS idx_artifacts_org_category ON artifacts(org_id, category);
                 """,
                 "artifact_versions": """
                     CREATE TABLE IF NOT EXISTS artifact_versions (
@@ -3025,6 +3022,8 @@ def initialize_tables():
                     DROP INDEX IF EXISTS idx_artifacts_org_title;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title
                         ON artifacts(org_id, category, title);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_org_category
+                        ON artifacts(org_id, category);
                 """)
             except Exception as e:
                 logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
