@@ -9,7 +9,7 @@ import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 const AuroraShader = dynamic(() => import('@/app/components/AuroraShader'), { ssr: false })
 
 export default function VerifyEmailPage() {
-  const { data: session, update } = useSession()
+  const { data: session } = useSession()
   const [code, setCode] = useState("")
   const [error, setError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -18,12 +18,6 @@ export default function VerifyEmailPage() {
   const [ready, setReady] = useState(false)
 
   useDarkPageBackground()
-
-  useEffect(() => {
-    if (session?.user?.emailVerified) {
-      window.location.href = "/onboarding"
-    }
-  }, [session?.user?.emailVerified])
 
   useEffect(() => {
     const t = setTimeout(() => setReady(true), 50)
@@ -55,16 +49,18 @@ export default function VerifyEmailPage() {
 
       if (!res.ok) {
         if (data.error === "Email already verified") {
-          await update()
-          window.location.href = "/onboarding"
+          const dest = sessionStorage.getItem("aurora_needs_onboarding") ? "/onboarding" : "/"
+          sessionStorage.removeItem("aurora_needs_onboarding")
+          window.location.href = dest
           return
         }
         setError(data.error || "Verification failed")
         return
       }
 
-      await update()
-      window.location.href = "/onboarding"
+      const dest = sessionStorage.getItem("aurora_needs_onboarding") ? "/onboarding" : "/"
+      sessionStorage.removeItem("aurora_needs_onboarding")
+      window.location.href = dest
     } catch {
       setError("An error occurred. Please try again.")
     } finally {

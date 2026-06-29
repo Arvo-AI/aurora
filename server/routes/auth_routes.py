@@ -53,7 +53,7 @@ def send_verification_email(user_id: str, email: str, conn=None):
                 (code, expires, user_id),
             )
             c.commit()
-        email_svc.send_verification_code_email(email, code)
+        email_svc.send_account_verification_email(email, code)
 
     try:
         if conn:
@@ -583,10 +583,8 @@ def resend_verification(user_id):
                 if already_verified:
                     return jsonify({"error": "Email already verified"}), 400
 
-                if last_expires:
-                    cooldown_until = last_expires - timedelta(minutes=14)
-                    if datetime.now() < cooldown_until:
-                        return jsonify({"error": "Please wait before requesting a new code"}), 429
+                if last_expires and datetime.now() < last_expires - timedelta(minutes=14, seconds=30):
+                    return jsonify({"error": "Please wait before requesting a new code"}), 429
 
                 code = f"{secrets.randbelow(1000000):06d}"
                 expires = datetime.now() + timedelta(minutes=15)
@@ -598,7 +596,7 @@ def resend_verification(user_id):
                 conn.commit()
 
                 email_svc = get_email_service()
-                email_svc.send_verification_code_email(email, code)
+                email_svc.send_account_verification_email(email, code)
 
         return jsonify({"status": "success"})
     except ValueError:

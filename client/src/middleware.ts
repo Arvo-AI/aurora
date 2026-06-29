@@ -75,9 +75,9 @@ export default auth((req) => {
 
   // Force email verification: redirect to /verify-email if not verified
   const isVerifyEmailRoute = nextUrl.pathname.startsWith('/verify-email')
-  const isOnboardingRoute = nextUrl.pathname.startsWith('/onboarding')
-  if (isLoggedIn && req.auth?.user?.emailVerified === false
-      && !isVerifyEmailRoute && !isOnboardingRoute && !isChangePasswordRoute && !isApiRoute) {
+  const emailVerifiedCookie = req.cookies.get('aurora-email-verified')?.value === req.auth?.user?.id
+  if (isLoggedIn && req.auth?.user?.emailVerified === false && !emailVerifiedCookie
+      && !isVerifyEmailRoute && !isChangePasswordRoute && !isApiRoute) {
     return sanitizeResponse(NextResponse.redirect(new URL("/verify-email", nextUrl)))
   }
 

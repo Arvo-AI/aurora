@@ -131,6 +131,7 @@ function AuthPage() {
       if (result?.ok) {
         sessionStorage.removeItem("aurora_onboarding_state")
         sessionStorage.removeItem("aurora_onboarding_queue")
+        sessionStorage.setItem("aurora_needs_onboarding", "true")
         router.push("/verify-email")
         router.refresh()
       } else {
