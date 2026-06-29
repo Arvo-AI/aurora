@@ -3025,14 +3025,22 @@ def initialize_tables():
 
             # Migration: Add email verification columns to users table
             try:
+                cursor.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'users' AND column_name = 'email_verified'"
+                )
+                column_existed = cursor.fetchone() is not None
+
                 cursor.execute("""
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code VARCHAR(6);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code_expires_at TIMESTAMP;
                 """)
-                cursor.execute(
-                    "UPDATE users SET email_verified = TRUE WHERE email_verified = FALSE;"
-                )
+
+                if not column_existed:
+                    cursor.execute("UPDATE users SET email_verified = TRUE;")
+                    logging.info("Backfilled email_verified=TRUE for existing users.")
+
                 conn.commit()
                 logging.info("Ensured email verification columns exist on users table.")
             except Exception as e:

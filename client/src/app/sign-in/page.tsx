@@ -131,7 +131,7 @@ function AuthPage() {
       if (result?.ok) {
         sessionStorage.removeItem("aurora_onboarding_state")
         sessionStorage.removeItem("aurora_onboarding_queue")
-        router.push("/onboarding")
+        router.push("/verify-email")
         router.refresh()
       } else {
         setError("Registration successful but sign-in failed. Please sign in manually.")

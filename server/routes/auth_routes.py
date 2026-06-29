@@ -32,6 +32,43 @@ def _name_to_slug(name: str) -> str:
         slug = slug + '-org'
     return slug
 
+
+def send_verification_email(user_id: str, email: str, conn=None):
+    """Generate a verification code, store it, and email it to the user.
+
+    If SMTP is not configured (ValueError from email service), auto-verifies
+    the user so they aren't locked out. Callers should already have committed
+    the user row before calling this.
+    """
+    from utils.notifications.email_service import get_email_service
+
+    def _do_send(c):
+        email_svc = get_email_service()
+        code = f"{secrets.randbelow(1000000):06d}"
+        expires = datetime.now() + timedelta(minutes=15)
+        with c.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET email_verification_code = %s, "
+                "email_verification_code_expires_at = %s WHERE id = %s",
+                (code, expires, user_id),
+            )
+            c.commit()
+        email_svc.send_verification_code_email(email, code)
+
+    try:
+        if conn:
+            _do_send(conn)
+        else:
+            with db_pool.get_admin_connection() as c:
+                _do_send(c)
+    except ValueError:
+        with db_pool.get_admin_connection() as c:
+            with c.cursor() as cur:
+                cur.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
+                c.commit()
+    except Exception as e:
+        logging.warning("Failed to send verification email to %s: %s", email[:3] + "***", e)
+
 @auth_bp.after_request
 def add_cors_headers(response):
     """Add CORS headers to all responses from auth routes."""
@@ -158,24 +195,7 @@ def register():
                 record_audit_event(org_id, user_id, "register", "organization", org_id,
                                    {"email": email}, request)
 
-                # Send email verification code
-                try:
-                    from utils.notifications.email_service import get_email_service
-                    email_svc = get_email_service()
-                    code = f"{secrets.randbelow(1000000):06d}"
-                    expires = datetime.now() + timedelta(minutes=15)
-                    cursor.execute(
-                        "UPDATE users SET email_verification_code = %s, email_verification_code_expires_at = %s WHERE id = %s",
-                        (code, expires, user_id)
-                    )
-                    conn.commit()
-                    email_svc.send_verification_code_email(email, code)
-                except ValueError:
-                    # SMTP not configured — auto-verify so user isn't locked out
-                    cursor.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
-                    conn.commit()
-                except Exception as e:
-                    logging.warning("Failed to send verification email: %s", e)
+                send_verification_email(user_id, email, conn)
 
                 return jsonify({
                     "id": user_id,
@@ -546,19 +566,27 @@ def verify_email(user_id):
 def resend_verification(user_id):
     """Resend email verification code."""
     try:
+        from utils.notifications.email_service import get_email_service
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT email, email_verified FROM users WHERE id = %s",
+                    "SELECT email, email_verified, email_verification_code_expires_at "
+                    "FROM users WHERE id = %s",
                     (user_id,),
                 )
                 row = cursor.fetchone()
                 if not row:
                     return jsonify({"error": "User not found"}), 404
 
-                email, already_verified = row
+                email, already_verified, last_expires = row
                 if already_verified:
                     return jsonify({"error": "Email already verified"}), 400
+
+                if last_expires:
+                    cooldown_until = last_expires - timedelta(minutes=14)
+                    if datetime.now() < cooldown_until:
+                        return jsonify({"error": "Please wait before requesting a new code"}), 429
 
                 code = f"{secrets.randbelow(1000000):06d}"
                 expires = datetime.now() + timedelta(minutes=15)
@@ -569,8 +597,9 @@ def resend_verification(user_id):
                 )
                 conn.commit()
 
-        from utils.notifications.email_service import get_email_service
-        get_email_service().send_verification_code_email(email, code)
+                email_svc = get_email_service()
+                email_svc.send_verification_code_email(email, code)
+
         return jsonify({"status": "success"})
     except ValueError:
         return jsonify({"error": "Email service not configured"}), 500

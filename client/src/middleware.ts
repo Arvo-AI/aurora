@@ -75,8 +75,9 @@ export default auth((req) => {
 
   // Force email verification: redirect to /verify-email if not verified
   const isVerifyEmailRoute = nextUrl.pathname.startsWith('/verify-email')
+  const isOnboardingRoute = nextUrl.pathname.startsWith('/onboarding')
   if (isLoggedIn && req.auth?.user?.emailVerified === false
-      && !isVerifyEmailRoute && !isChangePasswordRoute && !isApiRoute) {
+      && !isVerifyEmailRoute && !isOnboardingRoute && !isChangePasswordRoute && !isApiRoute) {
     return sanitizeResponse(NextResponse.redirect(new URL("/verify-email", nextUrl)))
   }
 

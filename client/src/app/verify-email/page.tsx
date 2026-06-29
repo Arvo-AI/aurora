@@ -20,6 +20,12 @@ export default function VerifyEmailPage() {
   useDarkPageBackground()
 
   useEffect(() => {
+    if (session?.user?.emailVerified) {
+      window.location.href = "/onboarding"
+    }
+  }, [session?.user?.emailVerified])
+
+  useEffect(() => {
     const t = setTimeout(() => setReady(true), 50)
     return () => clearTimeout(t)
   }, [])
@@ -48,6 +54,11 @@ export default function VerifyEmailPage() {
       const data = await res.json()
 
       if (!res.ok) {
+        if (data.error === "Email already verified") {
+          await update()
+          window.location.href = "/onboarding"
+          return
+        }
         setError(data.error || "Verification failed")
         return
       }
