@@ -318,6 +318,17 @@ GUARDRAILS_LLM_MODEL=openai/gpt-4o-mini
 
 The safety judge model can be any provider supported above. A fast, cheap, **non-reasoning** model is recommended since this runs on every command execution — reasoning models waste tokens on chain-of-thought for a simple Yes/No classification. See [Command Safety Configuration](../configuration/command-safety.md) for full setup details.
 
+## Next Steps Enrichment Model
+
+The Next Steps recommender polishes suggestion descriptions and summaries with a separate, lightweight model.
+
+```bash
+# Defaults to anthropic/claude-haiku-4.5 when unset.
+ENRICHMENT_MODEL=anthropic/claude-haiku-4.5
+```
+
+This is light text-formatting work (turning validated fixes into readable descriptions), so a small, cheap model is recommended. Same `provider/model` format as `MAIN_MODEL`.
+
 ## Troubleshooting
 
 ### "Invalid API key"
