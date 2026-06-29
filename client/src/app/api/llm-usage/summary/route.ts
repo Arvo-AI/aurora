@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { isAdmin } from '@/lib/roles';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
@@ -8,7 +9,8 @@ export async function GET(request: NextRequest) {
     if (!API_BASE_URL) return NextResponse.json({ error: 'BACKEND_URL not configured' }, { status: 500 });
     const authResult = await getAuthenticatedUser();
     if (authResult instanceof NextResponse) return authResult;
-    const { headers: authHeaders } = authResult;
+    const { headers: authHeaders, role } = authResult;
+    if (!isAdmin(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     const params = request.nextUrl.searchParams.toString();
     const url = `${API_BASE_URL}/api/llm-usage/summary${params ? `?${params}` : ''}`;
     const response = await fetch(url, { method: 'GET', headers: authHeaders, credentials: 'include', cache: 'no-store' });

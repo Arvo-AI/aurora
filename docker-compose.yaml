@@ -85,6 +85,8 @@ x-common-env: &common-env
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
   GH_OAUTH_CLIENT_ID: ${GH_OAUTH_CLIENT_ID}
   GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
+  # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
+  NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}

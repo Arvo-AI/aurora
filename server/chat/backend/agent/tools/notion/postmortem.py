@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Dict, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +13,7 @@ from connectors.notion_connector.postmortem_parser import parse_action_items
 from routes.audit_routes import record_audit_event
 from utils.auth.stateless_auth import resolve_org_id
 from utils.db.connection_pool import db_pool
+from utils.validation import is_valid_uuid
 
 from .common import build_rich_text, notion_tool_error, notion_tool_success
 
@@ -33,14 +33,6 @@ def _looks_like_email(value: Optional[str]) -> bool:
 
 def _looks_like_iso_date(value: Optional[str]) -> bool:
     return bool(value and _ISO_DATE_RE.match(value.strip()))
-
-
-def _validate_uuid(value: str) -> bool:
-    try:
-        UUID(value)
-        return True
-    except (ValueError, TypeError):
-        return False
 
 
 def _find_property_by_type(
@@ -259,14 +251,14 @@ def _create_action_items(
     client: NotionClient,
     postmortem_md: str,
     action_items_database_id: str,
-) -> int:
+) -> Dict[str, int]:
     """Create one Notion page per unchecked action item in the target DB.
 
-    Returns the number of pages successfully created.
+    Returns counts of created/failed pages.
     """
     items = parse_action_items(postmortem_md or "")
     if not items:
-        return 0
+        return {"created": 0, "failed": 0}
 
     try:
         db_schema = client.get_database(action_items_database_id)
@@ -281,7 +273,7 @@ def _create_action_items(
             "[NOTION] Action-items DB %s has no title property",
             action_items_database_id,
         )
-        return 0
+        return {"created": 0, "failed": 0}
 
     people_key = _find_property_by_type(db_schema, "people")
     date_key = _find_property_by_type(db_schema, "date")
@@ -357,7 +349,7 @@ def _export_postmortem_to_notion(
         ValueError: on invalid input or missing postmortem content.
         NotionAuthExpiredError: when stored Notion credentials cannot refresh.
     """
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         raise ValueError("Invalid incident ID")
     if not database_id:
         raise ValueError("database_id is required")
@@ -594,7 +586,7 @@ def notion_create_action_items(
     _ = session_id
     if not user_id:
         return notion_tool_error("user_id is required", code="missing_user")
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return notion_tool_error("Invalid incident ID", code="bad_input")
     if not action_items_database_id:
         return notion_tool_error(

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import ConnectorGrid from "@/components/connectors/ConnectorGrid";
 import ConnectorHeader from "@/components/connectors/ConnectorHeader";
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry";
@@ -32,7 +33,9 @@ function syncLocalStorage(connectorId: string, connectorName: string, isConnecte
 }
 
 export default function ConnectorsClient() {
-  const [searchQuery, setSearchQuery] = useState("");
+  const searchParams = useSearchParams();
+  const highlightConnector = searchParams.get("highlight") || "";
+  const [searchQuery, setSearchQuery] = useState(highlightConnector);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   const allConnectors = useMemo(() => connectorRegistry.getAll(), []);

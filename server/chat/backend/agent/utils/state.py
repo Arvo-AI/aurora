@@ -4,6 +4,7 @@ from langchain_core.messages import AnyMessage
 from pydantic import BaseModel, ConfigDict
 
 
+
 class State(BaseModel):
     messages: List[AnyMessage] = []
     question: str
@@ -26,6 +27,7 @@ class State(BaseModel):
     is_postmortem_action: bool = (
         False  # True only when the session is the dedicated "Generate Postmortem" action
     )
+    is_pr_review: bool = False  # True for PR change-gating risk reviews
     rca_context: Optional[Dict[str, Any]] = (
         None  # RCA-specific context (source, providers) - used by prompt_builder
     )

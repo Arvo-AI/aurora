@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Settings, User, BookOpen, FileText, Building2, Shield } from "lucide-react";
+import { Settings, User, BookOpen, FileText, Building2, Shield, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
@@ -11,7 +11,9 @@ import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
 import { OrgSettings } from "@/components/OrgSettings";
 import { SecuritySettings } from "@/components/SecuritySettings";
-import { useUser } from "@/hooks/useAuthHooks";
+import { useUser, useAuth } from "@/hooks/useAuthHooks";
+import { isAdmin } from "@/lib/roles";
+import { PeriodSelector, type Period } from "@/app/monitor/components/charts";
 
 
 interface SettingsModalProps {
@@ -19,13 +21,17 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security' | 'usage';
+
+const UsageTab = React.lazy(() => import('@/app/monitor/components/usage-tab'));
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
+  const [usagePeriod, setUsagePeriod] = useState<Period>('30d');
   useUser();
+  const { role } = useAuth();
 
-  const tabs = [
+  const allTabs = [
     {
       id: 'organization' as SettingsTab,
       label: 'Organization',
@@ -62,7 +68,25 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       icon: Shield,
       description: 'Agent command policies'
     },
+    {
+      id: 'usage' as SettingsTab,
+      label: 'Usage & Cost',
+      icon: DollarSign,
+      description: 'LLM usage and cost tracking',
+      adminOnly: true,
+    },
   ];
+
+  const tabs = useMemo(() => {
+    if (isAdmin(role)) return allTabs;
+    return allTabs.filter(t => !('adminOnly' in t && t.adminOnly));
+  }, [role]);
+
+  useEffect(() => {
+    if (!tabs.some(t => t.id === activeTab)) {
+      setActiveTab(tabs[0]?.id ?? 'organization');
+    }
+  }, [tabs, activeTab]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -116,6 +140,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return (
           <div className="p-6 h-full overflow-y-auto">
             <SecuritySettings />
+          </div>
+        );
+
+      case 'usage':
+        if (!isAdmin(role)) return null;
+        return (
+          <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-6 flex-shrink-0">
+              <h2 className="text-2xl font-bold">Usage & Cost</h2>
+              <PeriodSelector value={usagePeriod} onChange={setUsagePeriod} />
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 pr-4">
+              <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading...</div>}>
+                <UsageTab period={usagePeriod} />
+              </React.Suspense>
+            </div>
           </div>
         );
 

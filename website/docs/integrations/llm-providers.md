@@ -10,13 +10,13 @@ Aurora requires an LLM provider for its AI-powered investigation and Root Cause 
 
 | Provider | Mode | Environment Variable | Get API Key |
 |----------|------|---------------------|-------------|
-| **OpenRouter** | Gateway | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **OpenRouter** | `openrouter` | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | **OpenAI** | Direct | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) |
 | **Anthropic** | Direct | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) |
 | **Google AI** | Direct | `GOOGLE_AI_API_KEY` | [ai.google.dev](https://ai.google.dev/) |
-| **Vertex AI** | Direct | `VERTEX_AI_PROJECT` + credentials | [console.cloud.google.com](https://console.cloud.google.com/) |
+| **Vertex AI** | `vertex` | `VERTEX_AI_PROJECT` + credentials | [console.cloud.google.com](https://console.cloud.google.com/) |
 | **Ollama** | Direct | `OLLAMA_BASE_URL` | [ollama.com](https://ollama.com/) (free, local) |
-| **AWS Bedrock** | Direct | `BEDROCK_BASE_URL` (gateway) or `BEDROCK_REGION` (native) | [aws.amazon.com/bedrock](https://aws.amazon.com/bedrock/) |
+| **AWS Bedrock** | `bedrock` | `BEDROCK_BASE_URL` (gateway) or `BEDROCK_REGION` (native) | [aws.amazon.com/bedrock](https://aws.amazon.com/bedrock/) |
 
 Only **one** provider is required.
 
@@ -41,7 +41,7 @@ Connects directly to each provider's native API. Use this when running models lo
 LLM_PROVIDER_MODE=direct
 ```
 
-In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-2.5-flash` routes to Google AI).
+In direct mode, Aurora auto-detects the provider from the model name prefix (e.g., `anthropic/claude-3-haiku` routes to Anthropic, `google/gemini-3.5-flash` routes to Google AI).
 
 ### Provider Mode (route everything through one provider)
 
@@ -73,16 +73,14 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `anthropic/claude-haiku-4.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
 | | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `google/gemini-3-flash-preview` | Fast, outperforms 2.5 Pro |
+| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
 | | `google/gemini-2.5-flash` | Cost-effective |
-| | `google/gemini-2.5-flash-lite` | Cheapest Gemini option |
-| **Vertex AI** | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
-| | `vertex/gemini-3-flash-preview` | Fast, enterprise-grade |
+| **Vertex AI** | `vertex/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `vertex/gemini-3.1-pro-preview` | Latest flagship with thinking |
 | | `vertex/gemini-2.5-pro` | Strong for complex tasks |
 | | `vertex/gemini-2.5-flash` | Cost-effective with IAM auth |
-| | `vertex/gemini-2.5-flash-lite` | Cheapest Vertex option |
 | **Ollama** | `ollama/llama3.1` | Meta's Llama 3.1 (8B/70B) |
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
@@ -146,17 +144,31 @@ VERTEX_AI_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","pri
 # Optional: Location (default: global)
 VERTEX_AI_LOCATION=global
 
-LLM_PROVIDER_MODE=direct
+# Route every model pick through Vertex (recommended — works with clean
+# model names like "Gemini 2.5 Pro" in the picker, no vertex/ prefix needed).
+LLM_PROVIDER_MODE=vertex
 ```
+
+:::tip Two ways to route to Vertex
+- **`LLM_PROVIDER_MODE=vertex`** (recommended) — forces every supported model pick through Vertex; models Vertex can't serve fall back to their own provider.
+- **`LLM_PROVIDER_MODE=direct`** — only routes to Vertex when the model id carries a `vertex/` prefix (e.g. `MAIN_MODEL=vertex/gemini-2.5-pro`). A clean `google/...` id goes to the Google AI provider instead, not Vertex.
+:::
 
 **Authentication options:**
 1. **Service account JSON** (recommended): Set `VERTEX_AI_SERVICE_ACCOUNT_JSON` to the full JSON contents of your service account key file.
 2. **Application Default Credentials (ADC)**: If running on GCP (Cloud Run, GKE), ADC is automatic — just set `VERTEX_AI_PROJECT`.
 3. **Credentials file path**: Set `GOOGLE_APPLICATION_CREDENTIALS` to the path of your service account key file.
 
-:::tip
-The project ID is automatically extracted from the service account JSON if `VERTEX_AI_PROJECT` is not set.
+:::note
+`VERTEX_AI_PROJECT` is required — the provider is considered unavailable without it. The service account JSON only supplies credentials, not the project id.
 :::
+
+**Optional configuration:**
+
+```bash
+# Disable thinking mode for Gemini models (reduces latency, lowers token usage)
+GEMINI_DISABLE_THINKING=true
+```
 
 ### Ollama (Local Models)
 
@@ -265,10 +277,10 @@ RCA_MODEL=anthropic/claude-haiku-4.5
 RCA_MODEL=openai/gpt-4o
 
 # Google AI
-RCA_MODEL=google/gemini-2.5-flash
+RCA_MODEL=google/gemini-3.5-flash
 
 # Vertex AI
-RCA_MODEL=vertex/gemini-2.5-flash
+RCA_MODEL=vertex/gemini-3.5-flash
 
 # Ollama (local)
 RCA_MODEL=ollama/llama3.1

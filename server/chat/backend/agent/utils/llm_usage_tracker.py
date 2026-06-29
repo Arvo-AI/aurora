@@ -331,7 +331,19 @@ class LLMUsageTracker:
                     logger.debug(f"Cleared API cost cache for user {usage.user_id} after new usage record")
                 except Exception as cache_error:
                     logger.warning(f"Failed to clear API cost cache after usage store: {cache_error}")
-                
+
+                # Report usage to marketplace metering (no-op unless hooks are configured).
+                # Implementations must be non-blocking (buffer + flush pattern).
+                try:
+                    from utils.hooks import get_hook
+                    get_hook("report_usage")(usage.org_id, usage.estimated_cost, {
+                        "model": usage.model_name,
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                    })
+                except Exception as hook_err:
+                    logger.debug("report_usage hook error (non-fatal): %s", hook_err)
+
                 return True
 
         except Exception as e:

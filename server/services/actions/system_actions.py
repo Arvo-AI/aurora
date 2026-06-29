@@ -10,6 +10,7 @@ import logging
 from typing import Optional
 
 from services.actions.postmortem_action import DEFAULT_POSTMORTEM_INSTRUCTIONS
+from services.actions.alert_gap_action import DEFAULT_ALERT_GAP_INSTRUCTIONS
 
 from utils.db.connection_pool import db_pool
 
@@ -23,7 +24,17 @@ SYSTEM_ACTIONS = [
         "trigger_type": "on_incident",
         "trigger_config": {"timing": "resolved"},
         "mode": "agent",
-        "instructions": None,  # filled from postmortem_action.DEFAULT_POSTMORTEM_INSTRUCTIONS
+        "instructions": None,
+    },
+    {
+        "system_key": "alert_gap_audit",
+        "name": "Alert Gap Audit",
+        "description": "Periodically audits your infrastructure for alerting gaps and opens PRs/MRs with well-crafted alert definitions following SRE best practices.",
+        "trigger_type": "on_schedule",
+        "trigger_config": {"interval_seconds": 604800},
+        "mode": "agent",
+        "enabled": False,
+        "instructions": None,
     },
 ]
 
@@ -32,6 +43,8 @@ def _get_default_instructions(system_key: str) -> str:
     """Resolve the default instructions for a given system action."""
     if system_key == "generate_postmortem":
         return DEFAULT_POSTMORTEM_INSTRUCTIONS
+    if system_key == "alert_gap_audit":
+        return DEFAULT_ALERT_GAP_INSTRUCTIONS
     raise ValueError(f"Unknown system action: {system_key}")
 
 
@@ -57,12 +70,13 @@ def seed_system_actions(org_id: str, user_id: Optional[str] = None) -> int:
                     if cur.fetchone():
                         continue
 
+                    enabled = action_def.get("enabled", True)
                     cur.execute(
                         """INSERT INTO actions
                            (org_id, created_by, name, description, instructions,
                             trigger_type, trigger_config, mode, enabled,
                             is_system, system_key, default_instructions)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, true, true, %s, %s)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, true, %s, %s)""",
                         (
                             org_id,
                             creator,
@@ -72,6 +86,7 @@ def seed_system_actions(org_id: str, user_id: Optional[str] = None) -> int:
                             action_def["trigger_type"],
                             json.dumps(action_def["trigger_config"]),
                             action_def["mode"],
+                            enabled,
                             key,
                             instructions,
                         ),

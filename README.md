@@ -1,341 +1,334 @@
-<p align="center">
-  <img src=".github/assets/aurora-logo.png" alt="Aurora Logo" width="120" />
-</p>
+<div align="center">
 
-<h1 align="center">Aurora</h1>
+<img src=".github/assets/aurora-banner.gif" alt="Aurora — The open-source AI agent that investigates your incidents for you" width="100%" />
 
-<p align="center">
-  <strong>Open source AI agent for automated incident investigation & root cause analysis</strong>
-</p>
+<a href="https://github.com/Arvo-AI/aurora/stargazers"><img src="https://img.shields.io/github/stars/Arvo-AI/aurora?style=for-the-badge&logo=github&color=181717" alt="Stars" /></a>&nbsp;
+<a href="https://github.com/Arvo-AI/aurora/releases/latest"><img src="https://img.shields.io/github/v/release/Arvo-AI/aurora?style=for-the-badge&label=version&color=2ea44f" alt="Version" /></a>&nbsp;
+<a href="https://github.com/Arvo-AI/aurora/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue?style=for-the-badge" alt="License" /></a>&nbsp;
+<a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join_us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>&nbsp;
+<a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book_a_Demo-FF6B4A?style=for-the-badge&logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>&nbsp;
+<a href="https://aurora-ai.net"><img src="https://img.shields.io/badge/Try_it_Live-aurora--ai.net-8B5CF6?style=for-the-badge&logo=rocket&logoColor=white" alt="Try Aurora Live" /></a>
 
-<p align="center">
-  <a href="https://github.com/Arvo-AI/aurora/stargazers"><img src="https://img.shields.io/github/stars/Arvo-AI/aurora?style=social" alt="GitHub Stars" /></a>
-  <a href="https://github.com/Arvo-AI/aurora/releases"><img src="https://img.shields.io/github/v/release/Arvo-AI/aurora?label=version&color=green" alt="Latest Release" /></a>
-  <a href="https://github.com/Arvo-AI/aurora/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License" /></a>
-  <a href="https://github.com/Arvo-AI/aurora/actions/workflows/publish-images.yml"><img src="https://img.shields.io/github/actions/workflow/status/Arvo-AI/aurora/publish-images.yml?label=build" alt="Build Status" /></a>
-  <a href="https://github.com/Arvo-AI/aurora/network/members"><img src="https://img.shields.io/github/forks/Arvo-AI/aurora?style=flat" alt="Forks" /></a>
-  <a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book%20a%20Demo-cal.com-FF6B4A?logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
-</p>
+<br />
 
-<p align="center">
-  <a href="#features">Features</a> &middot;
-  <a href="#how-it-works">How It Works</a> &middot;
-  <a href="#integrations">Integrations</a> &middot;
-  <a href="#quick-start">Quick Start</a> &middot;
-  <a href="https://arvo-ai.github.io/aurora/">Docs</a> &middot;
-  <a href="https://www.arvoai.ca">Website</a>
-</p>
+<a href="https://aurora-ai.net">Try Aurora Live</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.arvoai.ca">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
+
+</div>
 
 ---
 
-### What's New
+## What's New
 
-- **New Relic, OpsGenie, incident.io Connectors** — Ingest alerts and query telemetry from three more monitoring platforms
-- **Notion & SharePoint** — Export RCAs and postmortems to Notion pages or SharePoint sites
-- **Google Chat** — Receive incident notifications and interact with Aurora from Google Workspace
-- **SigmaHQ Guardrails** — Community threat detection rules (37 SigmaHQ signatures) protect the agent's command execution
-- **NeMo Input Rail** — Prompt injection detection on every turn using NVIDIA NeMo Guardrails
-- **Org-level Command Policies** — Admins can configure per-org allowlists and denylists for agent commands
+- **Artifacts** — Persistent agent-maintained documents in Monitor, continuously updated as investigations progress
+- **Actions** — Automated post-RCA workflows (generate postmortems, open fix PRs, notify Slack) triggered on investigation completion
+- **AWS Bedrock Support** — Use Claude, Titan, and other Bedrock models via IAM auth
+- **Fly.io Connector** — Investigate incidents on Fly.io infrastructure
+- **CloudBees Enterprise** — Operations Center + Feature Management connector
+- **Kubeconfig Upload** — Connect on-prem Kubernetes clusters without a cloud provider
+- **CloudWatch Alarm Webhooks** — Ingest AWS CloudWatch alarms directly as incidents
+- **Extensibility Hooks** — Gate LLM calls, enforce seat limits, and customize behavior with lifecycle hooks
 
 See the full [CHANGELOG](CHANGELOG.md) for all releases.
 
 ---
 
-Aurora is an open-source (Apache 2.0) AI-powered incident management platform for SRE teams. When a monitoring tool fires an alert, Aurora's LangGraph-orchestrated AI agents **autonomously investigate** the incident — querying infrastructure across AWS, Azure, GCP, OVH, Scaleway, and Kubernetes, correlating data from 30+ tools, and delivering a structured root cause analysis with remediation recommendations.
+## Why Aurora?
 
-Unlike traditional tools that automate workflows (Slack channels, paging, runbooks), Aurora automates the **investigation itself**.
+When an alert fires at 3 AM, your on-call engineer spends 30-60 minutes doing the same thing every time: checking dashboards, running kubectl commands, reading logs, correlating deployments, and searching Slack history.
 
-<p align="center">
-  <img src=".github/assets/aurora-demo.gif" alt="Aurora Demo — AI agent investigating a cloud incident" width="800" />
-  <br />
-  <a href="https://www.loom.com/share/8082df350ea64a928f7fadbf811c5138"><strong>Watch the full demo video</strong></a>
-</p>
+**Aurora does all of that autonomously.** It receives the alert, spins up AI agents that investigate across your entire stack, and delivers a structured RCA by the time you open your laptop.
 
-<p align="center">
-  <img src=".github/assets/incident-summary.png" alt="Aurora Incident Investigation — AI-generated root cause analysis with timeline and remediation steps" width="800" />
-</p>
+| Without Aurora | With Aurora |
+|:---|:---|
+| Engineer paged, context-switches | Alert auto-triaged in background |
+| 30-60 min manual investigation | AI agents investigate in parallel |
+| Knowledge siloed in individuals | Investigation reasoning captured |
+| Postmortem written days later | Postmortem auto-generated |
+| Same failure, different engineer | Knowledge base grows over time |
+
+<div align="center">
+
+<a href="https://www.loom.com/share/8082df350ea64a928f7fadbf811c5138">
+  <img src=".github/assets/aurora-demo.gif" alt="Aurora Demo — AI agent investigating a cloud incident" width="100%" />
+</a>
+
+<sub>Click to watch the full demo</sub>
+
+</div>
+
+---
 
 ## Features
 
-### Agentic AI Investigation
+<table>
+<tr>
+<td width="50%" valign="top">
 
-Aurora's AI agents dynamically select from 30+ tools to investigate incidents. They run `kubectl`, `aws`, `az`, and `gcloud` commands in **sandboxed Kubernetes pods**, query logs, check recent deployments, and correlate data across systems — all autonomously.
+### Agentic Investigation
 
-<p align="center">
-  <img src=".github/assets/ai-investigation.png" alt="Aurora AI agent investigating an incident — running kubectl commands and analyzing pod status" width="800" />
-</p>
+AI agents dynamically select from 30+ tools. They run `kubectl`, `aws`, `az`, and `gcloud` in **sandboxed Kubernetes pods**, query logs, check deployments, and correlate data — all autonomously.
+
+</td>
+<td width="50%">
+
+<img src=".github/assets/ai-investigation.png" alt="AI agent investigating" width="100%" />
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### AI Code Fixes
+
+Aurora doesn't just find root cause — it suggests fixes and can generate pull requests with the remediation.
+
+</td>
+<td width="50%">
+
+<img src=".github/assets/pr-suggestion.png" alt="PR suggestion" width="100%" />
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
 ### Incident Dashboard
 
-Track all incidents in a single dashboard. Aurora ingests alerts from PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io, and other monitoring tools via webhooks, automatically triggering background investigations.
+Ingest alerts from PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io and more. Every alert auto-triggers a background investigation.
 
-<p align="center">
-  <img src=".github/assets/incidents-dashboard.png" alt="Aurora incidents dashboard showing active incidents with severity levels" width="800" />
-</p>
+</td>
+<td width="50%">
 
-### Automated Postmortem Generation
+<img src=".github/assets/incidents-dashboard.png" alt="Incidents dashboard" width="100%" />
 
-Aurora generates detailed postmortem reports with timeline, root cause, impact assessment, and remediation steps. Export directly to Confluence or Notion.
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-<p align="center">
-  <img src=".github/assets/postmortem-report.png" alt="Aurora auto-generated postmortem with timeline, root cause, and remediation" width="800" />
-</p>
+### Auto-Generated Postmortems
+
+Detailed reports with timeline, root cause, impact assessment, and remediation steps. Export directly to Confluence, Notion, or SharePoint.
+
+</td>
+<td width="50%">
+
+<img src=".github/assets/postmortem-report.png" alt="Postmortem report" width="100%" />
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
 ### Infrastructure Knowledge Graph
 
-Visualize your entire infrastructure as a dependency graph powered by Memgraph. When an incident occurs, Aurora traces the blast radius across services and cloud providers.
+Visualize your entire infrastructure as a dependency graph. When an incident occurs, Aurora traces blast radius across services and providers.
 
-<p align="center">
-  <img src=".github/assets/infrastructure-graph.png" alt="Aurora infrastructure dependency graph showing service relationships" width="800" />
-</p>
+</td>
+<td width="50%">
 
-### AI-Suggested Code Fixes
+<img src=".github/assets/infrastructure-graph.png" alt="Infrastructure graph" width="100%" />
 
-Aurora doesn't just find the root cause — it suggests code fixes and can generate pull requests with the remediation.
+</td>
+</tr>
+</table>
 
-<p align="center">
-  <img src=".github/assets/pr-suggestion.png" alt="Aurora AI-suggested code fix with pull request preview" width="800" />
-</p>
+**More capabilities:** Knowledge Base RAG &bull; Multi-Cloud (AWS, Azure, GCP, OVH, Scaleway, Cloudflare) &bull; Any LLM (OpenAI, Anthropic, Gemini, Vertex AI, OpenRouter, Ollama) &bull; Terraform/IaC Analysis &bull; MCP Server (Cursor, Claude Desktop, Windsurf) &bull; Org-level Command Policies &bull; SigmaHQ Guardrails &bull; NeMo Input Rail
 
-### Additional Capabilities
-
-- **Knowledge Base RAG** — Weaviate-powered vector search over your runbooks, past postmortems, and documentation
-- **Multi-Cloud Native** — AWS (STS AssumeRole + IRSA), Azure (Service Principal), GCP (OAuth + Service Account), OVH, Scaleway, Cloudflare, Kubernetes
-- **Any LLM Provider** — OpenAI, Anthropic, Google, or local models via Ollama for air-gapped deployments
-- **Terraform/IaC Analysis** — Understands your infrastructure-as-code state
-- **Self-Hosted** — Docker Compose or Helm chart. HashiCorp Vault or AWS Secrets Manager for secrets management
-- **Free Forever** — No per-seat or per-incident pricing. Apache 2.0.
-
-## How It Works
-
-```text
-Alert fires (PagerDuty, Datadog, Grafana, New Relic, OpsGenie, incident.io, etc.)
-        │
-        ▼
-   Aurora receives webhook
-        │
-        ▼
-   AI agent selects tools (from 30+)
-        │
-        ├── Queries cloud APIs (AWS, Azure, GCP, Cloudflare)
-        ├── Runs CLI commands in sandboxed pods
-        ├── Checks Kubernetes cluster status
-        ├── Queries logs (Splunk, Datadog, New Relic)
-        ├── Searches knowledge base (RAG)
-        └── Traverses infrastructure dependency graph
-                │
-                ▼
-   Root Cause Analysis generated
-        │
-        ├── Structured RCA with timeline
-        ├── Impact assessment & blast radius
-        ├── Remediation recommendations
-        ├── Code fix suggestions (with PRs)
-        └── Postmortem exported to Confluence/Notion
-```
-
-## Integrations
-
-Aurora integrates with 30+ tools across your stack:
-
-| Category | Tools |
-|----------|-------|
-| **Monitoring & Alerting** | PagerDuty, Datadog, Grafana, New Relic, OpsGenie, Netdata, Dynatrace, Coroot, ThousandEyes, BigPanda, incident.io |
-| **Cloud Providers** | AWS, Azure, GCP, OVH, Scaleway, Cloudflare |
-| **Infrastructure** | Kubernetes, Terraform, Docker, Tailscale |
-| **CI/CD** | Jenkins, Spinnaker, CloudBees |
-| **Log Management** | Splunk |
-| **AI Assistants** | [MCP server](website/docs/integrations/mcp.md) for Cursor, Claude Desktop, Windsurf |
-| **Communication** | Slack, Google Chat |
-| **Code & Docs** | GitHub, Bitbucket, Jira, Confluence, Notion, SharePoint |
-| **Search** | Self-hosted SearXNG |
-| **Data Stores** | Memgraph (graph), Weaviate (vector), PostgreSQL |
-| **Secrets** | HashiCorp Vault, AWS Secrets Manager |
-
-### Supported LLM Providers
-
-| Provider | Models |
-|----------|--------|
-| **OpenAI** | GPT-5.4, GPT-5.2, o3, o4-mini, o3-mini, GPT-4.1, GPT-4.1-mini, GPT-4o, GPT-4o-mini |
-| **Anthropic** | Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 3.5 Sonnet, Claude 3 Haiku |
-| **Google Gemini** | Gemini 3.1 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash Lite |
-| **Vertex AI** | Same Gemini models via Google Cloud with IAM auth |
-| **OpenRouter** | Any model via OpenRouter API (single key for all providers) |
-| **Ollama** | Llama 3.1, Qwen 2.5, and any local model (air-gapped) |
+---
 
 ## Quick Start
 
-Get Aurora running locally for testing and evaluation:
+Get Aurora running locally in under 5 minutes:
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/arvo-ai/aurora.git
-cd aurora
+git clone https://github.com/arvo-ai/aurora.git && cd aurora
 
-# 2. Initialize configuration (generates secure secrets automatically)
-make init
-
-# 3. Edit .env and add your LLM API key
-#    Get one from: https://openrouter.ai/keys or https://platform.openai.com/api-keys
-nano .env  # Add OPENROUTER_API_KEY=sk-or-v1-...
-
-# 4. Start Aurora (prebuilt from GHCR, or build from source)
-make prod-prebuilt   # or: make prod-local to build images locally
-
-# 5. Get Vault root token and add to .env
-#    Check the vault-init container logs for the root token:
-docker logs vault-init 2>&1 | grep "Root Token:"
-#    You'll see output like:
-#    ===================================================
-#    Vault initialization complete!
-#    Root Token: hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-#    IMPORTANT: Set VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx in your .env file
-#               to connect Aurora services to Vault.
-#    ===================================================
-#    Copy the root token value and add it to your .env file:
-nano .env  # Add VAULT_TOKEN=hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# 6. Restart Aurora to load the Vault token
-make down
-make prod-prebuilt   # or: make prod-local to build from source
+make init                # Generate secure secrets
+nano .env                # Add your LLM API key (OpenRouter, OpenAI, etc.)
+make prod-prebuilt       # Pull prebuilt images and start
 ```
 
-**That's it!** Open **http://localhost:3000** in your browser.
+Open **http://localhost:3000**. The first user to register becomes admin.
 
-The first user to register becomes the admin. After that, registration is closed — admins invite new users from the Organization page.
+> [!TIP]
+> Aurora works without any cloud provider accounts. The LLM API key is the only external requirement. Connectors are optional.
 
-> **Note**: Aurora works **without any cloud provider accounts**! The LLM API key is the only external requirement. Connectors are optional and can be enabled later if needed via the env file.
+<details>
+<summary><strong>Vault setup (required after first start)</strong></summary>
+<br />
 
-**Endpoints:**
-- **Frontend** (open in browser): http://localhost:3000
-- **API**: http://localhost:5080
-- **Chatbot WebSocket**: ws://localhost:5006
+```bash
+# Get the auto-generated root token
+docker logs vault-init 2>&1 | grep "Root Token:"
 
-To stop: `make down` | Logs: `make logs`
+# Add it to .env
+echo "VAULT_TOKEN=hvs.your-token-here" >> .env
 
-If you want cloud connectors, add provider credentials referenced in `.env.example`.
+# Restart to connect services to Vault
+make down && make prod-prebuilt
+```
 
-### Pin a specific version
+</details>
+
+<details>
+<summary><strong>Pin a specific version</strong></summary>
+<br />
 
 ```bash
 make prod-prebuilt VERSION=v1.2.3
 ```
 
-### Build from source
+</details>
+
+<details>
+<summary><strong>Build from source</strong></summary>
+<br />
 
 ```bash
 make prod-local
 ```
 
-### Deploy on Kubernetes
-
-Aurora's Helm chart is published to two registries — no need to clone the repo:
-
-```bash
-# Option A: Helm repository
-helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
-helm repo update
-helm show values aurora/aurora-oss > my-values.yaml
-# Edit my-values.yaml with your config, then:
-helm install aurora-oss aurora/aurora-oss --namespace aurora-oss --create-namespace -f my-values.yaml
-
-# Option B: OCI registry (GHCR)
-helm show values oci://ghcr.io/arvo-ai/charts/aurora-oss > my-values.yaml
-# Edit my-values.yaml with your config, then:
-helm install aurora-oss oci://ghcr.io/arvo-ai/charts/aurora-oss \
-  --namespace aurora-oss --create-namespace -f my-values.yaml
-```
-
-See the full [Kubernetes deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/kubernetes) for prerequisites, Vault setup, TLS, and configuration reference.
-
-### Air-gapped / restricted network
-
-Prebuilt airtight bundles (all images in one tarball) are published on every release and push to `main`. [Browse available bundles](https://storage.googleapis.com/aurora-airtight-bucket/index.html) and download with `curl`:
-
-```bash
-# Replace <version> with a release tag (e.g. v1.2.3) or commit SHA
-curl -LO https://storage.googleapis.com/aurora-airtight-bucket/aurora-airtight-<version>-amd64.tar.gz
-```
-
-Transfer the tarball to the target VM and run `make prod-airtight AIRTIGHT_BUNDLE=<file>`. See the [air-tight deployment guide](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) for full instructions.
-
-For detailed deployment guides, see the **[Documentation](https://arvo-ai.github.io/aurora/)**.
-
-## Architecture
-
-| Component | Technology |
-|-----------|-----------|
-| **Backend** | Python, Flask, Celery, LangGraph |
-| **Frontend** | Next.js |
-| **Graph Database** | Memgraph |
-| **Vector Store** | Weaviate |
-| **Secrets** | HashiCorp Vault |
-| **Storage** | PostgreSQL, Redis, SeaweedFS |
-
-```text
-aurora/
-├── server/      # Python API, chatbot, Celery workers
-├── client/      # Next.js frontend
-├── config/      # Configuration files
-├── deploy/      # Deployment scripts
-├── scripts/     # Utility scripts
-└── website/     # Documentation (Docusaurus)
-```
-
-## Security & Roles
-
-Aurora uses **Casbin RBAC** with three roles enforced at both the API and UI layers:
-
-| Role | Capabilities |
-|------|-------------|
-| **Admin** | Full access — manage users, org settings, LLM config, connectors, incidents, chat |
-| **Editor** | Write access — connectors, SSH keys, VMs, knowledge base, incidents, chat |
-| **Viewer** | Read-only — view incidents, postmortems, dashboards, chat |
-
-- **Registration** is closed after the first (admin) user. New accounts are created by admins only.
-- **Backend RBAC** via `@require_permission` decorators on all write endpoints (Casbin policy enforcement).
-- **Frontend guards** via `ConnectorAuthGuard` on sensitive pages (SSH keys, VM config, connector auth).
-- **CORS** is restricted to `FRONTEND_URL` — no wildcard origins on any endpoint.
-- The Flask API (port 5080) is exposed to the host because the frontend makes direct browser calls to it for some features (OVH/Scaleway VMs, cloud graph). CORS and RBAC protect it.
-
-For more details, see [SECURITY.md](SECURITY.md).
-
-## Data Privacy
-
-Aurora is fully self-hosted — **your incident data never leaves your environment**.
-
-- All data stays on your infrastructure (Docker Compose or Kubernetes)
-- No telemetry or usage data sent to Arvo AI
-- Secrets stored in HashiCorp Vault or AWS Secrets Manager with encryption at rest
-- LLM API calls go directly from your infrastructure to your chosen provider
-- Use Ollama for local LLM inference to avoid LLM provider API calls (note: web search, cloud integrations, and Terraform registry still require network access)
-- RBAC enforced at both API and UI layers
-
-## Community
-
-We'd love your help making Aurora better.
-
-- **[Discord](https://discord.com/invite/ccbN4FwHxM)** — Ask questions, share feedback, get help
-- **[GitHub Issues](https://github.com/Arvo-AI/aurora/issues)** — Report bugs or request features
-- **[GitHub Discussions](https://github.com/Arvo-AI/aurora/discussions)** — General discussion and ideas
-- **[Book a Demo](https://cal.com/arvo-ai)** — See Aurora in action with our team
-- **[Website](https://www.arvoai.ca)** — Learn more about Arvo AI
-- **[Documentation](https://arvo-ai.github.io/aurora/)** — Full deployment and configuration guides
-- **[Blog](https://www.arvoai.ca/blog)** — Guides on incident management, RCA, and SRE best practices
-
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE).
+</details>
 
 ---
 
-<p align="center">
-  <strong>If Aurora helps your team, give us a <a href="https://github.com/Arvo-AI/aurora">star on GitHub</a>!</strong>
-</p>
+## Deploy
+
+| Method | Best for |
+|--------|----------|
+| `make prod-prebuilt` | Local evaluation, single-node |
+| [Helm chart](https://arvo-ai.github.io/aurora/docs/deployment/kubernetes) | Production Kubernetes (GKE, EKS, AKS) |
+| [Air-tight bundle](https://arvo-ai.github.io/aurora/docs/deployment/vm-deployment#secure-deployment-air-tight) | Air-gapped / restricted networks |
+
+### Kubernetes (Helm)
+
+```bash
+helm repo add aurora https://raw.githubusercontent.com/Arvo-AI/aurora/gh-pages
+helm repo update
+helm show values aurora/aurora-oss > my-values.yaml
+# Edit my-values.yaml, then:
+helm install aurora-oss aurora/aurora-oss -n aurora --create-namespace -f my-values.yaml
+```
+
+Also available via OCI: `oci://ghcr.io/arvo-ai/charts/aurora-oss`
+
+---
+
+## Integrations
+
+<div align="center">
+
+![PagerDuty](https://img.shields.io/badge/PagerDuty-06AC38?style=flat-square&logo=pagerduty&logoColor=white)
+![Datadog](https://img.shields.io/badge/Datadog-632CA6?style=flat-square&logo=datadog&logoColor=white)
+![Grafana](https://img.shields.io/badge/Grafana-F46800?style=flat-square&logo=grafana&logoColor=white)
+![New Relic](https://img.shields.io/badge/New_Relic-1CE783?style=flat-square&logo=newrelic&logoColor=white)
+![OpsGenie](https://img.shields.io/badge/OpsGenie-0052CC?style=flat-square&logo=opsgenie&logoColor=white)
+![Dynatrace](https://img.shields.io/badge/Dynatrace-1496FF?style=flat-square&logo=dynatrace&logoColor=white)
+![incident.io](https://img.shields.io/badge/incident.io-FF4785?style=flat-square&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-232F3E?style=flat-square&logo=amazonwebservices&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure-0078D4?style=flat-square&logo=microsoftazure&logoColor=white)
+![GCP](https://img.shields.io/badge/GCP-4285F4?style=flat-square&logo=googlecloud&logoColor=white)
+![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-844FBA?style=flat-square&logo=terraform&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white)
+![Jenkins](https://img.shields.io/badge/Jenkins-D24939?style=flat-square&logo=jenkins&logoColor=white)
+![Slack](https://img.shields.io/badge/Slack-4A154B?style=flat-square&logo=slack&logoColor=white)
+![Google Chat](https://img.shields.io/badge/Google_Chat-34A853?style=flat-square&logo=googlechat&logoColor=white)
+![Jira](https://img.shields.io/badge/Jira-0052CC?style=flat-square&logo=jira&logoColor=white)
+![Confluence](https://img.shields.io/badge/Confluence-172B4D?style=flat-square&logo=confluence&logoColor=white)
+![Notion](https://img.shields.io/badge/Notion-000000?style=flat-square&logo=notion&logoColor=white)
+![SharePoint](https://img.shields.io/badge/SharePoint-0078D4?style=flat-square&logo=microsoftsharepoint&logoColor=white)
+![Bitbucket](https://img.shields.io/badge/Bitbucket-0052CC?style=flat-square&logo=bitbucket&logoColor=white)
+![Splunk](https://img.shields.io/badge/Splunk-000000?style=flat-square&logo=splunk&logoColor=white)
+![Fly.io](https://img.shields.io/badge/Fly.io-7B36ED?style=flat-square&logo=flydotio&logoColor=white)
+![CloudBees](https://img.shields.io/badge/CloudBees-1997B5?style=flat-square&logoColor=white)
+![Tailscale](https://img.shields.io/badge/Tailscale-242424?style=flat-square&logo=tailscale&logoColor=white)
+
+**LLMs:** OpenAI &bull; Anthropic &bull; Google Gemini &bull; Vertex AI &bull; AWS Bedrock &bull; OpenRouter &bull; Ollama (air-gapped)
+
+</div>
+
+---
+
+## Architecture
+
+```
+aurora/
+├── server/      # Python API (Flask), Celery workers, LangGraph agents
+├── client/      # Next.js frontend
+├── deploy/      # Helm chart, Docker Compose, deployment scripts
+├── config/      # Default configuration
+├── scripts/     # CLI utilities
+└── website/     # Documentation (Docusaurus)
+```
+
+| Layer | Stack |
+|-------|-------|
+| AI Orchestration | LangGraph, 30+ tool definitions |
+| Backend | Python, Flask, Celery |
+| Frontend | Next.js, TypeScript |
+| Graph DB | Memgraph |
+| Vector Store | Weaviate |
+| Secrets | HashiCorp Vault, AWS Secrets Manager |
+| Storage | PostgreSQL, Redis, S3-compatible |
+
+---
+
+## Security
+
+- **Sandboxed execution** — Agent commands run in isolated Kubernetes pods with NetworkPolicy, not on your control plane
+- **RBAC** — Three roles (Admin, Editor, Viewer) enforced at API and UI layers via Casbin
+- **Closed registration** — First user is admin; all others are invited
+- **SigmaHQ guardrails** — 37 threat detection signatures on agent command execution
+- **NeMo input rail** — Prompt injection detection on every turn
+- **No telemetry** — Zero data sent to Arvo AI. Fully self-hosted.
+
+---
+
+## Data Privacy
+
+Aurora is **100% self-hosted**. Your incident data never leaves your infrastructure.
+
+- All data on your infrastructure (Docker or Kubernetes)
+- No telemetry or tracking to Arvo AI
+- Secrets encrypted at rest in Vault or AWS Secrets Manager
+- LLM calls go directly from your infra to your chosen provider
+- Use Ollama for fully air-gapped operation
+
+---
+
+## Community
+
+<div align="center">
+
+<a href="https://discord.com/invite/ccbN4FwHxM"><img src="https://img.shields.io/badge/Discord-Join_the_community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>&nbsp;&nbsp;
+<a href="https://cal.com/arvo-ai"><img src="https://img.shields.io/badge/Book_a_Demo-FF6B4A?style=for-the-badge&logo=googlecalendar&logoColor=white" alt="Book a Demo" /></a>
+
+</div>
+
+<br />
+
+- **[GitHub Issues](https://github.com/Arvo-AI/aurora/issues)** — Bug reports and feature requests
+- **[GitHub Discussions](https://github.com/Arvo-AI/aurora/discussions)** — Ideas and Q&A
+- **[Documentation](https://arvo-ai.github.io/aurora/)** — Full deployment and configuration guides
+- **[Blog](https://www.arvoai.ca/blog)** — SRE best practices, incident management guides
+- **[Contributing](CONTRIBUTING.md)** — We welcome PRs! Read the guide first.
+
+---
+
+## License
+
+[Apache License 2.0](LICENSE) — free forever, no per-seat or per-incident pricing.
+
+---
+
+<div align="center">
+<br />
+<strong>If Aurora helps your team, <a href="https://github.com/Arvo-AI/aurora">star us on GitHub</a></strong>
+<br /><br />
+<a href="https://github.com/Arvo-AI/aurora/stargazers"><img src="https://img.shields.io/github/stars/Arvo-AI/aurora?style=for-the-badge&logo=github&color=181717" alt="Stars" /></a>
+<br /><br />
+</div>

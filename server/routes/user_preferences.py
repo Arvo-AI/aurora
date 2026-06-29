@@ -20,6 +20,12 @@ ORG_SCOPED_PREFERENCE_KEYS = frozenset({
     'rca_email_notifications',
     'rca_email_start_notifications',
     'action_email_notifications',
+    'action_email_start_notifications',
+    'slack_investigation_start_notifications',
+    'slack_investigation_complete_notifications',
+    'slack_action_start_notifications',
+    'slack_action_complete_notifications',
+    'google_chat_investigation_notifications',
 })
 
 EDITOR_ONLY_PREFERENCE_KEYS = ORG_SCOPED_PREFERENCE_KEYS

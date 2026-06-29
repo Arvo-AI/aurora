@@ -12,7 +12,7 @@ from utils.auth.github_auth_router import (
     NoGitHubAuthError,
     get_any_auth_for_user,
 )
-from utils.auth.github_auth_mode import is_oauth_enabled
+from utils.auth.github_auth_mode import is_oauth_token_honored
 from utils.auth.token_management import get_token_data
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class GetConnectedReposArgs(BaseModel):
 
 
 def _user_has_oauth(user_id: str) -> bool:
-    if not is_oauth_enabled():
+    if not is_oauth_token_honored():
         return False
     creds = get_token_data(user_id, "github")
     return bool(creds and creds.get("access_token"))

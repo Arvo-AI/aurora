@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import AppLayout from "@/app/components/AppLayout";
 import GlobalProjectSelectionMonitor from "@/components/cloud-provider/GlobalProjectSelectionMonitor";
 import { WebViewWarning } from "@/components/WebViewWarning";
+import OnboardingConnectorBar from "@/components/OnboardingConnectorBar";
 import { useConnectionHealth } from "@/hooks/useConnectionHealth";
 
 // Chat context definition (moved from layout.tsx)
@@ -127,6 +128,7 @@ export default function ClientShell({ children }: ClientShellProps) {
           </AppLayout>
           <Toaster />
           <WebViewWarning />
+          <OnboardingConnectorBar />
           <GlobalProjectSelectionMonitor />
         </ChatContext.Provider>
       </ProviderPreferenceProvider>

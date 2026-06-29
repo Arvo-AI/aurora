@@ -8,10 +8,7 @@ never drifts between them.
 """
 
 import logging
-from datetime import timezone
 from functools import wraps
-from typing import Optional
-from uuid import UUID
 
 import psycopg2.errors
 from flask import Blueprint, jsonify, request
@@ -21,6 +18,8 @@ from services.artifacts.store import create_version, upsert_artifact_by_title
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
+from utils.query_helpers import iso_utc
+from utils.validation import is_valid_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +30,6 @@ _MAX_TITLE = 500
 _ARTIFACT_NOT_FOUND = "Artifact not found"
 
 
-def _validate_uuid(value: str) -> bool:
-    try:
-        UUID(value)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-def _format_timestamp(ts) -> Optional[str]:
-    if not ts:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.isoformat()
-
-
 def _serialize_artifact(row, *, include_content: bool) -> dict:
     """Build a camelCase artifact dict from a row of
     (id, title, content, last_edited_by, created_at, updated_at, version_number).
@@ -55,8 +38,8 @@ def _serialize_artifact(row, *, include_content: bool) -> dict:
         "id": str(row[0]),
         "title": row[1],
         "lastEditedBy": row[3],
-        "createdAt": _format_timestamp(row[4]),
-        "updatedAt": _format_timestamp(row[5]),
+        "createdAt": iso_utc(row[4]),
+        "updatedAt": iso_utc(row[5]),
         "version": row[6] or 0,
     }
     if include_content:
@@ -70,7 +53,7 @@ def with_artifact(fn):
     """
     @wraps(fn)
     def wrapper(user_id, artifact_id, *args, **kwargs):
-        if not _validate_uuid(artifact_id):
+        if not is_valid_uuid(artifact_id):
             return jsonify({"error": "Invalid artifact ID"}), 400
 
         org_id = get_org_id_from_request()
@@ -277,7 +260,7 @@ def list_artifact_versions(user_id, artifact_id, *, org_id, conn, cursor, **kwar
             "id": str(row[0]),
             "versionNumber": row[1],
             "source": row[2],
-            "createdAt": _format_timestamp(row[3]),
+            "createdAt": iso_utc(row[3]),
             "generationSessionId": str(row[4]) if row[4] else None,
         }
         for row in rows
@@ -289,7 +272,7 @@ def list_artifact_versions(user_id, artifact_id, *, org_id, conn, cursor, **kwar
 @require_permission("artifacts", "read")
 @with_artifact
 def get_artifact_version(user_id, artifact_id, version_id, *, org_id, conn, cursor, **kwargs):
-    if not _validate_uuid(version_id):
+    if not is_valid_uuid(version_id):
         return jsonify({"error": "Invalid version ID"}), 400
 
     cursor.execute(
@@ -309,7 +292,7 @@ def get_artifact_version(user_id, artifact_id, version_id, *, org_id, conn, curs
             "versionNumber": row[1],
             "source": row[2],
             "content": row[3],
-            "createdAt": _format_timestamp(row[4]),
+            "createdAt": iso_utc(row[4]),
         }
     })
 
@@ -318,7 +301,7 @@ def get_artifact_version(user_id, artifact_id, version_id, *, org_id, conn, curs
 @require_permission("artifacts", "write")
 @with_artifact
 def restore_artifact_version(user_id, artifact_id, version_id, *, org_id, conn, cursor, **kwargs):
-    if not _validate_uuid(version_id):
+    if not is_valid_uuid(version_id):
         return jsonify({"error": "Invalid version ID"}), 400
 
     cursor.execute(

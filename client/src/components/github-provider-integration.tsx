@@ -5,12 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
-import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX } from 'lucide-react';
+import { Loader2, Check, ExternalLink, LogOut, ChevronDown, ChevronRight, RefreshCw, Pencil, X, Search, RotateCw, Trash2, AlertCircle, ShieldAlert, FolderX, Info } from 'lucide-react';
 import Image from 'next/image';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -76,6 +78,9 @@ export interface ConnectedRepo {
   metadata_status: string;
   repo_data: Repository | null;
   created_at: string | null;
+  // PR change gating (incident prevention) — only settable on App-linked repos.
+  change_gating_enabled?: boolean;
+  installation_id?: number | null;
 }
 
 export interface GitHubAuthConfig {
@@ -83,6 +88,7 @@ export interface GitHubAuthConfig {
   app_enabled: boolean;
   oauth_enabled: boolean;
   oauth_configured: boolean;
+  incident_prevention_enabled: boolean;
 }
 
 export class GitHubIntegrationService {
@@ -97,7 +103,7 @@ export class GitHubIntegrationService {
     if (!response.ok) {
       // Default to App-only on error so a misconfigured proxy never
       // surfaces an OAuth CTA the deployment hasn't enabled.
-      return { mode: 'app', app_enabled: true, oauth_enabled: false, oauth_configured: false };
+      return { mode: 'app', app_enabled: true, oauth_enabled: false, oauth_configured: false, incident_prevention_enabled: true };
     }
     return response.json();
   }
@@ -188,6 +194,18 @@ export class GitHubIntegrationService {
     if (!response.ok) throw new Error('Failed to update metadata');
   }
 
+  static async setChangeGating(repoFullName: string, enabled: boolean): Promise<void> {
+    const response = await fetch(`/api/proxy/github/repo-selections/${encodeURIComponent(repoFullName)}/change-gating`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || 'Failed to update incident prevention setting');
+    }
+  }
+
   static async generateRepoMetadata(repoFullName: string): Promise<void> {
     const response = await fetch('/api/proxy/github/repo-metadata/generate', {
       method: 'POST',
@@ -230,6 +248,7 @@ export default function GitHubProviderIntegration() {
   const [savedRepos, setSavedRepos] = useState<ConnectedRepo[]>([]);
   const [savedReposLoaded, setSavedReposLoaded] = useState(false);
   const [editingMetadata, setEditingMetadata] = useState<Record<string, string>>({});
+  const [gatingUpdating, setGatingUpdating] = useState<Set<string>>(new Set());
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const popupCleanupsRef = useRef<Array<() => void>>([]);
 
@@ -243,7 +262,6 @@ export default function GitHubProviderIntegration() {
 
   // GitHub App installations linked to this user
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
-  const [isLoadingInstallations, setIsLoadingInstallations] = useState(false);
   const [installationFilter, setInstallationFilter] = useState<string>('all');
 
   // App installations that exist on GitHub but aren't linked to this Aurora
@@ -259,6 +277,7 @@ export default function GitHubProviderIntegration() {
     app_enabled: true,
     oauth_enabled: false,
     oauth_configured: false,
+    incident_prevention_enabled: true,
   });
 
   useEffect(() => {
@@ -278,15 +297,10 @@ export default function GitHubProviderIntegration() {
   }, []);
 
   const fetchInstallations = useCallback(async () => {
-    setIsLoadingInstallations(true);
     try {
       const data = await GitHubAppService.listInstallations();
       const linked = data.installations || [];
       setInstallations(linked);
-      // If the user has no linked installs but the App exists on GitHub
-      // for some account (left over from a previous install or another
-      // session), surface those for explicit claim. Cleared once any
-      // install is linked.
       if (linked.length === 0 && authConfig.app_enabled) {
         try {
           const discovered = await GitHubAppService.discoverInstallations();
@@ -298,7 +312,6 @@ export default function GitHubProviderIntegration() {
         setDiscoveredInstallations([]);
       }
     } catch { setInstallations([]); }
-    finally { setIsLoadingInstallations(false); }
   }, [authConfig.app_enabled]);
 
   const startMetadataPolling = useCallback((repos: ConnectedRepo[]) => {
@@ -523,6 +536,39 @@ export default function GitHubProviderIntegration() {
       toast({ title: "Description updated" });
     } catch {
       toast({ title: "Error", description: "Failed to update description", variant: "destructive" });
+    }
+  };
+
+  const handleChangeGatingToggle = async (repoFullName: string, enabled: boolean) => {
+    setGatingUpdating(prev => new Set(prev).add(repoFullName));
+    setSavedRepos(prev => prev.map(r =>
+      r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: enabled } : r
+    ));
+    try {
+      await GitHubIntegrationService.setChangeGating(repoFullName, enabled);
+      // Re-assert the confirmed value: a loadSavedRepos poll snapshotted
+      // before the PUT committed can land after the optimistic update and
+      // clobber it with the stale flag.
+      setSavedRepos(prev => prev.map(r =>
+        r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: enabled } : r
+      ));
+      globalThis.dispatchEvent(new CustomEvent('providerStateChanged'));
+    } catch (error: unknown) {
+      const err = error as Error;
+      setSavedRepos(prev => prev.map(r =>
+        r.repo_full_name === repoFullName ? { ...r, change_gating_enabled: !enabled } : r
+      ));
+      toast({
+        title: "Error",
+        description: err.message || "Failed to update incident prevention setting",
+        variant: "destructive",
+      });
+    } finally {
+      setGatingUpdating(prev => {
+        const next = new Set(prev);
+        next.delete(repoFullName);
+        return next;
+      });
     }
   };
 
@@ -947,26 +993,10 @@ export default function GitHubProviderIntegration() {
       {/* Expanded content */}
       {expanded && githubStatus.isAuthenticated && (
         <div className="ml-6 border-l-2 border-muted pl-6 mt-2 space-y-3">
-          {/* GitHub App installations (rendered only when at least one exists or first load is in flight) */}
-          {(installations.length > 0 || (isLoadingInstallations && installations.length === 0)) && (
+          {installations.length > 0 && (
             <div className="space-y-2" data-testid="installations-section">
               <p className="text-sm font-medium text-muted-foreground">Connected GitHub Installations</p>
-              {isLoadingInstallations && installations.length === 0 ? (
-                <div className="space-y-2" data-testid="installations-skeleton">
-                  {[0, 1].map(i => (
-                    <div key={i} className="p-3 rounded-md border border-border animate-pulse">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
-                        <div className="flex-1 space-y-2">
-                          <div className="h-3 w-32 bg-muted rounded" />
-                          <div className="h-3 w-48 bg-muted rounded" />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                installations.map(installation => (
+              {installations.map(installation => (
                   <div
                     key={installation.installation_id}
                     className="p-3 rounded-md border border-border"
@@ -1022,8 +1052,7 @@ export default function GitHubProviderIntegration() {
                       </div>
                     </div>
                   </div>
-                ))
-              )}
+                ))}
             </div>
           )}
 
@@ -1134,6 +1163,31 @@ export default function GitHubProviderIntegration() {
                     )}
                     {isReady && !isEditing && repo.metadata_summary && (
                       <p className="text-xs text-muted-foreground">{repo.metadata_summary.replace(/\*\*/g, '')}</p>
+                    )}
+                    {repo.installation_id != null && authConfig.incident_prevention_enabled && (
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <TooltipProvider delayDuration={0}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                                Incident Prevention
+                                <Info className="h-3 w-3" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                              <p>Aurora reviews pull requests using knowledge of your infrastructure and connected services to flag changes that could cause production incidents.</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <Switch
+                          checked={!!repo.change_gating_enabled}
+                          disabled={gatingUpdating.has(repo.repo_full_name)}
+                          onCheckedChange={(checked) => handleChangeGatingToggle(repo.repo_full_name, checked)}
+                          className="scale-75 origin-right"
+                          aria-label={`Incident Prevention for ${repo.repo_full_name}`}
+                          data-testid={`repo-change-gating-${repo.repo_full_name}`}
+                        />
+                      </div>
                     )}
                   </div>
                 );

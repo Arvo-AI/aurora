@@ -123,6 +123,11 @@ def initialize_tables():
             # back into the connection pool.
             cursor.execute("SELECT pg_advisory_xact_lock(1234567890);")
 
+            # Set a lock_timeout for all DDL in this function so that startup
+            # doesn't hang indefinitely if a stale transaction holds a conflicting
+            # lock on a table we need to ALTER.
+            cursor.execute("SET lock_timeout = '5s';")
+
             # Define table creation scripts.
             create_tables = {
                 "k8s_pods": """
@@ -1128,11 +1133,24 @@ def initialize_tables():
                         name VARCHAR(255) NOT NULL,
                         slug VARCHAR(255) NOT NULL UNIQUE,
                         created_by VARCHAR(255) REFERENCES users(id),
+                        onboarding_completed BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+                """,
+                "onboarding_selections": """
+                    CREATE TABLE IF NOT EXISTS onboarding_selections (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id),
+                        selected_connectors TEXT[] NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_selections_org
+                        ON onboarding_selections(org_id);
                 """,
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
@@ -1595,6 +1613,22 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding installation_id column/FK to connected_repos: {e}"
+                )
+                conn.rollback()
+
+            # Migration: Add change_gating_enabled to connected_repos so
+            # existing deployments can enroll repos in PR change gating.
+            try:
+                cursor.execute(
+                    "ALTER TABLE connected_repos ADD COLUMN IF NOT EXISTS change_gating_enabled BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info(
+                    "Ensured change_gating_enabled column exists on connected_repos table."
+                )
+            except Exception as e:
+                logging.warning(
+                    f"Error adding change_gating_enabled column to connected_repos: {e}"
                 )
                 conn.rollback()
 
@@ -2537,7 +2571,10 @@ def initialize_tables():
             # View creation moved to after org_id migration (see below)
 
             # Early migration: ensure org_id column exists on all tables
-            # before RLS policies try to reference it
+            # before RLS policies try to reference it.
+            # Commit per-table to avoid holding ACCESS EXCLUSIVE locks across
+            # the entire loop (the session-level lock_timeout set above still
+            # applies to each individual ALTER).
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
@@ -2549,10 +2586,10 @@ def initialize_tables():
                     cursor.execute(
                         f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS org_id VARCHAR(255);"
                     )
+                    conn.commit()
                 except Exception as e:
                     logging.warning(f"Early org_id migration for {tbl}: {e}")
                     conn.rollback()
-            conn.commit()
 
             # Create org_id-dependent indexes after the migration above
             org_id_indexes = [
@@ -2571,65 +2608,70 @@ def initialize_tables():
             # DO NOT add k8s_clusters to RLS tables as views don't support RLS
             # Apply RLS policies to tables only
             for table_name in rls_tables:
-                cursor.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
-                logging.info(f"RLS enabled on table '{table_name}'.")
-                cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
-                logging.info(f"RLS forced on table '{table_name}'.")
+                try:
+                    cursor.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
+                    logging.info(f"RLS enabled on table '{table_name}'.")
+                    cursor.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY;")
+                    logging.info(f"RLS forced on table '{table_name}'.")
 
-                # RLS condition: deny access when org_id context is not set (default-deny).
-                # All code paths must SET myapp.current_org_id before querying.
-                _rls_using = f"""
-                    org_id IS NOT NULL
-                    AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
-                    AND org_id = current_setting('myapp.current_org_id', true)::text
-                """
+                    # RLS condition: deny access when org_id context is not set (default-deny).
+                    # All code paths must SET myapp.current_org_id before querying.
+                    _rls_using = f"""
+                        org_id IS NOT NULL
+                        AND COALESCE(current_setting('myapp.current_org_id', true), '') != ''
+                        AND org_id = current_setting('myapp.current_org_id', true)::text
+                    """
 
-                # SELECT policy
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS select_by_org ON {table_name};
-                        CREATE POLICY select_by_org ON {table_name}
-                        FOR SELECT USING ({_rls_using});
-                    END $$;
-                """)
-
-                # Drop legacy user-based policies if they exist
-                for old_policy in ['select_by_user', 'insert_by_user', 'update_by_user', 'delete_by_user']:
+                    # SELECT policy
                     cursor.execute(f"""
                         DO $$ BEGIN
-                            DROP POLICY IF EXISTS {old_policy} ON {table_name};
-                        EXCEPTION WHEN undefined_object THEN NULL;
+                            DROP POLICY IF EXISTS select_by_org ON {table_name};
+                            CREATE POLICY select_by_org ON {table_name}
+                            FOR SELECT USING ({_rls_using});
                         END $$;
                     """)
 
-                # CRUD policies for ALL rls_tables (not just a subset)
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS insert_by_org ON {table_name};
-                        CREATE POLICY insert_by_org ON {table_name}
-                        FOR INSERT WITH CHECK ({_rls_using});
-                    END $$;
-                """)
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS update_by_org ON {table_name};
-                        CREATE POLICY update_by_org ON {table_name}
-                        FOR UPDATE USING ({_rls_using});
-                    END $$;
-                """)
-                cursor.execute(f"""
-                    DO $$ BEGIN
-                        DROP POLICY IF EXISTS delete_by_org ON {table_name};
-                        CREATE POLICY delete_by_org ON {table_name}
-                        FOR DELETE USING ({_rls_using});
-                    END $$;
-                """)
+                    # Drop legacy user-based policies if they exist
+                    for old_policy in ['select_by_user', 'insert_by_user', 'update_by_user', 'delete_by_user']:
+                        cursor.execute(f"""
+                            DO $$ BEGIN
+                                DROP POLICY IF EXISTS {old_policy} ON {table_name};
+                            EXCEPTION WHEN undefined_object THEN NULL;
+                            END $$;
+                        """)
 
-                cursor.execute(
-                    f"SELECT policyname, qual FROM pg_policies WHERE tablename = '{table_name}';"
-                )
-                policies = cursor.fetchall()
-                logging.info(f"RLS policies for table '{table_name}': {policies}")
+                    # CRUD policies for ALL rls_tables (not just a subset)
+                    cursor.execute(f"""
+                        DO $$ BEGIN
+                            DROP POLICY IF EXISTS insert_by_org ON {table_name};
+                            CREATE POLICY insert_by_org ON {table_name}
+                            FOR INSERT WITH CHECK ({_rls_using});
+                        END $$;
+                    """)
+                    cursor.execute(f"""
+                        DO $$ BEGIN
+                            DROP POLICY IF EXISTS update_by_org ON {table_name};
+                            CREATE POLICY update_by_org ON {table_name}
+                            FOR UPDATE USING ({_rls_using});
+                        END $$;
+                    """)
+                    cursor.execute(f"""
+                        DO $$ BEGIN
+                            DROP POLICY IF EXISTS delete_by_org ON {table_name};
+                            CREATE POLICY delete_by_org ON {table_name}
+                            FOR DELETE USING ({_rls_using});
+                        END $$;
+                    """)
+
+                    cursor.execute(
+                        f"SELECT policyname, qual FROM pg_policies WHERE tablename = '{table_name}';"
+                    )
+                    policies = cursor.fetchall()
+                    logging.info(f"RLS policies for table '{table_name}': {policies}")
+                    conn.commit()
+                except Exception as e:
+                    logging.warning(f"RLS setup for table '{table_name}' deferred (will retry on next restart): {e}")
+                    conn.rollback()
 
             # Commit table creation and RLS before running migrations
             conn.commit()
@@ -3000,6 +3042,17 @@ def initialize_tables():
                 """)
             except Exception as e:
                 logging.warning(f"Error adding expires_at to org_invitations: {e}")
+                conn.rollback()
+
+            # Migration: Add onboarding_completed column to organizations table
+            try:
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE;"
+                )
+                conn.commit()
+                logging.info("Ensured onboarding_completed column exists on organizations table.")
+            except Exception as e:
+                logging.warning("Error adding onboarding_completed to organizations: %s", e)
                 conn.rollback()
 
             # Create k8s_clusters view (after org_id migration so the column exists)

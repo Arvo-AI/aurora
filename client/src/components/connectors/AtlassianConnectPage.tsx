@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2, AlertTriangle } from "lucide-react";
+import { Loader2, CheckCircle, ExternalLink, PenLine, FilePlus2, AlertTriangle, Copy, Webhook } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { atlassianService, AtlassianStatus } from "@/lib/services/atlassian";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,8 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [oauthConfigError, setOauthConfigError] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookCopied, setWebhookCopied] = useState(false);
 
   const connected = status?.[product.key]?.connected ?? false;
   const siblingConnected = sibling ? (status?.[sibling.key]?.connected ?? false) : true;
@@ -76,6 +78,13 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
         if (data.jiraMode) setJiraMode(data.jiraMode);
       }
     } catch { /* silent */ } finally { setIsLoadingSettings(false); }
+    try {
+      const res = await fetch("/api/jira/webhook-url", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.webhook_url) setWebhookUrl(data.webhook_url);
+      }
+    } catch { /* silent */ }
   };
 
   const saveJiraMode = async (mode: "full" | "comment_only") => {
@@ -274,6 +283,48 @@ export function AtlassianConnectPage({ product, sibling }: AtlassianConnectPageP
                     </button>
                   </>
                 )}
+              </CardContent>
+            </Card>
+          )}
+
+          {product.key === "jira" && webhookUrl && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Webhook className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-base">Incoming Webhook</CardTitle>
+                </div>
+                <CardDescription className="text-xs">
+                  Trigger Aurora RCA automatically when a bug is filed.
+                  In Jira: Settings &rarr; System &rarr; Advanced &rarr; WebHooks &rarr; paste this URL and select &quot;Issue created&quot;.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={webhookUrl}
+                    className="font-mono text-xs bg-muted/50"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(webhookUrl);
+                        setWebhookCopied(true);
+                        setTimeout(() => setWebhookCopied(false), 2000);
+                      } catch {
+                        toast({ title: "Couldn't copy to clipboard", description: "Copy the webhook URL manually.", variant: "destructive" });
+                      }
+                    }}
+                  >
+                    {webhookCopied ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-2">
+                  Triggers on issue types: Bug, Incident, Problem, Defect, Production Issue. Other types are ignored.
+                </p>
               </CardContent>
             </Card>
           )}

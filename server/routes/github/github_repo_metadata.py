@@ -9,6 +9,7 @@ otherwise. ``NoGitHubAuthError`` is mapped to a clean ``error`` status on
 the row (no retry — re-auth is a user action, not a transient failure).
 """
 import base64
+import json
 import logging
 from typing import Any, List, Union
 import requests
@@ -193,3 +194,131 @@ def generate_repo_metadata(self, user_id: str, repo_full_name: str):
             self.retry(countdown=30)
         except self.MaxRetriesExceededError:
             _update_metadata(user_id, repo_full_name, None, "error")
+
+
+def _import_installation_repos(self, user_id: str, installation_id: int):
+    """Auto-import a GitHub App installation's repos into ``connected_repos``.
+
+    Runs after a user installs/links the App so they do not have to re-select,
+    inside Aurora, the repos they already granted on GitHub (the redundant
+    second selection). Idempotent: each repo is UPSERTed with its
+    ``installation_id`` set and ``change_gating_enabled`` left at its default
+    (FALSE — change gating is still opt-in per repo). Unlike the manual save
+    path this NEVER deletes, so prior manual selections and other installations
+    are preserved; the user can still trim the set from the repo picker.
+
+    Metadata generation is dispatched only for genuinely new rows, and the
+    LLM-usage hook inside :func:`generate_repo_metadata` still gates cost.
+    """
+    from utils.auth.github_app_token import (
+        GitHubAppInstallationSuspended,
+        get_installation_token,
+    )
+    from routes.github.github_user_repos import _fetch_installation_repos
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    try:
+        token = get_installation_token(installation_id)
+    except GitHubAppInstallationSuspended:
+        logger.info(
+            "[RepoImport] installation suspended, skipping import installation_id=%s",
+            installation_id,
+        )
+        return
+    except Exception as exc:
+        logger.warning(
+            "[RepoImport] installation token mint failed installation_id=%s: %s",
+            installation_id, type(exc).__name__,
+        )
+        try:
+            self.retry(countdown=30)
+        except self.MaxRetriesExceededError:
+            logger.warning(
+                "[RepoImport] token mint retries exhausted installation_id=%s; giving up",
+                installation_id,
+            )
+        return
+
+    repos = _fetch_installation_repos(token, installation_id)
+    if not repos:
+        logger.info(
+            "[RepoImport] no repos to import installation_id=%s user=%s",
+            installation_id, user_id,
+        )
+        return
+
+    newly_added: list[str] = []
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            org_id = set_rls_context(cur, conn, user_id, log_prefix="[RepoImport]")
+            if not org_id:
+                logger.warning(
+                    "[RepoImport] no org for user=%s — cannot import (RLS)", user_id,
+                )
+                return
+            # Org-wide existing map (RLS scopes the SELECT to this org) ->
+            # {repo_full_name: owner_user_id}. Mirrors save_repo_selections:
+            # a repo already connected by another org member keeps its original
+            # owner on the UPSERT key, so we never create a second row for the
+            # same repo (which would double change-gating triggers + metadata).
+            cur.execute(
+                "SELECT repo_full_name, user_id FROM connected_repos "
+                "WHERE provider = 'github'",
+            )
+            existing = {r[0]: r[1] for r in cur.fetchall()}
+            for repo in repos:
+                full_name = repo.get("full_name")
+                if not full_name:
+                    continue
+                owner_id = existing.get(full_name, user_id)
+                cur.execute(
+                    """INSERT INTO connected_repos
+                           (user_id, org_id, provider, repo_full_name, repo_id,
+                            default_branch, is_private, installation_id, repo_data,
+                            metadata_status)
+                       VALUES (%s, %s, 'github', %s, %s, %s, %s, %s, %s, 'pending')
+                       ON CONFLICT (user_id, provider, repo_full_name) DO UPDATE SET
+                           repo_data = EXCLUDED.repo_data,
+                           default_branch = EXCLUDED.default_branch,
+                           is_private = EXCLUDED.is_private,
+                           installation_id = COALESCE(EXCLUDED.installation_id,
+                                                      connected_repos.installation_id),
+                           updated_at = NOW()""",
+                    (
+                        owner_id, org_id, full_name, repo.get("id"),
+                        repo.get("default_branch"), repo.get("private", False),
+                        installation_id, json.dumps(repo),
+                    ),
+                )
+                if full_name not in existing:
+                    existing[full_name] = user_id
+                    newly_added.append(full_name)
+            conn.commit()
+
+    logger.info(
+        "[RepoImport] imported %d repo(s) (%d new) installation_id=%s user=%s",
+        len(repos), len(newly_added), installation_id, user_id,
+    )
+    for repo_name in newly_added:
+        try:
+            generate_repo_metadata.delay(user_id, repo_name)
+        except Exception as exc:
+            logger.warning(
+                "[RepoImport] metadata enqueue failed for %s: %s", repo_name, exc,
+            )
+
+
+@celery_app.task(
+    name="routes.github.github_repo_metadata.import_installation_repos",
+    bind=True,
+    max_retries=2,
+)
+def import_installation_repos(self, user_id: str, installation_id: int):
+    """Celery entry point for the App repo auto-import.
+
+    Delegates to :func:`_import_installation_repos` so the body stays unit
+    testable without Celery's task machinery (which is stubbed out in the
+    lightweight test env, turning a decorated task into a no-op MagicMock).
+    """
+    return _import_installation_repos(self, user_id, installation_id)

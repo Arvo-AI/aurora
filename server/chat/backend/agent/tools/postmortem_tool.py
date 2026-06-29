@@ -8,20 +8,12 @@ during regular chat for postmortem-related queries.
 
 import json
 import logging
-import uuid as _uuid_mod
 
 from pydantic import BaseModel, Field
 
+from utils.validation import is_valid_uuid
+
 logger = logging.getLogger(__name__)
-
-
-def _is_valid_uuid(value: str) -> bool:
-    """Return True only if value is a well-formed UUID string."""
-    try:
-        _uuid_mod.UUID(value)
-        return True
-    except (ValueError, AttributeError):
-        return False
 
 
 class GetPostmortemArgs(BaseModel):
@@ -46,7 +38,7 @@ def get_postmortem(
     if not incident_id:
         return json.dumps({"error": "incident_id is required."})
 
-    if not _is_valid_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         logger.warning(
             "[PostmortemTool] get_postmortem called with non-UUID incident_id=%r — rejecting",
             incident_id,
@@ -107,7 +99,7 @@ def save_postmortem(
     if not incident_id:
         return json.dumps({"error": "incident_id is required."})
 
-    if not _is_valid_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         logger.warning(
             "[PostmortemTool] save_postmortem called with non-UUID incident_id=%r — rejecting",
             incident_id,

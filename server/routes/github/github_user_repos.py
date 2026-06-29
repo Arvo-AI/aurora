@@ -45,14 +45,14 @@ from utils.auth.github_app_token import (
     GitHubAppTokenError,
     get_installation_token,
 )
-from utils.auth.github_auth_mode import is_oauth_enabled
+from utils.auth.github_auth_mode import is_oauth_token_honored
 from utils.auth.github_auth_router import (
     NoGitHubAuthError,
     get_auth_for_user_repo,
     make_auth_header,
 )
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import get_credentials_from_db
+from utils.auth.stateless_auth import get_credentials_from_db, get_org_id_for_user
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -87,21 +87,26 @@ def create_cors_response(data=None, status=200):
 
 
 def _list_user_installation_ids(user_id: str) -> list[int]:
-    """Return ALL installation_ids linked to ``user_id`` in one DB round-trip.
+    """Return ALL installation_ids linked to the user's org in one DB round-trip.
 
     Batched so that ``/github/user-repos`` makes exactly ONE query
     against ``user_github_installations`` regardless of how many App
     installations the user has — no N+1.
+
+    Resolution is org-scoped: installations linked by any member of the
+    user's org are included, so every org member can list the org's repos
+    (consistent with how all other connectors are shared org-wide).
     """
+    org_id = get_org_id_for_user(user_id)
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT installation_id
+                """SELECT DISTINCT installation_id
                      FROM user_github_installations
-                    WHERE user_id = %s
+                    WHERE (user_id = %s OR org_id = %s)
                       AND disconnected_at IS NULL
                     ORDER BY installation_id""",
-                (user_id,),
+                (user_id, org_id),
             )
             return [row[0] for row in cur.fetchall()]
 
@@ -238,9 +243,9 @@ def _list_repos_for_user(user_id: str) -> list[dict[str, Any]]:
 
     # OAuth fallback / additional source. App entries already loaded above
     # win on collision per the module docstring (finer permissions, isolated
-    # rate limits). Only runs when OAuth is enabled in the deployment AND
-    # the user has a stored token.
-    if is_oauth_enabled():
+    # rate limits). Only runs when the user's existing OAuth token is still
+    # honored AND a token is stored.
+    if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
         except Exception:

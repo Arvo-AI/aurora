@@ -28,7 +28,7 @@ from flask import Blueprint, jsonify, request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from utils.auth.github_auth_mode import (
-    is_oauth_enabled,
+    is_oauth_login_enabled,
     oauth_credentials_configured,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -92,7 +92,7 @@ def github_login(user_id):
     Returns ``{oauth_url}`` for the frontend to open in a popup. The user
     is redirected back to ``/github/callback`` after consenting on GitHub.
     """
-    if not is_oauth_enabled():
+    if not is_oauth_login_enabled():
         return _oauth_disabled_response()
 
     if not oauth_credentials_configured():
@@ -160,7 +160,7 @@ def github_callback():
     is not guaranteed). Returns a templated success/error page that posts
     a message to the popup opener.
     """
-    if not is_oauth_enabled():
+    if not is_oauth_login_enabled():
         return flask.render_template(
             _CALLBACK_ERROR_TEMPLATE,
             error="GitHub OAuth is disabled in this deployment",
@@ -332,6 +332,15 @@ def github_callback():
             safe_user,
             cache_err,
         )
+
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+        from utils.auth.stateless_auth import get_org_id_for_user
+        org_id = get_org_id_for_user(aurora_user_id)
+        if org_id:
+            seed_org_tool_permissions(org_id, aurora_user_id)
+    except Exception:
+        logger.warning("[GITHUB-OAUTH] failed to seed tool permissions", exc_info=True)
 
     return flask.render_template(
         "github_callback_success.html",
