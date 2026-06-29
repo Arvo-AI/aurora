@@ -25,7 +25,7 @@ export async function DELETE(
     const { provider } = await context.params
 
     // Validate provider
-    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry'].includes(provider)) {
+    if (!['gcp', 'azure', 'aws', 'github', 'gitlab', 'grafana', 'datadog', 'netdata', 'ovh', 'scaleway', 'tailscale', 'slack', 'google_chat', 'splunk', 'dynatrace', 'confluence', 'jira', 'sharepoint', 'coroot', 'thousandeyes', 'jenkins', 'cloudbees', 'bigpanda', 'spinnaker', 'newrelic', 'opsgenie', 'incidentio', 'sentry', 'victorops', 'opensearch'].includes(provider)) {
       return NextResponse.json(
         { error: 'Invalid provider' },
         { status: 400 }
@@ -506,6 +506,16 @@ export async function DELETE(
 
       const data = await response.json()
       return NextResponse.json(data)
+    }
+
+    // Special handling for OpenSearch
+    if (provider === 'opensearch') {
+      return forwardRequest(request, 'DELETE', '/opensearch/disconnect', 'opensearch')
+    }
+
+    // Special handling for VictorOps (Splunk On-Call)
+    if (provider === 'victorops') {
+      return forwardRequest(request, 'DELETE', '/victorops', 'victorops')
     }
 
     // For other providers, use the general disconnect endpoint
