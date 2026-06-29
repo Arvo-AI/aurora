@@ -634,6 +634,7 @@ Because root cause is confirmed:
 - Do NOT generate diagnostic suggestions. The diagnosis is complete.
 - Generate ONLY mitigations and remediations that directly fix this root cause.
 - SIMPLEST FIX FIRST: What is the minimum change to restore service RIGHT NOW? Lead with that. The ideal architecture fix can come second.
+- PAIR STOPGAPS WITH THE DURABLE FIX: If your fastest mitigation does NOT itself fix the root cause (it only restores service or masks the symptom), you MUST also emit a separate "remediate" suggestion for the durable fix. Note the dependency in the mitigation's description (e.g. "temporary until the code fix ships"). Only skip the remediate when the quick fix IS the real fix.
 """
 
     return f"""You are an SRE generating the next actions an engineer should take after an incident investigation.
@@ -670,7 +671,7 @@ CONSTRAINTS:
 - If the alert is invalid/phantom (no real service or resource), return []
 - No project management (tickets, status updates, notifications) — technical actions only
 - Medium/high risk items MUST have an "undo" command showing how to reverse the action
-- 1-4 suggestions. Fewer is better. Never pad. Every suggestion must move the incident closer to resolution.
+- Output the FEWEST suggestions that fully cover what the human must do — often just 1. Hard cap 4. Never pad to fill the range; every suggestion must move the incident closer to resolution.
 - STRONG PREFERENCE for suggestions with runnable commands. Only omit the command for class "human_knowledge" (decisions, conversations, org context). If you can't write a command for a diagnostic/mitigation/remediate suggestion, drop it.
 - For commands: use kubectl, aws, gcloud, az, terraform, helm, curl, jq, gh, docker, sed, grep, python3 (available in sandbox)
 - Commands MUST use real values from the RESOURCE INVENTORY above — NEVER use placeholders like <bucket-name> or <timestamp>. If the inventory doesn't contain the value you need, set command to null.
