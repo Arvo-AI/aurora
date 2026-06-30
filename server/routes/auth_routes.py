@@ -198,7 +198,10 @@ def register():
                 record_audit_event(org_id, user_id, "register", "organization", org_id,
                                    {"email": email}, request)
 
-                send_verification_email(user_id, email)
+                try:
+                    send_verification_email(user_id, email)
+                except Exception:
+                    logging.warning("Failed to send verification email for %s", user_id)
 
                 return jsonify({
                     "id": user_id,
