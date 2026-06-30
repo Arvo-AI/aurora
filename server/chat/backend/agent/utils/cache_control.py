@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
 from langchain_core.messages import SystemMessage
 
@@ -40,23 +39,16 @@ logger = logging.getLogger(__name__)
 # ponytail: char heuristic; upgrade path = count tokens via the model tokenizer.
 _MIN_PREFIX_CHARS = 4096 * 4
 
-_VALID_TTLS = {"5m", "1h"}
-
 
 def _caching_enabled() -> bool:
-    # Default on: a cache miss only costs a normal call plus a small write
-    # premium, and it degrades gracefully. Disable with PROMPT_CACHING_ENABLED=false.
-    return os.getenv("PROMPT_CACHING_ENABLED", "true").strip().lower() not in (
-        "false",
-        "0",
-        "no",
-        "off",
+    # Default OFF: opt in per environment (staging first, then prod) after
+    # confirming cache_read tokens appear. Enable with PROMPT_CACHING_ENABLED=true.
+    return os.getenv("PROMPT_CACHING_ENABLED", "false").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
     )
-
-
-def _cache_ttl() -> str:
-    ttl = os.getenv("PROMPT_CACHE_TTL", "5m").strip().lower()
-    return ttl if ttl in _VALID_TTLS else "5m"
 
 
 def _is_anthropic_model(model_name: str) -> bool:
@@ -67,13 +59,24 @@ def _is_anthropic_model(model_name: str) -> bool:
     return model_name.split("/", 1)[0].lower() == "anthropic"
 
 
-def build_cached_system_prompt(model_name: str, system_prompt_text: str) -> Any:
+def build_cached_system_prompt(
+    model_name: str, system_prompt_text: str
+) -> "str | SystemMessage":
     """Return a system prompt for ``create_agent`` with Anthropic caching applied.
 
     Returns a ``SystemMessage`` carrying a ``cache_control`` ephemeral breakpoint
     when caching is enabled, the model is Anthropic-family, and the prompt is
     large enough to be cacheable. Otherwise returns the original string unchanged
-    (no-op), so non-Anthropic models and tiny prompts are unaffected.
+    (no-op), so non-Anthropic models (Google/OpenAI/etc.) and tiny prompts are
+    completely unaffected and behave exactly as before.
+
+    The breakpoint uses the default 5-minute ephemeral TTL (no explicit ``ttl``
+    field). Prod data: 99.9% of inter-turn gaps are <5min and the TTL refreshes
+    on every read, so 5m hits ~all turns; a 1h TTL costs 2x to write to rescue
+    ~0.05% of turns, so it is not worth exposing as a knob.
+
+    Caching can never break a session: on any unexpected failure we fall back to
+    the plain string, which is the original (pre-caching) behavior.
     """
     if not system_prompt_text or not isinstance(system_prompt_text, str):
         return system_prompt_text
@@ -86,22 +89,25 @@ def build_cached_system_prompt(model_name: str, system_prompt_text: str) -> Any:
         # cost a write that can never be read back.
         return system_prompt_text
 
-    cache_control = {"type": "ephemeral"}
-    ttl = _cache_ttl()
-    if ttl != "5m":
-        cache_control["ttl"] = ttl
-
-    logger.info(
-        "Applying Anthropic prompt cache breakpoint (ttl=%s, prefix_chars=%d)",
-        ttl,
-        len(system_prompt_text),
-    )
-    return SystemMessage(
-        content=[
-            {
-                "type": "text",
-                "text": system_prompt_text,
-                "cache_control": cache_control,
-            }
-        ]
-    )
+    try:
+        msg = SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": system_prompt_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        )
+        logger.info(
+            "Applying Anthropic prompt cache breakpoint (ttl=5m, prefix_chars=%d)",
+            len(system_prompt_text),
+        )
+        return msg
+    except Exception:
+        # Never let caching break the agent: degrade to the uncached prompt.
+        logger.warning(
+            "Failed to build cached system prompt; falling back to plain prompt",
+            exc_info=True,
+        )
+        return system_prompt_text

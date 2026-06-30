@@ -225,9 +225,8 @@ config:
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
   # Anthropic prompt caching on the agent workflow (cache reads = 0.1x input price). Anthropic models only.
-  PROMPT_CACHING_ENABLED: "true"
-  # Prompt cache TTL: 5m (default) or 1h for long/bursty RCA.
-  PROMPT_CACHE_TTL: "5m"
+  # Opt-in: enable per environment (staging first) after confirming cache_read tokens appear.
+  PROMPT_CACHING_ENABLED: "false"
   # Lightweight model for mechanical summarization (tool-output capping, alert/repo summaries). Empty = falls back to MAIN_MODEL.
   SUMMARIZATION_MODEL: ""
 
