@@ -256,6 +256,8 @@ config:
   # read-only sub-agents. Set RCA_ORCHESTRATOR_MODEL and RCA_SUBAGENT_MODEL
   # when enabling.
   ORCHESTRATOR_ENABLED: "false"
+  # Infrastructure visualization LLM extraction (disabled for cost; see cost-optimization design doc).
+  VISUALIZATION_ENABLED: "false"
   # * Only when ORCHESTRATOR_ENABLED=true — triage + synthesis brain.
   RCA_ORCHESTRATOR_MODEL: ""
   # * Only when ORCHESTRATOR_ENABLED=true — sub-agent investigator model.

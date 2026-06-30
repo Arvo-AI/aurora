@@ -108,6 +108,8 @@ x-common-env: &common-env
   SEARXNG_URL: ${SEARXNG_URL}
   RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
   ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-false}
+  # Infrastructure visualization feature: gates periodic + final LLM extraction during RCA. Off by default for cost.
+  VISUALIZATION_ENABLED: ${VISUALIZATION_ENABLED:-false}
   RCA_MODEL: ${RCA_MODEL}
   MAIN_MODEL: ${MAIN_MODEL}
   RCA_ORCHESTRATOR_MODEL: ${RCA_ORCHESTRATOR_MODEL}
