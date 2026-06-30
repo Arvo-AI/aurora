@@ -1,4 +1,12 @@
-import { createCIGetHandler, createCIPostHandler } from "@/lib/ci-api-handler";
+import { NextRequest } from "next/server";
+import { forwardRequest } from "@/lib/backend-proxy";
 
-export const GET = createCIGetHandler({ slug: "cloudbees", endpoint: "fleet/controllers", label: "CloudBees controller fleet" });
-export const POST = createCIPostHandler({ slug: "cloudbees", endpoint: "fleet/controllers", label: "add controllers to fleet" });
+const BACKEND_PATH = "/cloudbees/fleet/controllers";
+
+export async function GET(request: NextRequest) {
+  return forwardRequest(request, "GET", BACKEND_PATH, "CloudBees controller fleet");
+}
+
+export async function POST(request: NextRequest) {
+  return forwardRequest(request, "POST", BACKEND_PATH, "add controllers to fleet");
+}

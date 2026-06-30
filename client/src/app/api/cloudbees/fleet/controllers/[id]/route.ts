@@ -1,54 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getAuthenticatedUser } from "@/lib/auth-helper";
+import { NextRequest } from "next/server";
+import { forwardRequest } from "@/lib/backend-proxy";
 
-const API_BASE_URL = process.env.BACKEND_URL;
-
-// ---------------------------------------------------------------------------
-// DELETE /api/cloudbees/fleet/controllers/[id]
-// Removes a single controller from the user's standalone fleet.
-// ---------------------------------------------------------------------------
 export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const authResult = await getAuthenticatedUser();
-    if (authResult instanceof NextResponse) return authResult;
-
-    const { headers: authHeaders } = authResult;
-    const { id } = await context.params;
-
-    if (!API_BASE_URL) {
-      return NextResponse.json({ error: "BACKEND_URL is not configured" }, { status: 500 });
-    }
-
-    // Bound the backend call so a slow/hung Flask backend can't tie up the
-    // request indefinitely (matches fetchWithTimeout in ci-api-handler).
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    let response: Response;
-    try {
-      response = await fetch(
-        `${API_BASE_URL.replace(/\/$/, "")}/cloudbees/fleet/controllers/${encodeURIComponent(id)}`,
-        { method: "DELETE", headers: authHeaders, cache: "no-store", signal: controller.signal }
-      );
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!response.ok) {
-      await response.text();
-      console.error(`[api/cloudbees/fleet/controllers] Backend error: ${response.status}`);
-      return NextResponse.json(
-        { error: "Failed to remove controller" },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error("[api/cloudbees/fleet/controllers] Error:", error);
-    return NextResponse.json({ error: "Failed to remove controller" }, { status: 500 });
-  }
+  const { id } = await context.params;
+  return forwardRequest(
+    request,
+    "DELETE",
+    `/cloudbees/fleet/controllers/${encodeURIComponent(id)}`,
+    "remove fleet controller",
+  );
 }
