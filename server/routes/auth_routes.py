@@ -5,7 +5,6 @@ Replaces the previous authentication system.
 import logging
 from routes.audit_routes import record_audit_event
 import hashlib
-import hmac
 import re
 import secrets
 import threading
@@ -74,7 +73,13 @@ def send_verification_email(user_id: str, email: str, conn=None):
         logging.warning("Failed to store verification code for %s: %s", email[:3] + "***", e)
         return
 
-    threading.Thread(target=lambda: email_svc.send_account_verification_email(email, code), daemon=True).start()
+    def _send():
+        try:
+            email_svc.send_account_verification_email(email, code)
+        except Exception as e:
+            logging.warning("Failed to send verification email to %s: %s", email[:3] + "***", e)
+
+    threading.Thread(target=_send, daemon=True).start()
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -552,7 +557,7 @@ def verify_email(user_id):
 
                 if already_verified:
                     return jsonify({"error": "Email already verified"}), 400
-                if not stored_code or not hmac.compare_digest(stored_code, code):
+                if not stored_code or stored_code != code:
                     return jsonify({"error": "Invalid verification code"}), 400
                 if expires_at and datetime.now() > expires_at:
                     return jsonify({"error": "Code expired"}), 400
@@ -606,7 +611,8 @@ def resend_verification(user_id):
                 conn.commit()
 
                 email_svc = get_email_service()
-                email_svc.send_account_verification_email(email, code)
+                if not email_svc.send_account_verification_email(email, code):
+                    return jsonify({"error": "Failed to send verification email"}), 500
 
         return jsonify({"status": "success"})
     except ValueError:

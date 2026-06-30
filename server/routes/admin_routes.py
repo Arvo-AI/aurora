@@ -212,7 +212,6 @@ def create_user(user_id):
         logger.info("Admin %s created user %s (%s) with role '%s'", sanitize(user_id), sanitize(new_user_id), sanitize(email), sanitize(role))
         record_audit_event(org_id or "", user_id, "create_user", "user", new_user_id,
                            {"email": email, "role": role}, request)
-
         return jsonify({
             "id": row[0],
             "email": row[1],
