@@ -579,40 +579,23 @@ def verify_email(user_id):
 def resend_verification(user_id):
     """Resend email verification code."""
     try:
-        from utils.notifications.email_service import get_email_service
-
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT email, email_verified FROM users WHERE id = %s",
-                    (user_id,),
+                    "SELECT email, email_verified, email_verification_code_expires_at "
+                    "FROM users WHERE id = %s", (user_id,),
                 )
                 row = cursor.fetchone()
                 if not row:
                     return jsonify({"error": "User not found"}), 404
-
-                email, already_verified = row
-                if already_verified:
+                if row[1]:
                     return jsonify({"error": "Email already verified"}), 400
+                if row[2] and row[2] > datetime.now() + timedelta(minutes=14):
+                    return jsonify({"error": "Please wait before requesting a new code"}), 429
 
-                code = f"{secrets.randbelow(1000000):06d}"
-                code_hash = hashlib.sha256(code.encode()).hexdigest()
-                expires = datetime.now() + timedelta(minutes=15)
-                cursor.execute(
-                    "UPDATE users SET email_verification_code = %s, "
-                    "email_verification_code_expires_at = %s, "
-                    "email_verification_attempts = 0 WHERE id = %s",
-                    (code_hash, expires, user_id),
-                )
-                conn.commit()
-
-                email_svc = get_email_service()
-                if not email_svc.send_account_verification_email(email, code):
-                    return jsonify({"error": "Failed to send verification email"}), 500
-
+        if not send_verification_email(user_id, row[0]):
+            return jsonify({"error": "Failed to send verification email"}), 500
         return jsonify({"status": "success"})
-    except ValueError:
-        return jsonify({"error": "Email service not configured"}), 500
     except Exception:
         logging.exception("Error in /resend-verification")
         return jsonify({"error": "Server error"}), 500

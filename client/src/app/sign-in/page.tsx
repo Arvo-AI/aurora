@@ -169,6 +169,7 @@ function AuthPage() {
 
   const handleVerify = async () => {
     if (code.length !== 6) { setError("Please enter a valid 6-digit code"); return }
+    setError("")
     setIsLoading(true)
     try {
       const res = await fetch("/api/auth/verify-email", {
@@ -177,14 +178,7 @@ function AuthPage() {
         body: JSON.stringify({ code }),
       })
       const data = await res.json()
-      if (!res.ok) {
-        if (data.error === "Email already verified") {
-          setVerified(true)
-          const dest = sessionStorage.getItem("aurora_needs_onboarding") ? "/onboarding" : "/"
-          sessionStorage.removeItem("aurora_needs_onboarding")
-          setTimeout(() => router.push(dest), 800)
-          return
-        }
+      if (!res.ok && data.error !== "Email already verified") {
         setError(data.error || "Verification failed")
         return
       }
@@ -399,7 +393,7 @@ function AuthPage() {
                   </button>
                 </div>
                 <p className="text-center text-sm text-[#555]">
-                  <button onClick={() => { signOut({ redirect: false }); switchMode('signin') }} className="text-white/80 hover:text-white transition-colors inline-flex items-center gap-1.5">
+                  <button onClick={async () => { await signOut({ redirect: false }); switchMode('signin') }} className="text-white/80 hover:text-white transition-colors inline-flex items-center gap-1.5">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
                     Back
                   </button>
