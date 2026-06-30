@@ -21,6 +21,9 @@ _DUMMY_BCRYPT_HASH = bcrypt.hashpw(os.urandom(16), bcrypt.gensalt()).decode('utf
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
+VERIFICATION_CODE_EXPIRY_MINUTES = 15
+RESEND_COOLDOWN_MINUTES = 1
+
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
 ORG_NAME_REGEX = re.compile(r"^[\w\s\-\.,'&()]+$", re.UNICODE)
 ORG_NAME_ERROR = "Organization name can only contain letters, numbers, spaces, hyphens, periods, commas, apostrophes, ampersands, and parentheses"
@@ -53,7 +56,7 @@ def send_verification_email(user_id: str, email: str) -> bool:
 
     code = f"{secrets.randbelow(1000000):06d}"
     code_hash = hashlib.sha256(code.encode()).hexdigest()
-    expires = datetime.now() + timedelta(minutes=15)
+    expires = datetime.now() + timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES)
 
     with db_pool.get_admin_connection() as c:
         with c.cursor() as cur:
@@ -590,7 +593,7 @@ def resend_verification(user_id):
                     return jsonify({"error": "User not found"}), 404
                 if row[1]:
                     return jsonify({"error": "Email already verified"}), 400
-                if row[2] and row[2] > datetime.now() + timedelta(minutes=14):
+                if row[2] and row[2] > datetime.now() + timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES - RESEND_COOLDOWN_MINUTES):
                     return jsonify({"error": "Please wait before requesting a new code"}), 429
 
         if not send_verification_email(user_id, row[0]):
