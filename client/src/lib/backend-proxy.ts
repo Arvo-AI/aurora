@@ -76,6 +76,12 @@ function formatSuccessResponse(response: Response, errorLabel: string): Promise<
 async function errorResponseFromBackend(response: Response, errorLabel: string): Promise<NextResponse> {
   const text = await response.text();
   const ct = response.headers.get('content-type') || '';
+  if (ct.includes('text/html')) {
+    return NextResponse.json(
+      { error: `Unexpected HTML response from ${errorLabel}` },
+      { status: 502 },
+    );
+  }
   if (ct.includes('application/json')) {
     try {
       return NextResponse.json(JSON.parse(text), { status: response.status });
