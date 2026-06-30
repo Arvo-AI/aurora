@@ -169,7 +169,6 @@ function AuthPage() {
 
   const handleVerify = async () => {
     if (code.length !== 6) { setError("Please enter a valid 6-digit code"); return }
-    setError("")
     setIsLoading(true)
     try {
       const res = await fetch("/api/auth/verify-email", {
