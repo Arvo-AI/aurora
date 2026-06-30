@@ -126,6 +126,13 @@ export async function forwardRequest(
     }
 
     if (!response.ok) {
+      const ct = response.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        try {
+          const data = await response.json();
+          return NextResponse.json(data, { status: response.status });
+        } catch { /* fall through */ }
+      }
       const text = await response.text();
       return NextResponse.json(
         { error: text || `Failed to fetch ${errorLabel}` },
