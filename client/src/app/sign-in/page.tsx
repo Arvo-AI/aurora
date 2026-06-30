@@ -69,6 +69,7 @@ function AuthPage() {
   const [code, setCode] = useState("")
   const [resendCooldown, setResendCooldown] = useState(0)
   const [isResending, setIsResending] = useState(false)
+  const [verified, setVerified] = useState(false)
 
   // Change-password state
   const [currentPassword, setCurrentPassword] = useState("")
@@ -176,17 +177,19 @@ function AuthPage() {
       const data = await res.json()
       if (!res.ok) {
         if (data.error === "Email already verified") {
+          setVerified(true)
           const dest = sessionStorage.getItem("aurora_needs_onboarding") ? "/onboarding" : "/"
           sessionStorage.removeItem("aurora_needs_onboarding")
-          window.location.href = dest
+          setTimeout(() => router.push(dest), 800)
           return
         }
         setError(data.error || "Verification failed")
         return
       }
+      setVerified(true)
       const dest = sessionStorage.getItem("aurora_needs_onboarding") ? "/onboarding" : "/"
       sessionStorage.removeItem("aurora_needs_onboarding")
-      window.location.href = dest
+      setTimeout(() => router.push(dest), 800)
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
@@ -224,11 +227,8 @@ function AuthPage() {
       })
       const data = await response.json()
       if (!response.ok) { setError(data.error || "Failed to change password"); return }
-      await signIn("credentials", {
-        email: session?.user?.email,
-        password: newPassword,
-        callbackUrl: "/",
-      })
+      const result = await signIn("credentials", { email: session?.user?.email, password: newPassword, redirect: false })
+      if (result?.ok) switchMode("verify-email")
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
@@ -383,7 +383,7 @@ function AuthPage() {
                 <div className="space-y-4">
                   <div>
                     <label htmlFor="verify-code" className="block text-xs font-medium text-[#888] mb-1.5">Verification code</label>
-                    <input id="verify-code" type="text" inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} onKeyDown={(e) => e.key === "Enter" && handleVerify()} className="w-full px-3.5 py-2.5 rounded-lg border border-white/[0.12] bg-white/[0.03] text-white text-center text-2xl font-mono tracking-widest placeholder:text-[#555] focus:outline-none focus:ring-2 focus:ring-white/10 focus:border-white/20" placeholder="000000" disabled={isLoading} autoFocus />
+                    <input id="verify-code" type="text" inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} onKeyDown={(e) => e.key === "Enter" && handleVerify()} className={`w-full px-3.5 py-2.5 rounded-lg border text-center text-2xl font-mono tracking-widest placeholder:text-[#555] focus:outline-none focus:ring-2 transition-colors duration-300 ${verified ? 'border-green-500/40 bg-green-500/10 text-green-400 focus:ring-green-500/20' : 'border-white/[0.12] bg-white/[0.03] text-white focus:ring-white/10 focus:border-white/20'}`} placeholder="000000" disabled={isLoading || verified} autoFocus />
                   </div>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-[#555]">Code expires in 15 minutes</span>
@@ -392,7 +392,7 @@ function AuthPage() {
                     </button>
                   </div>
                   {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
-                  <button type="button" onClick={handleVerify} disabled={isLoading || code.length !== 6} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
+                  <button type="button" onClick={handleVerify} disabled={isLoading || code.length !== 6 || verified} className="w-full py-2.5 px-4 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-[#0a0a0a] disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200">
                     {isLoading ? <span className="flex items-center justify-center gap-2"><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>Verifying...</span> : "Verify"}
                   </button>
                 </div>

@@ -52,18 +52,21 @@ def send_verification_email(user_id: str, email: str) -> bool:
         return True
 
     code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
     expires = datetime.now() + timedelta(minutes=15)
 
     with db_pool.get_admin_connection() as c:
         with c.cursor() as cur:
             cur.execute(
                 "UPDATE users SET email_verification_code = %s, "
-                "email_verification_code_expires_at = %s WHERE id = %s",
-                (code, expires, user_id),
+                "email_verification_code_expires_at = %s, email_verification_attempts = 0 "
+                "WHERE id = %s",
+                (code_hash, expires, user_id),
             )
             c.commit()
 
     return email_svc.send_account_verification_email(email, code)
+
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -529,7 +532,8 @@ def verify_email(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT email_verification_code, email_verification_code_expires_at, email_verified "
+                    "SELECT email_verification_code, email_verification_code_expires_at, "
+                    "email_verified, email_verification_attempts "
                     "FROM users WHERE id = %s",
                     (user_id,),
                 )
@@ -537,19 +541,29 @@ def verify_email(user_id):
                 if not row:
                     return jsonify({"error": "User not found"}), 404
 
-                stored_code, expires_at, already_verified = row
+                stored_code, expires_at, already_verified, attempts = row
 
                 if already_verified:
                     return jsonify({"error": "Email already verified"}), 400
-                if not stored_code or stored_code != code:
-                    return jsonify({"error": "Invalid verification code"}), 400
+                if (attempts or 0) >= 5:
+                    return jsonify({"error": "Too many attempts. Please resend a new code."}), 429
                 if expires_at and datetime.now() > expires_at:
                     return jsonify({"error": "Code expired"}), 400
 
+                code_hash = hashlib.sha256(code.encode()).hexdigest()
+                if not stored_code or stored_code != code_hash:
+                    cursor.execute(
+                        "UPDATE users SET email_verification_attempts = "
+                        "COALESCE(email_verification_attempts, 0) + 1 WHERE id = %s",
+                        (user_id,),
+                    )
+                    conn.commit()
+                    return jsonify({"error": "Invalid verification code"}), 400
+
                 cursor.execute(
                     "UPDATE users SET email_verified = TRUE, "
-                    "email_verification_code = NULL, email_verification_code_expires_at = NULL "
-                    "WHERE id = %s",
+                    "email_verification_code = NULL, email_verification_code_expires_at = NULL, "
+                    "email_verification_attempts = 0 WHERE id = %s",
                     (user_id,),
                 )
                 conn.commit()
@@ -582,11 +596,13 @@ def resend_verification(user_id):
                     return jsonify({"error": "Email already verified"}), 400
 
                 code = f"{secrets.randbelow(1000000):06d}"
+                code_hash = hashlib.sha256(code.encode()).hexdigest()
                 expires = datetime.now() + timedelta(minutes=15)
                 cursor.execute(
                     "UPDATE users SET email_verification_code = %s, "
-                    "email_verification_code_expires_at = %s WHERE id = %s",
-                    (code, expires, user_id),
+                    "email_verification_code_expires_at = %s, "
+                    "email_verification_attempts = 0 WHERE id = %s",
+                    (code_hash, expires, user_id),
                 )
                 conn.commit()
 

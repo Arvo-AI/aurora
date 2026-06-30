@@ -3033,8 +3033,10 @@ def initialize_tables():
 
                 cursor.execute("""
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
-                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code VARCHAR(6);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code VARCHAR(64);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_code_expires_at TIMESTAMP;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_attempts INTEGER DEFAULT 0;
+                    ALTER TABLE users ALTER COLUMN email_verification_code TYPE VARCHAR(64);
                 """)
 
                 if not column_existed:
