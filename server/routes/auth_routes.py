@@ -23,6 +23,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 VERIFICATION_CODE_EXPIRY_MINUTES = 15
 RESEND_COOLDOWN_MINUTES = 1
+_SERVER_ERROR = "Server error"
 
 SLUG_REGEX = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
 ORG_NAME_REGEX = re.compile(r"^[\w\s\-\.,'&()]+$", re.UNICODE)
@@ -518,7 +519,7 @@ def get_current_user(user_id):
                 }), 200
     except Exception:
         logging.exception("Error in /me")
-        return jsonify({"error": "Server error"}), 500
+        return jsonify({"error": _SERVER_ERROR}), 500
 
 
 @auth_bp.route('/verify-email', methods=['POST'])
@@ -574,7 +575,7 @@ def verify_email(user_id):
         return jsonify({"status": "success"})
     except Exception:
         logging.exception("Error in /verify-email")
-        return jsonify({"error": "Server error"}), 500
+        return jsonify({"error": _SERVER_ERROR}), 500
 
 
 @auth_bp.route('/resend-verification', methods=['POST'])
@@ -603,7 +604,7 @@ def resend_verification(user_id):
         return jsonify({"status": "success"})
     except Exception:
         logging.exception("Error in /resend-verification")
-        return jsonify({"error": "Server error"}), 500
+        return jsonify({"error": _SERVER_ERROR}), 500
 
 
 @auth_bp.route('/admins', methods=['GET'])

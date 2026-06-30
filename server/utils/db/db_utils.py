@@ -3045,8 +3045,8 @@ def initialize_tables():
                 conn.commit()
                 logging.info("Ensured email verification columns exist on users table.")
             except Exception as e:
-                logging.warning("Error adding email verification columns to users: %s", e)
                 conn.rollback()
+                raise RuntimeError("Required email verification migration failed") from e
 
             # Create k8s_clusters view (after org_id migration so the column exists)
             # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view

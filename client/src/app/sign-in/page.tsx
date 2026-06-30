@@ -96,9 +96,10 @@ function AuthPage() {
     setError("")
     setFormVisible(false)
     setTaglineVisible(false)
-    const url = new URL(window.location.href)
-    newMode === "signin" ? url.searchParams.delete("mode") : url.searchParams.set("mode", newMode)
-    window.history.replaceState(null, "", url.toString())
+    const url = new URL(globalThis.location.href)
+    if (newMode === "signin") url.searchParams.delete("mode")
+    else url.searchParams.set("mode", newMode)
+    globalThis.history.replaceState(null, "", url.toString())
     setTimeout(() => {
       setMode(newMode)
       setTimeout(() => {
@@ -232,6 +233,9 @@ function AuthPage() {
   }
 
   const tagline = taglines[mode]
+  let resendLabel = "Resend code"
+  if (isResending) resendLabel = "Resending..."
+  else if (resendCooldown > 0) resendLabel = `Resend in ${resendCooldown}s`
 
   return (
     <div className="flex h-screen bg-[#0a0a0a] relative overflow-hidden">
@@ -383,7 +387,7 @@ function AuthPage() {
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-[#555]">Code expires in 15 minutes</span>
                     <button type="button" onClick={handleResend} disabled={isResending || resendCooldown > 0} className="text-white/60 hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors">
-                      {isResending ? "Resending..." : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend code"}
+                      {resendLabel}
                     </button>
                   </div>
                   {error && !verified && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"><p className="text-sm text-red-400">{error}</p></div>}
