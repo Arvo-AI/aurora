@@ -818,17 +818,20 @@ def run_background_chat(
             
             # Generate final complete visualization
             try:
-                tool_calls = result.get('tool_calls', [])
-                logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
-                
-                update_visualization.apply_async(kwargs={
-                    'incident_id': incident_id,
-                    'user_id': user_id,
-                    'session_id': session_id,
-                    'force_full': True,
-                    'tool_calls_json': json.dumps(tool_calls) if tool_calls else None
-                })
-                logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
+                if os.getenv("VISUALIZATION_ENABLED", "false").lower() != "true":
+                    logger.info(f"[BackgroundChat] Visualization disabled; skipping final visualization for incident {incident_id}")
+                else:
+                    tool_calls = result.get('tool_calls', [])
+                    logger.info(f"[BackgroundChat] Using {len(tool_calls)} tool calls from result for final visualization")
+
+                    update_visualization.apply_async(kwargs={
+                        'incident_id': incident_id,
+                        'user_id': user_id,
+                        'session_id': session_id,
+                        'force_full': True,
+                        'tool_calls_json': json.dumps(tool_calls) if tool_calls else None
+                    })
+                    logger.info(f"[BackgroundChat] Queued final visualization for incident {incident_id}")
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to generate final visualization: {e}")
         
