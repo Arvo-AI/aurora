@@ -7,7 +7,6 @@ from routes.audit_routes import record_audit_event
 import hashlib
 import re
 import secrets
-import threading
 from datetime import datetime, timedelta
 import bcrypt
 from flask import Blueprint, request, jsonify
@@ -33,12 +32,13 @@ def _name_to_slug(name: str) -> str:
     return slug
 
 
-def send_verification_email(user_id: str, email: str, conn=None):
+def send_verification_email(user_id: str, email: str) -> bool:
     """Generate a verification code, store it, and email it to the user.
 
     If SMTP is not configured (ValueError from email service), auto-verifies
-    the user so they aren't locked out. The SMTP send is dispatched in a
-    background thread so callers are not blocked on network I/O.
+    the user so they aren't locked out.
+
+    Returns True if the email was sent (or user was auto-verified), False on failure.
     """
     from utils.notifications.email_service import get_email_service
 
@@ -49,12 +49,12 @@ def send_verification_email(user_id: str, email: str, conn=None):
             with c.cursor() as cur:
                 cur.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
                 c.commit()
-        return
+        return True
 
     code = f"{secrets.randbelow(1000000):06d}"
     expires = datetime.now() + timedelta(minutes=15)
 
-    def _store_code(c):
+    with db_pool.get_admin_connection() as c:
         with c.cursor() as cur:
             cur.execute(
                 "UPDATE users SET email_verification_code = %s, "
@@ -63,23 +63,7 @@ def send_verification_email(user_id: str, email: str, conn=None):
             )
             c.commit()
 
-    try:
-        if conn:
-            _store_code(conn)
-        else:
-            with db_pool.get_admin_connection() as c:
-                _store_code(c)
-    except Exception as e:
-        logging.warning("Failed to store verification code for %s: %s", email[:3] + "***", e)
-        return
-
-    def _send():
-        try:
-            email_svc.send_account_verification_email(email, code)
-        except Exception as e:
-            logging.warning("Failed to send verification email to %s: %s", email[:3] + "***", e)
-
-    threading.Thread(target=_send, daemon=True).start()
+    return email_svc.send_account_verification_email(email, code)
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -207,7 +191,7 @@ def register():
                 record_audit_event(org_id, user_id, "register", "organization", org_id,
                                    {"email": email}, request)
 
-                send_verification_email(user_id, email, conn)
+                send_verification_email(user_id, email)
 
                 return jsonify({
                     "id": user_id,
@@ -586,20 +570,16 @@ def resend_verification(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT email, email_verified, email_verification_code_expires_at "
-                    "FROM users WHERE id = %s",
+                    "SELECT email, email_verified FROM users WHERE id = %s",
                     (user_id,),
                 )
                 row = cursor.fetchone()
                 if not row:
                     return jsonify({"error": "User not found"}), 404
 
-                email, already_verified, last_expires = row
+                email, already_verified = row
                 if already_verified:
                     return jsonify({"error": "Email already verified"}), 400
-
-                if last_expires and datetime.now() < last_expires - timedelta(minutes=14, seconds=30):
-                    return jsonify({"error": "Please wait before requesting a new code"}), 429
 
                 code = f"{secrets.randbelow(1000000):06d}"
                 expires = datetime.now() + timedelta(minutes=15)
