@@ -213,9 +213,6 @@ def create_user(user_id):
         record_audit_event(org_id or "", user_id, "create_user", "user", new_user_id,
                            {"email": email, "role": role}, request)
 
-        from routes.auth_routes import send_verification_email
-        send_verification_email(new_user_id, email)
-
         return jsonify({
             "id": row[0],
             "email": row[1],

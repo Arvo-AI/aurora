@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import re
 import secrets
+import threading
 from datetime import datetime, timedelta
 import bcrypt
 from flask import Blueprint, request, jsonify
@@ -37,15 +38,24 @@ def send_verification_email(user_id: str, email: str, conn=None):
     """Generate a verification code, store it, and email it to the user.
 
     If SMTP is not configured (ValueError from email service), auto-verifies
-    the user so they aren't locked out. Callers should already have committed
-    the user row before calling this.
+    the user so they aren't locked out. The SMTP send is dispatched in a
+    background thread so callers are not blocked on network I/O.
     """
     from utils.notifications.email_service import get_email_service
 
-    def _do_send(c):
+    try:
         email_svc = get_email_service()
-        code = f"{secrets.randbelow(1000000):06d}"
-        expires = datetime.now() + timedelta(minutes=15)
+    except ValueError:
+        with db_pool.get_admin_connection() as c:
+            with c.cursor() as cur:
+                cur.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
+                c.commit()
+        return
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    expires = datetime.now() + timedelta(minutes=15)
+
+    def _store_code(c):
         with c.cursor() as cur:
             cur.execute(
                 "UPDATE users SET email_verification_code = %s, "
@@ -53,21 +63,18 @@ def send_verification_email(user_id: str, email: str, conn=None):
                 (code, expires, user_id),
             )
             c.commit()
-        email_svc.send_account_verification_email(email, code)
 
     try:
         if conn:
-            _do_send(conn)
+            _store_code(conn)
         else:
             with db_pool.get_admin_connection() as c:
-                _do_send(c)
-    except ValueError:
-        with db_pool.get_admin_connection() as c:
-            with c.cursor() as cur:
-                cur.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
-                c.commit()
+                _store_code(c)
     except Exception as e:
-        logging.warning("Failed to send verification email to %s: %s", email[:3] + "***", e)
+        logging.warning("Failed to store verification code for %s: %s", email[:3] + "***", e)
+        return
+
+    threading.Thread(target=lambda: email_svc.send_account_verification_email(email, code), daemon=True).start()
 
 @auth_bp.after_request
 def add_cors_headers(response):
@@ -439,7 +446,7 @@ def change_password(user_id):
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
                 cursor.execute(
-                    "SELECT password_hash FROM users WHERE id = %s",
+                    "SELECT password_hash, email, COALESCE(must_change_password, FALSE), COALESCE(email_verified, FALSE) FROM users WHERE id = %s",
                     (user_id,)
                 )
                 result = cursor.fetchone()
@@ -447,7 +454,7 @@ def change_password(user_id):
                 if not result:
                     return jsonify({"error": "User not found"}), 404
                 
-                password_hash = result[0]
+                password_hash, user_email, was_must_change, was_verified = result
                 
                 from utils.auth.stateless_auth import resolve_org_id
                 org_id = resolve_org_id(user_id) or ""
@@ -471,6 +478,9 @@ def change_password(user_id):
                 logging.info(f"Password changed for user: {user_id}")
 
                 record_audit_event(org_id, user_id, "change_password", "user", user_id, {}, request)
+
+                if was_must_change and not was_verified:
+                    send_verification_email(user_id, user_email)
 
                 return jsonify({"message": "Password changed successfully"}), 200
         finally:
