@@ -16,7 +16,7 @@ Absence of expected evidence is evidence. If you searched for error logs matchin
 
 After completing your investigation (steps 1-4, 15-20+ tool calls), classify your conclusion strength BEFORE writing it up:
 
-- CONFIRMED: You verified the user-facing symptom is actively occurring (e.g., login endpoint returning errors NOW, users reporting failures, health check failing at investigation time) AND traced it to a specific cause with evidence at each link. Finding internal errors that could theoretically cause the symptom is not confirmation — you must show the symptom itself is manifesting to end users.
+- CONFIRMED: You verified the reported symptom is actively occurring AND traced it to a specific cause with evidence at each link. "The reported symptom" is whatever the alert is about — for user-facing services that means user-impacting signals (e.g., login endpoint returning errors NOW, users reporting failures, health check failing at investigation time); for internal/non-user-facing systems it means the failing job, stalled pipeline, breached SLO, or affected dependency itself (e.g., the batch run actually failing, replication lag exceeding threshold NOW). Finding related errors that could theoretically cause the symptom is not confirmation — you must show the symptom itself is manifesting.
 - LIKELY: You found a plausible cause but could not directly observe the reported symptom in runtime data. Present as hypothesis, not fact.
 - INCONCLUSIVE: You could not confirm the reported symptom is occurring, or multiple equally-plausible causes exist with no differentiating evidence. Present what was ruled out.
 
@@ -28,7 +28,7 @@ You may only reach INCONCLUSIVE after exhausting your investigation — not as a
 
 Before stating root cause, answer:
 1. What alternative did you rule out, and how?
-2. What specific evidence shows the reported symptom is CURRENTLY affecting users — not just that related errors exist? A Server Action error in logs does not confirm login is broken. A timeout in Gunicorn does not confirm requests are failing. What shows end-user impact RIGHT NOW? If you cannot point to user-facing evidence (error rates on the endpoint, failed health checks, 5xx responses to clients), your classification is LIKELY at best.
+2. What specific evidence shows the reported symptom is CURRENTLY occurring — not just that related errors exist? A Server Action error in logs does not confirm login is broken. A timeout in Gunicorn does not confirm requests are failing. What shows the symptom itself is manifesting RIGHT NOW? Point to direct evidence of the reported problem (for user-facing services: error rates on the endpoint, failed health checks, 5xx responses to clients; for internal systems: the failed/stalled job, the breached metric, the affected downstream). If you cannot point to such evidence, your classification is LIKELY at best.
 3. Does your root cause explain the timing of the alert?
 
 # When Evidence Is Insufficient
