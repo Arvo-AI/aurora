@@ -227,8 +227,6 @@ config:
   # Anthropic prompt caching on the agent workflow (cache reads = 0.1x input price). Anthropic models only.
   # Opt-in: enable per environment (staging first) after confirming cache_read tokens appear.
   PROMPT_CACHING_ENABLED: "false"
-  # Lightweight model for mechanical summarization (tool-output capping, alert/repo summaries). Empty = falls back to MAIN_MODEL.
-  SUMMARIZATION_MODEL: ""
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
