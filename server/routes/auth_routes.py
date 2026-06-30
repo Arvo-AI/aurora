@@ -594,8 +594,8 @@ def resend_verification(user_id):
                 if row[1]:
                     return jsonify({"error": "Email already verified"}), 400
                 if row[2]:
-                    issued_at = row[2] - timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES)
-                    if issued_at + timedelta(minutes=RESEND_COOLDOWN_MINUTES) > datetime.now():
+                    earliest_resend = row[2] - timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES - RESEND_COOLDOWN_MINUTES)
+                    if datetime.now() < earliest_resend:
                         return jsonify({"error": "Please wait before requesting a new code"}), 429
 
         if not send_verification_email(user_id, row[0]):
