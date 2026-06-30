@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Check, Trash2 } from "lucide-react";
+import { Copy, Check, Trash2, Plus } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
@@ -22,6 +22,7 @@ interface ConnectedDashboardProps {
   controllers: DiscoveredController[];
   isFleetMode?: boolean;
   onRemoveController?: (controllerId: string) => void;
+  onAddControllers?: (controllers: { name: string; url: string; username: string; token: string }[]) => void;
   rcaEnabled: boolean;
   rcaLoading: boolean;
   loading: boolean;
@@ -45,12 +46,17 @@ function timeAgo(dateStr: string | null | undefined): string {
 
 export function ConnectedDashboard({
   status, summary, webhookInfo, deployments, controllers,
-  isFleetMode = false, onRemoveController,
+  isFleetMode = false, onRemoveController, onAddControllers,
   rcaEnabled, rcaLoading, loading,
   onDisconnect, onRcaToggle,
 }: Readonly<ConnectedDashboardProps>) {
   const { toast } = useToast();
   const [webhookCopied, setWebhookCopied] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addUrl, setAddUrl] = useState("");
+  const [addUsername, setAddUsername] = useState("");
+  const [addToken, setAddToken] = useState("");
 
   const copyWebhookUrl = () => {
     if (!webhookInfo?.webhookUrl) return;
@@ -203,11 +209,93 @@ export function ConnectedDashboard({
       )}
 
       {/* Controllers — OC-managed (read-only) or fleet (removable) */}
-      {controllers.length > 0 && (
+      {(controllers.length > 0 || isFleetMode) && (
         <div className="mt-8 pt-6 border-t border-white/[0.04]">
-          <p className="text-[11px] uppercase tracking-[0.12em] text-[#555] mb-4">
-            {isFleetMode ? "Controllers" : "Managed Controllers"}
-          </p>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-[11px] uppercase tracking-[0.12em] text-[#555]">
+              {isFleetMode ? "Controllers" : "Managed Controllers"}
+            </p>
+            {isFleetMode && onAddControllers && !showAddForm && (
+              <button
+                type="button"
+                onClick={() => setShowAddForm(true)}
+                className="flex items-center gap-1.5 text-[12px] text-[#777] hover:text-white transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add controller
+              </button>
+            )}
+          </div>
+
+          {/* Inline add controller form */}
+          {isFleetMode && showAddForm && onAddControllers && (
+            <div className="mb-4 p-4 rounded-xl border border-white/[0.08] bg-white/[0.02] space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  placeholder="Name (optional)"
+                  disabled={loading}
+                  className="px-3 py-2.5 rounded-lg border border-white/[0.08] bg-white/[0.02] text-[13px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+                />
+                <input
+                  type="text"
+                  value={addUrl}
+                  onChange={(e) => setAddUrl(e.target.value)}
+                  placeholder="https://controller.example.com"
+                  disabled={loading}
+                  className="px-3 py-2.5 rounded-lg border border-white/[0.08] bg-white/[0.02] text-[13px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+                />
+                <input
+                  type="text"
+                  value={addUsername}
+                  onChange={(e) => setAddUsername(e.target.value)}
+                  placeholder="Username"
+                  disabled={loading}
+                  className="px-3 py-2.5 rounded-lg border border-white/[0.08] bg-white/[0.02] text-[13px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+                />
+                <input
+                  type="password"
+                  value={addToken}
+                  onChange={(e) => setAddToken(e.target.value)}
+                  placeholder="API token"
+                  disabled={loading}
+                  className="px-3 py-2.5 rounded-lg border border-white/[0.08] bg-white/[0.02] text-[13px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = addUrl.trim();
+                    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                      toast({ title: "Invalid URL", description: "URL must start with http:// or https://", variant: "destructive" });
+                      return;
+                    }
+                    if (!addUsername.trim() || !addToken) {
+                      toast({ title: "Missing fields", description: "Username and token are required", variant: "destructive" });
+                      return;
+                    }
+                    onAddControllers([{ name: addName.trim() || url, url, username: addUsername.trim(), token: addToken }]);
+                    setAddName(""); setAddUrl(""); setAddUsername(""); setAddToken("");
+                    setShowAddForm(false);
+                  }}
+                  disabled={loading || !addUrl.trim() || !addUsername.trim() || !addToken}
+                  className="px-4 py-2 rounded-lg bg-white text-black text-[13px] font-medium hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowAddForm(false); setAddName(""); setAddUrl(""); setAddUsername(""); setAddToken(""); }}
+                  className="px-4 py-2 text-[13px] text-[#777] hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-1">
             {controllers.map((ctrl) => (
               <div key={ctrl.id ?? ctrl.url} className="flex items-center justify-between py-3 px-4 rounded-xl bg-white/[0.02]">

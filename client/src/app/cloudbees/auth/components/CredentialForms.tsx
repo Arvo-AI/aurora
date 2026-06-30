@@ -3,7 +3,7 @@
 import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-type ConnectionMode = "oc" | "single" | "fleet" | "pat";
+type ConnectionMode = "oc" | "fleet" | "pat";
 
 export interface FleetControllerInput {
   name: string;
@@ -25,13 +25,6 @@ interface CredentialFormsProps {
   setOcApiToken: (v: string) => void;
   rolloutToken: string;
   setRolloutToken: (v: string) => void;
-  // Single controller fields
-  baseUrl: string;
-  setBaseUrl: (v: string) => void;
-  username: string;
-  setUsername: (v: string) => void;
-  apiToken: string;
-  setApiToken: (v: string) => void;
   // PAT fields
   platformUrl: string;
   setPlatformUrl: (v: string) => void;
@@ -39,7 +32,6 @@ interface CredentialFormsProps {
   setPat: (v: string) => void;
   // Actions
   onOCConnect: (e: React.FormEvent<HTMLFormElement>) => void;
-  onSingleConnect: (e: React.FormEvent<HTMLFormElement>) => void;
   onPATConnect: (e: React.FormEvent<HTMLFormElement>) => void;
   onFleetConnect: (controllers: FleetControllerInput[]) => void;
   onBack: () => void;
@@ -49,13 +41,11 @@ export function CredentialForms({
   mode, loading, urlError,
   ocUrl, setOcUrl, ocUsername, setOcUsername, ocApiToken, setOcApiToken,
   rolloutToken, setRolloutToken,
-  baseUrl, setBaseUrl, username, setUsername, apiToken, setApiToken,
   platformUrl, setPlatformUrl, pat, setPat,
-  onOCConnect, onSingleConnect, onPATConnect, onFleetConnect, onBack,
+  onOCConnect, onPATConnect, onFleetConnect, onBack,
 }: Readonly<CredentialFormsProps>) {
   const [showOcToken, setShowOcToken] = useState(false);
   const [showRolloutToken, setShowRolloutToken] = useState(false);
-  const [showToken, setShowToken] = useState(false);
   const [showPat, setShowPat] = useState(false);
 
   // Fleet (multiple standalone controllers) state
@@ -257,51 +247,12 @@ export function CredentialForms({
         </>
       )}
 
-      {mode === "single" && (
-        <>
-          <h1 className="text-[28px] font-bold tracking-tight mb-3">Connect your controller</h1>
-          <p className="text-[15px] text-[#777] mb-10">Enter your CloudBees CI instance details.</p>
-
-          {urlError && <p className="text-[13px] text-red-500 mb-4">{urlError}</p>}
-
-          <form onSubmit={onSingleConnect} className="space-y-6">
-            <div>
-              <label htmlFor="sc-url" className="block text-[13px] text-[#999] mb-2">Controller URL</label>
-              <input id="sc-url" type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://cloudbees.example.com" required disabled={loading} className="w-full px-4 py-3.5 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[15px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50" />
-            </div>
-            <div>
-              <label htmlFor="sc-username" className="block text-[13px] text-[#999] mb-2">Username</label>
-              <input id="sc-username" type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="your-cloudbees-username" required disabled={loading} className="w-full px-4 py-3.5 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[15px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50" />
-            </div>
-            <div>
-              <label htmlFor="sc-token" className="block text-[13px] text-[#999] mb-2">API Token</label>
-              <div className="relative">
-                <input id="sc-token" type={showToken ? "text" : "password"} value={apiToken} onChange={(e) => setApiToken(e.target.value)} placeholder="11xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" required disabled={loading} className="w-full px-4 py-3.5 pr-11 rounded-xl border border-white/[0.08] bg-white/[0.02] text-[15px] placeholder:text-[#333] focus:outline-none focus:border-white/[0.16] transition-colors disabled:opacity-50" />
-                <button type="button" onClick={() => setShowToken(!showToken)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition-colors" aria-label={showToken ? "Hide token" : "Show token"}>
-                  {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              <p className="text-[11px] text-[#444] mt-2">Your profile &rarr; Security &rarr; API Token &rarr; Generate</p>
-            </div>
-
-            <div className="flex items-center gap-3 pt-4">
-              <button type="button" onClick={onBack} className="text-[15px] text-[#777] hover:text-white transition-colors px-4 py-3">Back</button>
-              <button type="submit" disabled={loading || !baseUrl || !username || !apiToken} className="flex-1 py-3.5 rounded-xl bg-white text-black font-medium text-[15px] hover:bg-white/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {loading ? "Connecting..." : "Connect"}
-              </button>
-            </div>
-          </form>
-        </>
-      )}
-
       {mode === "fleet" && (
         <>
-          <h1 className="text-[28px] font-bold tracking-tight mb-3">Add your controllers</h1>
+          <h1 className="text-[28px] font-bold tracking-tight mb-3">Connect your controller(s)</h1>
           <p className="text-[15px] text-[#777] mb-10">
-            Add each standalone controller with its own URL, username, and API token. We&apos;ll
-            validate each one as you connect — unreachable controllers are still saved and marked
-            offline so the rest of the fleet stays usable.
+            Add one or more controllers — each with its own URL, username, and API token. You can
+            always add more after connecting. Unreachable controllers are saved and marked offline.
           </p>
 
           {fcError && <p className="text-[13px] text-red-500 mb-4">{fcError}</p>}
