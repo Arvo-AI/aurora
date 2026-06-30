@@ -34,6 +34,13 @@ _RECENT_OUTPUT_CHARS = 600
 _OLDER_OUTPUT_CHARS = 200
 _CODE_OUTPUT_CHARS = 2000
 
+# Reasoning budget for the hypothesis-extraction LLM call. Sized above the
+# upstream incident_thoughts cap (_REASONING_MAX_TOTAL_CHARS = 8k in
+# summarization.py) so the extractor sees everything it is handed instead of
+# re-truncating to a tail slice — a root cause established early in a long
+# investigation must still reach the ledger the recommender treats as authoritative.
+_HYPOTHESIS_REASONING_CHARS = 16_000
+
 _CODE_TOOLS = frozenset({
     "GitHub RCA", "MCP: Get Commit",
     "MCP: List Commits", "MCP: List Pull Requests",
@@ -245,8 +252,19 @@ def _extract_hypotheses(agent_reasoning: str) -> InvestigationState:
     if not agent_reasoning or len(agent_reasoning.strip()) < 100:
         return InvestigationState()
 
-    # Truncate reasoning for extraction (use less budget than full recommender)
-    reasoning_input = agent_reasoning[-4000:] if len(agent_reasoning) > 4000 else agent_reasoning
+    # If reasoning exceeds the budget, keep BOTH ends: hypothesis formation and
+    # ruled-out evidence land early, the confirmed root cause lands late. A
+    # tail-only slice silently dropped the early half.
+    if len(agent_reasoning) > _HYPOTHESIS_REASONING_CHARS:
+        head = _HYPOTHESIS_REASONING_CHARS // 2
+        tail = _HYPOTHESIS_REASONING_CHARS - head
+        reasoning_input = (
+            agent_reasoning[:head]
+            + "\n\n...[middle of reasoning truncated]...\n\n"
+            + agent_reasoning[-tail:]
+        )
+    else:
+        reasoning_input = agent_reasoning
 
     prompt = f"""Extract the hypothesis state from this investigation reasoning. Return JSON only.
 

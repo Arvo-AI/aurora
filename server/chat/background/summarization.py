@@ -434,7 +434,11 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
         return None
 
 
-_REASONING_MAX_TOTAL_CHARS = 8000
+# Budget for agent reasoning (incident_thoughts) fed into the summary prompt and
+# the recommender's hypothesis extractor. Both run on a 200k-context model, so
+# the old 8k tail cap needlessly dropped early reasoning (hypothesis formation,
+# ruled-out evidence). When over budget we keep BOTH ends rather than tail-only.
+_REASONING_MAX_TOTAL_CHARS = 24000
 
 
 def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
@@ -475,10 +479,14 @@ def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
 
     text = "\n\n".join(r[0] for r in rows if r and r[0])
     if len(text) > _REASONING_MAX_TOTAL_CHARS:
-        # Keep the most recent reasoning — that's where the synthesis lands.
+        # Keep BOTH ends: early reasoning holds hypothesis formation and
+        # ruled-out evidence, the tail holds the synthesis/confirmed root cause.
+        head = _REASONING_MAX_TOTAL_CHARS // 2
+        tail = _REASONING_MAX_TOTAL_CHARS - head
         text = (
-            "...[earlier reasoning truncated to fit prompt budget]\n\n"
-            + text[-_REASONING_MAX_TOTAL_CHARS:]
+            text[:head]
+            + "\n\n...[middle of reasoning truncated to fit prompt budget]...\n\n"
+            + text[-tail:]
         )
     return text
 
