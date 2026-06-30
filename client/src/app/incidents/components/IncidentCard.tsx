@@ -107,6 +107,9 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
+// Visualization disabled for cost (re-enable: set true / VISUALIZATION_ENABLED env). See cost-optimization design doc.
+const VISUALIZATION_ENABLED = false;
+
 export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
@@ -674,7 +677,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           )
         )}
           
-          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
+          {VISUALIZATION_ENABLED && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
             <button
               onClick={() => setShowVisualization(!showVisualization)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
@@ -871,7 +874,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       />
 
       {/* Infrastructure Visualization */}
-      {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
+      {VISUALIZATION_ENABLED && showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
         <>
           <div className="border-t border-zinc-800" />
           <div>
