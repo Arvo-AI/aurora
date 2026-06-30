@@ -54,10 +54,8 @@ from chat.background.citation_extractor import (
     CitationExtractor,
     save_incident_citations,
 )
-from chat.background.suggestion_extractor import (
-    SuggestionExtractor,
-    save_incident_suggestions,
-)
+from chat.background.recommender import generate_recommendations
+from chat.background.suggestion_extractor import save_incident_suggestions
 
 logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
@@ -302,7 +300,7 @@ WRITING RULES:
 - Never describe investigation process or tool failures ("Investigation revealed...", "Attempts to query...", "The investigation was unable...").
 - Tone: professional, factual, incident-record style. Calibrated certainty: state facts where supported, state uncertainty where not.
 
-After the report, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions (specific logs/metrics/configs/components). When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
+After the report, add a "## Ruled Out" section as a bullet list — each bullet is a hypothesis that was eliminated, with the evidence that killed it after an em dash. Do NOT use a markdown table. Finally add a "## Not Checked" section as a bullet list — each bullet is an area not examined and why (no symptoms pointed there, tool access unavailable, etc.).
 {fix_suggestions_block}"""
     else:
         # Transcript fallback — same anti-hallucination contract.
@@ -336,9 +334,17 @@ ANTI-HALLUCINATION RULES (non-negotiable):
 
 Tone: neutral, factual, incident-record style. Descriptive, not advisory. Do not address any audience.
 
-After the summary, add a "## Suggested Next Steps" paragraph with 2-4 concrete diagnostic actions. When the root cause is undetermined, these MUST be the precise checks an engineer would run to determine it — not generic advice.
+After the summary, add these sections:
+
+## Ruled Out
+List hypotheses that were investigated and eliminated, with the evidence that ruled them out.
+
+## Not Checked
+List paths that were not investigated and briefly explain why (e.g., access denied, out of scope, insufficient data).
 {fix_suggestions_block}"""
     return prompt
+
+
 
 
 def _fetch_fix_suggestions(incident_id: str, _retries: int = 2) -> List[Dict[str, Any]]:
@@ -428,7 +434,11 @@ def _fetch_incident_basics(incident_id: str, user_id: str) -> Optional[Dict[str,
         return None
 
 
-_REASONING_MAX_TOTAL_CHARS = 8000
+# Budget for agent reasoning (incident_thoughts) fed into the summary prompt and
+# the recommender's hypothesis extractor. Both run on a 200k-context model, so
+# the old 8k tail cap needlessly dropped early reasoning (hypothesis formation,
+# ruled-out evidence). When over budget we keep BOTH ends rather than tail-only.
+_REASONING_MAX_TOTAL_CHARS = 24000
 
 
 def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
@@ -469,10 +479,14 @@ def _fetch_agent_reasoning(user_id: str, incident_id: str) -> str:
 
     text = "\n\n".join(r[0] for r in rows if r and r[0])
     if len(text) > _REASONING_MAX_TOTAL_CHARS:
-        # Keep the most recent reasoning — that's where the synthesis lands.
+        # Keep BOTH ends: early reasoning holds hypothesis formation and
+        # ruled-out evidence, the tail holds the synthesis/confirmed root cause.
+        head = _REASONING_MAX_TOTAL_CHARS // 2
+        tail = _REASONING_MAX_TOTAL_CHARS - head
         text = (
-            "...[earlier reasoning truncated to fit prompt budget]\n\n"
-            + text[-_REASONING_MAX_TOTAL_CHARS:]
+            text[:head]
+            + "\n\n...[middle of reasoning truncated to fit prompt budget]...\n\n"
+            + text[-tail:]
         )
     return text
 
@@ -815,18 +829,26 @@ def generate_incident_summary_from_chat(
                     f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
                 )
 
-        # Extract and save structured suggestions with commands
+        # Generate next steps from the investigation trace (v3 recommender).
+        # Falls back to summary-based extraction if the trace is empty.
         try:
-            suggestion_extractor = SuggestionExtractor()
-            suggestions = suggestion_extractor.extract_suggestions(
-                incident_id=incident_id,
-                summary=summary,
-                citations=used_citations if used_citations else all_citations,
-                service=basics["service"],
-                alert_title=basics["alert_title"],
-                user_id=user_id,
-                session_id=session_id,
-            )
+            trace_citations = used_citations if used_citations else all_citations
+            if trace_citations:
+                suggestions = generate_recommendations(
+                    incident_id=incident_id,
+                    citations=trace_citations,
+                    agent_reasoning=agent_reasoning or "",
+                    service=basics["service"],
+                    alert_title=basics["alert_title"],
+                    severity=basics.get("severity", "unknown"),
+                    user_id=user_id,
+                    session_id=session_id,
+                    existing_fixes=fix_suggestions or [],
+                    rca_summary=summary or "",
+                )
+            else:
+                suggestions = []
+
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)
                 logger.info(
@@ -834,7 +856,7 @@ def generate_incident_summary_from_chat(
                 )
         except Exception as e:
             logger.exception(
-                f"{_LOG_PREFIX} Failed to extract suggestions for incident {incident_id}: {e}"
+                f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
             )
 
         _update_incident_summary(incident_id, summary, user_id=user_id)

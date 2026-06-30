@@ -686,45 +686,52 @@ def with_user_context(func):
     return wrapper
 
 def with_forced_context(func):
-    """Decorator that ALWAYS injects user_id and session_id from context, 
+    """Decorator that ALWAYS injects user_id and session_id from context,
     completely removing them from the AI's view to prevent mixups.
-    
+
     This is the preferred decorator for tools that should never have their
     user_id/session_id parameters mixed up by the AI.
+    Only injects parameters that the wrapped function actually accepts.
     """
+    import inspect
+    func_params = set(inspect.signature(func).parameters.keys())
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         # ALWAYS get user_id from context, never from AI
         context = get_user_context()
         context_user_id = context.get('user_id') if isinstance(context, dict) else context
         if context_user_id:
-            kwargs['user_id'] = context_user_id
-            logging.info(f"with_forced_context: Forced user_id from context: {context_user_id} for {func.__name__}")
+            if 'user_id' in func_params:
+                kwargs['user_id'] = context_user_id
+                logging.info(f"with_forced_context: Forced user_id from context: {context_user_id} for {func.__name__}")
         else:
             logging.error(f"with_forced_context: No user_id in context for {func.__name__}")
             raise ValueError(f"No user_id available in context for {func.__name__}")
-        
+
         # ALWAYS get session_id from context, never from AI
         context_state = get_state_context()
         context_session_id = context_state.session_id if context_state and hasattr(context_state, 'session_id') else None
         if context_session_id:
-            kwargs['session_id'] = context_session_id
-            logging.info(f"with_forced_context: Forced session_id from context: {context_session_id} for {func.__name__}")
+            if 'session_id' in func_params:
+                kwargs['session_id'] = context_session_id
+                logging.info(f"with_forced_context: Forced session_id from context: {context_session_id} for {func.__name__}")
         else:
             logging.error(f"with_forced_context: No session_id in context for {func.__name__}")
             raise ValueError(f"No session_id available in context for {func.__name__}")
-        
+
         # Inject incident_id if available (for RCA sessions)
         context_incident_id = context_state.incident_id if context_state and hasattr(context_state, 'incident_id') else None
-        if context_incident_id:
+        if context_incident_id and 'incident_id' in func_params:
             kwargs['incident_id'] = context_incident_id
             logging.info(f"with_forced_context: Forced incident_id from context: {context_incident_id} for {func.__name__}")
-        
+
         # Validate user_id format
-        user_id = kwargs['user_id']
-        from utils.auth.stateless_auth import is_valid_user_id
-        if not is_valid_user_id(user_id):
-            logging.warning(f"with_forced_context: user_id '{user_id}' is invalid (empty or not a string) for {func.__name__}")
+        user_id = kwargs.get('user_id')
+        if user_id:
+            from utils.auth.stateless_auth import is_valid_user_id
+            if not is_valid_user_id(user_id):
+                logging.warning(f"with_forced_context: user_id '{user_id}' is invalid (empty or not a string) for {func.__name__}")
 
         return func(*args, **kwargs)
     return wrapper

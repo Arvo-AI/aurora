@@ -12,15 +12,13 @@ import {
   AlertCircle,
   ChevronRight,
   Play,
-  GitBranch,
   FileText,
   Coins,
   Activity,
-  Check,
 } from 'lucide-react';
 import React, { useState, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { useRouter } from 'next/navigation';
+import remarkGfm from 'remark-gfm';
 import { useToast } from '@/hooks/use-toast';
 import { useUser } from '@/hooks/useAuthHooks';
 import { canWrite as checkCanWrite } from '@/lib/roles';
@@ -38,8 +36,11 @@ import PostmortemPanel from './PostmortemPanel';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import IncidentActionRuns from './IncidentActionRuns';
 import ExecutionWaterfall from './ExecutionWaterfall';
+import NextStepsConsole from './NextStepsConsole';
+import RuledOutConsole from './RuledOutConsole';
 import { ReactFlowProvider } from '@xyflow/react';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
+import { useExecutionCapabilities } from '@/hooks/use-execution-capabilities';
 
 function sourceDisplayName(source: string): string {
   const connector = connectorRegistry.get(source);
@@ -107,6 +108,28 @@ function isSafeUrl(url: string | undefined): boolean {
   }
 }
 
+type ChildrenProps = { children?: React.ReactNode };
+
+function buildMdComponents(processChildren: (children: React.ReactNode) => React.ReactNode) {
+  return {
+    h1: (props: ChildrenProps) => <h1 className="text-base font-semibold text-white mb-1">{processChildren(props.children)}</h1>,
+    h2: (props: ChildrenProps) => <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(props.children)}</h2>,
+    strong: (props: ChildrenProps) => <strong className="text-orange-300 font-semibold">{processChildren(props.children)}</strong>,
+    p: (props: ChildrenProps) => <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(props.children)}</p>,
+    ol: (props: ChildrenProps) => <ol className="list-decimal list-outside ml-4 mb-2 space-y-2">{props.children}</ol>,
+    ul: (props: ChildrenProps) => <ul className="list-disc list-outside ml-4 mb-2 space-y-2">{props.children}</ul>,
+    li: (props: ChildrenProps) => <li className="text-zinc-300 text-sm [&>p]:inline [&>p]:mb-0">{processChildren(props.children)}</li>,
+    code: (props: ChildrenProps) => <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">{props.children}</code>,
+    table: (props: ChildrenProps) => <table className="w-full text-sm border-collapse my-3">{props.children}</table>,
+    thead: (props: ChildrenProps) => <thead className="border-b border-zinc-700">{props.children}</thead>,
+    tbody: (props: ChildrenProps) => <tbody>{props.children}</tbody>,
+    tr: (props: ChildrenProps) => <tr className="border-b border-zinc-800/50">{props.children}</tr>,
+    th: (props: ChildrenProps) => <th className="text-left text-xs font-semibold text-zinc-400 py-1.5 pr-4">{processChildren(props.children)}</th>,
+    td: (props: ChildrenProps) => <td className="text-zinc-300 text-sm py-1.5 pr-4">{processChildren(props.children)}</td>,
+  };
+}
+
+
 export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
@@ -119,10 +142,10 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [showActions, setShowActions] = useState(false);
   const [resolvingIncident, setResolvingIncident] = useState(false);
   const alert = incident.alert;
-  const router = useRouter();
   const { toast } = useToast();
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
+  const execCaps = useExecutionCapabilities();
   const showSeverity = (alert.severity && (alert.severity as string) !== 'unknown') || incident.status === 'analyzed';
   const sourceIconSrc = getSourceIconSrc(alert.source);
   const sourceIconBgColor = getSourceIconBgColor(alert.source);
@@ -145,149 +168,36 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
     }
   };
 
-  // Extract significant words (length > 3) from text for matching.
-  // Splits on every non-word run AND on underscores, so path-y tokens like
-  // `server/routes/health_routes.py` become ['server', 'routes', 'health',
-  // 'routes', 'py'] instead of one un-splittable blob. Without this, file
-  // paths in bullets never overlap with file paths in fix-suggestion titles.
-  const extractSignificantWords = useCallback((text: string): string[] => {
-    return text
-      .toLowerCase()
-      .split(/[\W_]+/)
-      .filter(word => word.length > 3);
-  }, []);
-
-  // Pull the bare filename out of a path so we can do a strong "file mentioned
-  // in this bullet?" check for fix-type suggestions independent of word overlap.
-  const fileBasename = useCallback((filePath?: string): string | null => {
-    if (!filePath) return null;
-    const trimmed = filePath.trim();
-    if (!trimmed) return null;
-    const parts = trimmed.split(/[\\/]/);
-    const base = parts[parts.length - 1] || trimmed;
-    return base.toLowerCase();
-  }, []);
-
-  // Matches summary list items to suggestions by comparing significant words
-  // Returns the suggestion with the BEST match (most matching words), not just the first match.
-  // For fix-type suggestions, a basename mention in the bullet is also a strong match signal.
-  const findMatchingSuggestion = useCallback((text: string): Suggestion | null => {
-    if (!incident.suggestions?.length) return null;
-
-    const textWords = extractSignificantWords(text);
-    const lowerText = text.toLowerCase();
-    const normalizedText = text.toLowerCase().replace(/[^\w\s]/g, '');
-
-    let bestMatch: Suggestion | null = null;
-    let bestMatchCount = 0;
-
-    for (const suggestion of incident.suggestions) {
-      // Match by title word overlap (at least 2 significant words in common)
-      const titleWords = extractSignificantWords(suggestion.title);
-      const textWordSet = new Set(textWords);
-      const matchingWordCount = titleWords.filter(word => textWordSet.has(word)).length;
-
-      // Keep track of the best match (most words in common)
-      if (matchingWordCount >= 2 && matchingWordCount > bestMatchCount) {
-        bestMatch = suggestion;
-        bestMatchCount = matchingWordCount;
-      }
-
-      // For fix-type suggestions, also match if the bullet text mentions the
-      // target filename. Bullets like "Audit `server/routes/health_routes.py`"
-      // are a clear pointer to a fix on that file even when the prose vocab
-      // doesn't otherwise overlap with the fix title.
-      if (suggestion.type === 'fix') {
-        const base = fileBasename(suggestion.filePath);
-        if (base && lowerText.includes(base) && bestMatchCount < 3) {
-          bestMatch = suggestion;
-          bestMatchCount = 3; // beat any 2-word overlap; lose to richer overlap
-        }
-      }
-
-      // Match by description prefix overlap (only if no better title match)
-      if (!bestMatch) {
-        const normalizedDesc = suggestion.description.toLowerCase().replace(/[^\w\s]/g, '');
-        const textPrefix = normalizedText.slice(0, 50);
-        const descPrefix = normalizedDesc.slice(0, 50);
-        if (normalizedText.includes(descPrefix) || normalizedDesc.includes(textPrefix)) {
-          bestMatch = suggestion;
-          bestMatchCount = 2; // Treat description match as 2 words
-        }
-      }
-    }
-    return bestMatch;
-  }, [incident.suggestions, extractSignificantWords, fileBasename]);
-
-  // Find a fix suggestion by its database ID (for [S:id] markers)
-  const findFixSuggestionById = useCallback((id: string): Suggestion | null => {
-    if (!incident.suggestions?.length) return null;
-    return incident.suggestions.find(s => String(s.id) === id && s.type === 'fix') || null;
-  }, [incident.suggestions]);
-
-  // Function to render text with citation badges and suggestion markers
+  // Function to render text with citation badges
   const renderTextWithCitations = useCallback((text: string): React.ReactNode => {
-    // Split by citation patterns [1], [1, 2] AND suggestion markers [S:4]
-    const parts = text.split(/(\[\d+(?:,\s*\d+)*\]|\[S:\d+\])/g);
+    const CITATION_RE = /^\[(\d+(?:,\s*\d+)*)\]$/;
+    const parts = text.split(/(\[\d+(?:,\s*\d+)*\])/g);
 
-    return parts.map((part, index) => {
-      // Match suggestion marker [S:id] — always consume to avoid showing raw tokens
-      const suggestionMatch = part.match(/^\[S:(\d+)\]$/);
-      if (suggestionMatch) {
-        const suggestion = findFixSuggestionById(suggestionMatch[1]);
-        if (suggestion) {
-          const hasPR = Boolean(suggestion.prUrl);
-          return (
-            <button
-              key={`suggestion-marker-${index}`}
-              disabled={!canWrite}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (canWrite) setSelectedFixSuggestion(suggestion);
-              }}
-              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors align-middle ml-1.5 ${
-                hasPR
-                  ? canWrite ? 'bg-green-500/30 hover:bg-green-500/50 text-green-300 cursor-pointer' : 'bg-green-500/20 text-green-300/50 cursor-not-allowed'
-                  : canWrite ? 'bg-green-500/20 hover:bg-green-500/40 text-green-400 cursor-pointer' : 'bg-green-500/10 text-green-400/50 cursor-not-allowed'
-              }`}
-              title={hasPR ? 'View PR' : canWrite ? `Create PR: ${suggestion.filePath || 'Fix suggestion'}` : 'Editors and admins can create PRs'}
-            >
-              {hasPR ? <Check className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
-            </button>
-          );
-        }
-        return null;
-      }
-
-      // Match single [1] or multiple [1, 2] or [6, 7]
-      const match = part.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
+    return parts.map((part, idx) => {
+      const match = CITATION_RE.exec(part);
       if (match) {
-        const citationKeys = match[1].split(/,\s*/).map(k => k.trim());
-
-        // Render each citation key as a separate badge
+        const keys = match[1].split(/,\s*/).map(k => k.trim());
         return (
-          <span key={`citation-group-${index}`}>
-            {citationKeys.map((citationKey, keyIndex) => {
+          <span key={`cg-${idx}-${match[1]}`}>
+            {keys.map((citationKey) => {
               const citation = citations.find(c => c.key === citationKey);
               if (citation) {
                 return (
                   <CitationBadge
-                    key={`citation-${index}-${citationKey}`}
+                    key={`cb-${citationKey}`}
                     citationKey={citationKey}
                     onClick={() => setSelectedCitation(citation)}
                   />
                 );
               }
-              // If citation not found, render as plain text
-              return <span key={`citation-${index}-${citationKey}`}>[{citationKey}]</span>;
+              return <span key={`cs-${citationKey}`}>[{citationKey}]</span>;
             })}
           </span>
         );
       }
-      return part;
+      return <span key={`t-${idx}`}>{part}</span>;
     });
-  }, [citations, canWrite, findFixSuggestionById]);
+  }, [citations]);
 
 
   // Helper to process children and replace citation patterns
@@ -301,119 +211,28 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   }, [renderTextWithCitations]);
 
   // Recursively extract text content from React nodes for suggestion matching
-  const extractTextFromNode = useCallback((node: React.ReactNode): string => {
-    if (typeof node === 'string') return node;
-    if (Array.isArray(node)) return node.map((child) => extractTextFromNode(child)).join('');
-    if (React.isValidElement(node) && node.props.children) {
-      return extractTextFromNode(node.props.children);
-    }
-    return '';
-  }, []);
-
   // Preprocess summary to prevent ReactMarkdown from interpreting consecutive
   // citations like [5][6][7] as markdown link references
-  const preprocessedSummary = useMemo(() => {
-    if (!incident.summary) return '';
-    // Add space between consecutive brackets: [5][6] → [5] [6]
-    return incident.summary.replace(/\](\[)/g, '] $1');
+  const { summaryMain, summaryTrailing } = useMemo(() => {
+    if (!incident.summary) return { summaryMain: '', summaryTrailing: '' };
+    let text = incident.summary.replace(/]\[/g, '] [');
+    text = text.replace(/---\s*\n##\s*Suggested Next Steps[\s\S]*?(?=---\s*\n##|\s*$)/, '');
+    text = text.replace(/##\s*Suggested Next Steps[\s\S]*?(?=---\s*\n##|\n##|\s*$)/, '');
+    const trailingMatch = /((---\s*\n)?##\s*Ruled Out[\s\S]*)$/m.exec(text);
+    if (trailingMatch?.index !== undefined) {
+      return { summaryMain: text.slice(0, trailingMatch.index).trim(), summaryTrailing: trailingMatch[1].trim() };
+    }
+    return { summaryMain: text.trim(), summaryTrailing: '' };
   }, [incident.summary]);
 
-  // Memoize markdown rendering to prevent re-parsing on every render
-  const renderedSummary = useMemo(() => (
-    <ReactMarkdown
-      components={{
-        h1: ({ children }) => (
-          <h1 className="text-base font-semibold text-white mb-1">{processChildren(children)}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className="text-sm font-semibold text-white mt-3 mb-1">{processChildren(children)}</h2>
-        ),
-        strong: ({ children }) => (
-          <strong className="text-orange-300 font-semibold">{processChildren(children)}</strong>
-        ),
-        p: ({ children }) => (
-          <p className="mb-2 text-zinc-300 text-sm leading-normal">{processChildren(children)}</p>
-        ),
-        ul: ({ children }) => (
-          <ul className="list-disc list-outside ml-4 mb-2 space-y-1">{children}</ul>
-        ),
-        li: ({ children }) => {
-          const textContent = extractTextFromNode(children);
-          // Skip word-matching fallback if text has a [S:id] marker (already rendered inline)
-          const hasSuggestionMarker = /\[S:\d+\]/.test(textContent);
-          const matchingSuggestion = hasSuggestionMarker ? null : findMatchingSuggestion(textContent);
-          const isFixType = matchingSuggestion?.type === 'fix';
-          const canExecute = Boolean(matchingSuggestion?.command);
-          const canShowAction = canWrite && (canExecute || isFixType);
-          const wasExecuted = Boolean(matchingSuggestion?.executedAt);
-          const execStatus = matchingSuggestion?.executionStatus;
+  const mdComponents = useMemo(() => buildMdComponents(processChildren), [processChildren]);
 
-          return (
-            <li className="text-zinc-300 text-sm">
-              {processChildren(children)}
-              {canShowAction && matchingSuggestion && (
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isFixType) {
-                      setSelectedFixSuggestion(matchingSuggestion);
-                    } else {
-                      setSelectedSuggestion(matchingSuggestion);
-                    }
-                  }}
-                  className={`inline-flex items-center justify-center rounded transition-colors align-middle ml-1.5 ${
-                    isFixType
-                      ? matchingSuggestion.prUrl
-                        ? 'w-5 h-5 bg-green-500/30 hover:bg-green-500/50 text-green-300'
-                        : 'w-5 h-5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                      : wasExecuted
-                        ? execStatus === 'completed'
-                          ? 'h-5 gap-1 px-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400'
-                          : execStatus === 'failed'
-                            ? 'h-5 gap-1 px-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-400'
-                            : 'h-5 gap-1 px-1.5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
-                        : 'w-5 h-5 bg-orange-500/20 hover:bg-orange-500/40 text-orange-400'
-                  }`}
-                  title={isFixType
-                    ? matchingSuggestion.prUrl
-                      ? 'View PR'
-                      : `Create PR: ${matchingSuggestion.filePath || 'Fix suggestion'}`
-                    : wasExecuted
-                      ? `View output (${execStatus || 'executed'})`
-                      : `Run: ${matchingSuggestion.command?.split('\n')[0] || ''}`
-                  }
-                >
-                  {isFixType ? (
-                    matchingSuggestion.prUrl ? <Check className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />
-                  ) : wasExecuted ? (
-                    <>
-                      {execStatus === 'completed' && <CheckCircle2 className="w-3 h-3" />}
-                      {execStatus === 'failed' && <AlertCircle className="w-3 h-3" />}
-                      {execStatus === 'in_progress' && <span className="w-2 h-2 bg-orange-400 rounded-full animate-pulse" />}
-                      {(execStatus === 'executed' || !execStatus) && <Play className="w-3 h-3" />}
-                      <span className="text-[10px] font-medium">
-                        {execStatus === 'completed' ? 'Done' : execStatus === 'failed' ? 'Failed' : execStatus === 'in_progress' ? 'Running' : 'Ran'}
-                      </span>
-                    </>
-                  ) : (
-                    <Play className="w-3 h-3" />
-                  )}
-                </button>
-              )}
-            </li>
-          );
-        },
-        code: ({ children }) => (
-          <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-orange-300 text-xs font-mono">
-            {children}
-          </code>
-        ),
-      }}
-    >
-      {preprocessedSummary}
+  const renderedSummary = useMemo(() => (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+      {summaryMain}
     </ReactMarkdown>
-  ), [preprocessedSummary, processChildren, findMatchingSuggestion, extractTextFromNode, canWrite]);
+  ), [summaryMain, mdComponents]);
+
 
   return (
     <div className="space-y-8">
@@ -553,29 +372,23 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
               Raw Alert
             </button>
             {/* PagerDuty custom fields runbook */}
-            {alert.metadata?.customFields?.runbook_link ? (
-              isSafeUrl(alert.metadata.customFields.runbook_link) ? (
-                <a 
-                  href={alert.metadata.customFields.runbook_link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-green-400 hover:text-green-300"
-                  title="Runbook from PagerDuty"
-                >
-                  Runbook Link
-                </a>
-              ) : (
-                <span className="text-zinc-500" title="Invalid runbook URL">
-                  Runbook (invalid URL)
-                </span>
-              )
-            ) : (
-              alert.source === 'pagerduty' && (
-                <span className="text-zinc-600" title="No runbook configured">
-                  Runbook: none
-                </span>
-              )
-            )}
+            {(() => {
+              const runbookUrl = alert.metadata?.customFields?.runbook_link;
+              if (runbookUrl && isSafeUrl(runbookUrl)) {
+                return (
+                  <a href={runbookUrl} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:text-green-300" title="Runbook from PagerDuty">
+                    Runbook Link
+                  </a>
+                );
+              }
+              if (runbookUrl) {
+                return <span className="text-zinc-500" title="Invalid runbook URL">Runbook (invalid URL)</span>;
+              }
+              if (alert.source === 'pagerduty') {
+                return <span className="text-zinc-600" title="No runbook configured">Runbook: none</span>;
+              }
+              return null;
+            })()}
           </div>
         </div>
 
@@ -628,13 +441,31 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             {renderedSummary}
           </div>
 
+          {/* Next Steps — right after summary findings */}
+          {incident.suggestions && incident.suggestions.length > 0 && incident.auroraStatus === 'complete' && (
+            <NextStepsConsole
+              suggestions={incident.suggestions}
+              citations={citations}
+              canWrite={canWrite}
+              execCaps={execCaps}
+              onRunSuggestion={setSelectedSuggestion}
+              onFixSuggestion={setSelectedFixSuggestion}
+              onCitationClick={setSelectedCitation}
+            />
+          )}
+
+          {/* Ruled Out / Not Checked — collapsible console style */}
+          {summaryTrailing && (
+            <RuledOutConsole text={summaryTrailing} citations={citations} onCitationClick={setSelectedCitation} />
+          )}
+
           {/* Correlated Alerts Section */}
           {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
             <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
           )}
 
           {/* Other Recent Alerts - for manual correlation */}
-          <RecentAlertsSection 
+          <RecentAlertsSection
             currentIncidentId={incident.id}
             auroraStatus={incident.auroraStatus}
             onAlertMerged={onRefresh}
