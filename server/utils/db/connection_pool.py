@@ -183,8 +183,8 @@ class DatabaseConnectionPool:
                     logger.warning("Failed to reset session vars on pool return: %s", e)
                     try:
                         pool.putconn(connection, close=True)
-                    except Exception:
-                        pass
+                    except Exception as close_exc:
+                        logger.debug("Failed to close broken connection during cleanup: %s", close_exc)
                     with self._pool_available:
                         self._pool_available.notify()
                     return
