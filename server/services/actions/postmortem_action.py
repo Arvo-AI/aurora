@@ -19,6 +19,7 @@ def _get_action_instructions(user_id: str) -> tuple:
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                set_rls_context(cur, conn, user_id, log_prefix="[PostmortemAction:instructions]")
                 cur.execute(
                     """SELECT a.instructions, a.id, a.org_id FROM actions a
                        JOIN users u ON u.org_id = a.org_id
