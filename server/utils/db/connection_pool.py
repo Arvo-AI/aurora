@@ -162,8 +162,8 @@ class DatabaseConnectionPool:
             if connection:
                 try:
                     connection.rollback()
-                except Exception:
-                    pass  # rollback is best-effort during error handling
+                except Exception as rollback_exc:
+                    logger.debug("Rollback failed in connection error handler: %s", rollback_exc)
             logger.error(f"Error with connection: {e}")
             raise
         finally:
@@ -172,11 +172,22 @@ class DatabaseConnectionPool:
                     connection.rollback()
                     with connection.cursor() as cur:
                         cur.execute(
-                            "RESET ROLE; RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                            "RESET ROLE; "
+                            "RESET myapp.current_user_id; "
+                            "RESET myapp.current_org_id; "
+                            "RESET myapp.mcp_token_resolve; "
+                            "RESET myapp.kubectl_token_resolve;"
                         )
                     connection.commit()
                 except Exception as e:
                     logger.warning("Failed to reset session vars on pool return: %s", e)
+                    try:
+                        pool.putconn(connection, close=True)
+                    except Exception:
+                        pass
+                    with self._pool_available:
+                        self._pool_available.notify()
+                    return
                 try:
                     self._putconn_notify(pool, connection)
                 except Exception as e:
@@ -204,8 +215,8 @@ class DatabaseConnectionPool:
             if connection:
                 try:
                     connection.rollback()
-                except Exception:
-                    pass
+                except Exception as rollback_exc:
+                    logger.debug("Rollback failed in admin connection error handler: %s", rollback_exc)
             logger.error(f"Error with admin connection: {e}")
             raise
         finally:
@@ -214,11 +225,22 @@ class DatabaseConnectionPool:
                     connection.rollback()
                     with connection.cursor() as cur:
                         cur.execute(
-                            "RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                            "RESET ROLE; "
+                            "RESET myapp.current_user_id; "
+                            "RESET myapp.current_org_id; "
+                            "RESET myapp.mcp_token_resolve; "
+                            "RESET myapp.kubectl_token_resolve;"
                         )
                     connection.commit()
                 except Exception as e:
                     logger.warning("Failed to reset session vars on pool return: %s", e)
+                    try:
+                        pool.putconn(connection, close=True)
+                    except Exception:
+                        pass
+                    with self._pool_available:
+                        self._pool_available.notify()
+                    return
                 try:
                     self._putconn_notify(pool, connection)
                 except Exception as e:
@@ -226,16 +248,21 @@ class DatabaseConnectionPool:
 
     @staticmethod
     def _downgrade_role(connection):
-        """Downgrade session to aurora_app so RLS is enforced."""
+        """Downgrade session to aurora_app so RLS is enforced.
+
+        Raises RuntimeError if the role switch fails — connections must not
+        be used without RLS enforcement (fail closed).
+        """
         try:
             with connection.cursor() as cur:
                 cur.execute("SET ROLE aurora_app;")
         except Exception as exc:
-            logger.debug("SET ROLE aurora_app failed (role may not exist yet): %s", exc)
+            logger.error("SET ROLE aurora_app failed; refusing to run without RLS enforcement: %s", exc)
             try:
                 connection.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                logger.debug("Rollback after failed role downgrade also failed: %s", rollback_exc)
+            raise RuntimeError("Failed to downgrade database role for RLS enforcement") from exc
 
     @staticmethod
     def _set_rls_vars(connection):

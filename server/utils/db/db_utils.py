@@ -3069,14 +3069,16 @@ def initialize_tables():
                     DO $$ BEGIN
                         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'aurora_app') THEN
                             CREATE ROLE aurora_app NOSUPERUSER NOBYPASSRLS NOLOGIN;
+                        ELSE
+                            ALTER ROLE aurora_app NOSUPERUSER NOBYPASSRLS NOLOGIN;
                         END IF;
                     END $$;
                 """)
-                cursor.execute("GRANT ALL ON ALL TABLES IN SCHEMA public TO aurora_app;")
-                cursor.execute("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO aurora_app;")
+                cursor.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aurora_app;")
+                cursor.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aurora_app;")
                 cursor.execute("GRANT USAGE ON SCHEMA public TO aurora_app;")
-                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO aurora_app;")
-                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO aurora_app;")
+                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aurora_app;")
+                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO aurora_app;")
                 cursor.execute("GRANT aurora_app TO CURRENT_USER;")
                 conn.commit()
                 logging.info("Ensured aurora_app role exists with NOSUPERUSER NOBYPASSRLS.")
