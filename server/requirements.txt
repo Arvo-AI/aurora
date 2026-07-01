@@ -113,6 +113,8 @@ cryptography>=46.0.7  # CWE-787 / CVE-2026-39892 OOB write fixed in 46.0.7
 # MCP Server (Model Context Protocol)
 mcp[cli]>=1.27.0
 
+# Metrics
+prometheus-client==0.20.0
 # GitHub App authentication (JWT mint + installation tokens)
 PyGithub>=2.5  # advisories on <2.5
 PyJWT[crypto]>=2.12.0  # avoid CVE in <2.12.0 (unknown crit header acceptance)

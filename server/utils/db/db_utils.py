@@ -1272,9 +1272,27 @@ def initialize_tables():
                     );
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_postmortems_incident_id ON postmortems(incident_id);
-                    CREATE UNIQUE INDEX IF NOT EXISTS postmortems_incident_id_unique ON postmortems(incident_id);
                     CREATE INDEX IF NOT EXISTS idx_postmortems_user_id ON postmortems(user_id);
                 """,
+                "aws_security_findings": """
+                    CREATE TABLE IF NOT EXISTS aws_security_findings (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        finding_id VARCHAR(255) NOT NULL,
+                        source VARCHAR(200),
+                        title TEXT,
+                        severity_label VARCHAR(100),
+                        payload JSONB,
+                        ai_summary TEXT,
+                        ai_risk_level VARCHAR(100),
+                        ai_suggested_fix TEXT,
+                        remediation_approved BOOLEAN DEFAULT FALSE,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(org_id, finding_id)
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS idx_aws_securityhub_org_id_finding ON aws_security_findings(org_id, finding_id);
                 "artifacts": """
                     CREATE TABLE IF NOT EXISTS artifacts (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1477,6 +1495,7 @@ def initialize_tables():
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("connected_repos")
             rls_tables.append("execution_steps")
+            rls_tables.append("aws_security_findings")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
             rls_tables.append("rca_findings")
