@@ -3083,8 +3083,9 @@ def initialize_tables():
                 conn.commit()
                 logging.info("Ensured aurora_app role exists with NOSUPERUSER NOBYPASSRLS.")
             except Exception as e:
-                logging.warning(f"Error creating aurora_app role: {e}")
+                logging.error(f"FATAL: Error creating aurora_app role: {e}")
                 conn.rollback()
+                raise
 
             logging.info("Database tables initialized successfully.")
             cursor.close()

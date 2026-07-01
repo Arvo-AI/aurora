@@ -168,6 +168,7 @@ class DatabaseConnectionPool:
             raise
         finally:
             if connection:
+                reset_failed = False
                 try:
                     connection.rollback()
                     with connection.cursor() as cur:
@@ -181,17 +182,18 @@ class DatabaseConnectionPool:
                     connection.commit()
                 except Exception as e:
                     logger.warning("Failed to reset session vars on pool return: %s", e)
+                    reset_failed = True
                     try:
                         pool.putconn(connection, close=True)
                     except Exception as close_exc:
                         logger.debug("Failed to close broken connection during cleanup: %s", close_exc)
                     with self._pool_available:
                         self._pool_available.notify()
-                    return
-                try:
-                    self._putconn_notify(pool, connection)
-                except Exception as e:
-                    logger.error("Error returning connection to pool: %s", e)
+                if not reset_failed:
+                    try:
+                        self._putconn_notify(pool, connection)
+                    except Exception as e:
+                        logger.error("Error returning connection to pool: %s", e)
 
     @contextmanager
     def get_admin_connection(self):
@@ -221,6 +223,7 @@ class DatabaseConnectionPool:
             raise
         finally:
             if connection:
+                reset_failed = False
                 try:
                     connection.rollback()
                     with connection.cursor() as cur:
@@ -234,17 +237,18 @@ class DatabaseConnectionPool:
                     connection.commit()
                 except Exception as e:
                     logger.warning("Failed to reset session vars on pool return: %s", e)
+                    reset_failed = True
                     try:
                         pool.putconn(connection, close=True)
-                    except Exception:
-                        pass
+                    except Exception as close_exc:
+                        logger.debug("Failed to close broken admin connection during cleanup: %s", close_exc)
                     with self._pool_available:
                         self._pool_available.notify()
-                    return
-                try:
-                    self._putconn_notify(pool, connection)
-                except Exception as e:
-                    logger.error("Error returning connection to pool: %s", e)
+                if not reset_failed:
+                    try:
+                        self._putconn_notify(pool, connection)
+                    except Exception as e:
+                        logger.error("Error returning connection to pool: %s", e)
 
     @staticmethod
     def _downgrade_role(connection):
