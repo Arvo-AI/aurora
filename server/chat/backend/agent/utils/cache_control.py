@@ -26,7 +26,6 @@ manifest / last large turn, or switch to a real token count.
 from __future__ import annotations
 
 import logging
-import os
 
 from langchain_core.messages import SystemMessage
 
@@ -38,17 +37,6 @@ logger = logging.getLogger(__name__)
 # we never waste a cache WRITE on a prompt too small to cache on any model.
 # ponytail: char heuristic; upgrade path = count tokens via the model tokenizer.
 _MIN_PREFIX_CHARS = 4096 * 4
-
-
-def _caching_enabled() -> bool:
-    # Default OFF: opt in per environment (staging first, then prod) after
-    # confirming cache_read tokens appear. Enable with PROMPT_CACHING_ENABLED=true.
-    return os.getenv("PROMPT_CACHING_ENABLED", "false").strip().lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
 
 
 def _is_anthropic_model(model_name: str) -> bool:
@@ -65,10 +53,10 @@ def build_cached_system_prompt(
     """Return a system prompt for ``create_agent`` with Anthropic caching applied.
 
     Returns a ``SystemMessage`` carrying a ``cache_control`` ephemeral breakpoint
-    when caching is enabled, the model is Anthropic-family, and the prompt is
-    large enough to be cacheable. Otherwise returns the original string unchanged
-    (no-op), so non-Anthropic models (Google/OpenAI/etc.) and tiny prompts are
-    completely unaffected and behave exactly as before.
+    when the model is Anthropic-family and the prompt is large enough to be
+    cacheable. Otherwise returns the original string unchanged (no-op), so
+    non-Anthropic models (Google/OpenAI/etc.) and tiny prompts are completely
+    unaffected and behave exactly as before.
 
     The breakpoint uses the default 5-minute ephemeral TTL (no explicit ``ttl``
     field). Prod data: 99.9% of inter-turn gaps are <5min and the TTL refreshes
@@ -79,8 +67,6 @@ def build_cached_system_prompt(
     the plain string, which is the original (pre-caching) behavior.
     """
     if not system_prompt_text or not isinstance(system_prompt_text, str):
-        return system_prompt_text
-    if not _caching_enabled():
         return system_prompt_text
     if not _is_anthropic_model(model_name):
         return system_prompt_text

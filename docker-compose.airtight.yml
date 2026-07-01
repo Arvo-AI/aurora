@@ -115,7 +115,6 @@ x-common-env: &common-env
   VISION_MODEL: ${VISION_MODEL}
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
-  PROMPT_CACHING_ENABLED: ${PROMPT_CACHING_ENABLED:-false}  # Anthropic prompt caching on agent system prompt (cache reads 0.1x input price); opt-in
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}

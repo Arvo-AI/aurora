@@ -98,7 +98,6 @@ x-common-env: &common-env
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
   LLM_PROVIDER_MODE: ${LLM_PROVIDER_MODE}
-  PROMPT_CACHING_ENABLED: ${PROMPT_CACHING_ENABLED:-false}  # Anthropic prompt caching on agent system prompt (cache reads 0.1x input price); opt-in
   SEARXNG_URL: ${SEARXNG_URL}
   RCA_OPTIMIZE_COSTS: ${RCA_OPTIMIZE_COSTS}
   ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-false}
