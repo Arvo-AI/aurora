@@ -3059,6 +3059,31 @@ def initialize_tables():
                 conn.rollback()
 
             conn.commit()
+
+            # Ensure a non-superuser application role exists for RLS enforcement.
+            # The aurora superuser owns the tables and runs DDL, but all
+            # request-handling connections downgrade to aurora_app via SET ROLE
+            # so that RLS policies are actually enforced.
+            try:
+                cursor.execute("""
+                    DO $$ BEGIN
+                        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'aurora_app') THEN
+                            CREATE ROLE aurora_app NOSUPERUSER NOBYPASSRLS NOLOGIN;
+                        END IF;
+                    END $$;
+                """)
+                cursor.execute("GRANT ALL ON ALL TABLES IN SCHEMA public TO aurora_app;")
+                cursor.execute("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO aurora_app;")
+                cursor.execute("GRANT USAGE ON SCHEMA public TO aurora_app;")
+                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO aurora_app;")
+                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO aurora_app;")
+                cursor.execute("GRANT aurora_app TO CURRENT_USER;")
+                conn.commit()
+                logging.info("Ensured aurora_app role exists with NOSUPERUSER NOBYPASSRLS.")
+            except Exception as e:
+                logging.warning(f"Error creating aurora_app role: {e}")
+                conn.rollback()
+
             logging.info("Database tables initialized successfully.")
             cursor.close()
 

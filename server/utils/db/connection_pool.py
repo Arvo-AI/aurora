@@ -141,10 +141,10 @@ class DatabaseConnectionPool:
     def get_connection(self):
         """Get a connection from the pool with automatic cleanup.
 
-        Automatically sets RLS session variables (myapp.current_user_id,
-        myapp.current_org_id) from the Flask request context when available.
-        This ensures all queries on RLS-protected tables work correctly
-        without callers needing to SET them manually.
+        Downgrades to the aurora_app role (NOSUPERUSER NOBYPASSRLS) so that
+        PostgreSQL RLS policies are enforced. Also sets RLS session variables
+        (myapp.current_user_id, myapp.current_org_id) from the Flask request
+        context when available.
         """
         pool = self._get_pool()
         connection = None
@@ -152,6 +152,7 @@ class DatabaseConnectionPool:
             connection = self._getconn_with_retry(pool)
             if connection:
                 connection.autocommit = False
+                self._downgrade_role(connection)
                 self._set_rls_vars(connection)
                 logger.debug("Retrieved connection from pool")
                 yield connection
@@ -169,7 +170,49 @@ class DatabaseConnectionPool:
             if connection:
                 try:
                     connection.rollback()
-                    with connection.cursor() as cur:  # No RLS needed — pool cleanup (RESET vars)
+                    with connection.cursor() as cur:
+                        cur.execute(
+                            "RESET ROLE; RESET myapp.current_user_id; RESET myapp.current_org_id;"
+                        )
+                    connection.commit()
+                except Exception as e:
+                    logger.warning("Failed to reset session vars on pool return: %s", e)
+                try:
+                    self._putconn_notify(pool, connection)
+                except Exception as e:
+                    logger.error("Error returning connection to pool: %s", e)
+
+    @contextmanager
+    def get_admin_connection(self):
+        """Get a connection that retains superuser privileges (bypasses RLS).
+
+        Use ONLY for: DDL/migrations, cross-org background tasks that
+        explicitly call set_rls_context() per-org, and bootstrap queries
+        (e.g. auth registration before org context exists).
+        """
+        pool = self._get_pool()
+        connection = None
+        try:
+            connection = self._getconn_with_retry(pool)
+            if connection:
+                connection.autocommit = False
+                logger.debug("Retrieved admin connection from pool (no role downgrade)")
+                yield connection
+            else:
+                raise Exception("Failed to get connection from pool")
+        except Exception as e:
+            if connection:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+            logger.error(f"Error with admin connection: {e}")
+            raise
+        finally:
+            if connection:
+                try:
+                    connection.rollback()
+                    with connection.cursor() as cur:
                         cur.execute(
                             "RESET myapp.current_user_id; RESET myapp.current_org_id;"
                         )
@@ -182,6 +225,19 @@ class DatabaseConnectionPool:
                     logger.error("Error returning connection to pool: %s", e)
 
     @staticmethod
+    def _downgrade_role(connection):
+        """Downgrade session to aurora_app so RLS is enforced."""
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SET ROLE aurora_app;")
+        except Exception as exc:
+            logger.debug("SET ROLE aurora_app failed (role may not exist yet): %s", exc)
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+
+    @staticmethod
     def _set_rls_vars(connection):
         """Set RLS session variables from Flask request context if available."""
         try:
@@ -191,7 +247,7 @@ class DatabaseConnectionPool:
             user_id = request.headers.get('X-User-ID')
             org_id = request.headers.get('X-Org-ID') or getattr(g, '_org_id_resolved', None) or None
             if user_id or org_id:
-                with connection.cursor() as cur:  # No RLS needed — auto-setting RLS vars for Flask request
+                with connection.cursor() as cur:
                     if user_id:
                         cur.execute("SET myapp.current_user_id = %s", (user_id,))
                     if org_id:
@@ -204,12 +260,8 @@ class DatabaseConnectionPool:
         except Exception as exc:
             logger.debug("_set_rls_vars failed, continuing without RLS context: %s", exc)
 
-    # Backward compatibility aliases
+    # Backward compatibility alias
     def get_user_connection(self):
-        """Alias for get_connection() - kept for backward compatibility."""
-        return self.get_connection()
-
-    def get_admin_connection(self):
         """Alias for get_connection() - kept for backward compatibility."""
         return self.get_connection()
 
