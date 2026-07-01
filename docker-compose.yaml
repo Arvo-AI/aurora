@@ -488,12 +488,6 @@ services:
       retries: 3
       start_period: 10s
 
-  t2v-transformers:
-    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
-    logging: *default-logging
-    environment:
-      ENABLE_CUDA: '0'
-
   frontend:
     build:
       context: ./client

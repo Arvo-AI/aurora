@@ -1,17 +1,14 @@
 """
 Text-similarity correlation strategy.
 
-Scores an alert against an incident using cosine similarity on
-dense vector embeddings from the t2v-transformers service, with
-Jaccard fallback when embeddings are unavailable.
+Scores an alert against an incident using Jaccard token similarity
+on titles, with service-name overlap.
 """
 
 import logging
-import math
 import re
-from typing import List, Optional, Set
+from typing import List, Set
 
-from services.correlation.embedding_client import get_embedding_client
 from services.correlation.strategies.base import CorrelationStrategy
 
 logger = logging.getLogger(__name__)
@@ -21,7 +18,7 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class SimilarityStrategy(CorrelationStrategy):
-    """Vector-based similarity scoring for titles, with service-name overlap."""
+    """Token-based similarity scoring for titles, with service-name overlap."""
 
     TITLE_WEIGHT = 0.7
     SERVICE_WEIGHT = 0.3
@@ -33,10 +30,9 @@ class SimilarityStrategy(CorrelationStrategy):
         incident_title: str,
         incident_services: List[str],
     ) -> float:
-        """Score based on semantic similarity between alert and incident.
+        """Score based on text similarity between alert and incident.
 
-        Uses cosine similarity on embeddings from t2v-transformers, falling
-        back to Jaccard token similarity if embeddings unavailable.
+        Uses Jaccard token similarity on titles and service names.
 
         Args:
             alert_title: Title / summary of the alert.
@@ -55,50 +51,13 @@ class SimilarityStrategy(CorrelationStrategy):
             )
             return 0.0
 
-        title_sim = self._vector_similarity(alert_title, incident_title)
-        if title_sim is None:
-            title_sim = self._jaccard_similarity(alert_title, incident_title)
-
+        title_sim = self._jaccard_similarity(alert_title, incident_title)
         service_sim = self._service_similarity(alert_service, incident_services)
 
         return self.TITLE_WEIGHT * title_sim + self.SERVICE_WEIGHT * service_sim
 
-    def _vector_similarity(self, text_a: str, text_b: str) -> Optional[float]:
-        """Compute cosine similarity using embeddings.
-
-        Returns None if embeddings couldn't be retrieved.
-        """
-        try:
-            client = get_embedding_client()
-            vec_a = client.embed(text_a)
-            vec_b = client.embed(text_b)
-
-            if vec_a is None or vec_b is None:
-                return None
-
-            return self._cosine_similarity(vec_a, vec_b)
-        except Exception as e:
-            logger.debug("[SimilarityStrategy] Vector similarity failed: %s", e)
-            return None
-
-    @staticmethod
-    def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-        """Compute cosine similarity between two vectors."""
-        if len(vec_a) != len(vec_b) or len(vec_a) == 0:
-            return 0.0
-
-        dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
-        norm_a = math.sqrt(sum(a * a for a in vec_a))
-        norm_b = math.sqrt(sum(b * b for b in vec_b))
-
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-
-        similarity = dot_product / (norm_a * norm_b)
-        return max(0.0, min(1.0, similarity))
-
     def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
-        """Fallback: Jaccard token similarity."""
+        """Jaccard token similarity between two texts."""
         tokens_a = self._tokenize(text_a)
         tokens_b = self._tokenize(text_b)
         return self._jaccard(tokens_a, tokens_b)
@@ -132,6 +91,7 @@ class SimilarityStrategy(CorrelationStrategy):
             )
             return 0.0
 
+        # Exact match — no fuzzy comparison needed
         if alert_service in incident_services:
             return 1.0
 

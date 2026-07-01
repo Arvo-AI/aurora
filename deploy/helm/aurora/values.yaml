@@ -135,7 +135,6 @@ replicaCounts:
   chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
   frontend: 1        # Next.js frontend - stateless, can scale
   searxng: 1         # Web search engine - stateless, can scale
-  transformers: 1    # ML model service - stateless, can scale
   
   # Single-instance services (do NOT increase without additional config)
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
@@ -569,13 +568,6 @@ resources:
       cpu: "500m"
       memory: "1Gi"
       ephemeral-storage: "500Mi"
-  transformers:
-    requests:
-      cpu: "100m"
-      memory: "512Mi"
-    limits:
-      cpu: "500m"
-      memory: "2Gi"
   vault:
     requests:
       cpu: "50m"
@@ -657,10 +649,6 @@ affinity: {}
 #     nodeSelector: {}
 #     affinity: {}
 #   searxng:
-#     tolerations: []
-#     nodeSelector: {}
-#     affinity: {}
-#   transformers:
 #     tolerations: []
 #     nodeSelector: {}
 #     affinity: {}
