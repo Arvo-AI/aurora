@@ -12,6 +12,7 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
+from chat.backend.agent.utils.cache_control import build_cached_system_prompt
 from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
 import time
@@ -620,10 +621,17 @@ class Agent:
                     0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider)
                 )
 
+            # Mark the stable system prompt with an Anthropic cache_control
+            # breakpoint so turns 2..N of a session bill the prefix as a 0.1x
+            # cache read. No-op for non-Anthropic models and tiny prompts.
+            system_prompt_for_agent = build_cached_system_prompt(
+                model_name, system_prompt_text
+            )
+
             agent_graph = create_agent(
                 model=streaming_llm,
                 tools=tools,
-                system_prompt=system_prompt_text,
+                system_prompt=system_prompt_for_agent,
                 middleware=middlewares,
             )
 
