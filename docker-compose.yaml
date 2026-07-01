@@ -64,6 +64,7 @@ x-common-env: &common-env
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
   GEMINI_DISABLE_THINKING: ${GEMINI_DISABLE_THINKING}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
   # GitHub auth — every Aurora service that talks to GitHub (server,
   # celery_worker, chatbot) needs the auth mode + App credentials to mint

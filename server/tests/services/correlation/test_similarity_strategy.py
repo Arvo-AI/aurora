@@ -1,18 +1,26 @@
 """Tests for SimilarityStrategy."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from services.correlation.strategies.similarity import SimilarityStrategy
 
 
-class TestSimilarityStrategyScoring:
-    """Tests for the Jaccard-based scoring logic."""
+class TestSimilarityStrategyWithEmbeddings:
+    """Tests with mocked embedding client for vector similarity."""
 
     def setup_method(self):
         self.strategy = SimilarityStrategy()
 
-    def test_identical_texts_high_score(self):
-        """Identical titles and matching service should score ~1.0."""
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_identical_texts_high_cosine_similarity(self, mock_get_client):
+        """Identical texts should have cosine similarity of 1.0."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.return_value = [0.5, 0.5, 0.5, 0.5]
+        mock_get_client.return_value = mock_client
+
         score = self.strategy.score(
             alert_title="High CPU usage on payment service",
             alert_service="payment-service",
@@ -21,18 +29,36 @@ class TestSimilarityStrategyScoring:
         )
         assert score >= 0.95
 
-    def test_partial_overlap_mid_score(self):
-        """Partial overlap in titles gives mid-range score."""
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_similar_texts_high_score(self, mock_get_client):
+        """Similar texts should have high cosine similarity."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.side_effect = [
+            [0.8, 0.4, 0.2, 0.1],
+            [0.75, 0.45, 0.25, 0.05],
+        ]
+        mock_get_client.return_value = mock_client
+
         score = self.strategy.score(
-            alert_title="High memory usage on api-server",
+            alert_title="High CPU usage on api server",
             alert_service="api-server",
-            incident_title="High CPU usage on api-server",
+            incident_title="CPU spike detected on api server",
             incident_services=["api-server"],
         )
-        assert 0.3 <= score <= 0.9
+        assert score >= 0.7
 
-    def test_different_texts_low_score(self):
-        """Unrelated texts should have low similarity."""
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_different_texts_low_score(self, mock_get_client):
+        """Unrelated texts should have low cosine similarity."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.side_effect = [
+            [0.9, 0.1, 0.0, 0.0],
+            [0.0, 0.0, 0.1, 0.9],
+        ]
+        mock_get_client.return_value = mock_client
+
         score = self.strategy.score(
             alert_title="Disk space critically low",
             alert_service="storage-node",
@@ -42,14 +68,73 @@ class TestSimilarityStrategyScoring:
         assert score <= 0.3
 
 
+class TestSimilarityStrategyFallback:
+    """Tests for Jaccard fallback when embeddings unavailable."""
+
+    def setup_method(self):
+        self.strategy = SimilarityStrategy()
+
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_fallback_when_unconfigured(self, mock_get_client):
+        """Falls back to Jaccard when no EMBEDDING_MODEL is set."""
+        mock_client = MagicMock()
+        mock_client.is_configured = False
+        mock_get_client.return_value = mock_client
+
+        score = self.strategy.score(
+            alert_title="High CPU usage on payment service",
+            alert_service="payment-service",
+            incident_title="High CPU usage on payment service",
+            incident_services=["payment-service"],
+        )
+        assert score >= 0.8
+
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_fallback_on_embedding_failure(self, mock_get_client):
+        """Falls back to Jaccard when embedding API returns None."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.return_value = None
+        mock_get_client.return_value = mock_client
+
+        score = self.strategy.score(
+            alert_title="High CPU usage on payment service",
+            alert_service="payment-service",
+            incident_title="High CPU usage on payment service",
+            incident_services=["payment-service"],
+        )
+        assert score >= 0.8
+
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_fallback_partial_overlap(self, mock_get_client):
+        """Fallback Jaccard gives mid-range score for partial overlap."""
+        mock_client = MagicMock()
+        mock_client.is_configured = False
+        mock_get_client.return_value = mock_client
+
+        score = self.strategy.score(
+            alert_title="High memory usage on api-server",
+            alert_service="api-server",
+            incident_title="High CPU usage on api-server",
+            incident_services=["api-server"],
+        )
+        assert 0.3 <= score <= 0.9
+
+
 class TestSimilarityStrategyServiceMatching:
     """Tests for service name matching."""
 
     def setup_method(self):
         self.strategy = SimilarityStrategy()
 
-    def test_exact_service_match_boosts_score(self):
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_exact_service_match_boosts_score(self, mock_get_client):
         """Exact service match gives full service score."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.return_value = [0.5, 0.5, 0.5, 0.5]
+        mock_get_client.return_value = mock_client
+
         score = self.strategy.score(
             alert_title="Error rate spike",
             alert_service="checkout-service",
@@ -58,8 +143,14 @@ class TestSimilarityStrategyServiceMatching:
         )
         assert score == pytest.approx(1.0)
 
-    def test_different_service_reduces_score(self):
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_different_service_reduces_score(self, mock_get_client):
         """Different service name reduces the service component."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.return_value = [0.5, 0.5, 0.5, 0.5]
+        mock_get_client.return_value = mock_client
+
         score_match = self.strategy.score(
             alert_title="Error rate spike",
             alert_service="checkout-service",
@@ -101,8 +192,14 @@ class TestSimilarityStrategyEdgeCases:
         )
         assert score == 0.0
 
-    def test_empty_service_still_scores_on_title(self):
+    @patch("services.correlation.strategies.similarity.get_embedding_client")
+    def test_empty_service_still_scores_on_title(self, mock_get_client):
         """Empty services should not crash; score uses title only."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.embed.return_value = [0.5, 0.5, 0.5, 0.5]
+        mock_get_client.return_value = mock_client
+
         score = self.strategy.score(
             alert_title="CPU overload detected",
             alert_service="",
@@ -112,7 +209,36 @@ class TestSimilarityStrategyEdgeCases:
         assert score == pytest.approx(0.7)
 
 
-class TestJaccardSimilarity:
+class TestCosineSimilarity:
+    """Unit tests for cosine similarity calculation."""
+
+    def test_identical_vectors(self):
+        """Identical vectors have cosine similarity of 1.0."""
+        sim = SimilarityStrategy._cosine_similarity([1, 2, 3], [1, 2, 3])
+        assert sim == pytest.approx(1.0)
+
+    def test_orthogonal_vectors(self):
+        """Orthogonal vectors have cosine similarity of 0.0."""
+        sim = SimilarityStrategy._cosine_similarity([1, 0], [0, 1])
+        assert sim == pytest.approx(0.0)
+
+    def test_opposite_vectors(self):
+        """Opposite vectors have cosine similarity of 0.0 (clamped)."""
+        sim = SimilarityStrategy._cosine_similarity([1, 0], [-1, 0])
+        assert sim == 0.0
+
+    def test_empty_vectors(self):
+        """Empty vectors return 0.0."""
+        sim = SimilarityStrategy._cosine_similarity([], [])
+        assert sim == 0.0
+
+    def test_mismatched_lengths(self):
+        """Mismatched vector lengths return 0.0."""
+        sim = SimilarityStrategy._cosine_similarity([1, 2], [1, 2, 3])
+        assert sim == 0.0
+
+
+class TestJaccardFallback:
     """Tests for Jaccard tokenization and similarity."""
 
     def test_stopwords_removed(self):
@@ -148,3 +274,57 @@ class TestJaccardSimilarity:
         """Partial overlap gives mid-range Jaccard."""
         sim = SimilarityStrategy._jaccard({"a", "b", "c"}, {"b", "c", "d"})
         assert sim == pytest.approx(0.5)
+
+
+class TestEmbeddingClientParsing:
+    """Tests for EMBEDDING_MODEL env var parsing."""
+
+    @patch.dict("os.environ", {"EMBEDDING_MODEL": "openai/text-embedding-3-small"})
+    def test_parses_openai_model(self):
+        """Correctly parses openai provider and model."""
+        from services.correlation.embedding_client import _parse_embedding_model
+        provider, model = _parse_embedding_model()
+        assert provider == "openai"
+        assert model == "text-embedding-3-small"
+
+    @patch.dict("os.environ", {"EMBEDDING_MODEL": "google/text-embedding-004"})
+    def test_parses_google_model(self):
+        """Correctly parses google provider and model."""
+        from services.correlation.embedding_client import _parse_embedding_model
+        provider, model = _parse_embedding_model()
+        assert provider == "google"
+        assert model == "text-embedding-004"
+
+    @patch.dict("os.environ", {"EMBEDDING_MODEL": "bedrock/amazon.titan-embed-text-v2:0"})
+    def test_parses_bedrock_model(self):
+        """Correctly parses bedrock provider and model."""
+        from services.correlation.embedding_client import _parse_embedding_model
+        provider, model = _parse_embedding_model()
+        assert provider == "bedrock"
+        assert model == "amazon.titan-embed-text-v2:0"
+
+    @patch.dict("os.environ", {"EMBEDDING_MODEL": ""})
+    def test_empty_returns_none(self):
+        """Empty EMBEDDING_MODEL returns (None, None)."""
+        from services.correlation.embedding_client import _parse_embedding_model
+        provider, model = _parse_embedding_model()
+        assert provider is None
+        assert model is None
+
+    @patch.dict("os.environ", {}, clear=False)
+    def test_unset_returns_none(self):
+        """Unset EMBEDDING_MODEL returns (None, None)."""
+        import os
+        os.environ.pop("EMBEDDING_MODEL", None)
+        from services.correlation.embedding_client import _parse_embedding_model
+        provider, model = _parse_embedding_model()
+        assert provider is None
+        assert model is None
+
+    @patch.dict("os.environ", {"EMBEDDING_MODEL": "no-slash-here"})
+    def test_no_slash_returns_none(self):
+        """Model without provider prefix returns (None, None)."""
+        from services.correlation.embedding_client import _parse_embedding_model
+        provider, model = _parse_embedding_model()
+        assert provider is None
+        assert model is None
