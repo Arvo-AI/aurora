@@ -200,7 +200,7 @@ def register():
 
                 try:
                     send_verification_email(user_id, email)
-                except Exception:
+                except Exception:  # noqa: BLE001 — don't block registration if verification email fails
                     logging.warning("Failed to send verification email for %s", user_id)
 
                 return jsonify({

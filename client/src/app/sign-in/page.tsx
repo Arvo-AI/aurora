@@ -228,7 +228,9 @@ function AuthPage() {
       })
       const data = await response.json()
       if (!response.ok) { setError(data.error || "Failed to change password"); return }
-      const result = await signIn("credentials", { email: session?.user?.email, password: newPassword, redirect: false })
+      const userEmail = session?.user?.email
+      if (!userEmail) { setError("Session expired. Please sign in again."); return }
+      const result = await signIn("credentials", { email: userEmail, password: newPassword, redirect: false })
       if (result?.ok) {
         const updated = await update()
         if (updated?.user?.emailVerified) {
@@ -236,6 +238,8 @@ function AuthPage() {
         } else {
           switchMode("verify-email")
         }
+      } else {
+        setError("Password changed but re-authentication failed. Please sign in again.")
       }
     } catch {
       setError("An error occurred. Please try again.")
