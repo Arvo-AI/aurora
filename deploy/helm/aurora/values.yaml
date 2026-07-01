@@ -239,6 +239,12 @@ config:
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
 
+  # --- Embedding model for alert correlation (optional) ---
+  # Format: provider/model-name. If empty, uses Jaccard token similarity.
+  # Examples: openai/text-embedding-3-small, google/text-embedding-004,
+  #           bedrock/amazon.titan-embed-text-v2:0
+  EMBEDDING_MODEL: ""
+
   # --- Multi-agent RCA orchestrator (opt-in) ---
   # When "false" (default), background RCA uses the legacy single-agent path.
   # When "true", a lead orchestrator triages each RCA and may fan out parallel
