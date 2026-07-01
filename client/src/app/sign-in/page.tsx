@@ -46,7 +46,7 @@ function getInitialMode(searchParams: URLSearchParams): AuthMode {
 function AuthPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { data: session } = useSession()
+  const { data: session, update } = useSession()
   const rawCallbackUrl = searchParams.get("callbackUrl") || "/"
   const callbackUrl =
     rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//")
@@ -157,7 +157,12 @@ function AuthPage() {
         sessionStorage.removeItem("aurora_onboarding_state")
         sessionStorage.removeItem("aurora_onboarding_queue")
         sessionStorage.setItem("aurora_needs_onboarding", "true")
-        switchMode("verify-email")
+        const updated = await update()
+        if (updated?.user?.emailVerified) {
+          router.push("/onboarding")
+        } else {
+          switchMode("verify-email")
+        }
       } else {
         setError("Registration successful but sign-in failed. Please sign in manually.")
       }
@@ -224,7 +229,14 @@ function AuthPage() {
       const data = await response.json()
       if (!response.ok) { setError(data.error || "Failed to change password"); return }
       const result = await signIn("credentials", { email: session?.user?.email, password: newPassword, redirect: false })
-      if (result?.ok) switchMode("verify-email")
+      if (result?.ok) {
+        const updated = await update()
+        if (updated?.user?.emailVerified) {
+          router.push("/")
+        } else {
+          switchMode("verify-email")
+        }
+      }
     } catch {
       setError("An error occurred. Please try again.")
     } finally {
