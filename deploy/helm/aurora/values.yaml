@@ -237,8 +237,8 @@ config:
   GUARDRAILS_LLM_MODEL: ""
 
   # --- Concurrency & Pool Sizing ---
-  GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "8"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
@@ -888,3 +888,14 @@ vault:
     #   #     --from-literal=access_key=AKIA... \
     #   #     --from-literal=secret_key=...
     #   # credentials: true
+
+# ------------------------------------------------------------------------------
+# Server liveness probe configuration
+# ------------------------------------------------------------------------------
+# Increase failureThreshold to give the server more time to recover from
+# transient dependency outages (e.g. Weaviate rescheduling) before kubelet kills
+# the pod. Default 6 = 6 × 20s = 120s tolerance, which exceeds the typical
+# Weaviate eviction+reschedule window (~60-90s).
+server:
+  livenessProbe:
+    failureThreshold: 6
