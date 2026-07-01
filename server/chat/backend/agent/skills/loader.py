@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 # Regex to split YAML frontmatter (between --- delimiters) from body
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)", re.DOTALL)
 
+# Standard skill directories (relative to this file)
+_SKILLS_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__)))
+
+CORE_SKILLS_DIR = os.path.join(_SKILLS_ROOT, "core")
+BACKGROUND_RCA_DIR = os.path.join(_SKILLS_ROOT, "rca", "background")
+RCA_SEGMENTS_DIR = os.path.join(_SKILLS_ROOT, "rca", "segments")
+INTEGRATIONS_DIR = os.path.join(_SKILLS_ROOT, "integrations")
+
 
 @dataclass
 class SkillMetadata:

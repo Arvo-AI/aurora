@@ -49,15 +49,20 @@ _TOOL_METADATA: dict = {
     "github_fix": {"capability_tags": ["source_control_write"], "mutates": True, "cacheable": False},
     # github_apply_fix is NOT exposed to agents — see note in cloud_tools.py.
     "iac_tool": {"capability_tags": ["iac"], "mutates": True, "cacheable": False},
-    # Runbooks + knowledge base
-    "confluence_runbook_parse": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "knowledge_base_search": {"capability_tags": ["knowledge_base", "runbooks"], "mutates": False, "cacheable": True},
+    # Runbooks + memory
+    "confluence_runbook_parse": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "list_memories": {"capability_tags": ["memory", "runbooks"], "mutates": False, "cacheable": True},
+    "read_memory": {"capability_tags": ["memory", "runbooks"], "mutates": False, "cacheable": True},
+    "write_memory": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
+    "append_to_memory": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
+    "edit_memory": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
+    "grep_memories": {"capability_tags": ["memory", "runbooks"], "mutates": False, "cacheable": True},
     # Ticket / incident history
     "list_incidentio_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_timeline": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     # General research
-    "web_search": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
+    "web_search": {"capability_tags": ["memory"], "mutates": False, "cacheable": True},
     # Bitbucket — source control + CI (mirror of github tagging)
     "bitbucket_repos": {"capability_tags": ["source_control_read"], "mutates": False, "cacheable": True},
     "bitbucket_branches": {"capability_tags": ["source_control_read"], "mutates": False, "cacheable": True},
@@ -72,9 +77,9 @@ _TOOL_METADATA: dict = {
     "cloudflare_list_zones": {"capability_tags": ["observability"], "mutates": False, "cacheable": True},
     "cloudflare_action": {"capability_tags": [], "mutates": True, "cacheable": False},
     # Confluence runbook-search (confluence_runbook_parse already above)
-    "confluence_search_similar": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "confluence_search_runbooks": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "confluence_fetch_page": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "confluence_search_similar": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "confluence_search_runbooks": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "confluence_fetch_page": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
     # Coroot — observability platform
     "coroot_get_incidents": {"capability_tags": ["ticket_history", "observability"], "mutates": False, "cacheable": True},
     "coroot_get_incident_detail": {"capability_tags": ["ticket_history", "observability"], "mutates": False, "cacheable": True},
@@ -97,15 +102,15 @@ _TOOL_METADATA: dict = {
     "jira_update_issue": {"capability_tags": [], "mutates": True, "cacheable": False},
     "jira_link_issues": {"capability_tags": [], "mutates": True, "cacheable": False},
     # Notion — read-only investigation tools (write tools default to mutates=True via the catch-all below)
-    "notion_search": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "notion_fetch": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "notion_query_database": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
-    "notion_query_data_source": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
-    "notion_get_block_children": {"capability_tags": ["knowledge_base"], "mutates": False, "cacheable": True},
+    "notion_search": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "notion_fetch": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "notion_query_database": {"capability_tags": ["memory"], "mutates": False, "cacheable": True},
+    "notion_query_data_source": {"capability_tags": ["memory"], "mutates": False, "cacheable": True},
+    "notion_get_block_children": {"capability_tags": ["memory"], "mutates": False, "cacheable": True},
     # SharePoint
-    "sharepoint_search": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "sharepoint_fetch_page": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
-    "sharepoint_fetch_document": {"capability_tags": ["runbooks", "knowledge_base"], "mutates": False, "cacheable": True},
+    "sharepoint_search": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "sharepoint_fetch_page": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
+    "sharepoint_fetch_document": {"capability_tags": ["runbooks", "memory"], "mutates": False, "cacheable": True},
     "sharepoint_create_page": {"capability_tags": [], "mutates": True, "cacheable": False},
     # ThousandEyes — network observability
     "thousandeyes_list_tests": {"capability_tags": ["metrics", "observability"], "mutates": False, "cacheable": True},
@@ -175,7 +180,7 @@ def _resolve_connected_tool_filter(user_id: str) -> tuple[set, set]:
 
     - ``skill_owned_tools``: every tool name listed by ANY registered skill.
       Tools NOT in this set are considered always-available built-ins
-      (e.g. ``cloud_exec``, ``knowledge_base_search``, ``web_search``).
+      (e.g. ``cloud_exec``, ``list_memories``, ``web_search``).
     - ``connected_tools``: tools owned by at least one skill the user has
       currently connected. A skill-owned tool only passes the filter if it
       appears here.

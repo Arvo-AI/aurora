@@ -24,8 +24,6 @@ services:
     enabled: true    # Set false to use external Postgres (RDS, Cloud SQL, etc.)
   redis:
     enabled: true    # Set false to use external Redis (ElastiCache, Memorystore, etc.)
-  weaviate:
-    enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
   memgraph:
@@ -142,7 +140,6 @@ replicaCounts:
   # Single-instance services (do NOT increase without additional config)
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
   redis: 1           # Redis - single instance, no clustering configured
-  weaviate: 1        # Vector database - single instance, clustering requires additional config
   memgraph: 1        # Graph database - single instance, in-memory
   vault: 1           # Secrets manager - single instance, HA requires additional config
   postgres: 1        # Database - single instance, replication requires additional config
@@ -172,11 +169,6 @@ config:
   STORAGE_CACHE_ENABLED: "true"
   STORAGE_CACHE_TTL: "60"
   
-  # --- Vector Database (Weaviate) ---
-  WEAVIATE_HOST: ""  # Auto-generated if empty: <release>-weaviate
-  WEAVIATE_PORT: "8080"
-  WEAVIATE_GRPC_PORT: "50051"
-  
   # --- Graph Database (Memgraph) ---
   MEMGRAPH_HOST: ""  # Auto-generated if empty: <release>-memgraph
   MEMGRAPH_PORT: "7687"
@@ -190,8 +182,6 @@ config:
   # Redis: use rediss:// in REDIS_URL to enable TLS
   REDIS_SSL_CA_CERTS: ""          # Path to CA cert for Redis TLS
   REDIS_SSL_CERT_REQS: ""         # "none", "optional", "required"
-  # Weaviate: set to "true" for HTTPS+gRPC-TLS
-  WEAVIATE_SECURE: "false"
   
   # --- Public URLs (REQUIRED) ---
   # NEXT_PUBLIC_* vars are written to window.__ENV by docker-entrypoint.sh at startup.
@@ -295,7 +285,7 @@ config:
   #   - Terminal namespace (TERMINAL_NAMESPACE)
   #   - RBAC Role/RoleBindings for server and chatbot to manage terminal pods
   #   - NetworkPolicy blocking terminal pods from accessing cluster services
-  #     (Vault, Weaviate, Postgres, Redis, etc.) while allowing external internet
+  #     (Vault, Postgres, Redis, etc.) while allowing external internet
   #   - K8s API tokens mounted on server/chatbot pods
   # Optional additional hardening (manual):
   #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
@@ -575,15 +565,6 @@ resources:
       cpu: "300m"
       memory: "512Mi"
       ephemeral-storage: "1Gi"
-  weaviate:
-    requests:
-      cpu: "100m"
-      memory: "512Mi"
-      ephemeral-storage: "100Mi"
-    limits:
-      cpu: "500m"
-      memory: "1Gi"
-      ephemeral-storage: "1Gi"
   memgraph:
     requests:
       cpu: "100m"
@@ -696,10 +677,6 @@ affinity: {}
 #     tolerations: []
 #     nodeSelector: {}
 #     affinity: {}
-#   weaviate:
-#     tolerations: []
-#     nodeSelector: {}
-#     affinity: {}
 #   vault:
 #     tolerations: []
 #     nodeSelector: {}
@@ -715,8 +692,6 @@ affinity: {}
 persistence:
   postgres:
     size: 50Gi           # Database storage
-  weaviate:
-    size: 50Gi           # Vector embeddings storage
   vault:
     size: 10Gi           # Secrets storage
   redis:
@@ -844,7 +819,7 @@ ingress:
 # MITIGATIONS IN PLACE:
 #   1. Terminal pods run in an isolated namespace with a default-deny NetworkPolicy
 #      that blocks all egress to cluster-internal IPs (see pod-isolation.yaml).
-#      Untrusted pods cannot reach Vault, Weaviate, Postgres, Redis, or any other internal services.
+#      Untrusted pods cannot reach Vault, Postgres, Redis, or any other internal services.
 #   2. Terminal pods never receive Vault tokens - credentials are fetched by
 #      trusted pods and injected per-command via environment variables.
 #

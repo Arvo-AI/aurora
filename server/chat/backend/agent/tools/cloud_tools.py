@@ -49,7 +49,6 @@ from .cloud_exec_tool import cloud_exec
 
 from .zip_file_tool import analyze_zip_file
 from .cloud_provider_utils import determine_target_provider_from_context
-from .rag_indexer_tool import rag_index_zip, RAGIndexZipArgs
 from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
 from .tailscale_ssh_tool import tailscale_ssh, is_tailscale_connected
@@ -1738,18 +1737,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         description="Analyze a ZIP attachment: list, extract a file, or detect project structure",
     ))
 
-    # Add RAG indexer for ZIPs
-    tools.append(StructuredTool.from_function(
-        func=rag_index_zip,
-        name="rag_index_zip",
-        description=(
-            "Index code/text files from an uploaded ZIP into the RAG store (Weaviate). "
-            "Arguments: attachment_index (int)=0, max_files (int)=200, max_file_bytes (int)=750000, "
-            "include_patterns (list[str]) and exclude_dirs (list[str])."
-        ),
-        args_schema=RAGIndexZipArgs,
-    ))
-
     # Add load_skill tool for on-demand integration guidance
     try:
         from chat.backend.agent.skills.load_skill_tool import load_skill as _load_skill, LoadSkillArgs
@@ -1777,56 +1764,140 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to register load_skill tool: {e}")
 
-    # Add Knowledge Base search tool for authenticated users
+    # Add Memory tools for authenticated users
     try:
-        from chat.backend.agent.tools.knowledge_base_search_tool import (
-            knowledge_base_search,
-            KnowledgeBaseSearchArgs,
-            KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
+        from chat.backend.agent.tools.memory_tool import (
+            list_memories,
+            read_memory,
+            write_memory,
+            ListMemoriesArgs,
+            ReadMemoryArgs,
+            WriteMemoryArgs,
         )
 
-        context_wrapped_kb = with_user_context(knowledge_base_search)
-        notification_wrapped_kb = with_completion_notification(context_wrapped_kb)
+        context_wrapped_lm = with_user_context(list_memories)
+        notification_wrapped_lm = with_completion_notification(context_wrapped_lm)
         if tool_capture:
-            final_kb_func = wrap_func_with_capture(notification_wrapped_kb, "knowledge_base_search")
+            final_lm_func = wrap_func_with_capture(notification_wrapped_lm, "list_memories")
         else:
-            final_kb_func = notification_wrapped_kb
+            final_lm_func = notification_wrapped_lm
 
         tools.append(StructuredTool.from_function(
-            func=final_kb_func,
-            name="knowledge_base_search",
-            description=KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
-            args_schema=KnowledgeBaseSearchArgs,
+            func=final_lm_func,
+            name="list_memories",
+            description=(
+                "List org memory entries, optionally filtered by category "
+                "Use to discover available knowledge before reading specific entries."
+            ),
+            args_schema=ListMemoriesArgs,
         ))
-        logging.info(f"Added knowledge_base_search tool for user {user_id}")
-    except Exception as e:
-        logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
-    # Add get_infrastructure_context for all authenticated users
-    if user_id:
-        try:
-            from chat.backend.agent.tools.infra_context_tool import (
-                get_infrastructure_context,
-                GetInfraContextArgs,
-                GET_INFRA_CONTEXT_DESCRIPTION,
-            )
+        context_wrapped_rm = with_user_context(read_memory)
+        notification_wrapped_rm = with_completion_notification(context_wrapped_rm)
+        if tool_capture:
+            final_rm_func = wrap_func_with_capture(notification_wrapped_rm, "read_memory")
+        else:
+            final_rm_func = notification_wrapped_rm
 
-            context_wrapped_ic = with_user_context(get_infrastructure_context)
-            notification_wrapped_ic = with_completion_notification(context_wrapped_ic)
-            if tool_capture:
-                final_ic_func = wrap_func_with_capture(notification_wrapped_ic, "get_infrastructure_context")
-            else:
-                final_ic_func = notification_wrapped_ic
+        tools.append(StructuredTool.from_function(
+            func=final_rm_func,
+            name="read_memory",
+            description=(
+                "Read the full markdown content of a specific memory entry by category and title. "
+                "Use the ORG MEMORY index in your system prompt to find available entries, "
+                "then read the ones relevant to your investigation."
+            ),
+            args_schema=ReadMemoryArgs,
+        ))
 
+        context_wrapped_wm = with_user_context(write_memory)
+        notification_wrapped_wm = with_completion_notification(context_wrapped_wm)
+        if tool_capture:
+            final_wm_func = wrap_func_with_capture(notification_wrapped_wm, "write_memory")
+        else:
+            final_wm_func = notification_wrapped_wm
+
+        if not is_pr_review:
             tools.append(StructuredTool.from_function(
-                func=final_ic_func,
-                name="get_infrastructure_context",
-                description=GET_INFRA_CONTEXT_DESCRIPTION,
-                args_schema=GetInfraContextArgs,
+                func=final_wm_func,
+                name="write_memory",
+                description=(
+                    "Create or overwrite an org memory entry (full content replacement). "
+                    "Prefer append_to_memory for adding new info to existing entries, or "
+                    "edit_memory for surgical changes. Use write_memory only for new entries "
+                    "or when the entire content needs replacing."
+                ),
+                args_schema=WriteMemoryArgs,
             ))
-            logging.info(f"Added get_infrastructure_context tool for user {user_id}")
-        except Exception as e:
-            logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
+
+        from chat.backend.agent.tools.memory_tool import (
+            append_to_memory,
+            edit_memory,
+            grep_memories,
+            AppendToMemoryArgs,
+            EditMemoryArgs,
+            GrepMemoriesArgs,
+        )
+
+        context_wrapped_am = with_user_context(append_to_memory)
+        notification_wrapped_am = with_completion_notification(context_wrapped_am)
+        if tool_capture:
+            final_am_func = wrap_func_with_capture(notification_wrapped_am, "append_to_memory")
+        else:
+            final_am_func = notification_wrapped_am
+
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_am_func,
+                name="append_to_memory",
+                description=(
+                    "Append content to the end of an existing memory entry without rewriting it. "
+                    "Creates the entry if it doesn't exist. Use for incrementally adding findings, "
+                    "new sections, or updates to an existing document."
+                ),
+                args_schema=AppendToMemoryArgs,
+            ))
+
+        context_wrapped_em = with_user_context(edit_memory)
+        notification_wrapped_em = with_completion_notification(context_wrapped_em)
+        if tool_capture:
+            final_em_func = wrap_func_with_capture(notification_wrapped_em, "edit_memory")
+        else:
+            final_em_func = notification_wrapped_em
+
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_em_func,
+                name="edit_memory",
+                description=(
+                    "Find and replace specific text within a memory entry. Like sed — make surgical "
+                    "edits without rewriting the whole entry. old_text must match exactly. "
+                    "Read the entry first to see current content before editing."
+                ),
+                args_schema=EditMemoryArgs,
+            ))
+
+        context_wrapped_gm = with_user_context(grep_memories)
+        notification_wrapped_gm = with_completion_notification(context_wrapped_gm)
+        if tool_capture:
+            final_gm_func = wrap_func_with_capture(notification_wrapped_gm, "grep_memories")
+        else:
+            final_gm_func = notification_wrapped_gm
+
+        tools.append(StructuredTool.from_function(
+            func=final_gm_func,
+            name="grep_memories",
+            description=(
+                "Search across all memory content for a keyword or phrase. Returns matching "
+                "snippets with context. Use to find information across entries without reading "
+                "each one individually."
+            ),
+            args_schema=GrepMemoriesArgs,
+        ))
+
+        logging.info(f"Added memory tools (list, read, write, append, edit, grep) for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add memory tools: {e}")
 
     # Introspection tools — incident/infra/actions/metrics self-audit (always available)
     if user_id:
@@ -1849,7 +1920,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 get_action, GetActionArgs,
                 graph_get_service, GraphGetServiceArgs,
                 postmortem_list, PostmortemListArgs,
-                kb_get_memory, KbGetMemoryArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
             )
 
@@ -1984,14 +2054,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     PostmortemListArgs,
                 ),
                 (
-                    kb_get_memory,
-                    "kb_get_memory",
-                    "Read the org's persistent knowledge base memory — a shared context "
-                    "document that teams maintain with org-specific conventions, runbook "
-                    "references, and operational notes.",
-                    KbGetMemoryArgs,
-                ),
-                (
                     grafana_list_alerts,
                     "grafana_list_alerts",
                     "List Grafana alerts ingested via webhook. Optionally filter by state "
@@ -2018,56 +2080,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.info(f"Added introspection tools for user {user_id}")
         except Exception as e:
             logging.warning(f"Failed to add introspection tools: {e}")
-
-    # Add discovery finding tool for prediscovery mode
-    if mode_suffix == "prediscovery":
-        try:
-            from chat.backend.agent.tools.discovery_finding_tool import (
-                save_discovery_finding,
-                DiscoveryFindingArgs,
-                DISCOVERY_FINDING_DESCRIPTION,
-            )
-
-            context_wrapped_df = with_user_context(save_discovery_finding)
-            notification_wrapped_df = with_completion_notification(context_wrapped_df)
-            if tool_capture:
-                final_df_func = wrap_func_with_capture(notification_wrapped_df, "save_discovery_finding")
-            else:
-                final_df_func = notification_wrapped_df
-
-            tools.append(StructuredTool.from_function(
-                func=final_df_func,
-                name="save_discovery_finding",
-                description=DISCOVERY_FINDING_DESCRIPTION,
-                args_schema=DiscoveryFindingArgs,
-            ))
-            logging.info(f"Added save_discovery_finding tool for prediscovery mode")
-        except Exception as e:
-            logging.warning(f"Failed to add save_discovery_finding tool: {e}")
-
-        try:
-            from chat.backend.agent.tools.infra_context_tool import (
-                save_infrastructure_context,
-                SaveInfraContextArgs,
-                SAVE_INFRA_CONTEXT_DESCRIPTION,
-            )
-
-            context_wrapped_sic = with_user_context(save_infrastructure_context)
-            notification_wrapped_sic = with_completion_notification(context_wrapped_sic)
-            if tool_capture:
-                final_sic_func = wrap_func_with_capture(notification_wrapped_sic, "save_infrastructure_context")
-            else:
-                final_sic_func = notification_wrapped_sic
-
-            tools.append(StructuredTool.from_function(
-                func=final_sic_func,
-                name="save_infrastructure_context",
-                description=SAVE_INFRA_CONTEXT_DESCRIPTION,
-                args_schema=SaveInfraContextArgs,
-            ))
-            logging.info("Added save_infrastructure_context tool for prediscovery mode")
-        except Exception as e:
-            logging.warning(f"Failed to add save_infrastructure_context tool: {e}")
 
     # Add Splunk tools if connected
     if is_splunk_connected(user_id):

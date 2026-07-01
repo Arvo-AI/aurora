@@ -5,7 +5,6 @@ from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.llm import LLMManager, ModelConfig
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model, get_registry
-from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 from langchain_core.tools import StructuredTool
@@ -83,13 +82,12 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         return result
 
 class Agent:
-    def __init__(self, weaviate_client: WeaviateClient, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10):
+    def __init__(self, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10) -> None:
         self.llm_manager = LLMManager()
         self.postgres_client = postgres_client
-        self.weaviate_client = weaviate_client
         self.ctx_len = ctx_len
-        self.websocket_sender = websocket_sender  # Store websocket_sender directly
-        self.event_loop = event_loop  # Store event loop for thread-safe async calls
+        self.websocket_sender = websocket_sender
+        self.event_loop = event_loop
 
     def set_tool_capture(self, tool_capture):
         """Set the tool capture instance to be used by this agent."""

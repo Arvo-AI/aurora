@@ -75,34 +75,35 @@ async def _do_trigger_rca(
     return truncate_payload(result, tool_name="trigger_rca")
 
 
-async def _do_knowledge_base_search(api_call: ApiCall, query: str, limit: int) -> Dict[str, Any]:
+async def _do_list_memories(api_call: ApiCall, category: str) -> Dict[str, Any]:
+    params = f"?category={category}" if category else ""
     return truncate_payload(
-        await api_call(
-            "POST",
-            "/api/knowledge-base/search",
-            body={"query": query, "limit": limit},
-        ),
-        tool_name="knowledge_base_search",
+        await api_call("GET", f"/api/memory/entries{params}"),
+        tool_name="list_memories",
+    )
+
+
+async def _do_read_memory(api_call: ApiCall, entry_id: str) -> Dict[str, Any]:
+    return truncate_payload(
+        await api_call("GET", f"/api/memory/entries/{entry_id}"),
+        tool_name="read_memory",
     )
 
 
 async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict[str, Any]:
-    kb_call = api_call("POST", "/api/knowledge-base/search",
-                       body={"query": query, "limit": limit})
+    mem_call = api_call("GET", "/api/memory/entries?category=runbook")
     sp_call = api_call("POST", "/sharepoint/search",
                        body={"query": query, "maxResults": limit})
-    kb_res, sp_res = await asyncio.gather(kb_call, sp_call, return_exceptions=True)
+    mem_res, sp_res = await asyncio.gather(mem_call, sp_call, return_exceptions=True)
 
     sources: List[Dict[str, Any]] = []
-    if isinstance(kb_res, Exception):
+    if isinstance(mem_res, Exception):
         logger.exception(
-            "search_runbooks: knowledge_base call failed", exc_info=kb_res,
+            "search_runbooks: memory call failed", exc_info=mem_res,
         )
-        sources.append({"source": "knowledge_base", "error": "search_failed"})
+        sources.append({"source": "memory", "error": "search_failed"})
     else:
-        sources.append({"source": "knowledge_base", "results": kb_res})
-    # SharePoint silently skipped on error — likely not connected; callers
-    # should hit the explicit `sharepoint_search` dispatch entry for the error.
+        sources.append({"source": "memory", "results": mem_res})
     if not isinstance(sp_res, Exception):
         sources.append({"source": "sharepoint", "results": sp_res})
 
@@ -296,13 +297,18 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
         )
 
     @mcp.tool()
-    async def knowledge_base_search(query: str, limit: int = 5) -> Dict[str, Any]:
-        """Semantic search across Aurora's knowledge base (uploaded docs, indexed runbooks)."""
-        return await _do_knowledge_base_search(api_call, query, limit)
+    async def list_memories(category: str = "") -> Dict[str, Any]:
+        """List memory entries. Optionally filter by category: context, runbook, infrastructure, learned, postmortem, artifact."""
+        return await _do_list_memories(api_call, category)
+
+    @mcp.tool()
+    async def read_memory(entry_id: str) -> Dict[str, Any]:
+        """Read a single memory entry by ID. Use list_memories first to find the ID."""
+        return await _do_read_memory(api_call, entry_id)
 
     @mcp.tool()
     async def search_runbooks(query: str, limit: int = 5) -> Dict[str, Any]:
-        """Search runbooks/docs across the Aurora knowledge base and SharePoint
+        """Search runbooks/docs across org memory and SharePoint
         (when connected). Confluence has no search endpoint — fetch specific
         Confluence pages via call_tool('confluence_fetch_page', { url })."""
         return await _do_search_runbooks(api_call, query, limit)

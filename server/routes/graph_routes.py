@@ -147,7 +147,9 @@ def get_infrastructure_context_api(user_id):
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT content, updated_at FROM infrastructure_context WHERE org_id = %s",
+                    """SELECT content, updated_at FROM artifacts
+                       WHERE org_id = %s AND category = 'infrastructure'
+                       AND title = 'Infrastructure Context'""",
                     (org_id,),
                 )
                 row = cur.fetchone()

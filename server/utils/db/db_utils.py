@@ -1234,23 +1234,6 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_user_id ON knowledge_base_documents(user_id);
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON knowledge_base_documents(status);
                 """,
-                "incident_feedback": """
-                    CREATE TABLE IF NOT EXISTS incident_feedback (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        user_id VARCHAR(255) NOT NULL,
-                        org_id VARCHAR(255),
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-                        feedback_type VARCHAR(20) NOT NULL,
-                        comment TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_feedback_user_incident
-                    ON incident_feedback(user_id, incident_id);
-
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
-                """,
                 "postmortems": """
                     CREATE TABLE IF NOT EXISTS postmortems (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1282,13 +1265,13 @@ def initialize_tables():
                         user_id VARCHAR(255) NOT NULL,
                         title VARCHAR(500) NOT NULL,
                         content TEXT,
+                        category VARCHAR(50) NOT NULL,
+                        description TEXT,
                         last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
                         current_version_id UUID,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
                 """,
                 "artifact_versions": """
                     CREATE TABLE IF NOT EXISTS artifact_versions (
@@ -1471,7 +1454,6 @@ def initialize_tables():
             # so they don't need RLS - incident_alerts is protected separately for safety
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
-            rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
@@ -2738,7 +2720,7 @@ def initialize_tables():
                 "k8s_pod_metrics", "k8s_node_metrics",
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
-                "incident_feedback", "postmortems",
+                "postmortems",
                 "incident_lifecycle_events",
                 "connected_repos",
             ]
@@ -3081,6 +3063,81 @@ def initialize_tables():
                     logging.info(f"De-duplicated {cursor.rowcount} organization name(s).")
             except Exception as e:
                 logging.warning(f"Error de-duplicating organization names: {e}")
+                conn.rollback()
+
+            # artifacts: add category + description columns for memory system
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS description TEXT;
+                """)
+                # Back-fill any rows missing a category
+                cursor.execute("""
+                    UPDATE artifacts SET category = 'artifact' WHERE category IS NULL OR category = '';
+                """)
+                # Now enforce NOT NULL
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
+                """)
+                # Replace legacy (org_id, title) uniqueness with (org_id, category, title)
+                cursor.execute("""
+                    DROP INDEX IF EXISTS idx_artifacts_org_title;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title
+                        ON artifacts(org_id, category, title);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_org_category
+                        ON artifacts(org_id, category);
+                """)
+            except Exception as e:
+                logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
+                conn.rollback()
+
+            # Auto-trigger memory migration if old KB tables still have data
+            try:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'knowledge_base_memory'
+                    )
+                """)
+                old_tables_exist = cursor.fetchone()[0]
+
+                if old_tables_exist:
+                    # Migrate if any legacy source has rows and nothing migrated yet
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM knowledge_base_memory
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM infrastructure_context
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM knowledge_base_documents
+                            WHERE status IN ('processed', 'ready')
+                              AND storage_path IS NOT NULL
+                            LIMIT 1
+                        )
+                    """)
+                    has_source_data = cursor.fetchone()[0]
+
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM artifacts
+                            WHERE category IN ('context', 'infrastructure', 'runbook')
+                            LIMIT 1
+                        )
+                    """)
+                    already_migrated = cursor.fetchone()[0]
+
+                    if has_source_data and not already_migrated:
+                        from services.memory.migration_task import migrate_kb_to_memory
+                        migrate_kb_to_memory.delay()
+                        logging.info("Triggered automatic KB → memory migration task")
+            except Exception as e:
+                logging.warning(f"Error checking/triggering memory migration: {e}")
                 conn.rollback()
 
             conn.commit()

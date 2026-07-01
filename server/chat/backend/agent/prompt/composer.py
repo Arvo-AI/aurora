@@ -5,10 +5,8 @@ import os
 from typing import Any, List, Optional
 
 from .background import build_background_mode_segment
-from .context_fetchers import (
-    build_knowledge_base_memory_segment,
-    build_manual_vm_access_segment,
-)
+from .context_fetchers import build_manual_vm_access_segment
+from services.memory.index_builder import build_memory_index
 from .provider_rules import (
     build_ephemeral_rules,
     build_failure_recovery_segment,
@@ -62,7 +60,7 @@ def build_system_invariant(is_background: bool = False) -> str:
     return load_core_prompt(core_dir, segments=[
         "identity",
         "security",
-        "knowledge_base",
+        "memory",
         "tool_selection",
         "ssh_access",
         "cloud_access",
@@ -126,10 +124,15 @@ def build_prompt_segments(
         except Exception as e:
             logging.warning(f"Failed to build skills index: {e}")
 
-    # Build knowledge base memory context for authenticated users
-    knowledge_base_memory = ""
-    if state and hasattr(state, 'user_id'):
-        knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
+    # Build memory index for authenticated users
+    memory_context = ""
+    user_id = getattr(state, "user_id", None) if state else None
+    if user_id:
+        try:
+            memory_context = build_memory_index(user_id) or ""
+        except Exception:
+            logging.exception("Failed to build memory index for prompt")
+            memory_context = ""
 
     # Build org-level command policy segment
     security_policy = ""
@@ -160,7 +163,7 @@ def build_prompt_segments(
         failure_recovery=failure_recovery,
         background_mode=background_mode,
         manual_vm_access=manual_vm_access,
-        knowledge_base_memory=knowledge_base_memory,
+        knowledge_base_memory=memory_context,
         integration_index=integration_index,
         security_policy=security_policy,
         is_rca_background=is_background and not is_action,

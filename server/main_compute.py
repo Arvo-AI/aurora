@@ -473,9 +473,9 @@ from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
 import routes.opsgenie.tasks  # noqa: F401
 app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
 
-# --- Knowledge Base Routes ---
-from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
-app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
+# --- Memory Routes ---
+from routes.memory import memory_bp  # noqa: F401
+app.register_blueprint(memory_bp, url_prefix="/api/memory")
 
 
 # --- Confluence Integration Routes ---
@@ -516,10 +516,8 @@ app.register_blueprint(bitbucket_selection_bp, url_prefix="/bitbucket")
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
 from routes.incidents_sse import incidents_sse_bp
-from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
-app.register_blueprint(incident_feedback_bp)
 from routes.incidents_findings import findings_bp
 app.register_blueprint(findings_bp)
 

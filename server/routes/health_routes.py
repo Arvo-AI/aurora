@@ -6,7 +6,6 @@ This module provides comprehensive health checks for all Aurora services.
 import logging
 import time
 import os
-import requests
 import socket
 from datetime import datetime, timezone
 from flask import Blueprint, jsonify
@@ -52,23 +51,6 @@ def check_redis_health():
     except Exception as e:
         logger.warning(f"Redis health check failed: {e}", exc_info=True)
         return {"status": "unhealthy", "error": "Redis connection failed"}
-
-def check_weaviate_health():
-    """Check Weaviate vector database connectivity."""
-    try:
-        weaviate_host = os.getenv('WEAVIATE_HOST', 'weaviate')
-        weaviate_port = os.getenv('WEAVIATE_PORT', '8080')
-        weaviate_secure = os.getenv('WEAVIATE_SECURE', 'false').lower() in ('1', 'true', 'yes')
-        scheme = "https" if weaviate_secure else "http"
-        response = requests.get(f"{scheme}://{weaviate_host}:{weaviate_port}/v1/.well-known/ready", timeout=5)
-        response.raise_for_status()
-        return {"status": "healthy", "message": "Weaviate connection successful"}
-    except requests.RequestException as e:
-        logger.warning(f"Weaviate health check failed: {e}")
-        return {"status": "unhealthy", "error": "Weaviate HTTP connection failed"}
-    except Exception as e:
-        logger.warning(f"Weaviate health check failed: {e}")
-        return {"status": "unhealthy", "error": "Weaviate health check failed"}
 
 def check_celery_health():
     """Check Celery worker health."""
@@ -123,7 +105,6 @@ def health_check():
     checks = {
         "database": check_database_health(),
         "redis": check_redis_health(),
-        "weaviate": check_weaviate_health(),
         "celery": check_celery_health(),
         "chatbot_websocket": check_chatbot_websocket(),
     }

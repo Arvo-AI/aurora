@@ -7,7 +7,7 @@ import { Settings, User, BookOpen, FileText, Building2, Shield, DollarSign } fro
 import { cn } from "@/lib/utils";
 import { GeneralSettings } from "@/components/GeneralSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
-import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
+import { MemorySettings } from "@/components/MemorySettings";
 import { PostmortemsSettings } from "@/components/PostmortemsSettings";
 import { OrgSettings } from "@/components/OrgSettings";
 import { SecuritySettings } from "@/components/SecuritySettings";
@@ -21,7 +21,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'organization' | 'general' | 'profile' | 'knowledge-base' | 'postmortems' | 'security' | 'usage';
+type SettingsTab = 'organization' | 'general' | 'profile' | 'memory' | 'postmortems' | 'security' | 'usage';
 
 const UsageTab = React.lazy(() => import('@/app/monitor/components/usage-tab'));
 
@@ -51,10 +51,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       description: 'Update your profile information'
     },
     {
-      id: 'knowledge-base' as SettingsTab,
-      label: 'Knowledge Base',
+      id: 'memory' as SettingsTab,
+      label: 'Memory',
       icon: BookOpen,
-      description: 'Manage documentation and context'
+      description: 'Manage knowledge and context'
     },
     {
       id: 'postmortems' as SettingsTab,
@@ -110,11 +110,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
         );
       
-      case 'knowledge-base':
+      case 'memory':
         return (
           <div className="p-6 h-full overflow-y-auto flex flex-col min-h-0">
             <div className="flex-1 overflow-y-auto min-h-0">
-              <KnowledgeBaseSettings />
+              <MemorySettings />
             </div>
           </div>
         );

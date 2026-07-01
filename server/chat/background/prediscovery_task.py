@@ -3,7 +3,7 @@ Celery task for running prediscovery agent sessions.
 
 The prediscovery agent autonomously explores connected integrations (GitHub, Jenkins,
 cloud providers, monitoring tools) to map how services are interconnected. Findings
-are saved to the knowledge base for fast retrieval during RCA investigations.
+are saved to org memory for fast retrieval during RCA investigations.
 """
 
 import logging
@@ -54,20 +54,6 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
         return []
 
 
-def _cleanup_old_discovery_chunks(org_id: str, before: str = None) -> int:
-    """Delete previous discovery findings from Weaviate for this org.
-    
-    Args:
-        org_id: Organization to clean up for
-        before: ISO timestamp -- only delete findings created before this time
-    """
-    try:
-        from routes.knowledge_base.weaviate_client import delete_discovery_chunks
-        return delete_discovery_chunks(org_id, before=before)
-    except Exception as e:
-        logger.warning(f"[Prediscovery] Failed to cleanup old chunks: {e}")
-        return 0
-
 
 def build_prediscovery_prompt(user_id: str, providers: List[str], integrations: Dict[str, bool]) -> str:
     """Build the system prompt for the prediscovery agent."""
@@ -88,7 +74,7 @@ for understanding the production system.
 
 ## YOUR DELIVERABLE
 
-At the END of your investigation, you MUST call save_infrastructure_context() with a single
+At the END of your investigation, you MUST call write_memory(category='infrastructure', title='Infrastructure Context', ...) with a single
 document that covers:
 - All environments (for example production, staging, dev are common) and how they relate
 - Services in each environment, their dependencies, and how they communicate
@@ -103,16 +89,16 @@ with clear sections. Be specific -- include names, regions, namespaces, ports, i
 
 ## SIDE-EFFECT: INDIVIDUAL FINDINGS
 
-As you investigate, ALSO call save_discovery_finding() for each logical chain you discover.
-These are indexed separately for semantic search during incident response.
+As you investigate, call write_memory() for each logical chain you discover.
+Use category='infrastructure' so findings are indexed for incident response.
 
 ## CRITICAL RULES
 
 - The local filesystem is Aurora's own code -- NEVER use terminal_exec to read local files (ls, cat, find, grep, env). There is nothing useful locally.
 - terminal_exec is ONLY allowed for SSH into manual VMs (e.g. ssh -i ~/.ssh/id_key user@ip).
 - Each finding must describe real infrastructure you discovered by querying external APIs.
-- Call save_discovery_finding after EVERY interconnection chain you discover.
-- Call save_infrastructure_context ONCE at the very end with the complete consolidated document.
+- Call write_memory(category='infrastructure', ...) after EVERY interconnection chain you discover.
+- At the very end, call write_memory(category='infrastructure', title='Infrastructure Context', ...) with the full consolidated document.
 
 ## EXPLORATION STRATEGY
 
@@ -160,17 +146,21 @@ Each finding must be a detailed, descriptive paragraph that a human or AI can re
 an incident and immediately understand the topology. Write full sentences, not bullet lists.
 
 GOOD example:
-  save_discovery_finding(
+  write_memory(
+    category='infrastructure',
     title='payment-api deployment and monitoring chain',
     content='The payment-api service lives in GitHub repo acme-org/payment-api on the main branch. It is deployed via Jenkins job payment-service-deploy which builds a Docker image pushed to ECR at 390403884122.dkr.ecr.us-east-1.amazonaws.com/payment-api. The deployment targets Kubernetes cluster prod-east-1 in namespace payments, running as deployment payment-api with 3 replicas. The service depends on RDS instance db-payments-prod (PostgreSQL) which it connects to via environment variable DATABASE_URL, and ElastiCache cluster redis-sessions for session storage. It is monitored by Datadog monitors payment-api-latency (threshold: p99 > 500ms) and payment-api-error-rate (threshold: 5xx > 1%), both tagged with service:payment-api and env:production.',
-    tags='github,jenkins,k8s,aws,datadog,payment-api'
+    description='github,jenkins,k8s,aws,datadog,payment-api'
   )
 
 ## BEGIN EXPLORATION
 
-Investigate all connected integrations. Build toward the consolidated document.
-Call save_discovery_finding() as you go. Once your investigation is complete, call
-save_infrastructure_context() with the full synthesized document."""
+IMPORTANT: Before investigating, use list_memories(category='infrastructure') to see what is already
+documented. READ existing entries to understand what you already know. Then investigate and ONLY save
+genuinely new or changed information.
+
+For new topics, use write_memory(). For adding findings to an existing entry, use append_to_memory().
+For correcting outdated details, use edit_memory(). Do not rewrite unchanged content."""
 
 
 @celery_app.task(
@@ -202,7 +192,6 @@ def run_prediscovery(
     logger.info(f"[Prediscovery] Starting for user {user_id} (trigger={trigger})")
 
     from utils.auth.stateless_auth import get_org_id_for_user
-    from datetime import datetime, timezone
     org_id = get_org_id_for_user(user_id)
 
     # Hook: check if LLM call is allowed
@@ -220,7 +209,6 @@ def run_prediscovery(
         if connected_count == 0:
             logger.info(f"[Prediscovery] No integrations for user {user_id}, skipping")
             return {"status": "skipped", "reason": "no_integrations"}
-        run_started_at = datetime.now(timezone.utc).isoformat()
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
@@ -244,9 +232,6 @@ def run_prediscovery(
 
         from chat.background.task import _update_session_status
         _update_session_status(session_id, "completed", user_id=user_id)
-
-        if org_id:
-            _cleanup_old_discovery_chunks(org_id, before=run_started_at)
 
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
         return {"status": "completed", "session_id": session_id, "user_id": user_id}
