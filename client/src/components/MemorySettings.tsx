@@ -170,17 +170,16 @@ export function MemorySettings() {
       const res = await fetch(`/api/proxy/memory/entries/${entryId}`, {
         method: "DELETE",
       });
-
-      if (res.ok) {
-        toast({
-          title: "Entry deleted",
-          description: `"${title}" has been removed.`,
-        });
-        await fetchEntries();
-      } else {
+      if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to delete entry");
       }
+
+      toast({
+        title: "Entry deleted",
+        description: `"${title}" has been removed.`,
+      });
+      await fetchEntries();
     } catch (error) {
       toast({
         title: "Delete failed",
