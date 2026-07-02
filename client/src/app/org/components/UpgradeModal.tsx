@@ -26,7 +26,7 @@ export default function UpgradeModal({ open, onOpenChange }: UpgradeModalProps) 
             Unlock the full potential of Aurora for your team.
           </DialogDescription>
         </DialogHeader>
-        <p className="text-sm font-medium pt-1">What you get :</p>
+        <p className="text-sm font-medium pt-1">What you get:</p>
         <ul className="space-y-3 pb-2">
           {features.map((f) => (
             <li key={f} className="flex items-center gap-3 text-sm">

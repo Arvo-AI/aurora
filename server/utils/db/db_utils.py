@@ -3126,37 +3126,6 @@ def initialize_tables():
                 logging.warning(f"Error adding plan_tier to organizations: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_plan_tier")
 
-            # Trigger: auto-remove non-creator members when org is downgraded to free
-            try:
-                cursor.execute("SAVEPOINT sp_downgrade_trigger")
-                cursor.execute("""
-                    CREATE OR REPLACE FUNCTION fn_org_plan_downgrade()
-                    RETURNS TRIGGER AS $trg$
-                    BEGIN
-                        IF OLD.plan_tier = 'enterprise' AND NEW.plan_tier = 'free' THEN
-                            UPDATE org_invitations SET status = 'expired'
-                            WHERE org_id = NEW.id
-                              AND email IN (SELECT email FROM users WHERE org_id = NEW.id AND id != NEW.created_by);
-                            UPDATE users SET org_id = NULL
-                            WHERE org_id = NEW.id AND id != NEW.created_by;
-                            UPDATE users SET role = 'admin'
-                            WHERE id = NEW.created_by;
-                        END IF;
-                        RETURN NEW;
-                    END;
-                    $trg$ LANGUAGE plpgsql;
-
-                    DROP TRIGGER IF EXISTS trg_org_plan_downgrade ON organizations;
-                    CREATE TRIGGER trg_org_plan_downgrade
-                        AFTER UPDATE OF plan_tier ON organizations
-                        FOR EACH ROW
-                        EXECUTE FUNCTION fn_org_plan_downgrade();
-                """)
-                cursor.execute("RELEASE SAVEPOINT sp_downgrade_trigger")
-            except Exception as e:
-                logging.warning(f"Error creating plan downgrade trigger: {e}")
-                cursor.execute("ROLLBACK TO SAVEPOINT sp_downgrade_trigger")
-
             conn.commit()
             logging.info("Database tables initialized successfully.")
             cursor.close()

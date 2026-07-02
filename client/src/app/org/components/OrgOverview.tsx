@@ -28,7 +28,7 @@ export default function OrgOverview({ org, planTier }: OrgOverviewProps) {
     chatSessions: number;
   }>('/api/orgs/stats', jsonFetcher, { staleTime: 60_000 });
 
-  const isFree = planTier === "free" && getEnv("AURORA_ENV") !== "dev";
+  const isFree = planTier === "free";
 
   const roleCounts = org.members.reduce(
     (acc, m) => {

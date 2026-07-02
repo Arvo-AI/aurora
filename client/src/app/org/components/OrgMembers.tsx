@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { VALID_ROLES, ROLE_META, type UserRole } from "@/lib/roles";
-import { getEnv } from "@/lib/env";
 import type { OrgMember } from "@/components/OrgSettings";
 import UpgradeModal from "./UpgradeModal";
 
@@ -275,7 +274,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
   const [cancellingInvite, setCancellingInvite] = useState<string | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
-  const isFree = planTier === "free" && getEnv("AURORA_ENV") !== "dev";
+  const isFree = planTier === "free";
 
   const fetchPendingInvites = useCallback(async () => {
     if (!isAdmin) return;

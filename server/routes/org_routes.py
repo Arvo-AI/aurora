@@ -1,6 +1,7 @@
 """Organization management routes."""
 
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -280,7 +281,6 @@ def get_current_org(user_id):
                     for row in cursor.fetchall()
                 ]
 
-                import os
                 plan_tier = "enterprise" if os.getenv("AURORA_ENV", "production") == "dev" else (org[5] or "free")
 
                 return jsonify({
@@ -1160,3 +1160,89 @@ def update_org_preferences(user_id):
     except Exception as e:
         logger.error("Error updating org preferences: %s", e)
         return jsonify({"error": "Failed to update preferences"}), 500
+
+
+@org_bp.route("/plan", methods=["PATCH"])
+@require_permission("org", "manage")
+def update_plan(user_id):
+    """Update org plan tier. Handles downgrade cleanup (admin only)."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    data = request.get_json() or {}
+    new_tier = data.get("plan_tier")
+    if new_tier not in ("free", "enterprise"):
+        return jsonify({"error": "plan_tier must be 'free' or 'enterprise'"}), 400
+
+    try:
+        removed_user_ids = []
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT plan_tier, created_by FROM organizations WHERE id = %s",
+                    (org_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "Organization not found"}), 404
+
+                old_tier, creator_id = row[0] or "free", row[1]
+
+                if old_tier == new_tier:
+                    return jsonify({"planTier": new_tier})
+
+                if old_tier == "enterprise" and new_tier == "free":
+                    cursor.execute(
+                        """UPDATE org_invitations SET status = 'expired'
+                           WHERE org_id = %s AND email IN (
+                               SELECT email FROM users WHERE org_id = %s AND id != %s
+                           )""",
+                        (org_id, org_id, creator_id),
+                    )
+                    cursor.execute(
+                        "DELETE FROM user_tokens WHERE org_id = %s AND user_id != %s",
+                        (org_id, creator_id),
+                    )
+                    cursor.execute(
+                        "DELETE FROM user_connections WHERE org_id = %s AND user_id != %s",
+                        (org_id, creator_id),
+                    )
+                    cursor.execute(
+                        "DELETE FROM user_manual_vms WHERE org_id = %s AND user_id != %s",
+                        (org_id, creator_id),
+                    )
+                    cursor.execute(
+                        "SELECT id FROM users WHERE org_id = %s AND id != %s",
+                        (org_id, creator_id),
+                    )
+                    removed_user_ids = [r[0] for r in cursor.fetchall()]
+                    cursor.execute(
+                        "UPDATE users SET org_id = NULL WHERE org_id = %s AND id != %s",
+                        (org_id, creator_id),
+                    )
+                    cursor.execute(
+                        "UPDATE users SET role = 'admin' WHERE id = %s",
+                        (creator_id,),
+                    )
+
+                cursor.execute(
+                    "UPDATE organizations SET plan_tier = %s WHERE id = %s",
+                    (new_tier, org_id),
+                )
+                conn.commit()
+
+        for uid in removed_user_ids:
+            try:
+                for r in get_user_roles_in_org(uid, org_id):
+                    remove_role_from_user(uid, r, org_id)
+            except Exception as e:
+                logger.warning("Failed to clean Casbin roles for user %s: %s", uid, e)
+
+        record_audit_event(org_id, user_id, "update_plan", "organization", org_id,
+                           {"old_tier": old_tier, "new_tier": new_tier}, request)
+
+        return jsonify({"planTier": new_tier})
+    except Exception as e:
+        logger.error("Error updating plan: %s", e)
+        return jsonify({"error": "Failed to update plan"}), 500
