@@ -41,6 +41,7 @@ import RuledOutConsole from './RuledOutConsole';
 import { ReactFlowProvider } from '@xyflow/react';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 import { useExecutionCapabilities } from '@/hooks/use-execution-capabilities';
+import { isVisualizationEnabled } from '@/lib/feature-flags';
 
 function sourceDisplayName(source: string): string {
   const connector = connectorRegistry.get(source);
@@ -136,6 +137,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
   const [selectedFixSuggestion, setSelectedFixSuggestion] = useState<Suggestion | null>(null);
   const [showVisualization, setShowVisualization] = useState(false);
+  const visualizationEnabled = isVisualizationEnabled();
   const [showPostmortem, setShowPostmortem] = useState(false);
   const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [showWaterfall, setShowWaterfall] = useState(false);
@@ -505,7 +507,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           )
         )}
           
-          {(incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
+          {visualizationEnabled && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
             <button
               onClick={() => setShowVisualization(!showVisualization)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
@@ -702,7 +704,7 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
       />
 
       {/* Infrastructure Visualization */}
-      {showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
+      {visualizationEnabled && showVisualization && (incident.auroraStatus === 'complete' || incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing') && (
         <>
           <div className="border-t border-zinc-800" />
           <div>

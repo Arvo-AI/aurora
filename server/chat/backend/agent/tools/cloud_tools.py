@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional, Tuple
+import os
 import threading
 import json
 import asyncio
@@ -403,7 +404,7 @@ def send_tool_completion(tool_name: str, output: str, status: str = "completed",
         
         # Trigger visualization update every 30s for incident RCAs
         incident_id = getattr(state_context, 'incident_id', None) if state_context else None
-        if incident_id:
+        if incident_id and os.getenv("VISUALIZATION_ENABLED", "false").lower() == "true":
             try:
                 global _viz_triggers
                 
