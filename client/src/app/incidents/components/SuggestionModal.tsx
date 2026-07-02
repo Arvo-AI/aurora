@@ -89,12 +89,33 @@ export default function SuggestionModal({
     if (!suggestion.command || isExecuting) return;
     setIsExecuting(true);
 
-    // Mark suggestion as executed (non-blocking — don't let this prevent navigation)
+    // Each execution runs in its own dedicated chat session so its
+    // execution_status reflects only THIS command's outcome. Reusing the
+    // incident's shared RCA session would make _propagate_suggestion_status
+    // flip every suggestion linked to that session together (mislabeling).
+    let execSessionId: string | undefined;
+    try {
+      const sessionRes = await fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: `Run: ${suggestion.title}`.slice(0, 50), messages: [] }),
+      });
+      if (sessionRes.ok) {
+        execSessionId = (await sessionRes.json()).id;
+      } else {
+        console.error('Failed to create execution session:', sessionRes.status);
+      }
+    } catch (err) {
+      console.error('Failed to create execution session:', err);
+    }
+
+    // Mark suggestion as executed, linked to its dedicated session (non-blocking
+    // — don't let this prevent navigation).
     try {
       const res = await fetch(`/api/incidents/suggestions/${suggestion.id}/mark-executed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatSessionId }),
+        body: JSON.stringify({ chatSessionId: execSessionId ?? chatSessionId }),
       });
       if (!res.ok) {
         console.error('Failed to mark suggestion as executed:', res.status);
@@ -105,8 +126,9 @@ export default function SuggestionModal({
 
     const message = `Execute this command and report the output:\n\n\`\`\`\n${suggestion.command}\n\`\`\`\n\nRun ONLY this command. Report the output, then stop. Do not run follow-up commands or investigate further.`;
     const params = new URLSearchParams({ mode: 'agent' });
-    if (chatSessionId) {
-      params.set('sessionId', chatSessionId);
+    const sessionForChat = execSessionId ?? chatSessionId;
+    if (sessionForChat) {
+      params.set('sessionId', sessionForChat);
     }
     sessionStorage.setItem('pendingChatMessage', message);
     setIsExecuting(false);
@@ -115,9 +137,12 @@ export default function SuggestionModal({
   };
 
   const handleViewOutput = () => {
-    if (!chatSessionId) return;
+    // Prefer the suggestion's dedicated execution session (where this command's
+    // output actually lives); fall back to the incident's RCA session.
+    const outputSessionId = suggestion.executionSessionId ?? chatSessionId;
+    if (!outputSessionId) return;
     onClose();
-    router.push(`/chat?sessionId=${chatSessionId}`);
+    router.push(`/chat?sessionId=${outputSessionId}`);
   };
 
   const suggestionType = suggestion.type as keyof typeof typeIcons;
@@ -222,7 +247,7 @@ export default function SuggestionModal({
               </>
             )}
           </Button>
-          {isAlreadyExecuted && chatSessionId && (
+          {isAlreadyExecuted && (suggestion.executionSessionId || chatSessionId) && (
             <Button
               variant="outline"
               onClick={handleViewOutput}

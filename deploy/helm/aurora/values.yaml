@@ -264,6 +264,8 @@ config:
   RCA_SUBAGENT_MODEL: ""
   # Lightweight model for mechanical summarization (tool-output capping, alert/repo summaries). Empty = falls back to MAIN_MODEL.
   SUMMARIZATION_MODEL: ""
+  # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = falls back to MAIN_MODEL.
+  ENRICHMENT_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
   # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of

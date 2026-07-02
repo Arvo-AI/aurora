@@ -33,6 +33,7 @@ _RCA_SECTION_ORDER = [
     "error_recovery",
     "evidence_standard",
     "conclusion_gate",
+    "remediation",
 ]
 
 
