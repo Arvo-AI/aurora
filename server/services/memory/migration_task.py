@@ -45,7 +45,7 @@ def _set_rls_for_row(cursor, org_id: str, user_id: str) -> None:
     cursor.execute("SET LOCAL myapp.current_org_id = %s;", (org_id,))
 
 
-@celery_app.task(name="migrate_kb_to_memory", bind=True, max_retries=0)
+@celery_app.task(name="migrate_kb_to_memory", bind=True, max_retries=3, default_retry_delay=60)
 def migrate_kb_to_memory(self):
     """Migrate all existing KB data into memory artifacts."""
     stats = {"context": 0, "infrastructure": 0, "documents": 0, "errors": 0}
@@ -195,9 +195,14 @@ def migrate_kb_to_memory(self):
 
                 conn.commit()
 
-    except Exception:
-        logger.exception("[Migration] Fatal error")
-        stats["errors"] += 1
+    except Exception as exc:
+        logger.exception("[Migration] Fatal error — retrying (%d/%d)", self.request.retries, self.max_retries)
+        raise self.retry(exc=exc)
+
+    if stats["errors"] > 0:
+        logger.warning("[Migration] Completed with %d errors — retrying for failed rows (%d/%d): %s",
+                       stats["errors"], self.request.retries, self.max_retries, stats)
+        raise self.retry(exc=RuntimeError(f"{stats['errors']} rows failed during migration"))
 
     logger.info("[Migration] Complete: %s", stats)
     return stats
