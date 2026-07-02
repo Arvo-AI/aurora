@@ -190,10 +190,9 @@ def read_memory(category: str, title: str, offset: int = 0, limit: int = 50000, 
             "total_length": total_length,
             "offset": offset,
             "returned_length": len(chunk),
+            "has_more": offset + limit < total_length,
         }
-        # Signal to the agent whether there's more content to read
         if offset + limit < total_length:
-            result["has_more"] = True
             result["next_offset"] = offset + limit
 
         return json.dumps(result)
