@@ -177,7 +177,7 @@ class CloudBeesFleetClient:
             return builds, None
 
         except Exception as e:
-            logger.warning("Failed to query fleet controller %s: %s", sanitize(controller_name), sanitize(e))
+            logger.warning("Failed to query fleet controller %s: %s", sanitize(controller_name), type(e).__name__)
             return [], f"{controller_name}: Failed to query controller"
 
     @staticmethod
