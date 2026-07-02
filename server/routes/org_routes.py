@@ -734,7 +734,7 @@ def _create_invitation(org_id: str, user_id: str):
 
                 cursor.execute(
                     """DELETE FROM org_invitations
-                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired', 'accepted')""",
                     (org_id, email),
                 )
 

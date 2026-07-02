@@ -127,7 +127,7 @@ def create_user(user_id):
                 # Clear old cancelled/declined/expired rows to avoid unique constraint
                 cur.execute(
                     """DELETE FROM org_invitations
-                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired', 'accepted')""",
                     (org_id, target_email),
                 )
 
