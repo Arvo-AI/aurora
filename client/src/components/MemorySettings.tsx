@@ -191,70 +191,87 @@ export function MemorySettings() {
   };
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || !userId) return;
+    const files = event.target.files;
+    if (!files || files.length === 0 || !userId) return;
 
     const allowedTypes = [".md", ".txt", ".pdf"];
-    const dotIndex = file.name.lastIndexOf(".");
-    if (dotIndex === -1 || dotIndex === file.name.length - 1) {
-      toast({
-        title: "Invalid file type",
-        description: "Supported formats: Markdown (.md), Plain Text (.txt), PDF (.pdf)",
-        variant: "destructive",
-      });
-      return;
-    }
-    const ext = file.name.toLowerCase().slice(dotIndex);
-    if (!allowedTypes.includes(ext)) {
-      toast({
-        title: "Invalid file type",
-        description: "Supported formats: Markdown (.md), Plain Text (.txt), PDF (.pdf)",
-        variant: "destructive",
-      });
-      return;
-    }
 
-    if (file.size > 50 * 1024 * 1024) {
-      toast({
-        title: "File too large",
-        description: "Maximum file size is 50MB",
-        variant: "destructive",
-      });
-      return;
+    // Validate all files first
+    for (const file of Array.from(files)) {
+      const dotIndex = file.name.lastIndexOf(".");
+      if (dotIndex === -1 || dotIndex === file.name.length - 1) {
+        toast({
+          title: "Invalid file type",
+          description: `"${file.name}" is not supported. Use: .md, .txt, .pdf`,
+          variant: "destructive",
+        });
+        return;
+      }
+      const ext = file.name.toLowerCase().slice(dotIndex);
+      if (!allowedTypes.includes(ext)) {
+        toast({
+          title: "Invalid file type",
+          description: `"${file.name}" is not supported. Use: .md, .txt, .pdf`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        toast({
+          title: "File too large",
+          description: `"${file.name}" exceeds 50MB limit`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("category", uploadCategory);
+    let successCount = 0;
+    let lastError: string | null = null;
 
-    try {
-      const res = await fetch("/api/proxy/memory/upload", {
-        method: "POST",
-        body: formData,
-      });
+    for (const file of Array.from(files)) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", uploadCategory);
 
-      if (res.ok) {
-        toast({
-          title: "File uploaded",
-          description: `"${file.name}" has been added to memory.`,
+      try {
+        const res = await fetch("/api/proxy/memory/upload", {
+          method: "POST",
+          body: formData,
         });
-        await fetchEntries();
-      } else {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to upload file");
+
+        if (res.ok) {
+          successCount++;
+        } else {
+          const data = await res.json();
+          lastError = data.error || `Failed to upload "${file.name}"`;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : `Failed to upload "${file.name}"`;
       }
-    } catch (error) {
+    }
+
+    if (successCount > 0) {
       toast({
-        title: "Upload failed",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: successCount === 1 ? "File uploaded" : `${successCount} files uploaded`,
+        description: successCount === 1
+          ? `"${files[0].name}" has been added to memory.`
+          : `${successCount} file(s) have been added to memory.`,
+      });
+      await fetchEntries();
+    }
+    if (lastError && successCount < files.length) {
+      toast({
+        title: "Some uploads failed",
+        description: lastError,
         variant: "destructive",
       });
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+    }
+
+    setIsUploading(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   };
 
@@ -402,6 +419,7 @@ export function MemorySettings() {
                 ref={fileInputRef}
                 type="file"
                 accept=".md,.txt,.pdf"
+                multiple
                 onChange={handleUpload}
                 className="hidden"
                 id="memory-upload"
@@ -432,12 +450,12 @@ export function MemorySettings() {
                 ) : (
                   <>
                     <Upload className="mr-2 h-4 w-4" />
-                    Upload File
+                    Upload Files
                   </>
                 )}
               </Button>
               <span className="text-xs text-muted-foreground">
-                .md, .txt, .pdf — max 50MB
+                .md, .txt, .pdf — max 50MB each
               </span>
             </div>
           )}
