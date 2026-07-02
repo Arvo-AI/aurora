@@ -47,6 +47,9 @@ const MEMORY_CATEGORIES = [
   "artifact",
 ] as const;
 
+// Categories users can manually create/upload and filter by — excludes artifact (internal system category)
+const USER_WRITABLE_CATEGORIES = ["context", "runbook", "infrastructure", "learned", "postmortem"] as const;
+
 type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
@@ -89,7 +92,6 @@ export function MemorySettings() {
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadCategory, setUploadCategory] = useState<MemoryCategory>("runbook");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchEntries = useCallback(async () => {
@@ -233,7 +235,7 @@ export function MemorySettings() {
     for (const file of Array.from(files)) {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("category", uploadCategory);
+      formData.append("category", "context");
 
       try {
         const res = await fetch("/api/proxy/memory/upload", {
@@ -281,6 +283,34 @@ export function MemorySettings() {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
 
+  const handleCategoryChange = async (entryId: string, newCategory: MemoryCategory) => {
+    try {
+      const res = await fetch(`/api/proxy/memory/entries/${entryId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: newCategory }),
+      });
+      if (res.ok) {
+        setEntries((prev) =>
+          prev.map((e) => e.id === entryId ? { ...e, category: newCategory } : e)
+        );
+      } else {
+        const data = await res.json();
+        toast({
+          title: "Failed to update category",
+          description: data.error || "An error occurred",
+          variant: "destructive",
+        });
+      }
+    } catch {
+      toast({
+        title: "Failed to update category",
+        description: "An error occurred",
+        variant: "destructive",
+      });
+    }
+  };
+
   if (userLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -323,7 +353,7 @@ export function MemorySettings() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All categories</SelectItem>
-                  {MEMORY_CATEGORIES.map((cat) => (
+                  {USER_WRITABLE_CATEGORIES.map((cat) => (
                     <SelectItem key={cat} value={cat}>
                       {CATEGORY_META[cat].label}
                     </SelectItem>
@@ -331,10 +361,34 @@ export function MemorySettings() {
                 </SelectContent>
               </Select>
               {canWrite && (
-                <Button variant="outline" size="sm" onClick={() => setShowCreateForm(!showCreateForm)}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  New
-                </Button>
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,.txt,.pdf"
+                    multiple
+                    onChange={handleUpload}
+                    className="hidden"
+                    id="memory-upload"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
+                  >
+                    {isUploading ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4 mr-1" />
+                    )}
+                    {isUploading ? "Uploading..." : "Upload"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setShowCreateForm(!showCreateForm)}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    New
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -363,7 +417,7 @@ export function MemorySettings() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {MEMORY_CATEGORIES.filter((c) => c !== "artifact").map((cat) => (
+                      {USER_WRITABLE_CATEGORIES.map((cat) => (
                         <SelectItem key={cat} value={cat}>
                           {CATEGORY_META[cat].label}
                         </SelectItem>
@@ -412,53 +466,6 @@ export function MemorySettings() {
             </div>
           )}
 
-          {/* Upload */}
-          {canWrite && (
-            <div className="flex items-center gap-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".md,.txt,.pdf"
-                multiple
-                onChange={handleUpload}
-                className="hidden"
-                id="memory-upload"
-              />
-              <Select value={uploadCategory} onValueChange={(v) => setUploadCategory(v as MemoryCategory)}>
-                <SelectTrigger className="w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MEMORY_CATEGORIES.filter((c) => c !== "artifact").map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {CATEGORY_META[cat].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-                variant="outline"
-                size="sm"
-              >
-                {isUploading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload Files
-                  </>
-                )}
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                .md, .txt, .pdf — max 50MB each
-              </span>
-            </div>
-          )}
 
           {/* Entry List */}
           {isLoadingEntries ? (
@@ -490,9 +497,27 @@ export function MemorySettings() {
                       <div className="min-w-0">
                         <p className="font-medium truncate">{entry.title}</p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${meta.color}`}>
-                            {meta.label}
-                          </Badge>
+                          {canWrite ? (
+                            <Select
+                              value={entry.category}
+                              onValueChange={(v) => handleCategoryChange(entry.id, v as MemoryCategory)}
+                            >
+                              <SelectTrigger className={`h-5 w-auto gap-1 border-0 px-1.5 py-0 text-xs ${meta.color}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {USER_WRITABLE_CATEGORIES.map((cat) => (
+                                  <SelectItem key={cat} value={cat}>
+                                    {CATEGORY_META[cat].label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${meta.color}`}>
+                              {meta.label}
+                            </Badge>
+                          )}
                           {entry.description && (
                             <span className="truncate max-w-[200px]">{entry.description}</span>
                           )}

@@ -206,6 +206,39 @@ def delete_entry(user_id, entry_id):
         return jsonify({"error": "Failed to delete memory entry"}), 500
 
 
+@memory_bp.route("/entries/<entry_id>", methods=["PUT"])
+@require_permission("memory", "write")
+def update_entry(user_id, entry_id):
+    """Update a memory entry's category."""
+    org_id = get_org_id_from_request()
+    data = request.get_json(silent=True) or {}
+    category = data.get("category", "").strip()
+
+    if not category or category not in MEMORY_CATEGORIES:
+        return jsonify({"error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+
+            cursor.execute(
+                """UPDATE artifacts
+                   SET category = %s, last_edited_by = 'user', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
+                (category, entry_id, org_id, list(MEMORY_CATEGORIES)),
+            )
+            if cursor.rowcount == 0:
+                return jsonify({"error": "Memory entry not found"}), 404
+            conn.commit()
+
+        return jsonify({"success": True}), 200
+
+    except Exception as e:
+        logger.exception(f"[Memory] Error updating entry: {e}")
+        return jsonify({"error": "Failed to update memory entry"}), 500
+
+
 @memory_bp.route("/upload", methods=["POST"])
 @require_permission("memory", "write")
 def upload_file(user_id):
