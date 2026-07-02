@@ -38,6 +38,15 @@ def _default_after_llm_call(org_id: Optional[str], user_id: str, metadata: dict)
 
 def _default_before_add_member(org_id: str, current_member_count: int) -> Tuple[bool, Optional[str]]:
     """Called before adding a member to an org. Return (False, message) to block."""
+    if os.getenv("AURORA_ENV", "production") == "dev":
+        return True, None
+    from utils.db.db_utils import db_pool
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT plan_tier FROM organizations WHERE id = %s", (org_id,))
+            row = cur.fetchone()
+    if row and row[0] == "free" and current_member_count >= 1:
+        return False, "Seat limit reached for your plan. Upgrade to add more members."
     return True, None
 
 

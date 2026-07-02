@@ -258,7 +258,7 @@ def get_current_org(user_id):
             with conn.cursor() as cursor:
                 # No RLS needed — organizations, users not RLS-protected
                 cursor.execute(
-                    "SELECT id, name, slug, created_by, created_at FROM organizations WHERE id = %s",
+                    "SELECT id, name, slug, created_by, created_at, plan_tier FROM organizations WHERE id = %s",
                     (org_id,),
                 )
                 org = cursor.fetchone()
@@ -280,12 +280,16 @@ def get_current_org(user_id):
                     for row in cursor.fetchall()
                 ]
 
+                import os
+                plan_tier = "enterprise" if os.getenv("AURORA_ENV", "production") == "dev" else (org[5] or "free")
+
                 return jsonify({
                     "id": org[0],
                     "name": org[1],
                     "slug": org[2],
                     "createdBy": org[3],
                     "createdAt": org[4].isoformat() if org[4] else None,
+                    "planTier": plan_tier,
                     "members": members,
                 })
     except Exception as e:
