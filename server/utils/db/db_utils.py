@@ -3030,6 +3030,7 @@ def initialize_tables():
                 conn.rollback()
 
             # Auto-trigger memory migration if old KB tables still have data
+            _should_trigger_migration = False
             try:
                 cursor.execute("""
                     SELECT EXISTS (
@@ -3040,7 +3041,6 @@ def initialize_tables():
                 old_tables_exist = cursor.fetchone()[0]
 
                 if old_tables_exist:
-                    # Migrate if any legacy source has rows and nothing migrated yet
                     cursor.execute("""
                         SELECT EXISTS (
                             SELECT 1 FROM knowledge_base_memory
@@ -3071,14 +3071,19 @@ def initialize_tables():
                     already_migrated = cursor.fetchone()[0]
 
                     if has_source_data and not already_migrated:
-                        from services.memory.migration_task import migrate_kb_to_memory
-                        migrate_kb_to_memory.delay()
-                        logging.info("Triggered automatic KB → memory migration task")
+                        _should_trigger_migration = True
             except Exception as e:
                 logging.warning(f"Error checking/triggering memory migration: {e}")
                 conn.rollback()
 
             conn.commit()
+
+            # Enqueue migration AFTER commit so the worker sees the final schema
+            if _should_trigger_migration:
+                from services.memory.migration_task import migrate_kb_to_memory
+                migrate_kb_to_memory.delay()
+                logging.info("Triggered automatic KB → memory migration task")
+
             logging.info("Database tables initialized successfully.")
             cursor.close()
 
