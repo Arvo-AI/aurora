@@ -149,7 +149,8 @@ class CloudBeesFleetClient:
     ) -> Tuple[List[Dict], Optional[str]]:
         """Query builds from a single controller. Returns (builds, error_msg)."""
         controller_url = controller.get("base_url")
-        controller_name = controller.get("name") or controller_url or "unknown"
+        # Extract name before touching secrets so taint analysis stays clean.
+        controller_name = str(controller.get("name") or "unknown")
         if not controller_url:
             return [], None
 
@@ -177,7 +178,7 @@ class CloudBeesFleetClient:
             return builds, None
 
         except Exception as e:
-            logger.warning("Failed to query fleet controller %s: %s", sanitize(controller_name), type(e).__name__)
+            logger.warning("Failed to query fleet controller %s: %s", controller_name, type(e).__name__)
             return [], f"{controller_name}: Failed to query controller"
 
     @staticmethod
