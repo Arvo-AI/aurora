@@ -28,7 +28,7 @@ CLOUDBEES_PROVIDER = "cloudbees"
 
 
 def _get_stored_cloudbees_credentials(user_id: str) -> Optional[Dict[str, Any]]:
-    """Get credentials from any CloudBees provider (legacy, OC, or FM)."""
+    """Get credentials from any CloudBees provider (legacy, OC, fleet, or FM)."""
     try:
         creds = get_token_data(user_id, CLOUDBEES_PROVIDER)
         if creds:
@@ -36,6 +36,9 @@ def _get_stored_cloudbees_credentials(user_id: str) -> Optional[Dict[str, Any]]:
         oc_creds = get_token_data(user_id, CLOUDBEES_OC_PROVIDER)
         if oc_creds:
             return oc_creds
+        fleet_creds = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER)
+        if fleet_creds:
+            return fleet_creds
         return None
     except Exception:
         logger.error("Failed to retrieve CloudBees credentials for user %s", user_id)
@@ -129,6 +132,17 @@ def connect(user_id):
 @require_permission("connectors", "read")
 def status(user_id):
     """Check whether CloudBees CI is connected and return summary dashboard data."""
+    # Fleet mode (multiple standalone controllers, no OC) has no single server
+    # to report on — surface controller count instead of single-instance stats.
+    fleet_creds = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER)
+    fleet_controllers = (fleet_creds or {}).get("controllers") or []
+    if fleet_controllers and not get_token_data(user_id, CLOUDBEES_PROVIDER):
+        return jsonify({
+            "connected": True,
+            "mode": "fleet",
+            "controllerCount": len(fleet_controllers),
+        })
+
     creds = _get_stored_cloudbees_credentials(user_id)
     if not creds:
         return jsonify({"connected": False})
@@ -243,6 +257,7 @@ def disconnect(user_id):
 
 CLOUDBEES_OC_PROVIDER = "cloudbees_oc"
 CLOUDBEES_FM_PROVIDER = "cloudbees_fm"
+CLOUDBEES_FLEET_PROVIDER = "cloudbees_fleet"
 
 
 @cloudbees_bp.route("/connect-platform", methods=["POST"])
@@ -382,9 +397,17 @@ def platform_status(user_id):
             "app_id": fm_creds.get("app_id"),
         }
 
+    # Check fleet (standalone multi-controller, no OC)
+    fleet_status = {"connected": False}
+    fleet_creds = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER)
+    fleet_controllers = (fleet_creds or {}).get("controllers") or []
+    if fleet_controllers:
+        fleet_status = {"connected": True, "count": len(fleet_controllers)}
+
     return jsonify({
         "operations_center": oc_status,
         "feature_management": fm_status,
+        "fleet": fleet_status,
     })
 
 
@@ -417,11 +440,11 @@ def list_controllers(user_id):
 @cloudbees_bp.route("/disconnect-platform", methods=["POST", "DELETE"])
 @require_permission("connectors", "write")
 def disconnect_platform(user_id):
-    """Disconnect Operations Center and Feature Management by removing stored credentials."""
+    """Disconnect Operations Center, Feature Management, and controller fleet by removing stored credentials."""
     deleted_total = 0
     errors = []
 
-    for provider in (CLOUDBEES_OC_PROVIDER, CLOUDBEES_FM_PROVIDER):
+    for provider in (CLOUDBEES_OC_PROVIDER, CLOUDBEES_FM_PROVIDER, CLOUDBEES_FLEET_PROVIDER):
         try:
             success, deleted = delete_user_secret(user_id, provider)
             if success:
@@ -439,6 +462,196 @@ def disconnect_platform(user_id):
         "success": len(errors) == 0,
         "message": "Platform credentials removed" if not errors else "; ".join(errors),
         "deleted": deleted_total,
+    })
+
+
+# ------------------------------------------------------------------
+# Fleet: multiple standalone controllers WITHOUT Operations Center
+# ------------------------------------------------------------------
+
+MAX_FLEET_CONTROLLERS = 20
+
+
+def _public_controller(ctrl: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip credentials from a stored controller for API responses.
+
+    Omits both the API token AND the username — the username is the auth
+    principal for the token, so it is not exposed to the frontend.
+    """
+    return {
+        "id": ctrl.get("id"),
+        "name": ctrl.get("name") or ctrl.get("base_url", ""),
+        "url": ctrl.get("base_url", ""),
+        "status": ctrl.get("status", "unknown"),
+        "last_error": ctrl.get("last_error"),
+    }
+
+
+def _normalize_controller_input(raw: Any) -> list:
+    """Coerce request body into a list of {name,url,username,token} dicts."""
+    if isinstance(raw, dict):
+        # Either a single controller, or {"controllers": [...]}
+        if isinstance(raw.get("controllers"), list):
+            return raw["controllers"]
+        return [raw]
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+def _check_controller_fields(item: Dict[str, Any], by_url: Dict[str, Any]) -> tuple:
+    """Extract and statically validate one controller's fields.
+
+    Returns (fields, error_dict) with exactly one non-None. ``fields`` is a
+    (base_url, username, api_token, name) tuple when valid.
+    """
+    base_url = (item.get("url") or item.get("base_url") or "").strip().rstrip("/")
+    username = (item.get("username") or "").strip()
+    api_token = item.get("token") or item.get("api_token")
+    name = (item.get("name") or "").strip() or base_url
+
+    url_ok = base_url.startswith(("http://", "https://"))  # NOSONAR
+    if not url_ok:
+        return None, {"name": name, "error": "URL must start with http:// or https://"}
+    if not username or not api_token or not isinstance(api_token, str):
+        return None, {"name": name, "error": "username and token are required"}
+    if len(by_url) >= MAX_FLEET_CONTROLLERS and base_url not in by_url:
+        return None, {"name": name, "error": f"Fleet limit of {MAX_FLEET_CONTROLLERS} controllers reached"}
+
+    return (base_url, username, api_token, name), None
+
+
+def _validate_controller_item(item: Any, by_url: Dict[str, Any]) -> tuple:
+    """Validate and normalize one controller input.
+
+    Returns (cfg, error_dict). Exactly one is non-None: ``cfg`` is the stored
+    controller dict (with status/last_error set), or ``error_dict`` describes
+    why the item was rejected.
+    """
+    if not isinstance(item, dict):
+        return None, {"error": "Each controller must be an object", "value": str(item)[:80]}
+
+    fields, error_dict = _check_controller_fields(item, by_url)
+    if error_dict:
+        return None, error_dict
+    base_url, username, api_token, name = fields
+
+    cfg = {
+        "id": (by_url.get(base_url, {}).get("id")) or secrets.token_hex(8),
+        "name": name,
+        "base_url": base_url,
+        "username": username,
+        "api_token": api_token,
+    }
+
+    from connectors.cloudbees_connector.fleet_client import CloudBeesFleetClient
+    ok, _, error = CloudBeesFleetClient.validate_controller(cfg)
+    cfg["status"] = "online" if ok else "offline"
+    cfg["last_error"] = None if ok else (error or "Validation failed")
+    return cfg, None
+
+
+@cloudbees_bp.route("/fleet/controllers", methods=["POST"])
+@require_permission("connectors", "write")
+def add_fleet_controllers(user_id):
+    """Add one or more standalone controllers to the user's fleet.
+
+    Accepts a single controller object or a JSON array (bulk import). Each
+    controller is validated against its own /api/json; unreachable controllers
+    are still stored but marked 'offline' with the validation error (partial
+    validation — a single down controller does not block the whole fleet).
+    """
+    try:
+        body = request.get_json(force=True, silent=True)
+    except Exception:
+        body = None
+
+    incoming = _normalize_controller_input(body)
+    if not incoming:
+        return jsonify({"error": "Provide a controller object or a non-empty JSON array of controllers"}), 400
+
+    # Load existing fleet (merge/append, dedup by base_url)
+    existing = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER) or {}
+    controllers: list = list(existing.get("controllers") or [])
+    webhook_secret = existing.get("webhook_secret") or secrets.token_hex(32)
+    by_url = {(c.get("base_url") or "").rstrip("/"): c for c in controllers}
+
+    added, failed = [], []
+    for item in incoming:
+        cfg, error_dict = _validate_controller_item(item, by_url)
+        if error_dict:
+            failed.append(error_dict)
+            continue
+        by_url[cfg["base_url"]] = cfg
+        added.append(_public_controller(cfg))
+
+    controllers = list(by_url.values())
+    if not controllers:
+        return jsonify({"error": "No valid controllers provided", "failed": failed}), 400
+
+    payload = {"controllers": controllers, "webhook_secret": webhook_secret}
+    try:
+        store_tokens_in_db(user_id, payload, CLOUDBEES_FLEET_PROVIDER)
+        logger.info("[CLOUDBEES] Stored fleet for user %s (%d controllers)", user_id, len(controllers))
+    except Exception:
+        logger.exception("[CLOUDBEES] Failed to store fleet for user %s", user_id)
+        return jsonify({"error": "Failed to store controller fleet"}), 500
+
+    return jsonify({
+        "success": True,
+        "controllers": [_public_controller(c) for c in controllers],
+        "added": added,
+        "failed": failed,
+        "count": len(controllers),
+    })
+
+
+@cloudbees_bp.route("/fleet/controllers", methods=["GET"])
+@require_permission("connectors", "read")
+def list_fleet_controllers(user_id):
+    """Return the user's registered controller fleet (credentials omitted)."""
+    creds = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER) or {}
+    controllers = creds.get("controllers") or []
+    return jsonify({
+        "connected": len(controllers) > 0,
+        "controllers": [_public_controller(c) for c in controllers],
+        "count": len(controllers),
+    })
+
+
+@cloudbees_bp.route("/fleet/controllers/<controller_id>", methods=["DELETE"])
+@require_permission("connectors", "write")
+def remove_fleet_controller(user_id, controller_id: str):
+    """Remove a single controller from the fleet. Clears the fleet if it was the last one."""
+    creds = get_token_data(user_id, CLOUDBEES_FLEET_PROVIDER) or {}
+    controllers = creds.get("controllers") or []
+    if not controllers:
+        return jsonify({"error": "No controllers registered"}), 404
+
+    remaining = [c for c in controllers if c.get("id") != controller_id]
+    if len(remaining) == len(controllers):
+        return jsonify({"error": "Controller not found"}), 404
+
+    if not remaining:
+        # Last controller removed — delete the whole secret
+        try:
+            delete_user_secret(user_id, CLOUDBEES_FLEET_PROVIDER)
+        except Exception:
+            logger.exception("[CLOUDBEES] Failed to clear empty fleet for user %s", user_id)
+            return jsonify({"error": "Failed to remove controller"}), 500
+        return jsonify({"success": True, "controllers": [], "count": 0})
+
+    payload = {"controllers": remaining, "webhook_secret": creds.get("webhook_secret") or secrets.token_hex(32)}
+    try:
+        store_tokens_in_db(user_id, payload, CLOUDBEES_FLEET_PROVIDER)
+    except Exception:
+        logger.exception("[CLOUDBEES] Failed to update fleet for user %s", user_id)
+        return jsonify({"error": "Failed to remove controller"}), 500
+
+    return jsonify({
+        "success": True,
+        "controllers": [_public_controller(c) for c in remaining],
+        "count": len(remaining),
     })
 
 
@@ -464,8 +677,8 @@ def _verify_webhook_user(user_id: str) -> bool:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[CLOUDBEES:verify_webhook]"):
                     return False
                 cursor.execute(
-                    "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider IN (%s, %s) LIMIT 1",
-                    (user_id, CLOUDBEES_PROVIDER, CLOUDBEES_OC_PROVIDER),
+                    "SELECT 1 FROM user_tokens WHERE user_id = %s AND provider IN (%s, %s, %s) LIMIT 1",
+                    (user_id, CLOUDBEES_PROVIDER, CLOUDBEES_OC_PROVIDER, CLOUDBEES_FLEET_PROVIDER),
                 )
                 return cursor.fetchone() is not None
     except Exception as e:

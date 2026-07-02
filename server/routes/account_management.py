@@ -20,6 +20,7 @@ _DELETE_LOG_PREFIX = "[AccountMgmt:delete_connected_account]"
 _PROVIDER_UI_ALIAS = {
     "cloudbees_oc": "cloudbees",
     "cloudbees_fm": "cloudbees",
+    "cloudbees_fleet": "cloudbees",
 }
 
 

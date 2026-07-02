@@ -4,15 +4,14 @@ import { useEffect, useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { getUserFriendlyError } from "@/lib/utils";
-import { cloudbeesService } from "@/lib/services/ci-provider";
 import type { CIProviderStatus } from "@/lib/services/ci-provider";
 import { apiRequest } from "@/lib/services/api-client";
 import { ModeSelector } from "./ModeSelector";
-import { CredentialForms } from "./CredentialForms";
+import { CredentialForms, type FleetControllerInput } from "./CredentialForms";
 import { WebhookSetup } from "./WebhookSetup";
 import { ConnectedDashboard } from "./ConnectedDashboard";
 
-type ConnectionMode = "oc" | "single" | "pat";
+type ConnectionMode = "oc" | "fleet" | "pat";
 
 type Step = 1 | 2 | 3 | "connected";
 
@@ -40,17 +39,13 @@ export default function CloudBeesAuthPage() {
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [status, setStatus] = useState<CIProviderStatus | null>(null);
 
-  // Single Controller fields
-  const [baseUrl, setBaseUrl] = useState("");
-  const [username, setUsername] = useState("");
-  const [apiToken, setApiToken] = useState("");
-
   // Operations Center fields
   const [ocUrl, setOcUrl] = useState("");
   const [ocUsername, setOcUsername] = useState("");
   const [ocApiToken, setOcApiToken] = useState("");
   const [rolloutToken, setRolloutToken] = useState("");
   const [controllers, setControllers] = useState<DiscoveredController[]>([]);
+  const [isFleetMode, setIsFleetMode] = useState(false);
 
   // Personal Access Token fields
   const [platformUrl, setPlatformUrl] = useState("");
@@ -88,8 +83,17 @@ export default function CloudBeesAuthPage() {
           localStorage.setItem(CONNECTED_KEY, "true");
           setStep("connected");
           if (result.summary) setSummary(result.summary);
+          if (result.mode === "fleet") setIsFleetMode(true);
+          // Fleet controllers (standalone, no OC) — only present in fleet mode
+          apiRequest<{ controllers?: DiscoveredController[]; connected?: boolean }>("/api/cloudbees/fleet/controllers", { method: "GET", cache: "no-store" }).then(d => {
+            if (d?.connected && d?.controllers?.length) {
+              setIsFleetMode(true);
+              setControllers(d.controllers);
+            }
+          }).catch(() => {});
+          // OC-discovered controllers (only present when OC connected)
           apiRequest<{ controllers?: DiscoveredController[] }>("/api/cloudbees/controllers", { method: "GET", cache: "no-store" }).then(d => {
-            if (d?.controllers) setControllers(d.controllers);
+            if (d?.controllers?.length) setControllers(d.controllers);
           }).catch(() => {});
           apiRequest<any>("/api/cloudbees/webhook-url", { method: "GET", cache: "no-store" }).then(setWebhookInfo).catch(() => {});
           apiRequest<any>("/api/cloudbees/deployments", { method: "GET", cache: "no-store" }).then(d => setDeployments(d?.deployments || [])).catch(() => {});
@@ -116,41 +120,6 @@ export default function CloudBeesAuthPage() {
 
   const validateUrl = (url: string): boolean => {
     return url.startsWith("http://") || url.startsWith("https://");
-  };
-
-  const handleSingleControllerConnect = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!validateUrl(baseUrl)) {
-      setUrlError("URL must start with http:// or https://");
-      return;
-    }
-    setUrlError("");
-    setLoading(true);
-    try {
-      const connectResult = await cloudbeesService.connect({ baseUrl, username, apiToken });
-      setStatus(connectResult);
-      localStorage.setItem(CONNECTED_KEY, "true");
-      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
-
-      try {
-        await apiRequest("/api/provider-preferences", {
-          method: "POST",
-          body: JSON.stringify({ action: "add", provider: "cloudbees" }),
-        });
-      } catch { /* best-effort */ }
-
-      toast({
-        title: "CloudBees CI Connected",
-        description: `Successfully connected to ${baseUrl}`,
-      });
-      setStep(3);
-    } catch (err: unknown) {
-      console.error("CloudBees connection failed", err);
-      toast({ title: "Connection Failed", description: getUserFriendlyError(err), variant: "destructive" });
-    } finally {
-      setLoading(false);
-      setApiToken("");
-    }
   };
 
   const handleOCConnect = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -271,6 +240,100 @@ export default function CloudBeesAuthPage() {
     }
   };
 
+  const handleFleetConnect = async (fleetControllers: FleetControllerInput[]) => {
+    if (fleetControllers.length === 0) return;
+    setLoading(true);
+    try {
+      const result = await apiRequest<{ controllers?: DiscoveredController[]; failed?: unknown[] }>(
+        "/api/cloudbees/fleet/controllers",
+        { method: "POST", body: JSON.stringify({ controllers: fleetControllers }), cache: "no-store" }
+      );
+
+      if (result?.controllers) setControllers(result.controllers);
+      setIsFleetMode(true);
+
+      const newStatus: CIProviderStatus = { connected: true };
+      setStatus(newStatus);
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ connected: true }));
+      localStorage.setItem(CONNECTED_KEY, "true");
+      globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
+
+      try {
+        await apiRequest("/api/provider-preferences", {
+          method: "POST",
+          body: JSON.stringify({ action: "add", provider: "cloudbees" }),
+        });
+      } catch { /* best-effort */ }
+
+      const total = result?.controllers?.length ?? fleetControllers.length;
+      const failedCount = result?.failed?.length ?? 0;
+      toast({
+        title: "Controllers Connected",
+        description: failedCount > 0
+          ? `${total} controller(s) saved, ${failedCount} could not be validated (marked offline).`
+          : `${total} controller(s) connected successfully.`,
+        variant: failedCount > 0 ? "destructive" : undefined,
+      });
+      setStep(3);
+    } catch (err: unknown) {
+      console.error("CloudBees fleet connection failed", err);
+      toast({ title: "Connection Failed", description: getUserFriendlyError(err), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddControllers = async (newControllers: { name: string; url: string; username: string; token: string }[]) => {
+    if (newControllers.length === 0) return;
+    setLoading(true);
+    try {
+      const result = await apiRequest<{ controllers?: DiscoveredController[]; failed?: unknown[] }>(
+        "/api/cloudbees/fleet/controllers",
+        { method: "POST", body: JSON.stringify({ controllers: newControllers }), cache: "no-store" }
+      );
+      if (result?.controllers) setControllers(result.controllers);
+      const failedCount = result?.failed?.length ?? 0;
+      toast({
+        title: "Controller added",
+        description: failedCount > 0
+          ? `Saved but could not validate (marked offline).`
+          : `${newControllers.length} controller(s) added successfully.`,
+        variant: failedCount > 0 ? "destructive" : undefined,
+      });
+    } catch (err) {
+      toast({ title: "Failed to add controller", description: getUserFriendlyError(err), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveController = async (controllerId: string) => {
+    setLoading(true);
+    try {
+      const result = await apiRequest<{ controllers?: DiscoveredController[]; count?: number }>(
+        `/api/cloudbees/fleet/controllers/${controllerId}`,
+        { method: "DELETE", cache: "no-store" }
+      );
+      setControllers(result?.controllers ?? []);
+      if ((result?.count ?? 0) === 0) {
+        // Last controller removed — fleet is gone
+        setIsFleetMode(false);
+        setStatus({ connected: false });
+        localStorage.removeItem(CACHE_KEY);
+        localStorage.removeItem(CONNECTED_KEY);
+        globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
+        setStep(1);
+        toast({ title: "Controller removed", description: "All controllers removed. CloudBees disconnected." });
+      } else {
+        toast({ title: "Controller removed" });
+      }
+    } catch (err) {
+      toast({ title: "Failed to remove controller", description: getUserFriendlyError(err), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDisconnect = async () => {
     setLoading(true);
     try {
@@ -281,13 +344,12 @@ export default function CloudBeesAuthPage() {
       } catch { /* best-effort */ }
 
       setStatus({ connected: false });
-      setBaseUrl("");
-      setUsername("");
       setOcUrl("");
       setOcUsername("");
       setPlatformUrl("");
       setRolloutToken("");
       setControllers([]);
+      setIsFleetMode(false);
       localStorage.removeItem(CACHE_KEY);
       localStorage.removeItem(CONNECTED_KEY);
       globalThis.dispatchEvent(new CustomEvent("providerStateChanged"));
@@ -396,19 +458,13 @@ export default function CloudBeesAuthPage() {
           setOcApiToken={setOcApiToken}
           rolloutToken={rolloutToken}
           setRolloutToken={setRolloutToken}
-          baseUrl={baseUrl}
-          setBaseUrl={setBaseUrl}
-          username={username}
-          setUsername={setUsername}
-          apiToken={apiToken}
-          setApiToken={setApiToken}
           platformUrl={platformUrl}
           setPlatformUrl={setPlatformUrl}
           pat={pat}
           setPat={setPat}
           onOCConnect={handleOCConnect}
-          onSingleConnect={handleSingleControllerConnect}
           onPATConnect={handlePATConnect}
+          onFleetConnect={handleFleetConnect}
           onBack={() => { setStep(1); setUrlError(""); }}
         />
       )}
@@ -427,6 +483,9 @@ export default function CloudBeesAuthPage() {
           webhookInfo={webhookInfo}
           deployments={deployments}
           controllers={controllers}
+          isFleetMode={isFleetMode}
+          onRemoveController={handleRemoveController}
+          onAddControllers={handleAddControllers}
           rcaEnabled={rcaEnabled}
           rcaLoading={rcaLoading}
           loading={loading}

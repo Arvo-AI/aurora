@@ -49,7 +49,7 @@ class CloudBeesRCAArgs(BaseModel):
 
 
 def is_cloudbees_connected(user_id: str) -> bool:
-    """Check if CloudBees CI is connected for a user (legacy single-controller OR OC/PAT)."""
+    """Check if CloudBees CI is connected (legacy single-controller, OC/PAT, or fleet)."""
     from utils.auth.token_management import get_token_data
     # Legacy single-controller credentials
     creds = get_token_data(user_id, "cloudbees")
@@ -58,6 +58,10 @@ def is_cloudbees_connected(user_id: str) -> bool:
     # OC/PAT enterprise credentials
     oc_creds = get_token_data(user_id, "cloudbees_oc")
     if oc_creds and oc_creds.get("base_url") and oc_creds.get("api_token"):
+        return True
+    # Fleet: multiple standalone controllers (no OC)
+    fleet_creds = get_token_data(user_id, "cloudbees_fleet")
+    if fleet_creds and (fleet_creds.get("controllers") or []):
         return True
     return False
 
@@ -118,6 +122,20 @@ def _get_fm_client_for_user(user_id: str):
     return CloudBeesFMClient(api_token=api_token)
 
 
+def _get_fleet_client_for_user(user_id: str):
+    """Build a CloudBeesFleetClient from the user's stored fleet of controllers."""
+    from utils.auth.token_management import get_token_data
+    from connectors.cloudbees_connector.fleet_client import CloudBeesFleetClient
+
+    creds = get_token_data(user_id, "cloudbees_fleet")
+    if not creds:
+        return None
+    controllers = creds.get("controllers") or []
+    if not controllers:
+        return None
+    return CloudBeesFleetClient(controllers=controllers)
+
+
 def cloudbees_rca(
     action: str,
     job_path: Optional[str] = None,
@@ -161,49 +179,69 @@ def cloudbees_rca(
 
     elif action == "cross_controller_deployments":
         oc_client = _get_oc_client_for_user(user_id)
-        if not oc_client:
+        if oc_client:
+            with oc_client:
+                success, builds, error = oc_client.query_recent_builds_across_controllers(
+                    service=service, time_window_hours=time_window_hours
+                )
+                if not success:
+                    return json.dumps({"error": error or "Failed to query Operations Center."})
+                return json.dumps({"builds": builds, "count": len(builds), "time_window_hours": time_window_hours, "warnings": error})
+        # Fallback: manually-registered fleet (no OC)
+        fleet_client = _get_fleet_client_for_user(user_id)
+        if not fleet_client:
             return json.dumps({
-                "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
+                "error": "No cross-controller source connected. Connect Operations Center or register controllers (Multiple Controllers mode) in Connectors → CloudBees."
             })
-        with oc_client:
-            success, builds, error = oc_client.query_recent_builds_across_controllers(
-                service=service, time_window_hours=time_window_hours
-            )
-            if not success:
-                return json.dumps({"error": error or "Failed to query Operations Center."})
-            return json.dumps({"builds": builds, "count": len(builds), "time_window_hours": time_window_hours, "warnings": error})
+        success, builds, error = fleet_client.query_recent_builds_across_controllers(
+            service=service, time_window_hours=time_window_hours
+        )
+        if not success:
+            return json.dumps({"error": error or "Failed to query controller fleet."})
+        return json.dumps({"builds": builds, "count": len(builds), "time_window_hours": time_window_hours, "warnings": error})
 
     elif action == "controller_list":
         oc_client = _get_oc_client_for_user(user_id)
-        if not oc_client:
+        if oc_client:
+            with oc_client:
+                success, controllers, error = oc_client.discover_controllers()
+                if not success:
+                    return json.dumps({"error": error or "Failed to discover controllers."})
+                return json.dumps({"controllers": controllers, "count": len(controllers)})
+        # Fallback: manually-registered fleet (no OC)
+        fleet_client = _get_fleet_client_for_user(user_id)
+        if not fleet_client:
             return json.dumps({
-                "error": "Operations Center is not connected. Connect it in Connectors → CloudBees to enable cross-controller queries."
+                "error": "No controller source connected. Connect Operations Center or register controllers (Multiple Controllers mode) in Connectors → CloudBees."
             })
-        with oc_client:
-            success, controllers, error = oc_client.discover_controllers()
-            if not success:
-                return json.dumps({"error": error or "Failed to discover controllers."})
-            return json.dumps({"controllers": controllers, "count": len(controllers)})
+        success, controllers, error = fleet_client.discover_controllers()
+        if not success:
+            return json.dumps({"error": error or "Failed to list controllers."})
+        return json.dumps({"controllers": controllers, "count": len(controllers)})
 
     # --- Existing single-controller actions ---
     elif action == "recent_deployments":
         return _action_recent_deployments(user_id, service, time_window_hours, provider="cloudbees")
 
-    # Resolve client: prefer legacy single-controller, then OC per-controller
+    # Resolve client: prefer legacy single-controller, then OC, then fleet (per-controller)
     client = _get_client_for_cloudbees_user(user_id)
     if not client:
         oc_client = _get_oc_client_for_user(user_id)
-        if not oc_client:
+        fleet_client = _get_fleet_client_for_user(user_id)
+        if not oc_client and not fleet_client:
             return json.dumps({"error": "CloudBees CI is not connected. Configure credentials in Settings > Connectors > CloudBees CI."})
-        # OC mode: route build introspection through a per-controller JenkinsClient
+        # OC / fleet mode: route build introspection through a per-controller JenkinsClient
         if not controller_url:
             return json.dumps({
-                "error": "controller_url is required for build introspection in Operations Center mode. "
+                "error": "controller_url is required for build introspection in multi-controller mode. "
                 "Use controller_list or cross_controller_deployments first to discover controller URLs, "
                 "then pass the relevant controller_url for this action."
             })
         try:
-            client = oc_client.get_controller_client(controller_url)
+            if oc_client:
+                client = oc_client.get_controller_client(controller_url)
+            else:
+                client = fleet_client.get_controller_client(controller_url)
         except ValueError as e:
             return json.dumps({"error": str(e)})
 
