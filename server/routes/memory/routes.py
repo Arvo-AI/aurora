@@ -24,6 +24,7 @@ memory_bp = Blueprint("memory", __name__)
 
 ALLOWED_EXTENSIONS = {"md", "txt", "pdf"}
 MAX_CONTENT_LENGTH = 500_000  # 500KB per manually-created entry
+MAX_UPLOAD_CONTENT_LENGTH = 50_000_000  # 50MB max extracted text per uploaded file
 
 
 def _extract_pdf_text(content: bytes) -> str:
@@ -271,6 +272,9 @@ def upload_file(user_id):
         if not content.strip():
             return jsonify({"error": "No text content could be extracted from file"}), 400
 
+        if len(content) > MAX_UPLOAD_CONTENT_LENGTH:
+            return jsonify({"error": "Extracted text exceeds 50MB limit."}), 400
+
         # Use explicit title if provided, otherwise derive from filename
         base_title = request.form.get("title", "").strip()
         if not base_title:
@@ -303,7 +307,7 @@ def upload_file(user_id):
             )
             conn.commit()
 
-        logger.info("[Memory] Uploaded file '%s'", base_title)
+        logger.info("[Memory] Uploaded file (%d chars)", len(content))
         return jsonify({"entries": [{"id": artifact_id, "title": base_title}], "parts": 1}), 201
 
     except Exception as e:
