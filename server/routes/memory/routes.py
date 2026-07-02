@@ -16,7 +16,6 @@ from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from services.memory import MEMORY_CATEGORIES
-from services.memory.splitter import split_content, make_part_title, make_part_description
 from services.artifacts.store import create_version
 
 logger = logging.getLogger(__name__)
@@ -25,6 +24,7 @@ memory_bp = Blueprint("memory", __name__)
 
 ALLOWED_EXTENSIONS = {"md", "txt", "pdf"}
 MAX_CONTENT_LENGTH = 500_000  # 500KB per manually-created entry
+MAX_UPLOAD_CONTENT_LENGTH = 50_000_000  # 50MB max extracted text per uploaded file
 
 
 def _extract_pdf_text(content: bytes) -> str:
@@ -206,6 +206,39 @@ def delete_entry(user_id, entry_id):
         return jsonify({"error": "Failed to delete memory entry"}), 500
 
 
+@memory_bp.route("/entries/<entry_id>", methods=["PUT"])
+@require_permission("memory", "write")
+def update_entry(user_id, entry_id):
+    """Update a memory entry's category."""
+    org_id = get_org_id_from_request()
+    data = request.get_json(silent=True) or {}
+    category = data.get("category", "").strip()
+
+    if not category or category not in MEMORY_CATEGORIES:
+        return jsonify({"error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
+
+            cursor.execute(
+                """UPDATE artifacts
+                   SET category = %s, last_edited_by = 'user', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = %s AND org_id = %s AND category = ANY(%s)""",
+                (category, entry_id, org_id, list(MEMORY_CATEGORIES)),
+            )
+            if cursor.rowcount == 0:
+                return jsonify({"error": "Memory entry not found"}), 404
+            conn.commit()
+
+        return jsonify({"success": True}), 200
+
+    except Exception as e:
+        logger.exception(f"[Memory] Error updating entry: {e}")
+        return jsonify({"error": "Failed to update memory entry"}), 500
+
+
 @memory_bp.route("/upload", methods=["POST"])
 @require_permission("memory", "write")
 def upload_file(user_id):
@@ -239,54 +272,43 @@ def upload_file(user_id):
         if not content.strip():
             return jsonify({"error": "No text content could be extracted from file"}), 400
 
-        # Derive title from filename (without extension)
-        base_title = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
-        description = request.form.get("description", "").strip()
+        if len(content) > MAX_UPLOAD_CONTENT_LENGTH:
+            return jsonify({"error": "Extracted text exceeds 50MB limit."}), 400
 
-        # Split large documents into multiple parts at paragraph boundaries
-        parts = split_content(content)
-        total_parts = len(parts)
-        created_entries = []
+        # Use explicit title if provided, otherwise derive from filename
+        base_title = request.form.get("title", "").strip()
+        if not base_title:
+            base_title = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+        description = request.form.get("description", "").strip()
 
         with db_pool.get_user_connection() as conn:
             cursor = conn.cursor()
             set_rls_context(cursor, conn, user_id, log_prefix="[Memory]")
 
-            for i, part_content in enumerate(parts, start=1):
-                # Single-part documents keep their original title
-                if total_parts == 1:
-                    title = base_title
-                    part_desc = description or None
-                else:
-                    title = make_part_title(base_title, i, total_parts)
-                    part_desc = make_part_description(description, i, total_parts)
+            cursor.execute(
+                """INSERT INTO artifacts
+                       (org_id, user_id, title, content, category, description,
+                        last_edited_by, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', CURRENT_TIMESTAMP)
+                   ON CONFLICT (org_id, category, title)
+                   DO UPDATE SET content = EXCLUDED.content,
+                                 description = EXCLUDED.description,
+                                 last_edited_by = 'user',
+                                 updated_at = CURRENT_TIMESTAMP
+                   RETURNING id""",
+                (org_id, user_id, base_title, content, category, description or None),
+            )
+            row = cursor.fetchone()
+            artifact_id = str(row[0])
 
-                cursor.execute(
-                    """INSERT INTO artifacts
-                           (org_id, user_id, title, content, category, description,
-                            last_edited_by, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, 'user', CURRENT_TIMESTAMP)
-                       ON CONFLICT (org_id, category, title)
-                       DO UPDATE SET content = EXCLUDED.content,
-                                     description = EXCLUDED.description,
-                                     last_edited_by = 'user',
-                                     updated_at = CURRENT_TIMESTAMP
-                       RETURNING id""",
-                    (org_id, user_id, title, part_content, category, part_desc),
-                )
-                row = cursor.fetchone()
-                artifact_id = str(row[0])
-
-                create_version(
-                    cursor, artifact_id, org_id, user_id, part_content,
-                    source="manual", set_current=True,
-                )
-                created_entries.append({"id": artifact_id, "title": title})
-
+            create_version(
+                cursor, artifact_id, org_id, user_id, content,
+                source="manual", set_current=True,
+            )
             conn.commit()
 
-        logger.info("[Memory] Uploaded file (%d parts)", total_parts)
-        return jsonify({"entries": created_entries, "parts": total_parts}), 201
+        logger.info("[Memory] Uploaded file (%d chars)", len(content))
+        return jsonify({"entries": [{"id": artifact_id, "title": base_title}], "parts": 1}), 201
 
     except Exception as e:
         logger.exception("[Memory] Error uploading file")

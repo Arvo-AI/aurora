@@ -47,6 +47,9 @@ const MEMORY_CATEGORIES = [
   "artifact",
 ] as const;
 
+// Categories users can manually create/upload and filter by — excludes artifact (internal system category)
+const USER_WRITABLE_CATEGORIES = ["context", "runbook", "infrastructure", "learned", "postmortem"] as const;
+
 type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const CATEGORY_META: Record<MemoryCategory, { label: string; icon: React.ReactNode; color: string }> = {
@@ -89,7 +92,6 @@ export function MemorySettings() {
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadCategory, setUploadCategory] = useState<MemoryCategory>("runbook");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchEntries = useCallback(async () => {
@@ -168,17 +170,16 @@ export function MemorySettings() {
       const res = await fetch(`/api/proxy/memory/entries/${entryId}`, {
         method: "DELETE",
       });
-
-      if (res.ok) {
-        toast({
-          title: "Entry deleted",
-          description: `"${title}" has been removed.`,
-        });
-        await fetchEntries();
-      } else {
+      if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to delete entry");
       }
+
+      toast({
+        title: "Entry deleted",
+        description: `"${title}" has been removed.`,
+      });
+      await fetchEntries();
     } catch (error) {
       toast({
         title: "Delete failed",
@@ -191,70 +192,87 @@ export function MemorySettings() {
   };
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || !userId) return;
+    const files = event.target.files;
+    if (!files || files.length === 0 || !userId) return;
 
     const allowedTypes = [".md", ".txt", ".pdf"];
-    const dotIndex = file.name.lastIndexOf(".");
-    if (dotIndex === -1 || dotIndex === file.name.length - 1) {
-      toast({
-        title: "Invalid file type",
-        description: "Supported formats: Markdown (.md), Plain Text (.txt), PDF (.pdf)",
-        variant: "destructive",
-      });
-      return;
-    }
-    const ext = file.name.toLowerCase().slice(dotIndex);
-    if (!allowedTypes.includes(ext)) {
-      toast({
-        title: "Invalid file type",
-        description: "Supported formats: Markdown (.md), Plain Text (.txt), PDF (.pdf)",
-        variant: "destructive",
-      });
-      return;
-    }
 
-    if (file.size > 50 * 1024 * 1024) {
-      toast({
-        title: "File too large",
-        description: "Maximum file size is 50MB",
-        variant: "destructive",
-      });
-      return;
+    // Validate all files first
+    for (const file of Array.from(files)) {
+      const dotIndex = file.name.lastIndexOf(".");
+      if (dotIndex === -1 || dotIndex === file.name.length - 1) {
+        toast({
+          title: "Invalid file type",
+          description: `"${file.name}" is not supported. Use: .md, .txt, .pdf`,
+          variant: "destructive",
+        });
+        return;
+      }
+      const ext = file.name.toLowerCase().slice(dotIndex);
+      if (!allowedTypes.includes(ext)) {
+        toast({
+          title: "Invalid file type",
+          description: `"${file.name}" is not supported. Use: .md, .txt, .pdf`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        toast({
+          title: "File too large",
+          description: `"${file.name}" exceeds 50MB limit`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("category", uploadCategory);
+    let successCount = 0;
+    let lastError: string | null = null;
 
-    try {
-      const res = await fetch("/api/proxy/memory/upload", {
-        method: "POST",
-        body: formData,
-      });
+    for (const file of Array.from(files)) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", "context");
 
-      if (res.ok) {
-        toast({
-          title: "File uploaded",
-          description: `"${file.name}" has been added to memory.`,
+      try {
+        const res = await fetch("/api/proxy/memory/upload", {
+          method: "POST",
+          body: formData,
         });
-        await fetchEntries();
-      } else {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to upload file");
+
+        if (res.ok) {
+          successCount++;
+        } else {
+          const data = await res.json();
+          lastError = data.error || `Failed to upload "${file.name}"`;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : `Failed to upload "${file.name}"`;
       }
-    } catch (error) {
+    }
+
+    if (successCount > 0) {
       toast({
-        title: "Upload failed",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: successCount === 1 ? "File uploaded" : `${successCount} files uploaded`,
+        description: successCount === 1
+          ? `"${files[0].name}" has been added to memory.`
+          : `${successCount} file(s) have been added to memory.`,
+      });
+      await fetchEntries();
+    }
+    if (lastError && successCount < files.length) {
+      toast({
+        title: "Some uploads failed",
+        description: lastError,
         variant: "destructive",
       });
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+    }
+
+    setIsUploading(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   };
 
@@ -262,6 +280,34 @@ export function MemorySettings() {
     if (!dateStr) return "";
     const d = new Date(dateStr);
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+
+  const handleCategoryChange = async (entryId: string, newCategory: MemoryCategory) => {
+    try {
+      const res = await fetch(`/api/proxy/memory/entries/${entryId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: newCategory }),
+      });
+      if (res.ok) {
+        setEntries((prev) =>
+          prev.map((e) => e.id === entryId ? { ...e, category: newCategory } : e)
+        );
+      } else {
+        const data = await res.json();
+        toast({
+          title: "Failed to update category",
+          description: data.error || "An error occurred",
+          variant: "destructive",
+        });
+      }
+    } catch {
+      toast({
+        title: "Failed to update category",
+        description: "An error occurred",
+        variant: "destructive",
+      });
+    }
   };
 
   if (userLoading) {
@@ -306,7 +352,7 @@ export function MemorySettings() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All categories</SelectItem>
-                  {MEMORY_CATEGORIES.map((cat) => (
+                  {USER_WRITABLE_CATEGORIES.map((cat) => (
                     <SelectItem key={cat} value={cat}>
                       {CATEGORY_META[cat].label}
                     </SelectItem>
@@ -314,10 +360,34 @@ export function MemorySettings() {
                 </SelectContent>
               </Select>
               {canWrite && (
-                <Button variant="outline" size="sm" onClick={() => setShowCreateForm(!showCreateForm)}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  New
-                </Button>
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,.txt,.pdf"
+                    multiple
+                    onChange={handleUpload}
+                    className="hidden"
+                    id="memory-upload"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
+                  >
+                    {isUploading ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4 mr-1" />
+                    )}
+                    {isUploading ? "Uploading..." : "Upload"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setShowCreateForm(!showCreateForm)}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    New
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -346,7 +416,7 @@ export function MemorySettings() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {MEMORY_CATEGORIES.filter((c) => c !== "artifact").map((cat) => (
+                      {USER_WRITABLE_CATEGORIES.map((cat) => (
                         <SelectItem key={cat} value={cat}>
                           {CATEGORY_META[cat].label}
                         </SelectItem>
@@ -395,52 +465,6 @@ export function MemorySettings() {
             </div>
           )}
 
-          {/* Upload */}
-          {canWrite && (
-            <div className="flex items-center gap-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".md,.txt,.pdf"
-                onChange={handleUpload}
-                className="hidden"
-                id="memory-upload"
-              />
-              <Select value={uploadCategory} onValueChange={(v) => setUploadCategory(v as MemoryCategory)}>
-                <SelectTrigger className="w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MEMORY_CATEGORIES.filter((c) => c !== "artifact").map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {CATEGORY_META[cat].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-                variant="outline"
-                size="sm"
-              >
-                {isUploading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload File
-                  </>
-                )}
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                .md, .txt, .pdf — max 50MB
-              </span>
-            </div>
-          )}
 
           {/* Entry List */}
           {isLoadingEntries ? (
@@ -472,9 +496,27 @@ export function MemorySettings() {
                       <div className="min-w-0">
                         <p className="font-medium truncate">{entry.title}</p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${meta.color}`}>
-                            {meta.label}
-                          </Badge>
+                          {canWrite ? (
+                            <Select
+                              value={entry.category}
+                              onValueChange={(v) => handleCategoryChange(entry.id, v as MemoryCategory)}
+                            >
+                              <SelectTrigger className={`h-5 w-auto gap-1 border-0 px-1.5 py-0 text-xs ${meta.color}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {USER_WRITABLE_CATEGORIES.map((cat) => (
+                                  <SelectItem key={cat} value={cat}>
+                                    {CATEGORY_META[cat].label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${meta.color}`}>
+                              {meta.label}
+                            </Badge>
+                          )}
                           {entry.description && (
                             <span className="truncate max-w-[200px]">{entry.description}</span>
                           )}

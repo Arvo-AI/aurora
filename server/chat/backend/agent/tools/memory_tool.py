@@ -22,7 +22,7 @@ from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
-_MAX_CONTENT = 100000
+_AGENT_WRITE_LIMIT = 500_000  # Max chars the agent can write in a single tool call
 _CATEGORY_HELP = ", ".join(sorted(MEMORY_CATEGORIES))
 _MAX_TITLE = 500
 _GREP_MAX_RESULTS = 10
@@ -112,7 +112,7 @@ def list_memories(category: str = "", user_id: str | None = None, **kwargs) -> s
                 params = (org_id, list(MEMORY_CATEGORIES))
 
             cursor.execute(
-                f"""SELECT title, category, description, last_edited_by, updated_at
+                f"""SELECT title, category, description, last_edited_by, updated_at, LENGTH(content) as content_length
                     FROM artifacts
                     WHERE org_id = %s AND {cat_filter}
                     ORDER BY category, updated_at DESC""",
@@ -127,6 +127,7 @@ def list_memories(category: str = "", user_id: str | None = None, **kwargs) -> s
                 "description": row[2] or "",
                 "last_edited_by": row[3],
                 "updated_at": row[4].isoformat() if row[4] else None,
+                "content_length": row[5] or 0,
             }
             for row in rows
         ]
@@ -147,10 +148,12 @@ def list_memories(category: str = "", user_id: str | None = None, **kwargs) -> s
 class ReadMemoryArgs(BaseModel):
     category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
     title: str = Field(description="The exact title of the memory entry to read")
+    offset: int = Field(default=0, description="Character offset to start reading from (for paginating large entries)")
+    limit: int = Field(default=50000, description="Maximum number of characters to return (default 50000). Use with offset to paginate.")
 
 
-def read_memory(category: str, title: str, user_id: str | None = None, **kwargs) -> str:
-    """Read one memory entry's full markdown by category and title."""
+def read_memory(category: str, title: str, offset: int = 0, limit: int = 50000, user_id: str | None = None, **kwargs) -> str:
+    """Read one memory entry by category and title. Supports pagination via offset/limit for large documents."""
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -172,15 +175,27 @@ def read_memory(category: str, title: str, user_id: str | None = None, **kwargs)
                 "message": f"No memory entry '{title}' in category '{category}'.",
             })
 
-        return json.dumps({
+        full_content = row[0] or ""
+        total_length = len(full_content)
+        chunk = full_content[offset:offset + limit]
+
+        result = {
             "status": "ok",
             "category": category,
             "title": title.strip(),
-            "content": row[0] or "",
+            "content": chunk,
             "description": row[1] or "",
             "last_edited_by": row[2],
             "updated_at": row[3].isoformat() if row[3] else None,
-        })
+            "total_length": total_length,
+            "offset": offset,
+            "returned_length": len(chunk),
+            "has_more": offset + limit < total_length,
+        }
+        if offset + limit < total_length:
+            result["next_offset"] = offset + limit
+
+        return json.dumps(result)
 
     except ValueError as e:
         return _error_response(e)
@@ -220,8 +235,8 @@ def write_memory(
         return err
     if not content or not content.strip():
         return json.dumps({"error": "content cannot be empty."})
-    if len(content) > _MAX_CONTENT:
-        return json.dumps({"error": "Content exceeds maximum length (100000 chars)."})
+    if len(content) > _AGENT_WRITE_LIMIT:
+        return json.dumps({"error": "Content exceeds maximum length (500000 chars)."})
 
     try:
         with _memory_connection(user_id, "write") as (cursor, conn, org_id):
@@ -307,8 +322,8 @@ def append_to_memory(
                 new_content = content
                 artifact_id = None
 
-            if len(new_content) > _MAX_CONTENT:
-                return json.dumps({"error": "Resulting content would exceed 100KB limit."})
+            if len(new_content) > _AGENT_WRITE_LIMIT:
+                return json.dumps({"error": "Resulting content would exceed 500KB limit."})
 
             if artifact_id:
                 cursor.execute(
@@ -402,10 +417,17 @@ def edit_memory(
                     "message": "old_text not found in the entry. Read the entry first to see its current content.",
                 })
 
+            # Reject ambiguous matches — agent must provide enough context for uniqueness
+            if existing.count(old_text) > 1:
+                return json.dumps({
+                    "status": "ambiguous",
+                    "message": f"old_text matches {existing.count(old_text)} locations. Include more surrounding context to make it unique.",
+                })
+
             new_content = existing.replace(old_text, new_text, 1)
 
-            if len(new_content) > _MAX_CONTENT:
-                return json.dumps({"error": "Resulting content would exceed 100KB limit."})
+            if len(new_content) > _AGENT_WRITE_LIMIT:
+                return json.dumps({"error": "Resulting content would exceed 500KB limit."})
 
             cursor.execute(
                 """UPDATE artifacts
