@@ -1173,6 +1173,43 @@ def update_org_preferences(user_id):
         return jsonify({"error": "Failed to update preferences"}), 500
 
 
+def _downgrade_to_free(cursor, org_id: str, creator_id: str) -> list:
+    """Remove all non-creator members and expire invitations for a downgrade."""
+    cursor.execute(
+        """UPDATE org_invitations SET status = 'expired'
+           WHERE org_id = %s AND status = 'pending'""",
+        (org_id,),
+    )
+    cursor.execute(
+        "SELECT id FROM users WHERE org_id = %s AND id != %s",
+        (org_id, creator_id),
+    )
+    removed_user_ids = [r[0] for r in cursor.fetchall()]
+    for uid in removed_user_ids:
+        _purge_vault_secrets(cursor, user_id=uid, org_id=org_id)
+    cursor.execute(
+        "DELETE FROM user_tokens WHERE org_id = %s AND user_id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "DELETE FROM user_connections WHERE org_id = %s AND user_id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "DELETE FROM user_manual_vms WHERE org_id = %s AND user_id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "UPDATE users SET org_id = NULL WHERE org_id = %s AND id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "UPDATE users SET role = 'admin' WHERE id = %s",
+        (creator_id,),
+    )
+    return removed_user_ids
+
+
 @org_bp.route("/plan", methods=["PATCH"])
 @require_permission("org", "manage")
 def update_plan(user_id):
@@ -1207,38 +1244,7 @@ def update_plan(user_id):
                     return jsonify({"error": "Enterprise upgrades must be completed through billing"}), 403
 
                 if old_tier == "enterprise" and new_tier == "free":
-                    cursor.execute(
-                        """UPDATE org_invitations SET status = 'expired'
-                           WHERE org_id = %s AND status = 'pending'""",
-                        (org_id,),
-                    )
-                    cursor.execute(
-                        "SELECT id FROM users WHERE org_id = %s AND id != %s",
-                        (org_id, creator_id),
-                    )
-                    removed_user_ids = [r[0] for r in cursor.fetchall()]
-                    for uid in removed_user_ids:
-                        _purge_vault_secrets(cursor, user_id=uid, org_id=org_id)
-                    cursor.execute(
-                        "DELETE FROM user_tokens WHERE org_id = %s AND user_id != %s",
-                        (org_id, creator_id),
-                    )
-                    cursor.execute(
-                        "DELETE FROM user_connections WHERE org_id = %s AND user_id != %s",
-                        (org_id, creator_id),
-                    )
-                    cursor.execute(
-                        "DELETE FROM user_manual_vms WHERE org_id = %s AND user_id != %s",
-                        (org_id, creator_id),
-                    )
-                    cursor.execute(
-                        "UPDATE users SET org_id = NULL WHERE org_id = %s AND id != %s",
-                        (org_id, creator_id),
-                    )
-                    cursor.execute(
-                        "UPDATE users SET role = 'admin' WHERE id = %s",
-                        (creator_id,),
-                    )
+                    removed_user_ids = _downgrade_to_free(cursor, org_id, creator_id)
 
                 cursor.execute(
                     "UPDATE organizations SET plan_tier = %s WHERE id = %s",
