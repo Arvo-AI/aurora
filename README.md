@@ -11,7 +11,7 @@
 
 <br />
 
-<a href="https://aurora-ai.net">Try Aurora Live</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.arvoai.ca">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
+<a href="https://aurora-ai.net">Try Aurora Live</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.aurorasre.ai">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
 
 </div>
 
@@ -314,7 +314,7 @@ Aurora is **100% self-hosted**. Your incident data never leaves your infrastruct
 - **[GitHub Issues](https://github.com/Arvo-AI/aurora/issues)** — Bug reports and feature requests
 - **[GitHub Discussions](https://github.com/Arvo-AI/aurora/discussions)** — Ideas and Q&A
 - **[Documentation](https://arvo-ai.github.io/aurora/)** — Full deployment and configuration guides
-- **[Blog](https://www.arvoai.ca/blog)** — SRE best practices, incident management guides
+- **[Blog](https://www.aurorasre.ai/blog)** — SRE best practices, incident management guides
 - **[Contributing](CONTRIBUTING.md)** — We welcome PRs! Read the guide first.
 
 ---
