@@ -89,6 +89,7 @@ class SuggestionExtractor:
         alert_title: str,
         user_id: str = "",
         session_id: str = "",
+        agent_reasoning: str = "",
     ) -> List[Suggestion]:
         """
         Use LLM to generate structured suggestions with commands.
@@ -101,6 +102,7 @@ class SuggestionExtractor:
             alert_title: The alert title
             user_id: User ID for usage tracking
             session_id: Session ID for usage tracking
+            agent_reasoning: The investigating agent's thoughts/reasoning stream
 
         Returns:
             List of Suggestion objects
@@ -112,6 +114,7 @@ class SuggestionExtractor:
             citation_context=citation_context,
             service=service,
             alert_title=alert_title,
+            agent_reasoning=agent_reasoning,
         )
 
         try:
@@ -151,13 +154,16 @@ class SuggestionExtractor:
             return "No investigation evidence available."
 
         lines = []
-        # Use last 15 citations for context (most recent/relevant)
-        for c in citations[-15:]:
+        # Use last 15 citations; recent ones get more output space
+        recent_start = max(0, len(citations) - 5)
+        for i, c in enumerate(citations[-15:]):
             tool_name = c.tool_name
             command = c.command
-            # Truncate output to avoid context overflow
-            output = c.output[:500] if c.output else "No output"
-            lines.append(f"- {tool_name}: {command}\n  Output snippet: {output}")
+            cap = 1200 if (i + len(citations) - 15) >= recent_start else 600
+            output = c.output[:cap] if c.output else "No output"
+            if len(c.output or "") > cap:
+                output += "..."
+            lines.append(f"- {tool_name}: {command}\n  Output: {output}")
 
         return "\n".join(lines)
 
@@ -167,9 +173,19 @@ class SuggestionExtractor:
         citation_context: str,
         service: str,
         alert_title: str,
+        agent_reasoning: str = "",
     ) -> str:
         """Build the prompt for generating structured suggestions."""
-        return f"""Based on this incident analysis, generate 2-4 actionable suggestions with executable commands.
+        reasoning_block = ""
+        if agent_reasoning:
+            # Use last 8000 chars — the conclusion and classification are at the end
+            trimmed = agent_reasoning[-8000:] if len(agent_reasoning) > 8000 else agent_reasoning
+            reasoning_block = f"""
+INVESTIGATOR REASONING (the agent's own conclusions — this is the most important context):
+{trimmed}
+"""
+
+        return f"""You are deciding what an engineer should do next after an incident investigation.
 
 INCIDENT:
 - Service: {service}
@@ -177,29 +193,25 @@ INCIDENT:
 
 SUMMARY:
 {summary}
-
-INVESTIGATION EVIDENCE (tools and commands that were used):
+{reasoning_block}
+INVESTIGATION EVIDENCE (tools used during the investigation):
 {citation_context}
 
-Generate suggestions as a JSON array. Each suggestion MUST have:
-- "title": Short action title (e.g., "Check pod logs", "Restart deployment")
-- "description": 1-2 sentence explanation of what this will help diagnose or fix
-- "type": One of "diagnostic" (read-only investigation), "mitigation" (fix the issue), or "communication" (notify stakeholders)
-- "risk": One of "safe" (read-only), "low" (minor changes), "medium" (service restart), "high" (data loss risk)
-- "command": The exact CLI command to run (kubectl, gcloud, aws, az, splunk search, etc.)
+Return a JSON array of 0-5 suggestions. Each suggestion MUST have:
+- "title": what to do (action verb + specific target)
+- "description": why this helps, what it addresses
+- "type": "diagnostic" | "mitigation" | "remediate" | "prevent"
+- "risk": "safe" | "low" | "medium" | "high"
+- "command": exact CLI command if applicable (kubectl, gcloud, aws, gh, terraform, etc.), or null
 
-GUIDELINES:
-- For diagnostic suggestions, use read-only commands (get, describe, logs, list, search)
-- For mitigation suggestions, include the actual remediation command but mark appropriately by risk
-- Commands should be complete and executable (include namespaces, resource names from the investigation)
-- Reference specific resources mentioned in the investigation evidence
-- Prefer kubectl, gcloud, aws, az commands based on what tools were used in the investigation
+RULES:
+- If the incident is transient and self-resolved with no action needed, return []. Zero suggestions is correct when nothing needs to be done.
+- If a fix already exists as an open PR or was generated during the investigation, the primary suggestion should be to merge/apply it (use `gh pr merge` or link to the PR).
+- Do not suggest actions the investigation already performed.
+- Do not generate padding suggestions to hit a minimum count — fewer is better.
+- When a command is provided, it must be specific (real resource names, namespaces, repos from the evidence).
 
-Return ONLY a valid JSON array, no markdown formatting, no explanation:
-[
-  {{"title": "...", "description": "...", "type": "diagnostic", "risk": "safe", "command": "kubectl logs ..."}},
-  {{"title": "...", "description": "...", "type": "mitigation", "risk": "medium", "command": "kubectl rollout restart ..."}}
-]"""
+Return ONLY the JSON array:"""
 
     def _parse_suggestions_response(self, content: Any) -> List[Suggestion]:
         """Parse LLM response into Suggestion objects."""

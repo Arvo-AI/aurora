@@ -826,6 +826,7 @@ def generate_incident_summary_from_chat(
                 alert_title=basics["alert_title"],
                 user_id=user_id,
                 session_id=session_id,
+                agent_reasoning=agent_reasoning or "",
             )
             if suggestions:
                 save_incident_suggestions(incident_id, suggestions)
