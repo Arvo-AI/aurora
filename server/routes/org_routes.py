@@ -1235,7 +1235,7 @@ def update_plan(user_id):
                 if not row:
                     return jsonify({"error": _ORG_NOT_FOUND}), 404
 
-                old_tier, creator_id = row[0] or "free", row[1]
+                old_tier, creator_id = row[0] or "free", row[1] or user_id
 
                 if old_tier == new_tier:
                     return jsonify({"planTier": new_tier})
