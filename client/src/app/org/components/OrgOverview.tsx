@@ -20,7 +20,7 @@ interface OrgOverviewProps {
   planTier?: string;
 }
 
-export default function OrgOverview({ org, planTier }: OrgOverviewProps) {
+export default function OrgOverview({ org, planTier }: Readonly<OrgOverviewProps>) {
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const { data: stats } = useQuery<{
     members: number;

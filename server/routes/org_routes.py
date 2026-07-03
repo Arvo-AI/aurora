@@ -18,6 +18,7 @@ from routes.audit_routes import record_audit_event
 logger = logging.getLogger(__name__)
 
 INVITATION_TTL_DAYS = 7
+_ORG_NOT_FOUND = "Organization not found"
 
 org_bp = Blueprint("org", __name__, url_prefix="/api/orgs")
 
@@ -264,7 +265,7 @@ def get_current_org(user_id):
                 )
                 org = cursor.fetchone()
                 if not org:
-                    return jsonify({"error": "Organization not found"}), 404
+                    return jsonify({"error": _ORG_NOT_FOUND}), 404
 
                 cursor.execute(
                     "SELECT id, email, name, role, created_at FROM users WHERE org_id = %s ORDER BY created_at",
@@ -358,7 +359,7 @@ def update_org(user_id):
                 conn.commit()
 
                 if not row:
-                    return jsonify({"error": "Organization not found"}), 404
+                    return jsonify({"error": _ORG_NOT_FOUND}), 404
 
                 record_audit_event(org_id, user_id, "update_org", "organization", org_id,
                                    {"name": name, "slug": slug}, request)
@@ -1185,7 +1186,7 @@ def update_plan(user_id):
                 )
                 row = cursor.fetchone()
                 if not row:
-                    return jsonify({"error": "Organization not found"}), 404
+                    return jsonify({"error": _ORG_NOT_FOUND}), 404
 
                 old_tier, creator_id = row[0] or "free", row[1]
 
@@ -1244,5 +1245,5 @@ def update_plan(user_id):
 
         return jsonify({"planTier": new_tier})
     except Exception as e:
-        logger.error("Error updating plan: %s", e)
+        logger.exception("Error updating plan: %s", e)
         return jsonify({"error": "Failed to update plan"}), 500

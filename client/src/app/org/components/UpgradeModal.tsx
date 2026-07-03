@@ -16,7 +16,7 @@ const features = [
   "10x usage limits",
 ];
 
-export default function UpgradeModal({ open, onOpenChange }: UpgradeModalProps) {
+export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeModalProps>) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -38,7 +38,7 @@ export default function UpgradeModal({ open, onOpenChange }: UpgradeModalProps) 
         <div className="border-t pt-4">
           <Button
             className="w-full"
-            onClick={() => window.open("https://cal.com/arvo-ai?ref=999998", "_blank")}
+            onClick={() => window.open("https://cal.com/arvo-ai?ref=999998", "_blank", "noopener")}
           >
             Book a meeting
           </Button>

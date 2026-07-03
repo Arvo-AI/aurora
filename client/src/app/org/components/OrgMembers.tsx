@@ -266,7 +266,7 @@ interface OrgMembersProps {
   onMembersChanged: () => void;
 }
 
-export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMembersChanged }: OrgMembersProps) {
+export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMembersChanged }: Readonly<OrgMembersProps>) {
   const [updating, setUpdating] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [permOpen, setPermOpen] = useState(false);
