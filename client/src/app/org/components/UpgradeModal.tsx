@@ -38,7 +38,7 @@ export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeMod
         <div className="border-t pt-4">
           <Button
             className="w-full"
-            onClick={() => window.open("https://cal.com/arvo-ai?ref=999998", "_blank", "noopener")}
+            onClick={() => window.open("https://cal.com/arvo-ai?ref=999998", "_blank", "noopener,noreferrer")}
           >
             Book a meeting
           </Button>

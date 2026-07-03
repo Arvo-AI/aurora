@@ -1193,14 +1193,22 @@ def update_plan(user_id):
                 if old_tier == new_tier:
                     return jsonify({"planTier": new_tier})
 
+                if old_tier == "free" and new_tier == "enterprise":
+                    return jsonify({"error": "Enterprise upgrades must be completed through billing"}), 403
+
                 if old_tier == "enterprise" and new_tier == "free":
                     cursor.execute(
                         """UPDATE org_invitations SET status = 'expired'
-                           WHERE org_id = %s AND email IN (
-                               SELECT email FROM users WHERE org_id = %s AND id != %s
-                           )""",
-                        (org_id, org_id, creator_id),
+                           WHERE org_id = %s AND status = 'pending'""",
+                        (org_id,),
                     )
+                    cursor.execute(
+                        "SELECT id FROM users WHERE org_id = %s AND id != %s",
+                        (org_id, creator_id),
+                    )
+                    removed_user_ids = [r[0] for r in cursor.fetchall()]
+                    for uid in removed_user_ids:
+                        _purge_vault_secrets(cursor, user_id=uid, org_id=org_id)
                     cursor.execute(
                         "DELETE FROM user_tokens WHERE org_id = %s AND user_id != %s",
                         (org_id, creator_id),
@@ -1213,11 +1221,6 @@ def update_plan(user_id):
                         "DELETE FROM user_manual_vms WHERE org_id = %s AND user_id != %s",
                         (org_id, creator_id),
                     )
-                    cursor.execute(
-                        "SELECT id FROM users WHERE org_id = %s AND id != %s",
-                        (org_id, creator_id),
-                    )
-                    removed_user_ids = [r[0] for r in cursor.fetchall()]
                     cursor.execute(
                         "UPDATE users SET org_id = NULL WHERE org_id = %s AND id != %s",
                         (org_id, creator_id),

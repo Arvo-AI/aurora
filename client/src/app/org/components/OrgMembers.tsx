@@ -274,7 +274,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
   const [cancellingInvite, setCancellingInvite] = useState<string | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
-  const isFree = planTier === "free";
+  const isFree = (planTier ?? "free") === "free";
 
   const fetchPendingInvites = useCallback(async () => {
     if (!isAdmin) return;

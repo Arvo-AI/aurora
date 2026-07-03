@@ -28,7 +28,7 @@ export default function OrgOverview({ org, planTier }: Readonly<OrgOverviewProps
     chatSessions: number;
   }>('/api/orgs/stats', jsonFetcher, { staleTime: 60_000 });
 
-  const isFree = planTier === "free";
+  const isFree = (planTier ?? "free") === "free";
 
   const roleCounts = org.members.reduce(
     (acc, m) => {
