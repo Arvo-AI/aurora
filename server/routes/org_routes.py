@@ -659,6 +659,16 @@ def _list_invitations(org_id: str):
                          AND expires_at IS NOT NULL AND expires_at <= NOW()""",
                     (org_id,),
                 )
+
+                if os.getenv("AURORA_ENV", "production") != "dev":
+                    cursor.execute(
+                        """UPDATE org_invitations i SET status = 'expired'
+                           FROM organizations o
+                           WHERE i.org_id = %s AND i.status = 'pending'
+                             AND o.id = i.org_id AND COALESCE(o.plan_tier, 'free') = 'free'""",
+                        (org_id,),
+                    )
+
                 conn.commit()
 
                 cursor.execute(
