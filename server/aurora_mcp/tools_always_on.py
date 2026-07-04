@@ -103,7 +103,17 @@ async def _do_search_runbooks(api_call: ApiCall, query: str, limit: int) -> Dict
         )
         sources.append({"source": "memory", "error": "search_failed"})
     else:
-        sources.append({"source": "memory", "results": mem_res})
+        # Filter memory results by query relevance — all query tokens must appear
+        # in the title or description (case-insensitive, any order)
+        entries = mem_res.get("entries", []) if isinstance(mem_res, dict) else []
+        tokens = query.lower().split()
+        filtered = []
+        for e in entries:
+            searchable = f"{e.get('title', '') or ''} {e.get('description', '') or ''}".lower()
+            if all(tok in searchable for tok in tokens):
+                filtered.append(e)
+        mem_res_filtered = {**mem_res, "entries": filtered[:limit]} if isinstance(mem_res, dict) else mem_res
+        sources.append({"source": "memory", "results": mem_res_filtered})
     if not isinstance(sp_res, Exception):
         sources.append({"source": "sharepoint", "results": sp_res})
 
@@ -298,7 +308,7 @@ def register_tier1_tools(mcp, api_call: ApiCall) -> None:
 
     @mcp.tool()
     async def list_memories(category: str = "") -> Dict[str, Any]:
-        """List memory entries. Optionally filter by category: context, runbook, infrastructure, learned, postmortem, artifact."""
+        """List memory entries. Optionally filter by category: context, runbook, infrastructure, learned, postmortem."""
         return await _do_list_memories(api_call, category)
 
     @mcp.tool()
