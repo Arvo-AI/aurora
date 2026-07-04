@@ -12,11 +12,9 @@ from .loader import (
     load_core_prompt,
     CORE_SKILLS_DIR,
     BACKGROUND_RCA_DIR,
-    RCA_SEGMENTS_DIR,
-    INTEGRATIONS_DIR,
 )
 
 __all__ = [
     "SkillRegistry", "load_skill", "LoadSkillArgs", "load_core_prompt",
-    "CORE_SKILLS_DIR", "BACKGROUND_RCA_DIR", "RCA_SEGMENTS_DIR", "INTEGRATIONS_DIR",
+    "CORE_SKILLS_DIR", "BACKGROUND_RCA_DIR",
 ]
