@@ -26,6 +26,7 @@ memory_bp = Blueprint("memory", __name__)
 ALLOWED_EXTENSIONS = {"md", "txt", "pdf"}
 MAX_CONTENT_LENGTH = 500_000  # 500KB per manually-created entry
 MAX_UPLOAD_CONTENT_LENGTH = 50_000_000  # 50MB max extracted text per uploaded file
+MAX_RAW_UPLOAD_BYTES = 100_000_000  # 100MB max raw file body to prevent OOM
 
 
 def _extract_pdf_text(content: bytes) -> str:
@@ -263,7 +264,14 @@ def upload_file(user_id):
         return jsonify({"error": f"category must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
 
     try:
-        raw_bytes = file.read()
+        # Check Content-Length header to reject oversized uploads before reading
+        content_length = request.content_length
+        if content_length and content_length > MAX_RAW_UPLOAD_BYTES:
+            return jsonify({"error": "File too large. Maximum raw upload size is 100MB."}), 400
+
+        raw_bytes = file.read(MAX_RAW_UPLOAD_BYTES + 1)
+        if len(raw_bytes) > MAX_RAW_UPLOAD_BYTES:
+            return jsonify({"error": "File too large. Maximum raw upload size is 100MB."}), 400
 
         # Extract text based on file type
         if ext == "pdf":
