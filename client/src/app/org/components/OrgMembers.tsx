@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { VALID_ROLES, ROLE_META, type UserRole } from "@/lib/roles";
 import type { OrgMember } from "@/components/OrgSettings";
+import { getEnv } from "@/lib/env";
 import UpgradeModal from "./UpgradeModal";
 
 const PERMISSION_TABLE: {
@@ -275,6 +276,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   const isFree = (planTier ?? "free") === "free";
+  const showPaywall = isFree && getEnv("AURORA_ENV") !== "dev";
 
   const fetchPendingInvites = useCallback(async () => {
     if (!isAdmin) return;
@@ -365,7 +367,7 @@ export default function OrgMembers({ org, currentUserId, isAdmin, planTier, onMe
           {org.members.length} member{org.members.length !== 1 ? "s" : ""}
         </p>
         {isAdmin && (
-          isFree
+          showPaywall
             ? <><Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => setUpgradeOpen(true)}><Plus className="h-3.5 w-3.5" />Add</Button><UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} /></>
             : <AddUserDialog onCreated={handleAddUserCreated} />
         )}

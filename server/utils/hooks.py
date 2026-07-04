@@ -96,7 +96,7 @@ def _load_hooks():
         _hooks_loaded = True
 
 
-_FAIL_CLOSED_HOOKS = {"verify_entitlement"}
+_FAIL_CLOSED_HOOKS = {"verify_entitlement", "before_add_member"}
 
 
 def _resolve_hook_fn(name: str):
@@ -110,7 +110,7 @@ def _handle_hook_error(name: str, fn, *args, **kwargs):
     """Handle a hook exception: fail closed or fall back to default."""
     if name in _FAIL_CLOSED_HOOKS:
         logger.exception("Hook '%s' raised — failing closed", name)
-        return False, "Entitlement verification unavailable"
+        return False, "Operation temporarily unavailable — please try again"
     logger.exception("Hook '%s' raised — failing open", name)
     if fn is _HOOK_REGISTRY[name]:
         return True, None

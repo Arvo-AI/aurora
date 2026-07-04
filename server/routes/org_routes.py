@@ -1260,7 +1260,9 @@ def update_plan(user_id):
                 logger.warning("Failed to clean Casbin roles for user %s: %s", uid, e)
 
         record_audit_event(org_id, user_id, "update_plan", "organization", org_id,
-                           {"old_tier": old_tier, "new_tier": new_tier}, request)
+                           {"old_tier": old_tier, "new_tier": new_tier,
+                            "removed_user_ids": removed_user_ids,
+                            "removed_user_count": len(removed_user_ids)}, request)
 
         return jsonify({"planTier": new_tier})
     except Exception as e:

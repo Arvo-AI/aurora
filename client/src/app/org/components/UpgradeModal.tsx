@@ -3,6 +3,7 @@
 import { Check } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { getEnv } from "@/lib/env";
 
 interface UpgradeModalProps {
   open: boolean;
@@ -17,6 +18,8 @@ const features = [
 ];
 
 export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeModalProps>) {
+  const bookingUrl = getEnv("NEXT_PUBLIC_UPGRADE_BOOKING_URL");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -35,14 +38,16 @@ export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeMod
             </li>
           ))}
         </ul>
-        <div className="border-t pt-4">
-          <Button
-            className="w-full"
-            onClick={() => window.open("https://cal.com/arvo-ai?ref=999998", "_blank", "noopener,noreferrer")}
-          >
-            Book a meeting
-          </Button>
-        </div>
+        {bookingUrl && (
+          <div className="border-t pt-4">
+            <Button
+              className="w-full"
+              onClick={() => window.open(bookingUrl, "_blank", "noopener,noreferrer")}
+            >
+              Book a meeting
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
