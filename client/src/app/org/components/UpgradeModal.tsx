@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Check } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,16 @@ const features = [
 export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeModalProps>) {
   const bookingUrl = getEnv("NEXT_PUBLIC_UPGRADE_BOOKING_URL");
 
+  useEffect(() => {
+    if (open) {
+      fetch("/api/orgs/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "upgrade_prompt_viewed" }),
+      }).catch(() => {});
+    }
+  }, [open]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -33,7 +44,7 @@ export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeMod
         <ul className="space-y-3 pb-2">
           {features.map((f) => (
             <li key={f} className="flex items-center gap-3 text-sm">
-              <Check className="h-4 w-4 flex-shrink-0" />
+              <Check className="h-4 w-4 flex-shrink-0 text-green-500" />
               {f}
             </li>
           ))}

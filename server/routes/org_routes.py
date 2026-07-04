@@ -1268,3 +1268,19 @@ def update_plan(user_id):
     except Exception as e:
         logger.exception("Error updating plan: %s", e)
         return jsonify({"error": "Failed to update plan"}), 500
+
+
+@org_bp.route("/track", methods=["POST"])
+@require_auth_only
+def track_event(user_id):
+    """Record a lightweight frontend event in the audit log."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    event = (request.get_json() or {}).get("event")
+    if event not in {"upgrade_prompt_viewed"}:
+        return jsonify({"error": "Unknown event"}), 400
+
+    record_audit_event(org_id, user_id, event, "organization", org_id, None, request)
+    return jsonify({"ok": True})
