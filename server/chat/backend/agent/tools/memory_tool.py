@@ -217,6 +217,10 @@ class WriteMemoryArgs(BaseModel):
         default="",
         description="One-line summary for the memory index (helps with future retrieval)",
     )
+    overwrite: bool = Field(
+        default=False,
+        description="Set to true to replace an existing entry with the same title. If false and the title exists, the write is rejected.",
+    )
 
 
 def write_memory(
@@ -224,11 +228,12 @@ def write_memory(
     title: str,
     content: str,
     description: str = "",
+    overwrite: bool = False,
     user_id: str | None = None,
     session_id: str | None = None,
     **kwargs,
 ) -> str:
-    """Create or update a memory entry. Records a new version each time."""
+    """Create a new memory entry, or overwrite an existing one (requires overwrite=true)."""
     if err := _validate_category(category):
         return err
     if err := _validate_title(title):
@@ -238,8 +243,27 @@ def write_memory(
     if len(content) > _AGENT_WRITE_LIMIT:
         return json.dumps({"error": "Content exceeds maximum length (500000 chars)."})
 
+    content = _strip_nul(content)
     try:
         with _memory_connection(user_id, "write") as (cursor, conn, org_id):
+            # Check if entry already exists
+            cursor.execute(
+                """SELECT id FROM artifacts
+                   WHERE org_id = %s AND category = %s AND title = %s""",
+                (org_id, category, title.strip()),
+            )
+            existing = cursor.fetchone()
+
+            if existing and not overwrite:
+                return json.dumps({
+                    "status": "already_exists",
+                    "message": (
+                        f"A memory entry '{title}' already exists in category '{category}'. "
+                        "Use overwrite=true to replace it, or use append_to_memory / edit_memory "
+                        "to modify the existing content."
+                    ),
+                })
+
             cursor.execute(
                 """INSERT INTO artifacts
                        (org_id, user_id, title, content, category, description,
@@ -264,9 +288,11 @@ def write_memory(
             conn.commit()
 
         logger.info(f"[MemoryTool] Wrote memory '{category}/{title.strip()}' v{version} for org {org_id}")
+        action = "overwritten" if existing else "created"
         return json.dumps({
             "status": "ok",
-            "message": f"Memory saved: {category}/{title.strip()} (version {version}).",
+            "action": action,
+            "message": f"Memory {action}: {category}/{title.strip()} (version {version}).",
             "version": version,
         })
 

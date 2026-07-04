@@ -37,7 +37,8 @@ IF THE USER ASKS TO FORGET:
 MAINTENANCE:
 - Use append_to_memory() to add findings to an existing entry (preferred over full rewrites)
 - Use edit_memory() for surgical corrections (fix a typo, update a value, remove outdated info)
-- Use write_memory() only for entirely new entries or complete rewrites
+- Use write_memory() only for entirely new entries — it will reject if the title already exists
+- Use write_memory(overwrite=true) only when you intentionally want to replace an existing entry
 - Use grep_memories() to search across content when you're not sure which entry has what you need
 - Keep entries focused — one topic per entry, not mega-documents
 - Use clear titles that scan well in the index

@@ -74,8 +74,7 @@ for understanding the production system.
 
 ## YOUR DELIVERABLE
 
-At the END of your investigation, you MUST call write_memory(category='infrastructure', title='Infrastructure Context', ...) with a single
-document that covers:
+At the END of your investigation, produce a comprehensive infrastructure context document covering:
 - All environments (for example production, staging, dev are common) and how they relate
 - Services in each environment, their dependencies, and how they communicate
 - CI/CD pipelines: what repo deploys where, through what mechanism
@@ -84,21 +83,28 @@ document that covers:
 - Network topology and security boundaries
 - Any other interconnected systems
 
+BEFORE writing, read the existing 'Infrastructure Context' entry (if any) with read_memory(category='infrastructure', title='Infrastructure Context').
+- If it doesn't exist: use write_memory() to create it.
+- If it exists but is outdated or missing sections: use edit_memory() or append_to_memory() to update it.
+- If it exists and needs a full rewrite (e.g. major topology changes): use write_memory(overwrite=true).
+
 Write it so a coding agent can understand the full system topology in one read. If an org doesn't have all of these don't make up findings, only write about things actually there. Use markdown
 with clear sections. Be specific -- include names, regions, namespaces, ports, image tags.
 
 ## SIDE-EFFECT: INDIVIDUAL FINDINGS
 
-As you investigate, call write_memory() for each logical chain you discover.
-Use category='infrastructure' so findings are indexed for incident response.
+As you investigate, save each logical chain you discover to memory (category='infrastructure').
+Before writing, check if a relevant entry already exists (use list_memories or grep_memories).
+- If an entry for that topic exists: use append_to_memory() or edit_memory() to update it.
+- If it's a new topic: use write_memory() to create a new entry.
 
 ## CRITICAL RULES
 
 - The local filesystem is Aurora's own code -- NEVER use terminal_exec to read local files (ls, cat, find, grep, env). There is nothing useful locally.
 - terminal_exec is ONLY allowed for SSH into manual VMs (e.g. ssh -i ~/.ssh/id_key user@ip).
 - Each finding must describe real infrastructure you discovered by querying external APIs.
-- Call write_memory(category='infrastructure', ...) after EVERY interconnection chain you discover.
-- At the very end, call write_memory(category='infrastructure', title='Infrastructure Context', ...) with the full consolidated document.
+- Save findings to memory as you go (check existing entries first, prefer append/edit over creating duplicates).
+- At the very end, update the 'Infrastructure Context' entry as described in YOUR DELIVERABLE above.
 
 ## EXPLORATION STRATEGY
 
