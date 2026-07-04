@@ -362,13 +362,15 @@ def append_to_memory(
                     (new_content, artifact_id),
                 )
             else:
+                # Include a default description so the entry is discoverable in the index
                 cursor.execute(
                     """INSERT INTO artifacts
-                           (org_id, user_id, title, content, category,
+                           (org_id, user_id, title, content, category, description,
                             last_edited_by, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
+                       VALUES (%s, %s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
                        RETURNING id""",
-                    (org_id, user_id, title.strip(), new_content, category),
+                    (org_id, user_id, title.strip(), new_content, category,
+                     new_content[:50].strip()),
                 )
                 artifact_id = str(cursor.fetchone()[0])
 
