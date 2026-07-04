@@ -37,7 +37,6 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "cloudbees_rca": "CloudBees RCA",
     "tailscale_ssh": "Tailscale SSH",
     "analyze_zip_file": "ZIP Analyzer",
-    "rag_index_zip": "RAG Indexer",
     "list_memories": "Memory",
     "read_memory": "Memory",
     "write_memory": "Memory",

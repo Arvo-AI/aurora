@@ -376,7 +376,7 @@ class Agent:
                     prompt_text = ' '.join([p['text'] if isinstance(p, dict) and p.get('type') == 'text' else str(p) for p in last_content])
             # Only include zip-related tools if referenced
             if not self._prompt_references_zip(prompt_text, getattr(state, 'attachments', [])):
-                tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file', 'rag_index_zip')]
+                tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file',)]
 
             # Register canonicalized prefix + tools with cache middleware.
             # Skip for sub-agents: their `system_prompt_override` (the role brief)
