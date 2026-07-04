@@ -16,7 +16,7 @@ from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.storage.storage import get_storage_manager
 from services.artifacts.store import create_version
-from services.memory.splitter import split_content, make_part_title, make_part_description
+from utils.validation import strip_nul
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ def migrate_kb_to_memory(self):
                 for org_id, user_id, content in kb_rows:
                     cursor.execute("SAVEPOINT migrate_kb_row")
                     try:
+                        content = strip_nul(content)
                         _set_rls_for_row(cursor, org_id, user_id)
                         cursor.execute(
                             """INSERT INTO artifacts
@@ -100,6 +101,7 @@ def migrate_kb_to_memory(self):
 
                     cursor.execute("SAVEPOINT migrate_infra_row")
                     try:
+                        content = strip_nul(content)
                         _set_rls_for_row(cursor, org_id, user_id)
                         cursor.execute(
                             """INSERT INTO artifacts
@@ -152,41 +154,31 @@ def migrate_kb_to_memory(self):
                         else:
                             content = raw_bytes.decode("utf-8", errors="replace")
 
+                        content = strip_nul(content)
+
                         if not content.strip():
                             cursor.execute("RELEASE SAVEPOINT migrate_doc_row")
                             continue
 
                         _set_rls_for_row(cursor, org_id, user_id)
 
-                        base_title = filename.rsplit(".", 1)[0] if "." in filename else filename
-                        base_desc = f"Migrated from uploaded document: {filename}"
+                        title = filename.rsplit(".", 1)[0] if "." in filename else filename
+                        desc = f"Migrated from uploaded document: {filename}"
 
-                        # Split large documents into multiple parts
-                        parts = split_content(content)
-                        total_parts = len(parts)
-
-                        for i, part_content in enumerate(parts, start=1):
-                            if total_parts == 1:
-                                title = base_title
-                                desc = base_desc
-                            else:
-                                title = make_part_title(base_title, i, total_parts)
-                                desc = make_part_description(base_desc, i, total_parts)
-
-                            cursor.execute(
-                                """INSERT INTO artifacts
-                                       (org_id, user_id, title, content, category, description,
-                                        last_edited_by, updated_at)
-                                   VALUES (%s, %s, %s, %s, 'runbook',
-                                           %s, 'user', CURRENT_TIMESTAMP)
-                                   ON CONFLICT (org_id, category, title) DO NOTHING
-                                   RETURNING id""",
-                                (org_id, user_id, title, part_content, desc),
-                            )
-                            row = cursor.fetchone()
-                            if row:
-                                create_version(cursor, str(row[0]), org_id, user_id, part_content, source="migration")
-                                stats["documents"] += 1
+                        cursor.execute(
+                            """INSERT INTO artifacts
+                                   (org_id, user_id, title, content, category, description,
+                                    last_edited_by, updated_at)
+                               VALUES (%s, %s, %s, %s, 'runbook',
+                                       %s, 'user', CURRENT_TIMESTAMP)
+                               ON CONFLICT (org_id, category, title) DO NOTHING
+                               RETURNING id""",
+                            (org_id, user_id, title, content, desc),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            create_version(cursor, str(row[0]), org_id, user_id, content, source="migration")
+                            stats["documents"] += 1
 
                         cursor.execute("RELEASE SAVEPOINT migrate_doc_row")
                     except Exception as e:
@@ -197,44 +189,37 @@ def migrate_kb_to_memory(self):
                 # 4) Migrate postmortems → postmortem memory entries
                 cursor.execute(
                     """SELECT p.id, p.org_id, p.user_id, p.content, p.updated_at,
-                              i.alert_title
+                              i.alert_title, p.incident_id
                        FROM postmortems p
                        JOIN incidents i ON i.id = p.incident_id
                        WHERE p.content IS NOT NULL AND p.content != ''"""
                 )
                 pm_rows = cursor.fetchall()
 
-                for pm_id, org_id, user_id, content, updated_at, alert_title in pm_rows:
+                for pm_id, org_id, user_id, content, updated_at, alert_title, incident_id in pm_rows:
                     cursor.execute("SAVEPOINT migrate_pm_row")
                     try:
+                        content = strip_nul(content)
                         _set_rls_for_row(cursor, org_id, user_id)
-                        title = f"Postmortem: {alert_title}" if alert_title else f"Postmortem ({pm_id})"
+                        # Include incident_id prefix to avoid title collisions from non-unique alert_titles
+                        short_id = str(incident_id)[:8] if incident_id else str(pm_id)[:8]
+                        title = f"Postmortem: {alert_title} [{short_id}]" if alert_title else f"Postmortem ({pm_id})"
 
-                        parts = split_content(content)
-                        total_parts = len(parts)
-
-                        for i, part_content in enumerate(parts, start=1):
-                            if total_parts == 1:
-                                part_title = title
-                                desc = "Generated postmortem (migrated)"
-                            else:
-                                part_title = make_part_title(title, i, total_parts)
-                                desc = make_part_description("Generated postmortem (migrated)", i, total_parts)
-
-                            cursor.execute(
-                                """INSERT INTO artifacts
-                                       (org_id, user_id, title, content, category, description,
-                                        last_edited_by, updated_at)
-                                   VALUES (%s, %s, %s, %s, 'postmortem',
-                                           %s, 'system', %s)
-                                   ON CONFLICT (org_id, category, title) DO NOTHING
-                                   RETURNING id""",
-                                (org_id, user_id, part_title, part_content, desc, updated_at),
-                            )
-                            row = cursor.fetchone()
-                            if row:
-                                create_version(cursor, str(row[0]), org_id, user_id, part_content, source="migration")
-                                stats["postmortems"] += 1
+                        cursor.execute(
+                            """INSERT INTO artifacts
+                                   (org_id, user_id, title, content, category, description,
+                                    last_edited_by, updated_at)
+                               VALUES (%s, %s, %s, %s, 'postmortem',
+                                       %s, 'system', %s)
+                               ON CONFLICT (org_id, category, title) DO NOTHING
+                               RETURNING id""",
+                            (org_id, user_id, title, content,
+                             "Generated postmortem (migrated)", updated_at),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            create_version(cursor, str(row[0]), org_id, user_id, content, source="migration")
+                            stats["postmortems"] += 1
 
                         cursor.execute("RELEASE SAVEPOINT migrate_pm_row")
                     except Exception as e:
@@ -248,10 +233,11 @@ def migrate_kb_to_memory(self):
         logger.exception("[Migration] Fatal error — retrying (%d/%d)", self.request.retries, self.max_retries)
         raise self.retry(exc=exc)
 
+    # Don't retry for row-level errors — those are permanently bad (NUL, corrupt PDF, etc.)
+    # and will fail identically every time. Only log them.
     if stats["errors"] > 0:
-        logger.warning("[Migration] Completed with %d errors — retrying for failed rows (%d/%d): %s",
-                       stats["errors"], self.request.retries, self.max_retries, stats)
-        raise self.retry(exc=RuntimeError(f"{stats['errors']} rows failed during migration"))
+        logger.warning("[Migration] Completed with %d permanently-failed rows (not retrying): %s",
+                       stats["errors"], stats)
 
     logger.info("[Migration] Complete: %s", stats)
     return stats
