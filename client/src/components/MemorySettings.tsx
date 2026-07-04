@@ -148,8 +148,10 @@ export function MemorySettings() {
         setShowCreateForm(false);
         await fetchEntries();
       } else {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to create entry");
+        const text = await res.text();
+        let msg = "Failed to create entry";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
       }
     } catch (error) {
       toast({
@@ -171,8 +173,10 @@ export function MemorySettings() {
         method: "DELETE",
       });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to delete entry");
+        const text = await res.text();
+        let msg = "Failed to delete entry";
+        try { msg = JSON.parse(text).error || msg; } catch {}
+        throw new Error(msg);
       }
 
       toast({
@@ -245,8 +249,8 @@ export function MemorySettings() {
         if (res.ok) {
           successCount++;
         } else {
-          const data = await res.json();
-          lastError = data.error || `Failed to upload "${file.name}"`;
+          const text = await res.text();
+          try { lastError = JSON.parse(text).error || `Failed to upload "${file.name}"`; } catch { lastError = `Failed to upload "${file.name}"`; }
         }
       } catch (error) {
         lastError = error instanceof Error ? error.message : `Failed to upload "${file.name}"`;
@@ -294,10 +298,12 @@ export function MemorySettings() {
           prev.map((e) => e.id === entryId ? { ...e, category: newCategory } : e)
         );
       } else {
-        const data = await res.json();
+        const text = await res.text();
+        let msg = "An error occurred";
+        try { msg = JSON.parse(text).error || msg; } catch {}
         toast({
           title: "Failed to update category",
-          description: data.error || "An error occurred",
+          description: msg,
           variant: "destructive",
         });
       }
