@@ -45,7 +45,9 @@ def _default_before_add_member(org_id: str, current_member_count: int) -> Tuple[
         with conn.cursor() as cur:
             cur.execute("SELECT plan_tier FROM organizations WHERE id = %s", (org_id,))
             row = cur.fetchone()
-    if row and row[0] == "free" and current_member_count >= 1:
+    if not row:
+        return False, "Entitlement verification unavailable"
+    if row[0] == "free" and current_member_count >= 1:
         return False, "Seat limit reached for your plan. Upgrade to add more members."
     return True, None
 
