@@ -5,12 +5,10 @@ One-time Celery task to migrate existing data into the new memory system:
 1. knowledge_base_memory → context memory entry
 2. infrastructure_context → infrastructure memory entry
 3. knowledge_base_documents (with content in S3) → runbook memory entries
-4. postmortems → postmortem memory entries
 """
 
 import io
 import logging
-import re
 
 from celery_config import celery_app
 from pypdf import PdfReader
@@ -20,69 +18,6 @@ from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
 logger = logging.getLogger(__name__)
-
-MAX_PART_SIZE = 50_000  # ~50KB per part
-
-
-def _split_content(content: str, max_size: int = MAX_PART_SIZE) -> list[str]:
-    """Split content into chunks at paragraph boundaries."""
-    if len(content) <= max_size:
-        return [content]
-
-    paragraphs = re.split(r"\n{2,}", content)
-    parts = []
-    current_part = []
-    current_size = 0
-
-    for paragraph in paragraphs:
-        para_size = len(paragraph) + 2
-
-        # Single paragraph exceeds max — force-split at line boundaries
-        if para_size > max_size:
-            if current_part:
-                parts.append("\n\n".join(current_part))
-                current_part = []
-                current_size = 0
-
-            lines = paragraph.split("\n")
-            for line in lines:
-                if current_size + len(line) + 1 > max_size and current_part:
-                    parts.append("\n".join(current_part))
-                    current_part = []
-                    current_size = 0
-                current_part.append(line)
-                current_size += len(line) + 1
-
-            if current_part:
-                parts.append("\n".join(current_part))
-                current_part = []
-                current_size = 0
-            continue
-
-        if current_size + para_size > max_size and current_part:
-            parts.append("\n\n".join(current_part))
-            current_part = []
-            current_size = 0
-
-        current_part.append(paragraph)
-        current_size += para_size
-
-    if current_part:
-        parts.append("\n\n".join(current_part))
-
-    return parts
-
-
-def _make_part_title(base_title: str, part_num: int, total_parts: int) -> str:
-    return f"{base_title} ({part_num}/{total_parts})"
-
-
-def _make_part_description(base_description: str, part_num: int, total_parts: int) -> str:
-    part_label = f"Part {part_num} of {total_parts}"
-    if base_description:
-        return f"{base_description} — {part_label}"
-    return part_label
-
 
 def _normalize_storage_path(storage_path: str) -> str:
     """Strip s3://bucket/ prefix from legacy KB document paths."""
@@ -224,34 +159,23 @@ def migrate_kb_to_memory(self):
 
                         _set_rls_for_row(cursor, org_id, user_id)
 
-                        base_title = filename.rsplit(".", 1)[0] if "." in filename else filename
-                        base_desc = f"Migrated from uploaded document: {filename}"
+                        title = filename.rsplit(".", 1)[0] if "." in filename else filename
+                        desc = f"Migrated from uploaded document: {filename}"
 
-                        parts = _split_content(content)
-                        total_parts = len(parts)
-
-                        for i, part_content in enumerate(parts, start=1):
-                            if total_parts == 1:
-                                title = base_title
-                                desc = base_desc
-                            else:
-                                title = _make_part_title(base_title, i, total_parts)
-                                desc = _make_part_description(base_desc, i, total_parts)
-
-                            cursor.execute(
-                                """INSERT INTO artifacts
-                                       (org_id, user_id, title, content, category, description,
-                                        last_edited_by, updated_at)
-                                   VALUES (%s, %s, %s, %s, 'runbook',
-                                           %s, 'user', CURRENT_TIMESTAMP)
-                                   ON CONFLICT (org_id, category, title) DO NOTHING
-                                   RETURNING id""",
-                                (org_id, user_id, title, part_content, desc),
-                            )
-                            row = cursor.fetchone()
-                            if row:
-                                create_version(cursor, str(row[0]), org_id, user_id, part_content, source="migration")
-                                stats["documents"] += 1
+                        cursor.execute(
+                            """INSERT INTO artifacts
+                                   (org_id, user_id, title, content, category, description,
+                                    last_edited_by, updated_at)
+                               VALUES (%s, %s, %s, %s, 'runbook',
+                                       %s, 'user', CURRENT_TIMESTAMP)
+                               ON CONFLICT (org_id, category, title) DO NOTHING
+                               RETURNING id""",
+                            (org_id, user_id, title, content, desc),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            create_version(cursor, str(row[0]), org_id, user_id, content, source="migration")
+                            stats["documents"] += 1
 
                         cursor.execute("RELEASE SAVEPOINT migrate_doc_row")
                     except Exception as e:

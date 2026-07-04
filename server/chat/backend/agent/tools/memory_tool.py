@@ -370,7 +370,7 @@ def append_to_memory(
                        VALUES (%s, %s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
                        RETURNING id""",
                     (org_id, user_id, title.strip(), new_content, category,
-                     f"Appended content in {category}"),
+                     new_content[:150].strip()),
                 )
                 artifact_id = str(cursor.fetchone()[0])
 
