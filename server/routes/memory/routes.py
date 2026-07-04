@@ -17,6 +17,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from services.memory import MEMORY_CATEGORIES
 from services.artifacts.store import create_version
+from utils.validation import strip_nul
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ memory_bp = Blueprint("memory", __name__)
 ALLOWED_EXTENSIONS = {"md", "txt", "pdf"}
 MAX_CONTENT_LENGTH = 500_000  # 500KB per manually-created entry
 MAX_UPLOAD_CONTENT_LENGTH = 50_000_000  # 50MB max extracted text per uploaded file
+MAX_RAW_UPLOAD_BYTES = 100_000_000  # 100MB max raw file body to prevent OOM
 
 
 def _extract_pdf_text(content: bytes) -> str:
@@ -105,6 +107,7 @@ def create_entry(user_id):
         return jsonify({"error": "title is required"}), 400
     if not content:
         return jsonify({"error": "content is required"}), 400
+    content = strip_nul(content)
     if len(content) > MAX_CONTENT_LENGTH:
         return jsonify({"error": "Content exceeds 500KB limit"}), 400
 
@@ -261,13 +264,23 @@ def upload_file(user_id):
         return jsonify({"error": f"category must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
 
     try:
-        raw_bytes = file.read()
+        # Check Content-Length header to reject oversized uploads before reading
+        content_length = request.content_length
+        if content_length and content_length > MAX_RAW_UPLOAD_BYTES:
+            return jsonify({"error": "File too large. Maximum raw upload size is 100MB."}), 400
+
+        raw_bytes = file.read(MAX_RAW_UPLOAD_BYTES + 1)
+        if len(raw_bytes) > MAX_RAW_UPLOAD_BYTES:
+            return jsonify({"error": "File too large. Maximum raw upload size is 100MB."}), 400
 
         # Extract text based on file type
         if ext == "pdf":
             content = _extract_pdf_text(raw_bytes)
         else:
             content = raw_bytes.decode("utf-8", errors="replace")
+
+        # Strip NUL bytes that Postgres text columns reject
+        content = strip_nul(content)
 
         if not content.strip():
             return jsonify({"error": "No text content could be extracted from file"}), 400

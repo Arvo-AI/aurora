@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from services.memory import MEMORY_CATEGORIES, ALL_CATEGORIES
 from services.artifacts.store import create_version
+from utils.validation import strip_nul
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 
@@ -243,7 +244,7 @@ def write_memory(
     if len(content) > _AGENT_WRITE_LIMIT:
         return json.dumps({"error": "Content exceeds maximum length (500000 chars)."})
 
-    content = _strip_nul(content)
+    content = strip_nul(content)
     try:
         with _memory_connection(user_id, "write") as (cursor, conn, org_id):
             # Check if entry already exists
@@ -330,6 +331,8 @@ def append_to_memory(
     if not content or not content.strip():
         return json.dumps({"error": "content cannot be empty."})
 
+    content = strip_nul(content)
+
     try:
         with _memory_connection(user_id, "append") as (cursor, conn, org_id):
             cursor.execute(
@@ -359,13 +362,15 @@ def append_to_memory(
                     (new_content, artifact_id),
                 )
             else:
+                # Include a default description so the entry is discoverable in the index
                 cursor.execute(
                     """INSERT INTO artifacts
-                           (org_id, user_id, title, content, category,
+                           (org_id, user_id, title, content, category, description,
                             last_edited_by, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
+                       VALUES (%s, %s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
                        RETURNING id""",
-                    (org_id, user_id, title.strip(), new_content, category),
+                    (org_id, user_id, title.strip(), new_content, category,
+                     f"Appended content in {category}"),
                 )
                 artifact_id = str(cursor.fetchone()[0])
 
@@ -418,6 +423,7 @@ def edit_memory(
     if not old_text:
         return json.dumps({"error": "old_text is required (the text to find and replace)."})
 
+    new_text = strip_nul(new_text)
     try:
         with _memory_connection(user_id, "edit") as (cursor, conn, org_id):
             cursor.execute(

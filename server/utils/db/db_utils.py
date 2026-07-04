@@ -3031,6 +3031,48 @@ def initialize_tables():
                 conn.rollback()
                 raise
 
+            # artifacts: add incident_id + generation_session_id for postmortem unification
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
+                """)
+                # Drop FK constraint on postmortem_exports so it can reference artifact IDs
+                cursor.execute("""
+                    ALTER TABLE postmortem_exports DROP CONSTRAINT IF EXISTS postmortem_exports_postmortem_id_fkey;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding incident_id/generation_session_id to artifacts: {e}")
+                conn.rollback()
+
+            # Migrate postmortem data into artifacts (idempotent)
+            try:
+                cursor.execute("""
+                    INSERT INTO artifacts (org_id, user_id, title, content, category, description,
+                                          incident_id, generation_session_id, last_edited_by,
+                                          created_at, updated_at)
+                    SELECT COALESCE(p.org_id, i.org_id), p.user_id,
+                           COALESCE('Postmortem: ' || i.alert_title, 'Postmortem (' || p.incident_id || ')'),
+                           p.content, 'postmortem',
+                           'Generated postmortem for incident: ' || COALESCE(i.alert_title, p.incident_id::text),
+                           p.incident_id, p.generation_session_id, 'system',
+                           p.generated_at, p.updated_at
+                    FROM postmortems p
+                    JOIN incidents i ON i.id = p.incident_id
+                    WHERE p.content IS NOT NULL
+                      AND COALESCE(p.org_id, i.org_id) IS NOT NULL
+                    ON CONFLICT (org_id, category, title) DO NOTHING
+                """)
+                migrated_count = cursor.rowcount
+                if migrated_count > 0:
+                    logging.info(f"Migrated {migrated_count} postmortems into artifacts table.")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error migrating postmortems to artifacts: {e}")
+                conn.rollback()
+
             # Auto-trigger memory migration if old KB tables still have data
             _should_trigger_migration = False
             try:

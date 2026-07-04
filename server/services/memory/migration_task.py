@@ -10,15 +10,78 @@ One-time Celery task to migrate existing data into the new memory system:
 
 import io
 import logging
+import re
 
 from celery_config import celery_app
 from pypdf import PdfReader
 from utils.db.connection_pool import db_pool
 from utils.storage.storage import get_storage_manager
 from services.artifacts.store import create_version
-from services.memory.splitter import split_content, make_part_title, make_part_description
+from utils.validation import strip_nul
 
 logger = logging.getLogger(__name__)
+
+MAX_PART_SIZE = 50_000  # ~50KB per part
+
+
+def _split_content(content: str, max_size: int = MAX_PART_SIZE) -> list[str]:
+    """Split content into chunks at paragraph boundaries."""
+    if len(content) <= max_size:
+        return [content]
+
+    paragraphs = re.split(r"\n{2,}", content)
+    parts = []
+    current_part = []
+    current_size = 0
+
+    for paragraph in paragraphs:
+        para_size = len(paragraph) + 2
+
+        # Single paragraph exceeds max — force-split at line boundaries
+        if para_size > max_size:
+            if current_part:
+                parts.append("\n\n".join(current_part))
+                current_part = []
+                current_size = 0
+
+            lines = paragraph.split("\n")
+            for line in lines:
+                if current_size + len(line) + 1 > max_size and current_part:
+                    parts.append("\n".join(current_part))
+                    current_part = []
+                    current_size = 0
+                current_part.append(line)
+                current_size += len(line) + 1
+
+            if current_part:
+                parts.append("\n".join(current_part))
+                current_part = []
+                current_size = 0
+            continue
+
+        if current_size + para_size > max_size and current_part:
+            parts.append("\n\n".join(current_part))
+            current_part = []
+            current_size = 0
+
+        current_part.append(paragraph)
+        current_size += para_size
+
+    if current_part:
+        parts.append("\n\n".join(current_part))
+
+    return parts
+
+
+def _make_part_title(base_title: str, part_num: int, total_parts: int) -> str:
+    return f"{base_title} ({part_num}/{total_parts})"
+
+
+def _make_part_description(base_description: str, part_num: int, total_parts: int) -> str:
+    part_label = f"Part {part_num} of {total_parts}"
+    if base_description:
+        return f"{base_description} — {part_label}"
+    return part_label
 
 
 def _normalize_storage_path(storage_path: str) -> str:
@@ -49,7 +112,7 @@ def _set_rls_for_row(cursor, org_id: str, user_id: str) -> None:
 @celery_app.task(name="migrate_kb_to_memory", bind=True, max_retries=3, default_retry_delay=60)
 def migrate_kb_to_memory(self):
     """Migrate all existing KB data into memory artifacts."""
-    stats = {"context": 0, "infrastructure": 0, "documents": 0, "postmortems": 0, "errors": 0}
+    stats = {"context": 0, "infrastructure": 0, "documents": 0, "errors": 0}
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -63,6 +126,7 @@ def migrate_kb_to_memory(self):
                 for org_id, user_id, content in kb_rows:
                     cursor.execute("SAVEPOINT migrate_kb_row")
                     try:
+                        content = strip_nul(content)
                         _set_rls_for_row(cursor, org_id, user_id)
                         cursor.execute(
                             """INSERT INTO artifacts
@@ -85,7 +149,6 @@ def migrate_kb_to_memory(self):
                         cursor.execute("ROLLBACK TO SAVEPOINT migrate_kb_row")
 
                 # 2) Migrate infrastructure_context → infrastructure
-                # Table is org-scoped (org_id PK only) — resolve a user for RLS
                 cursor.execute(
                     "SELECT org_id, content FROM infrastructure_context WHERE content IS NOT NULL AND content != ''"
                 )
@@ -100,6 +163,7 @@ def migrate_kb_to_memory(self):
 
                     cursor.execute("SAVEPOINT migrate_infra_row")
                     try:
+                        content = strip_nul(content)
                         _set_rls_for_row(cursor, org_id, user_id)
                         cursor.execute(
                             """INSERT INTO artifacts
@@ -152,6 +216,8 @@ def migrate_kb_to_memory(self):
                         else:
                             content = raw_bytes.decode("utf-8", errors="replace")
 
+                        content = strip_nul(content)
+
                         if not content.strip():
                             cursor.execute("RELEASE SAVEPOINT migrate_doc_row")
                             continue
@@ -161,8 +227,7 @@ def migrate_kb_to_memory(self):
                         base_title = filename.rsplit(".", 1)[0] if "." in filename else filename
                         base_desc = f"Migrated from uploaded document: {filename}"
 
-                        # Split large documents into multiple parts
-                        parts = split_content(content)
+                        parts = _split_content(content)
                         total_parts = len(parts)
 
                         for i, part_content in enumerate(parts, start=1):
@@ -170,8 +235,8 @@ def migrate_kb_to_memory(self):
                                 title = base_title
                                 desc = base_desc
                             else:
-                                title = make_part_title(base_title, i, total_parts)
-                                desc = make_part_description(base_desc, i, total_parts)
+                                title = _make_part_title(base_title, i, total_parts)
+                                desc = _make_part_description(base_desc, i, total_parts)
 
                             cursor.execute(
                                 """INSERT INTO artifacts
@@ -194,64 +259,17 @@ def migrate_kb_to_memory(self):
                         stats["errors"] += 1
                         cursor.execute("ROLLBACK TO SAVEPOINT migrate_doc_row")
 
-                # 4) Migrate postmortems → postmortem memory entries
-                cursor.execute(
-                    """SELECT p.id, p.org_id, p.user_id, p.content, p.updated_at,
-                              i.alert_title
-                       FROM postmortems p
-                       JOIN incidents i ON i.id = p.incident_id
-                       WHERE p.content IS NOT NULL AND p.content != ''"""
-                )
-                pm_rows = cursor.fetchall()
-
-                for pm_id, org_id, user_id, content, updated_at, alert_title in pm_rows:
-                    cursor.execute("SAVEPOINT migrate_pm_row")
-                    try:
-                        _set_rls_for_row(cursor, org_id, user_id)
-                        title = f"Postmortem: {alert_title}" if alert_title else f"Postmortem ({pm_id})"
-
-                        parts = split_content(content)
-                        total_parts = len(parts)
-
-                        for i, part_content in enumerate(parts, start=1):
-                            if total_parts == 1:
-                                part_title = title
-                                desc = "Generated postmortem (migrated)"
-                            else:
-                                part_title = make_part_title(title, i, total_parts)
-                                desc = make_part_description("Generated postmortem (migrated)", i, total_parts)
-
-                            cursor.execute(
-                                """INSERT INTO artifacts
-                                       (org_id, user_id, title, content, category, description,
-                                        last_edited_by, updated_at)
-                                   VALUES (%s, %s, %s, %s, 'postmortem',
-                                           %s, 'system', %s)
-                                   ON CONFLICT (org_id, category, title) DO NOTHING
-                                   RETURNING id""",
-                                (org_id, user_id, part_title, part_content, desc, updated_at),
-                            )
-                            row = cursor.fetchone()
-                            if row:
-                                create_version(cursor, str(row[0]), org_id, user_id, part_content, source="migration")
-                                stats["postmortems"] += 1
-
-                        cursor.execute("RELEASE SAVEPOINT migrate_pm_row")
-                    except Exception as e:
-                        logger.warning("[Migration] Error migrating postmortem %s for org %s: %s", pm_id, org_id, e)
-                        stats["errors"] += 1
-                        cursor.execute("ROLLBACK TO SAVEPOINT migrate_pm_row")
-
                 conn.commit()
 
     except Exception as exc:
         logger.exception("[Migration] Fatal error — retrying (%d/%d)", self.request.retries, self.max_retries)
         raise self.retry(exc=exc)
 
+    # Don't retry for row-level errors — those are permanently bad (NUL, corrupt PDF, etc.)
+    # and will fail identically every time. Only log them.
     if stats["errors"] > 0:
-        logger.warning("[Migration] Completed with %d errors — retrying for failed rows (%d/%d): %s",
-                       stats["errors"], self.request.retries, self.max_retries, stats)
-        raise self.retry(exc=RuntimeError(f"{stats['errors']} rows failed during migration"))
+        logger.warning("[Migration] Completed with %d permanently-failed rows (not retrying): %s",
+                       stats["errors"], stats)
 
     logger.info("[Migration] Complete: %s", stats)
     return stats

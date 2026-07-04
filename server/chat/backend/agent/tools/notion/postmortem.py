@@ -139,8 +139,8 @@ def _fetch_postmortem(
             cursor.execute("SET myapp.current_org_id = %s", (org_id,))
             conn.commit()
             cursor.execute(
-                """SELECT id, content FROM postmortems
-                   WHERE incident_id = %s AND org_id = %s""",
+                """SELECT id, content FROM artifacts
+                   WHERE incident_id = %s AND org_id = %s AND category = 'postmortem'""",
                 (incident_id, org_id),
             )
             row = cursor.fetchone()
@@ -213,7 +213,6 @@ def _update_postmortem_notion_metadata(
                 cursor.execute("SET myapp.current_user_id = %s", (user_id,))
                 cursor.execute("SET myapp.current_org_id = %s", (org_id,))
                 conn.commit()
-                # Write to normalized exports table (upsert)
                 cursor.execute(
                     """INSERT INTO postmortem_exports
                            (postmortem_id, org_id, destination, external_id, external_url, external_database_id, exported_at)
@@ -224,16 +223,6 @@ def _update_postmortem_notion_metadata(
                                      external_database_id = EXCLUDED.external_database_id,
                                      exported_at = EXCLUDED.exported_at""",
                     (str(postmortem_id), org_id, str(page_id), page_url, str(database_id)),
-                )
-                # Keep legacy columns in sync for backwards compatibility
-                cursor.execute(
-                    """UPDATE postmortems
-                       SET notion_page_id = %s,
-                           notion_page_url = %s,
-                           notion_exported_at = CURRENT_TIMESTAMP,
-                           notion_database_id = %s
-                       WHERE id = %s AND org_id = %s""",
-                    (str(page_id), page_url, str(database_id), str(postmortem_id), org_id),
                 )
                 conn.commit()
     except Exception as exc:

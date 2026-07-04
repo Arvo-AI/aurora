@@ -778,12 +778,20 @@ def postmortem_list(limit=50, offset=0, *, user_id, **_) -> dict:
 
     with _cursor(user_id) as (cur, org_id):
         cur.execute(
-            """SELECT p.id, p.incident_id, p.generated_at, p.updated_at, i.alert_title,
-                      p.confluence_page_url, p.jira_issue_url, p.notion_page_url
-               FROM postmortems p
-               LEFT JOIN incidents i ON p.incident_id = i.id
-               WHERE p.org_id = %s
-               ORDER BY p.generated_at DESC LIMIT %s OFFSET %s""",
+            """SELECT a.id, a.incident_id, a.created_at, a.updated_at, i.alert_title,
+                      pe_confluence.external_url AS confluence_url,
+                      pe_jira.external_url AS jira_url,
+                      pe_notion.external_url AS notion_url
+               FROM artifacts a
+               LEFT JOIN incidents i ON a.incident_id = i.id
+               LEFT JOIN postmortem_exports pe_confluence
+                   ON pe_confluence.postmortem_id = a.id AND pe_confluence.destination = 'confluence'
+               LEFT JOIN postmortem_exports pe_jira
+                   ON pe_jira.postmortem_id = a.id AND pe_jira.destination = 'jira'
+               LEFT JOIN postmortem_exports pe_notion
+                   ON pe_notion.postmortem_id = a.id AND pe_notion.destination = 'notion'
+               WHERE a.org_id = %s AND a.category = 'postmortem'
+               ORDER BY a.created_at DESC LIMIT %s OFFSET %s""",
             (org_id, limit, offset),
         )
         rows = cur.fetchall()
