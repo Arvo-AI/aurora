@@ -20,6 +20,9 @@ HOW TO VERIFY BEFORE ACTING ON MEMORY:
 - If memory names a service or resource: verify it still exists via your tools
 - If memory names a procedure: confirm the steps are still valid (commands, endpoints)
 - If memory is old: treat as possibly stale and verify key facts
+- NEVER blindly trust "learned" memories as root causes for current incidents.
+  Learned patterns are hypotheses from past investigations — they can mislead if the
+  current issue has different underlying causes. Always verify with fresh evidence.
 
 WHEN TO SAVE IMMEDIATELY:
 - The user explicitly asks you to remember something
