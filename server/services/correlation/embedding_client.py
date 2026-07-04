@@ -120,7 +120,7 @@ class EmbeddingClient:
 
         access_key = os.getenv("BEDROCK_ACCESS_KEY_ID", "").strip()
         secret_key = os.getenv("BEDROCK_SECRET_ACCESS_KEY", "").strip()
-        region = os.getenv("BEDROCK_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+        region = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
 
         if not access_key or not secret_key:
             logger.warning("[EmbeddingClient] BEDROCK_ACCESS_KEY_ID/SECRET not set")
