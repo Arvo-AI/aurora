@@ -3025,9 +3025,11 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_artifacts_org_category
                         ON artifacts(org_id, category);
                 """)
+                conn.commit()
             except Exception as e:
                 logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
                 conn.rollback()
+                raise
 
             # Auto-trigger memory migration if old KB tables still have data
             _should_trigger_migration = False
