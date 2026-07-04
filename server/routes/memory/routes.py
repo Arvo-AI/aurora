@@ -17,6 +17,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from services.memory import MEMORY_CATEGORIES
 from services.artifacts.store import create_version
+from utils.validation import strip_nul
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ def create_entry(user_id):
         return jsonify({"error": "title is required"}), 400
     if not content:
         return jsonify({"error": "content is required"}), 400
+    content = strip_nul(content)
     if len(content) > MAX_CONTENT_LENGTH:
         return jsonify({"error": "Content exceeds 500KB limit"}), 400
 
@@ -268,6 +270,9 @@ def upload_file(user_id):
             content = _extract_pdf_text(raw_bytes)
         else:
             content = raw_bytes.decode("utf-8", errors="replace")
+
+        # Strip NUL bytes that Postgres text columns reject
+        content = strip_nul(content)
 
         if not content.strip():
             return jsonify({"error": "No text content could be extracted from file"}), 400
