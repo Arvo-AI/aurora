@@ -3074,16 +3074,20 @@ def initialize_tables():
                         END IF;
                     END $$;
                 """)
+                cursor.execute("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM aurora_app;")
+                cursor.execute("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM aurora_app;")
                 cursor.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aurora_app;")
                 cursor.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aurora_app;")
                 cursor.execute("GRANT USAGE ON SCHEMA public TO aurora_app;")
+                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM aurora_app;")
+                cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM aurora_app;")
                 cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aurora_app;")
                 cursor.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO aurora_app;")
                 cursor.execute("GRANT aurora_app TO CURRENT_USER;")
                 conn.commit()
                 logging.info("Ensured aurora_app role exists with NOSUPERUSER NOBYPASSRLS.")
-            except Exception as e:
-                logging.error(f"FATAL: Error creating aurora_app role: {e}")
+            except Exception:
+                logging.exception("FATAL: Error creating aurora_app role")
                 conn.rollback()
                 raise
 
