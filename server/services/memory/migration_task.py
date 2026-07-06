@@ -5,7 +5,6 @@ One-time Celery task to migrate existing data into the new memory system:
 1. knowledge_base_memory → context memory entry
 2. infrastructure_context → infrastructure memory entry
 3. knowledge_base_documents (with content in S3) → runbook memory entries
-4. postmortems → postmortem memory entries
 """
 
 import io
@@ -19,7 +18,6 @@ from services.artifacts.store import create_version
 from utils.validation import strip_nul
 
 logger = logging.getLogger(__name__)
-
 
 def _normalize_storage_path(storage_path: str) -> str:
     """Strip s3://bucket/ prefix from legacy KB document paths."""
@@ -49,7 +47,7 @@ def _set_rls_for_row(cursor, org_id: str, user_id: str) -> None:
 @celery_app.task(name="migrate_kb_to_memory", bind=True, max_retries=3, default_retry_delay=60)
 def migrate_kb_to_memory(self):
     """Migrate all existing KB data into memory artifacts."""
-    stats = {"context": 0, "infrastructure": 0, "documents": 0, "postmortems": 0, "errors": 0}
+    stats = {"context": 0, "infrastructure": 0, "documents": 0, "errors": 0}
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -86,7 +84,6 @@ def migrate_kb_to_memory(self):
                         cursor.execute("ROLLBACK TO SAVEPOINT migrate_kb_row")
 
                 # 2) Migrate infrastructure_context → infrastructure
-                # Table is org-scoped (org_id PK only) — resolve a user for RLS
                 cursor.execute(
                     "SELECT org_id, content FROM infrastructure_context WHERE content IS NOT NULL AND content != ''"
                 )
@@ -185,47 +182,6 @@ def migrate_kb_to_memory(self):
                         logger.warning("[Migration] Error migrating doc %s for org %s: %s", filename, org_id, e)
                         stats["errors"] += 1
                         cursor.execute("ROLLBACK TO SAVEPOINT migrate_doc_row")
-
-                # 4) Migrate postmortems → postmortem memory entries
-                cursor.execute(
-                    """SELECT p.id, p.org_id, p.user_id, p.content, p.updated_at,
-                              i.alert_title, p.incident_id
-                       FROM postmortems p
-                       JOIN incidents i ON i.id = p.incident_id
-                       WHERE p.content IS NOT NULL AND p.content != ''"""
-                )
-                pm_rows = cursor.fetchall()
-
-                for pm_id, org_id, user_id, content, updated_at, alert_title, incident_id in pm_rows:
-                    cursor.execute("SAVEPOINT migrate_pm_row")
-                    try:
-                        content = strip_nul(content)
-                        _set_rls_for_row(cursor, org_id, user_id)
-                        # Include incident_id prefix to avoid title collisions from non-unique alert_titles
-                        short_id = str(incident_id)[:8] if incident_id else str(pm_id)[:8]
-                        title = f"Postmortem: {alert_title} [{short_id}]" if alert_title else f"Postmortem ({pm_id})"
-
-                        cursor.execute(
-                            """INSERT INTO artifacts
-                                   (org_id, user_id, title, content, category, description,
-                                    last_edited_by, updated_at)
-                               VALUES (%s, %s, %s, %s, 'postmortem',
-                                       %s, 'system', %s)
-                               ON CONFLICT (org_id, category, title) DO NOTHING
-                               RETURNING id""",
-                            (org_id, user_id, title, content,
-                             "Generated postmortem (migrated)", updated_at),
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            create_version(cursor, str(row[0]), org_id, user_id, content, source="migration")
-                            stats["postmortems"] += 1
-
-                        cursor.execute("RELEASE SAVEPOINT migrate_pm_row")
-                    except Exception as e:
-                        logger.warning("[Migration] Error migrating postmortem %s for org %s: %s", pm_id, org_id, e)
-                        stats["errors"] += 1
-                        cursor.execute("ROLLBACK TO SAVEPOINT migrate_pm_row")
 
                 conn.commit()
 

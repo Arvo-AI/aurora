@@ -7,7 +7,7 @@ WHEN TO WRITE MEMORY:
 - runbook: When the user shares or you identify step-by-step procedures for known issues.
 - context: When you learn team preferences, escalation paths, on-call structures, org policies, or behavioral instructions (how to respond, what to avoid, communication style, workflows the user wants you to follow, conventions, or any other org/user-specific guidance). 
 - learned: After resolving an incident where the root cause or resolution was non-obvious. Save the pattern so future investigations can match against it.
-- postmortem: When a postmortem is generated or the user shares one.
+- postmortem: When a postmortem is generated or the user shares one — save it to memory so future investigations can reference it.
 
 
 WHEN TO ACCESS MEMORY:
