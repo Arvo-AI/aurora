@@ -839,7 +839,7 @@ def list_postmortems(user_id):
                         """SELECT postmortem_id, destination, external_id, external_key,
                                   external_url, external_database_id, exported_at
                            FROM postmortem_exports
-                           WHERE postmortem_id = ANY(%s)""",
+                           WHERE postmortem_id = ANY(%s::uuid[])""",
                         (artifact_ids,),
                     )
                     for erow in cursor.fetchall():

@@ -3054,7 +3054,8 @@ def initialize_tables():
                                           incident_id, generation_session_id, last_edited_by,
                                           created_at, updated_at)
                     SELECT COALESCE(p.org_id, i.org_id), p.user_id,
-                           COALESCE('Postmortem: ' || i.alert_title, 'Postmortem (' || p.incident_id || ')'),
+                           COALESCE('Postmortem: ' || i.alert_title || ' [' || LEFT(p.incident_id::text, 8) || ']',
+                                    'Postmortem (' || p.incident_id || ')'),
                            p.content, 'postmortem',
                            'Generated postmortem for incident: ' || COALESCE(i.alert_title, p.incident_id::text),
                            p.incident_id, p.generation_session_id, 'system',

@@ -272,7 +272,8 @@ def _reserve_postmortem_artifact(user_id: str, incident_id: str, session_id: str
                 )
                 incident_row = cur.fetchone()
                 alert_title = incident_row[0] if incident_row else None
-                title = f"Postmortem: {alert_title}" if alert_title else f"Postmortem ({incident_id})"
+                short_id = str(incident_id)[:8]
+                title = f"Postmortem: {alert_title} [{short_id}]" if alert_title else f"Postmortem ({incident_id})"
 
                 cur.execute(
                     """INSERT INTO artifacts

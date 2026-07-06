@@ -137,7 +137,8 @@ def save_postmortem(
 
                 org_id = incident_row[0]
                 alert_title = incident_row[1]
-                title = f"Postmortem: {alert_title}" if alert_title else f"Postmortem ({incident_id})"
+                short_id = str(incident_id)[:8]
+                title = f"Postmortem: {alert_title} [{short_id}]" if alert_title else f"Postmortem ({incident_id})"
 
                 # Upsert the artifact with incident_id linkage
                 cursor.execute(
