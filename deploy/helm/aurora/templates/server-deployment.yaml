@@ -61,6 +61,10 @@ spec:
                 name: {{ include "aurora.secretName.backend" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.app" . }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: terraform-workdir
               mountPath: /app/terraform_workdir

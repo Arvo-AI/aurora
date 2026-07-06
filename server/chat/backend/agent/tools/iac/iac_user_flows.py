@@ -21,12 +21,14 @@ def check_github_connection(user_id: str) -> bool:
 
         credentials = get_user_cloud_credentials(user_id)
         if credentials and credentials.get("github", {}).get("access_token"):
-            logger.info(f"GitHub is connected for user {user_id}")
             return True
-        logger.info(f"GitHub is not connected for user {user_id}")
-        return False
-    except Exception as e:
-        logger.warning(f"Error checking GitHub connection: {e}")
+        from utils.auth.github_auth_router import (
+            NoGitHubAuthError,
+            get_any_auth_for_user,
+        )
+        get_any_auth_for_user(user_id)
+        return True
+    except Exception:
         return False
 
 

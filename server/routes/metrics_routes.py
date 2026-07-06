@@ -5,24 +5,12 @@ from flask import Blueprint, jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
+from utils.metrics_periods import period_to_interval as _get_period_interval
 
 logger = logging.getLogger(__name__)
 
 metrics_bp = Blueprint("metrics", __name__)
 _LOG_PREFIX = "[Metrics]"
-
-# Valid period values and their PostgreSQL interval strings
-_PERIOD_MAP = {
-    "7d": "7 days",
-    "30d": "30 days",
-    "90d": "90 days",
-    "180d": "180 days",
-    "365d": "365 days",
-}
-
-
-def _get_period_interval(period_str: str) -> str:
-    return _PERIOD_MAP.get(period_str, "30 days")
 
 
 def _parse_window_hours(default: int = 4) -> tuple[int | None, tuple | None]:

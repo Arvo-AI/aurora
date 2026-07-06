@@ -47,7 +47,8 @@ from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth.github_auth_mode import (
     get_auth_mode,
     is_app_enabled,
-    is_oauth_enabled,
+    is_oauth_login_enabled,
+    is_oauth_token_honored,
     oauth_credentials_configured,
 )
 from utils.auth.rbac_decorators import require_permission
@@ -512,6 +513,32 @@ def github_app_install_callback():
         setup_action or "unknown",
     )
 
+    # Auto-import the repos the user already granted on GitHub so they don't
+    # have to re-select them inside Aurora. Best-effort + async: a failure here
+    # must never break the install (the manual picker remains as a fallback).
+    try:
+        from routes.github.github_repo_metadata import import_installation_repos
+
+        import_installation_repos.delay(user_id, installation_id)
+    except Exception:
+        # Best-effort: the manual repo picker remains a fallback. Log with a
+        # trace so a persistent broker/import failure is visible in ops.
+        logger.warning(
+            "[GITHUB-APP-CALLBACK] failed to enqueue repo auto-import installation_id=%d",
+            installation_id,
+            exc_info=True,
+        )
+
+    # Ensure tool permissions include GitHub tools for this org (idempotent).
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+        seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning(
+            "[GITHUB-APP-CALLBACK] failed to seed tool permissions",
+            exc_info=True,
+        )
+
     # Reuse the OAuth success template. App-mode has no user token to relay,
     # so token is empty; account_login takes the github_username slot so the
     # postMessage to the parent window still carries a useful identifier.
@@ -909,13 +936,18 @@ def github_app_unlink_installation(user_id, installation_id):
 @require_permission("connectors", "read")
 def github_auth_config(user_id):  # noqa: ARG001 — user_id required by decorator
     """Return the deployment's GitHub auth configuration."""
+    from utils.flags.feature_flags import is_incident_prevention_enabled
+
     app_runtime_ready = bool(flask.current_app.config.get("GITHUB_APP_ENABLED"))
     return jsonify(
         {
             "mode": get_auth_mode(),
             "app_enabled": is_app_enabled() and app_runtime_ready,
-            "oauth_enabled": is_oauth_enabled(),
+            # oauth_enabled drives the "Connect via OAuth" CTA — gate it on
+            # NEW-connection enablement (off by default; OAuth is deprecated).
+            "oauth_enabled": is_oauth_login_enabled(),
             "oauth_configured": oauth_credentials_configured(),
+            "incident_prevention_enabled": is_incident_prevention_enabled(),
         }
     )
 
@@ -932,6 +964,11 @@ def github_status(user_id):
 
     app_username: str | None = None
     if app_branch_active:
+        # Org-scoped: an installation linked by any org member marks the
+        # connector connected, so every member sees identical state
+        # (consistent with OAuth tokens and all other connectors). The
+        # user's own link is preferred for the displayed account name.
+        org_id = get_org_id_for_user(user_id)
         try:
             with db_pool.get_admin_connection() as conn:
                 with conn.cursor() as cur:
@@ -940,12 +977,13 @@ def github_status(user_id):
                              FROM user_github_installations ugi
                              JOIN github_installations gi
                                   ON gi.installation_id = ugi.installation_id
-                            WHERE ugi.user_id = %s
+                            WHERE (ugi.user_id = %s OR ugi.org_id = %s)
                               AND ugi.disconnected_at IS NULL
                               AND gi.suspended_at IS NULL
-                            ORDER BY ugi.is_primary DESC, ugi.linked_at DESC
+                            ORDER BY (ugi.user_id = %s) DESC,
+                                     ugi.is_primary DESC, ugi.linked_at DESC
                             LIMIT 1""",
-                        (user_id,),
+                        (user_id, org_id, user_id),
                     )
                     row = cur.fetchone()
                     if row:
@@ -960,7 +998,9 @@ def github_status(user_id):
     if app_username:
         return jsonify({"connected": True, "username": app_username, "auth_method": "app"})
 
-    if is_oauth_enabled():
+    # Existing OAuth connections stay valid even in App-only mode (deprecation
+    # keeps them working until the user disconnects).
+    if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
         except Exception as exc:

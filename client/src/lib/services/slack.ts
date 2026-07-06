@@ -16,14 +16,6 @@ export interface SlackConnectResponse {
   message: string;
 }
 
-export interface SlackChannel {
-  id: string;
-  name: string;
-  is_member: boolean;
-  is_private: boolean;
-  num_members?: number;
-}
-
 const API_BASE = '/api/slack';
 
 export const slackService = {
@@ -61,12 +53,5 @@ export const slackService = {
       method: 'DELETE',
       cache: 'no-store',
     });
-  },
-
-  async listChannels(): Promise<SlackChannel[]> {
-    const data = await apiRequest<{ channels: SlackChannel[] }>(`${API_BASE}/channels`, {
-      cache: 'no-store',
-    });
-    return data.channels || [];
   },
 };

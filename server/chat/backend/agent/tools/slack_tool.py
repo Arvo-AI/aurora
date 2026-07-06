@@ -95,7 +95,7 @@ def _format_message(msg: dict) -> dict:
 
 
 def list_slack_channels(user_id: str | None = None, **kwargs) -> str:
-    """List Slack channels accessible to the bot, including name, topic, and purpose."""
+    """List Slack channels the bot is a member of, including name, topic, and purpose."""
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
 
@@ -104,7 +104,7 @@ def list_slack_channels(user_id: str | None = None, **kwargs) -> str:
         return json.dumps({"error": _ERR_NOT_CONNECTED})
 
     try:
-        channels = client.list_channels()
+        channels = client.list_bot_channels()
         result = []
         for ch in channels[:100]:
             result.append({

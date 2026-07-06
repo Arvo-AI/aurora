@@ -48,13 +48,17 @@ def get_repo_selections(user_id):
     - ``None`` when neither path can resolve.
     """
     try:
-        from utils.auth.github_auth_mode import is_oauth_enabled
+        from utils.auth.github_auth_mode import is_oauth_token_honored
         from utils.auth.token_management import get_token_data
 
         org_id = resolve_org(user_id)
         predicate, pred_params = org_read_predicate(user_id, org_id)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # change_gating_enabled is OR-ed across the org's duplicate
+                # rows for a repo (UNIQUE is per user): the webhook honors
+                # ANY enrolled org row, so the UI must reflect the same
+                # semantics rather than whichever row DISTINCT ON keeps.
                 cur.execute(
                     f"""SELECT DISTINCT ON (r.repo_full_name)
                               r.repo_full_name, r.repo_id, r.default_branch,
@@ -63,9 +67,13 @@ def get_repo_selections(user_id):
                               r.user_id,
                               (i.installation_id IS NOT NULL
                                   AND i.suspended_at IS NULL)
-                                  AS has_active_installation
+                                  AS has_active_installation,
+                              r.org_change_gating_enabled
                          FROM (
-                             SELECT *
+                             SELECT *,
+                                    bool_or(change_gating_enabled)
+                                        OVER (PARTITION BY repo_full_name)
+                                        AS org_change_gating_enabled
                                FROM connected_repos
                               WHERE provider = 'github'
                                 AND {predicate}
@@ -77,7 +85,7 @@ def get_repo_selections(user_id):
                 )
                 rows = cur.fetchall()
 
-        oauth_enabled = is_oauth_enabled()
+        oauth_enabled = is_oauth_token_honored()
         oauth_owner_cache: dict[str, bool] = {}
 
         def _owner_has_oauth(owner_id: str) -> bool:
@@ -115,6 +123,7 @@ def get_repo_selections(user_id):
                 "created_at": r[7].isoformat() if r[7] else None,
                 "installation_id": installation_id,
                 "auth_method": auth_method,
+                "change_gating_enabled": bool(r[11]),
             })
         return jsonify({"repositories": repos})
     except Exception as e:
@@ -260,6 +269,76 @@ def update_repo_metadata(user_id, repo_full_name):
     except Exception as e:
         logger.error(f"Error updating repo metadata: {e}", exc_info=True)
         return jsonify({"error": "Failed to update metadata"}), 500
+
+
+@github_repo_selection_bp.route("/repo-selections/<path:repo_full_name>/change-gating", methods=["PUT"])
+@require_permission("connectors", "write")
+def update_change_gating(user_id, repo_full_name):
+    """Enable or disable PR change gating for a specific repo."""
+    try:
+        data = request.get_json(silent=True)
+        enabled = data.get("enabled") if isinstance(data, dict) else None
+        if not isinstance(enabled, bool):
+            return jsonify({"error": "enabled must be a boolean"}), 400
+
+        org_id = resolve_org(user_id)
+        predicate, pred_params = org_read_predicate(user_id, org_id)
+
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                if enabled:
+                    # Duplicate org rows can exist for one repo (UNIQUE is
+                    # per user); prefer an App-linked row so an OAuth-era
+                    # sibling row can't trigger a spurious 409. Suspended
+                    # installations can't deliver webhooks, so enabling
+                    # would be a silent no-op — reject those too.
+                    cur.execute(
+                        f"""SELECT r.installation_id, i.installation_id, i.suspended_at
+                             FROM connected_repos r
+                             LEFT JOIN github_installations i
+                                    ON i.installation_id = r.installation_id
+                            WHERE r.provider = 'github'
+                              AND r.repo_full_name = %s AND {predicate}
+                            ORDER BY (r.installation_id IS NULL) ASC,
+                                     r.updated_at DESC
+                            LIMIT 1""",
+                        (repo_full_name, *pred_params),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        return jsonify({"error": "Repository not found"}), 404
+                    if row[0] is None:
+                        return jsonify({
+                            "error": "GitHub App installation is required for Incident Prevention. Install the Aurora GitHub App on this repository to enable it."
+                        }), 409
+                    # r.installation_id is set but no github_installations row
+                    # matched (orphaned id, e.g. the App was removed): enabling
+                    # would never deliver webhooks — a silent no-op. Reject it.
+                    if row[1] is None:
+                        return jsonify({
+                            "error": "The GitHub App installation for this repository is no longer registered. Reinstall the Aurora GitHub App to enable Incident Prevention."
+                        }), 409
+                    if row[2] is not None:
+                        return jsonify({
+                            "error": "The GitHub App installation for this repository is suspended. Unsuspend it on GitHub to enable Incident Prevention."
+                        }), 409
+                cur.execute(
+                    f"""UPDATE connected_repos
+                       SET change_gating_enabled = %s, updated_at = NOW()
+                       WHERE provider = 'github' AND repo_full_name = %s AND {predicate}""",
+                    (enabled, repo_full_name, *pred_params),
+                )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"error": "Repository not found"}), 404
+                conn.commit()
+        return jsonify({
+            "repo_full_name": repo_full_name,
+            "change_gating_enabled": enabled,
+        })
+    except Exception:
+        logger.exception("Error updating change gating")
+        return jsonify({"error": "Failed to update change gating"}), 500
 
 
 @github_repo_selection_bp.route("/repo-metadata/generate", methods=["POST"])

@@ -517,6 +517,158 @@ If you didn't request this, you can safely ignore this email.{self._text_footer(
         
         return self._send_email(to_email, subject, html_body, text_body)
 
+    def send_account_verification_email(
+        self,
+        to_email: str,
+        verification_code: str
+    ) -> bool:
+        """Send email verification code for account registration/login.
+
+        Args:
+            to_email: Email address to verify
+            verification_code: 6-digit verification code
+
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        subject = "[Aurora] Verify Your Account"
+
+        text_body = f"""VERIFY YOUR ACCOUNT
+
+Welcome to Aurora! Please verify your email address to complete your account setup.
+
+Your verification code is: {verification_code}
+
+This code will expire in 15 minutes.
+
+If you didn't create an Aurora account, you can safely ignore this email.{self._text_footer()}"""
+
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 40px 20px;">
+                <table role="presentation" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">Verify Your Account</h1>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 40px 30px;">
+                            <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
+                                Welcome to Aurora! Please verify your email address to complete your account setup.
+                            </p>
+
+                            <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
+                                Enter this verification code in Aurora:
+                            </p>
+
+                            <!-- Verification Code Box -->
+                            <div style="background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); border-radius: 8px; padding: 30px; text-align: center; margin: 0 0 30px 0;">
+                                <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #1f2937; font-family: 'Courier New', monospace;">
+                                    {verification_code}
+                                </div>
+                            </div>
+
+                            <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                                This code will expire in <strong>15 minutes</strong>.
+                            </p>
+
+                            <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                                If you didn't create an Aurora account, you can safely ignore this email.
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f9fafb; padding: 30px; text-align: center; border-top: 1px solid #e5e7eb;">
+                            <p style="margin: 0; color: #9ca3af; font-size: 12px;">
+                                Aurora AI - Intelligent Cloud Operations
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+        return self._send_email(to_email, subject, html_body, text_body)
+
+    def send_action_started_email(
+        self,
+        to_email: str,
+        action_data: Dict[str, Any],
+    ) -> bool:
+        """Send email notification when an Aurora Action starts running.
+
+        Args:
+            to_email: Recipient email address
+            action_data: Dictionary containing action details
+                - action_name: Name of the action
+                - run_id: Action run UUID
+                - session_id: Chat session ID (for link)
+
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        action_name = str(action_data.get('action_name', 'Unknown Action'))
+        action_name_html = html.escape(action_name)
+        session_id = action_data.get('session_id')
+
+        subject = f"[Aurora] Action Started - {action_name}"
+
+        session_url = f"{self.frontend_url}/chat?sessionId={session_id}" if session_id else f"{self.frontend_url}/actions"
+        logo_url = self._get_logo_url()
+
+        text_body = f"""ACTION STARTED
+
+Action: {action_name}
+Status: Running
+
+Aurora has started executing this action.
+
+View details: {session_url}{self._text_footer()}"""
+
+        html_body = f"""{self._email_header_html(logo_url)}
+{self._status_banner_html("Action Started", "Aurora is executing this action")}
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 48px 40px;">
+                            {self._alert_title_card_html("Action", action_name_html)}
+
+                            <!-- Status -->
+                            <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 40px;">
+                                <tr>
+                                    <td style="padding: 20px 16px 20px 0; vertical-align: top; border-top: 1px solid #e5e5e5;">
+                                        <div style="font-size: 11px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px;">Status</div>
+                                        <div style="font-size: 15px; font-weight: 600; color: #2563eb;">Running</div>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- CTA Button -->
+                            {self._cta_button_html(session_url, "View Action")}
+                        </td>
+                    </tr>
+{self._email_footer_html()}"""
+
+        return self._send_email(to_email, subject, html_body, text_body)
+
     def send_action_completed_email(
         self,
         to_email: str,

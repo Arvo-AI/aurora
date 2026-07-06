@@ -140,7 +140,7 @@ These are indexed separately for semantic search during incident response.
 5. **CI/CD** (if Jenkins/Spinnaker/CloudBees connected):
    - jenkins_rca(action='recent_deployments') or cloudbees_rca/spinnaker_rca to see what gets deployed where
    - For each deployment: what repo, what target environment, what K8s cluster/namespace
-   - If CloudBees Operations Center is connected: use cloudbees_rca(action='controller_list') to discover all managed controllers, then cloudbees_rca(action='cross_controller_deployments') to see what's deploying across the organization
+   - If CloudBees Operations Center OR a manually-registered controller fleet (Multiple Controllers mode) is connected: use cloudbees_rca(action='controller_list') to discover all controllers, then cloudbees_rca(action='cross_controller_deployments') to see what's deploying across the organization
 
 6. **Observability** (if Datadog/Splunk/Coroot/Dynatrace/ThousandEyes connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')

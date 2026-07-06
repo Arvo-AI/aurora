@@ -258,6 +258,36 @@ http://YOUR_VM_IP:3000
 
 You must include the `:3000` port — plain `http://YOUR_VM_IP/` (port 80) will not work.
 
+### Reverse Proxy & TLS (optional)
+
+To serve Aurora over HTTPS behind one hostname — required for GitHub App
+webhook delivery, and cleaner than exposing raw ports — terminate TLS at a
+reverse proxy and forward to Aurora. Minimal nginx sketch (proxy runs on the
+VM host and forwards to the published backend port; add a matching
+`location` for the frontend on `:3000` if you want the UI on the same
+domain):
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name aurora.example.com;
+    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://localhost:5080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+Traefik labels achieve the same; the only requirements are TLS termination
+and Host-header preservation.
+
 ### Verify Health
 
 ```bash

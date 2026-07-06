@@ -53,8 +53,12 @@ from utils.auth.github_app_token import (
     GitHubAppInstallationSuspended,
     get_installation_token,
 )
-from utils.auth.github_auth_mode import is_oauth_enabled
-from utils.auth.stateless_auth import get_credentials_from_db, set_rls_context
+from utils.auth.github_auth_mode import is_oauth_token_honored
+from utils.auth.stateless_auth import (
+    get_credentials_from_db,
+    get_org_id_for_user,
+    set_rls_context,
+)
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -157,7 +161,7 @@ def _try_oauth_fallback(user_id: str) -> AuthResult | None:
     lookup failures degrade to "no auth available", letting the caller
     surface a single ``NoGitHubAuthError``.
     """
-    if not is_oauth_enabled():
+    if not is_oauth_token_honored():
         return None
     try:
         creds = get_credentials_from_db(user_id, "github")
@@ -294,57 +298,78 @@ def make_auth_header(auth: AuthResult) -> dict[str, str]:
     return {"Authorization": f"token {auth.token}"}
 
 
-def _lookup_install_by_account(user_id: str, account_login: str) -> int | None:
-    """Return the user's active install whose ``account_login`` matches (case-insensitive)."""
+def _lookup_install_by_account(
+    user_id: str, account_login: str, org_id: str | None = None
+) -> int | None:
+    """Return an active install whose ``account_login`` matches (case-insensitive).
+
+    Resolution is org-scoped: an installation linked by any member of the
+    user's org counts, mirroring how every other Aurora connector is
+    shared org-wide. The user's own link is preferred when both exist.
+    ``org_id`` is resolved from the user when not supplied so org-scoping
+    is the default and call sites cannot accidentally drop it.
+    """
+    if org_id is None:
+        org_id = get_org_id_for_user(user_id)
 
     sql = """
         SELECT u.installation_id
         FROM user_github_installations u
         JOIN github_installations i
             ON i.installation_id = u.installation_id
-        WHERE u.user_id = %s
+        WHERE (u.user_id = %s OR u.org_id = %s)
           AND u.disconnected_at IS NULL
           AND i.suspended_at IS NULL
           AND LOWER(i.account_login) = LOWER(%s)
-        ORDER BY u.is_primary DESC, u.linked_at DESC
+        ORDER BY (u.user_id = %s) DESC, u.is_primary DESC, u.linked_at DESC
         LIMIT 1
     """
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (user_id, account_login))
+            cursor.execute(sql, (user_id, org_id, account_login, user_id))
             row = cursor.fetchone()
     return row[0] if row else None
 
 
-def _lookup_any_active_installation(user_id: str) -> int | None:
-    """Return the first non-suspended installation_id linked to ``user_id``.
+def _lookup_any_active_installation(
+    user_id: str, org_id: str | None = None
+) -> int | None:
+    """Return the first non-suspended installation_id linked to the user's org.
 
     Joins ``user_github_installations`` to ``github_installations`` and
     filters out rows whose installation is suspended or whose
-    installation row was deleted (LEFT-JOIN miss). Ordering is
-    deterministic — primary installations win, then most recent links —
-    so concurrent calls for the same user receive the same installation
-    id even when there are multiple candidates.
+    installation row was deleted (LEFT-JOIN miss). Resolution is
+    org-scoped — an installation linked by any member of ``org_id``
+    counts — so every org member shares the connection (consistent with
+    OAuth tokens and all other connectors). The user's own link is
+    preferred; ordering is otherwise deterministic (primary installs
+    first, then most recent links) so concurrent calls receive the same
+    installation id even when there are multiple candidates.
 
-    Returns ``None`` when the user has no usable installation.
+    Returns ``None`` when neither the user nor their org has a usable
+    installation. ``org_id`` is resolved from the user when not supplied
+    so org-scoping is the default and call sites cannot accidentally drop
+    it.
     """
+    if org_id is None:
+        org_id = get_org_id_for_user(user_id)
 
     sql = """
         SELECT u.installation_id
         FROM user_github_installations u
         JOIN github_installations i
             ON i.installation_id = u.installation_id
-        WHERE u.user_id = %s
+        WHERE (u.user_id = %s OR u.org_id = %s)
           AND u.disconnected_at IS NULL
           AND i.suspended_at IS NULL
-        ORDER BY u.is_primary DESC, u.linked_at DESC
+        ORDER BY (u.user_id = %s) DESC, u.is_primary DESC, u.linked_at DESC
         LIMIT 1
     """
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(sql, (user_id,))
+            cursor.execute(sql, (user_id, org_id, user_id))
             row = cursor.fetchone()
 
     if row is None:
@@ -431,7 +456,7 @@ def is_github_connected(user_id: str) -> bool:
             exc_info=True,
         )
 
-    if is_oauth_enabled():
+    if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
             if creds and creds.get("access_token"):

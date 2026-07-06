@@ -2,10 +2,8 @@
 
 import logging
 import time
-from datetime import timezone
 from functools import wraps
 from typing import Any, Dict, Optional
-from uuid import UUID
 
 import requests
 from flask import Blueprint, jsonify, request
@@ -21,29 +19,13 @@ from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from connectors.confluence_connector.auth import refresh_access_token
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
+from utils.query_helpers import iso_utc
+from utils.validation import is_valid_uuid
 
 logger = logging.getLogger(__name__)
 
 postmortem_bp = Blueprint("postmortem", __name__)
 _LOG_PREFIX = "[Postmortem]"
-
-
-def _validate_uuid(value: str) -> bool:
-    """Validate that a string is a valid UUID."""
-    try:
-        UUID(value)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-def _format_timestamp(ts) -> Optional[str]:
-    """Format timestamp ensuring UTC timezone."""
-    if not ts:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.isoformat()
 
 
 def _create_version(
@@ -83,7 +65,7 @@ def with_incident_postmortem(require_postmortem=False):
     def decorator(fn):
         @wraps(fn)
         def wrapper(user_id, incident_id, *args, **kwargs):
-            if not _validate_uuid(incident_id):
+            if not is_valid_uuid(incident_id):
                 return jsonify({"error": "Invalid incident ID"}), 400
 
             org_id = get_org_id_from_request()
@@ -184,18 +166,18 @@ def get_postmortem(user_id, incident_id, *, org_id, conn, cursor, postmortem_id,
         "incidentId": str(row[1]),
         "userId": row[2],
         "content": row[3],
-        "generatedAt": _format_timestamp(row[4]),
-        "updatedAt": _format_timestamp(row[5]),
+        "generatedAt": iso_utc(row[4]),
+        "updatedAt": iso_utc(row[5]),
         "confluencePageId": row[6],
         "confluencePageUrl": row[7],
-        "confluenceExportedAt": _format_timestamp(row[8]),
+        "confluenceExportedAt": iso_utc(row[8]),
         "jiraIssueId": row[9],
         "jiraIssueKey": row[10],
         "jiraIssueUrl": row[11],
-        "jiraExportedAt": _format_timestamp(row[12]),
+        "jiraExportedAt": iso_utc(row[12]),
         "notionPageId": row[13],
         "notionPageUrl": row[14],
-        "notionExportedAt": _format_timestamp(row[15]),
+        "notionExportedAt": iso_utc(row[15]),
         "notionDatabaseId": row[16],
         "generationSessionId": row[17],
     }
@@ -263,7 +245,7 @@ def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, post
             "versionNumber": row[1],
             "source": row[2],
             "userId": row[3],
-            "createdAt": _format_timestamp(row[4]),
+            "createdAt": iso_utc(row[4]),
             "generationSessionId": str(row[5]) if row[5] else None,
         }
         for row in rows
@@ -276,7 +258,7 @@ def list_postmortem_versions(user_id, incident_id, *, org_id, conn, cursor, post
 @with_incident_postmortem(require_postmortem=False)
 def get_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
     """Get a specific postmortem version content."""
-    if not _validate_uuid(version_id):
+    if not is_valid_uuid(version_id):
         return jsonify({"error": "Invalid version ID"}), 400
 
     cursor.execute(
@@ -298,7 +280,7 @@ def get_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cu
             "source": row[2],
             "userId": row[3],
             "content": row[4],
-            "createdAt": _format_timestamp(row[5]),
+            "createdAt": iso_utc(row[5]),
         }
     })
 
@@ -308,7 +290,7 @@ def get_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cu
 @with_incident_postmortem(require_postmortem=True)
 def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn, cursor, postmortem_id, **kwargs):
     """Restore a previous postmortem version as the current content."""
-    if not _validate_uuid(version_id):
+    if not is_valid_uuid(version_id):
         return jsonify({"error": "Invalid version ID"}), 400
 
     cursor.execute(
@@ -342,7 +324,7 @@ def restore_postmortem_version(user_id, incident_id, version_id, *, org_id, conn
 @require_permission("postmortems", "write")
 def regenerate_postmortem(user_id, incident_id):
     """Trigger postmortem generation (or regeneration) via the built-in action."""
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
 
     try:
@@ -371,7 +353,7 @@ def regenerate_postmortem(user_id, incident_id):
 @require_permission("postmortems", "write")
 def export_to_confluence(user_id, incident_id):
 
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
 
     try:
@@ -532,7 +514,7 @@ def export_to_confluence(user_id, incident_id):
 @require_permission("postmortems", "write")
 def export_to_notion(user_id, incident_id):
     """Export postmortem to a Notion database."""
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -632,18 +614,18 @@ def list_postmortems(user_id):
                 "incidentId": str(row[1]),
                 "incidentTitle": row[9],
                 "content": row[3],
-                "generatedAt": _format_timestamp(row[4]),
-                "updatedAt": _format_timestamp(row[5]),
+                "generatedAt": iso_utc(row[4]),
+                "updatedAt": iso_utc(row[5]),
                 "confluencePageId": row[6],
                 "confluencePageUrl": row[7],
-                "confluenceExportedAt": _format_timestamp(row[8]),
+                "confluenceExportedAt": iso_utc(row[8]),
                 "jiraIssueId": row[10],
                 "jiraIssueKey": row[11],
                 "jiraIssueUrl": row[12],
-                "jiraExportedAt": _format_timestamp(row[13]),
+                "jiraExportedAt": iso_utc(row[13]),
                 "notionPageId": row[14],
                 "notionPageUrl": row[15],
-                "notionExportedAt": _format_timestamp(row[16]),
+                "notionExportedAt": iso_utc(row[16]),
                 "notionDatabaseId": row[17],
             }
             postmortems.append(postmortem)
@@ -665,7 +647,7 @@ def list_postmortems(user_id):
 @require_permission("postmortems", "write")
 def export_to_jira(user_id, incident_id):
     """Export postmortem to Jira as a parent issue with subtasks for action items."""
-    if not _validate_uuid(incident_id):
+    if not is_valid_uuid(incident_id):
         return jsonify({"error": "Invalid incident ID"}), 400
 
     try:

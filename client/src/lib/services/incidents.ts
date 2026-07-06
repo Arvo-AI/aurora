@@ -25,7 +25,7 @@ export function getSourceIconBgColor(source: string): string {
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 export type AuroraStatus = 'running' | 'summarizing' | 'complete' | 'error';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
-export type SuggestionType = 'diagnostic' | 'mitigation' | 'communication' | 'fix';
+export type SuggestionType = 'diagnostic' | 'mitigation' | 'remediate' | 'prevent' | 'communication' | 'fix';
 
 export interface AlertMetadata {
   // Common fields
@@ -87,7 +87,10 @@ export interface Suggestion {
   description: string;
   type: SuggestionType;
   risk: SuggestionRisk;
-  command?: string; // Optional command to run
+  command?: string;
+  rationale?: string;
+  undo?: string;
+  summary?: string;
   // Execution tracking
   executedAt?: string;
   executionSessionId?: string;
@@ -233,7 +236,7 @@ export interface Incident {
   streamingThoughts: StreamingThought[];
   suggestions: Suggestion[];
   citations?: Citation[]; // Evidence citations for the summary
-  chatSessions?: ChatSession[]; // All chat sessions linked to this incident
+  chatSessions?: ChatSession[];
   correlatedAlerts?: CorrelatedAlert[]; // Alerts correlated to this incident
   correlatedAlertCount?: number; // Count of correlated alerts (for list view)
   mergedIntoIncidentId?: string; // ID of incident this was merged into
@@ -245,8 +248,7 @@ export interface Incident {
   alertFiredAt?: string;
   createdAt?: string;
   updatedAt?: string;
-  chatSessionId?: string; // RCA chat session ID
-  activeTab?: 'thoughts' | 'chat'; // Currently active tab in the UI
+  chatSessionId?: string;
   tokenUsage?: {
     requestCount: number;
     totalInputTokens: number;
@@ -301,7 +303,6 @@ export const incidentsService = {
         alertFiredAt: inc.alertFiredAt,
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
-        activeTab: inc.activeTab || 'thoughts',
       }));
     } catch (error) {
       console.error('Error fetching incidents:', error);
@@ -342,6 +343,9 @@ export const incidentsService = {
           type: s.type || 'diagnostic',
           risk: s.risk || 'safe',
           command: s.command,
+          rationale: s.rationale,
+          undo: s.undo,
+          summary: s.summary,
           filePath: s.filePath,
           originalContent: s.originalContent,
           suggestedContent: s.suggestedContent,
@@ -364,14 +368,7 @@ export const incidentsService = {
           executedAt: c.executedAt,
           createdAt: c.createdAt,
         })),
-        chatSessions: (inc.chatSessions || []).map((cs: any) => ({
-          id: cs.id,
-          title: cs.title,
-          messages: cs.messages || [],
-          status: cs.status || 'active',
-          createdAt: cs.createdAt,
-          updatedAt: cs.updatedAt,
-        })),
+        chatSessions: inc.chatSessions,
         correlatedAlerts: (inc.correlatedAlerts || []).map((ca: any) => ({
           id: ca.id,
           sourceType: ca.sourceType as AlertSource,
@@ -393,7 +390,6 @@ export const incidentsService = {
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
         chatSessionId: inc.chatSessionId,
-        activeTab: inc.activeTab || 'thoughts',
         tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {
@@ -412,17 +408,6 @@ export const incidentsService = {
     } catch (error) {
       console.error('Error getting active count:', error);
       return 0;
-    }
-  },
-
-  async updateActiveTab(incidentId: string, activeTab: 'thoughts' | 'chat'): Promise<void> {
-    try {
-      await apiRequest(`/api/incidents/${incidentId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ activeTab }),
-      });
-    } catch (error) {
-      console.error('Error updating active tab:', error);
     }
   },
 

@@ -36,3 +36,8 @@ export const isCloudBeesEnabled = () => {
 export const isBitbucketOAuthEnabled = () => {
   return getEnv('NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH') === 'true';
 };
+
+// Off unless explicitly enabled, mirroring the backend VISUALIZATION_ENABLED default.
+export const isVisualizationEnabled = () => {
+  return getEnv('NEXT_PUBLIC_ENABLE_VISUALIZATION') === 'true';
+};

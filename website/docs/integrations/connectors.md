@@ -366,36 +366,6 @@ in `hybrid` mode).
 
 #### Path A — GitHub App (recommended)
 
-##### Quickstart (local dev or single-tenant)
-
-The bootstrap script registers an App via GitHub's App Manifest flow,
-captures the post-create redirect, and writes `.env` + Vault for you:
-
-```bash
-python3 server/scripts/register_github_app.py --org <your-github-org>
-```
-
-For a manual click-through (every form field, permissions table, event
-list, troubleshooting), the operator walkthrough lives in the source
-tree at [`server/connectors/github_connector/SETUP_GITHUB_APP.md`](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md).
-
-Required env (set in `.env`):
-
-```bash
-GITHUB_AUTH_MODE=app
-
-GITHUB_APP_ID=<numeric, from App settings>
-GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
-NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
-GITHUB_APP_WEBHOOK_URL=https://<your-host>/github/webhook
-GITHUB_APP_SETUP_URL=https://<your-host>/github/app/install/callback
-GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
-```
-
-The App's private key (PEM) goes into your configured secrets backend
-(Vault or AWS Secrets Manager) at `aurora/system/github-app/private-key`,
-not into `.env`.
-
 ##### On-prem deployment
 
 When Aurora runs on customer infrastructure (private cloud, on-prem
@@ -414,24 +384,76 @@ their own Aurora hostname.
 | GitHub org admin role | Creating an App on an org requires owner. |
 | Aurora deployment shell + secrets backend access (Vault or AWS Secrets Manager) | You need to write App private key + webhook secret into the configured backend. |
 
-**Step 1 — Create the App in the customer's org**:
+**Step 1 — Create the App** on the org (or a personal account):
 
 ```
+# Organization-owned app
 https://github.com/organizations/<customer-org>/settings/apps/new
+
+# Personal account
+https://github.com/settings/apps/new
 ```
 
 | Field | Value |
 |---|---|
 | GitHub App name | `aurora-<customer-slug>` (globally unique). Examples: `aurora-acme-prod`, `aurora-acme-staging`. |
-| Homepage URL | `<BASE_URL>` (the customer's Aurora hostname) |
-| Callback URL | `<BASE_URL>/github/app/install/callback` |
-| Setup URL | Same as Callback URL |
-| Webhook URL | `<BASE_URL>/github/webhook` |
+| Homepage URL | `<FRONTEND_URL>` (the user-facing Aurora hostname, e.g. `https://aurora.example.com`) |
+| Callback URL | `<API_URL>/github/callback` (OAuth user-authorization redirect) |
+| Setup URL | `<API_URL>/github/app/install/callback` (post-install redirect — a **different** route from the Callback URL) |
+| Webhook URL | `<API_URL>/github/webhook` |
 | Webhook secret | Output of `openssl rand -hex 32` — keep a copy, you'll write it to your secrets backend |
 | Where can be installed? | **Only on this account** (locks the App to the customer org) |
 
-Permissions and events match the dev walkthrough — see
-[SETUP_GITHUB_APP.md § Step 3 / § Step 4](https://github.com/Arvo-AI/aurora/blob/main/server/connectors/github_connector/SETUP_GITHUB_APP.md#step-3-permissions-checklist).
+:::important Webhook, Setup, and Callback URLs use the **API** host — not the frontend
+`/github/webhook`, `/github/app/install/callback`, and `/github/callback` are
+**backend** routes (the Flask server on port `5080`). GitHub posts to them
+directly and the Next.js frontend does **not** proxy `/github/*`, so they must
+point at wherever the backend is publicly reachable — `<API_URL>`. In the
+default Helm ingress that's the `api.<domain>` host (`ingress.hosts.api`, e.g.
+`api.aurora.example.com`); in local dev it's a tunnel straight to port `5080`.
+Only the **Homepage URL** uses the frontend hostname (`<FRONTEND_URL>`).
+:::
+
+**Repository permissions** (set in Permissions & events tab):
+
+| Permission | Access level | Why |
+|---|---|---|
+| Actions | **Read and write** | Read workflow run status for CI/CD correlation; trigger workflow re-runs during remediation |
+| Checks | Read-only | CI check-result correlation |
+| Commit statuses | Read-only | Correlate commit/CI status with deployments |
+| Contents | **Read and write** | Read file contents and repo trees (MCP, metadata generation); create branches and commits when applying fixes |
+| Deployments | Read-only | Deploy timeline correlation |
+| Discussions | Read-only | Correlate GitHub Discussions with incidents |
+| Issues | **Read and write** | Issue-to-incident correlation; comment on and open issues |
+| Metadata | Read-only | Required by GitHub for all App installations (auto-selected) |
+| Pull requests | **Read and write** | Read PR diffs; post change-gating review comments; open remediation PRs |
+
+:::note Why some permissions need write
+Aurora performs its write actions (commit a fix, open a PR, comment on an
+issue, re-run a workflow) through the **GitHub MCP** server. An MCP write
+call fails if the App installation lacks the matching permission — so every
+`Read and write` row above is required by the GitHub MCP tools that use it.
+Resources Aurora only reads stay `Read-only`.
+:::
+
+**Organization permissions:** Members → Read-only (org membership for owner resolution).
+
+**Subscribe to events** (same Permissions & events tab):
+
+| Event | Purpose |
+|---|---|
+| Check run | CI check correlation |
+| Check suite | CI suite lifecycle |
+| Deployment | Deploy timeline |
+| Deployment status | Deploy success/failure tracking |
+| Issues | Issue-incident correlation |
+| Pull request | Change-gating trigger (`opened`, `synchronize`, `reopened`, `ready_for_review`) |
+| Workflow run | CI/CD pipeline correlation |
+
+There is no checkbox for the `installation` and `installation_repositories`
+events (install/uninstall/suspend, repos added/removed) — GitHub delivers
+those to every App automatically, and Aurora relies on them for installation
+lifecycle tracking.
 
 **Step 2 — Download the private key**: on the App's settings page after
 creation, **Generate a private key** downloads a `.pem` file once. Back
@@ -462,37 +484,43 @@ aws secretsmanager create-secret --name aurora/system/github-app/private-key \
   --secret-string file:///absolute/path/to/app-private-key.pem --region "$AWS_SM_REGION"
 ```
 
+:::warning PEM Key Format
+The `.pem` file is multi-line with `-----BEGIN RSA PRIVATE KEY-----` headers.
+You **must** use `file://` to preserve newlines. Passing the PEM content
+directly as a shell string strips newlines and causes "Could not deserialize
+key data" errors when Aurora tries to sign installation tokens.
+:::
+
 To update a secret that already exists, swap `create-secret` for
 `put-secret-value --secret-id <name> --secret-string … --region "$AWS_SM_REGION"`.
 
-**Step 4 — Set Aurora env vars** in the customer's `.env` (same keys as
-the Quickstart block above), with `GITHUB_APP_*` URLs pointing at the
-customer's `<BASE_URL>`. Set `AURORA_ENV=production` and a rotated
+**Step 4 — Set Aurora env vars** in the customer's `.env`, with the webhook
+and setup URLs pointing at the customer's `<API_URL>` (the backend host — see
+the note above). Set `AURORA_ENV=production` and a rotated
 `INTERNAL_API_SECRET` so the runtime startup check enforces both.
 
-**Step 5 — Reverse-proxy sketch (nginx)**: terminate TLS at the edge,
-forward to `aurora-server:5080`.
+```bash
+GITHUB_AUTH_MODE=app
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name aurora.example.com;
-    ssl_certificate     /etc/letsencrypt/live/aurora.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/aurora.example.com/privkey.pem;
-    client_max_body_size 25m;
-    location / {
-        proxy_pass http://aurora-server:5080;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 300s;
-    }
-}
+GITHUB_APP_ID=<numeric, from App settings>
+GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
+NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
+GITHUB_APP_WEBHOOK_URL=<API_URL>/github/webhook
+GITHUB_APP_SETUP_URL=<API_URL>/github/app/install/callback
+GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
-Traefik labels achieve the same; the only requirements are TLS
-termination and Host-header preservation.
+The private key (PEM) is **not** an env var — it lives in your secrets
+backend at `aurora/system/github-app/private-key` (Step 3).
+
+:::note Kubernetes (Helm)
+A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (including
+`GITHUB_APP_WEBHOOK_SECRET`) already live under `config:` in the chart's
+`values.yaml` — fill in your values there and apply with `helm upgrade`.
+The private key is **not** a values field — it is read from your secrets
+backend at `aurora/system/github-app/private-key`, so store it there
+(`vault kv put` or `aws secretsmanager create-secret`) exactly as in Step 3.
+:::
 
 **Per-environment Apps**: create separate `aurora-<customer>-prod`,
 `aurora-<customer>-staging`, `aurora-<customer>-dev` Apps. Aurora reads
@@ -500,19 +528,43 @@ termination and Host-header preservation.
 and a stray callback-URL change in dev cannot break prod webhook
 delivery.
 
-**Verification**: open `<BASE_URL>` in a browser, navigate to **Settings →
-Connectors → GitHub** → **Connect** → **Install GitHub App**. The popup
-goes to GitHub.com, you approve repository access, and the dialog flips
+**Verification**: open `<FRONTEND_URL>` in a browser, click **Connectors** in
+the left sidebar, find the **GitHub** card and click **Manage**, then use
+**Install GitHub App**. The popup goes to GitHub.com, you approve
+repository access, and the dialog flips
 from "Not connected" to "Available" or "Connected". `aurora-server` logs
 should show `200 GET /github/app/install/callback` followed by the new
 `installation_id`.
+
+##### Upgrading permissions later
+
+When you change the App's permissions (e.g. adding a repository permission
+for a new feature), GitHub does **not** apply them to existing installations
+automatically — each installer must approve the new scope first, and Aurora
+flags the installation as pending until they do.
+
+To approve:
+
+1. In Aurora, click **Connectors** in the left sidebar, open the **GitHub**
+   card's **Manage** dialog, then click **Manage** on the installation under
+   **Connected GitHub Installations**. This opens its GitHub settings page
+   (`https://github.com/settings/installations/<id>`, or the
+   `…/organizations/<org>/settings/installations/<id>` variant for orgs).
+2. GitHub shows a banner — *"&lt;App name&gt; is requesting an update to its
+   permissions"* — click **Review request**.
+3. Review the diff (e.g. *Read and write access to Issues — was read-only*)
+   and click **Accept new permissions**.
+
+GitHub then delivers an `installation` event with action
+`new_permissions_accepted`, which Aurora processes to refresh the stored
+scopes and clear the pending state.
 
 #### Path B — OAuth fallback (on-prem only, when public ingress isn't possible)
 
 1. Go to [GitHub > Settings > Developer settings > OAuth Apps](https://github.com/settings/developers)
 2. Click **New OAuth App**
    - Application name: `Aurora`
-   - Homepage URL: `http://localhost:3000` (or your real `BASE_URL`)
+   - Homepage URL: `http://localhost:3000` (or your real `<FRONTEND_URL>`)
    - Authorization callback URL: `http://localhost:5080/github/callback`
 3. Click **Register application** and copy the **Client ID** + a freshly-generated **Client secret**
 
@@ -546,6 +598,11 @@ use the OAuth fallback above.
 | "GitHub App install URL is missing the required state parameter" | `GITHUB_APP_SETUP_URL` doesn't match what's registered on the App settings page. Update `.env` to match. |
 | "Failed to initiate GitHub OAuth" | `GH_OAUTH_CLIENT_ID`/`SECRET` empty when `GITHUB_AUTH_MODE=oauth` or `hybrid`. Set them and restart. |
 | Webhook deliveries fail with 4xx | Webhook secret in your secrets backend doesn't match what's registered on the App. Rewrite it at `aurora/system/github-app/webhook-secret` (`vault kv put` or `aws secretsmanager put-secret-value`, per `SECRETS_BACKEND`) and re-save the App secret. |
+| "Could not deserialize key data" in logs | Private-key PEM was stored without its newlines. Re-store with `file://` (AWS SM) or `@` (Vault) so the multi-line PEM is preserved verbatim. |
+| Change-gating / incident-prevention reviews not posting | Pull Requests permission is Read-only. Upgrade it to **Read and write** in Permissions & events, then accept the prompt in GitHub. |
+| No webhook for `pull_request` events | Event not subscribed. Add it under Permissions & events → Subscribe to events (existing installs receive new events automatically). |
+| `installation_id` not stored after install | Setup URL misconfigured or server unreachable from GitHub. Verify `GITHUB_APP_SETUP_URL` matches the App's Setup URL exactly and is reachable from the public internet. |
+| "Suspended installation" in logs | An org owner suspended the App. Unsuspend it via GitHub org settings → GitHub Apps. |
 
 ---
 
@@ -1216,26 +1273,172 @@ See [kubectl-agent README](https://github.com/arvo-ai/aurora/blob/main/kubectl-a
 
 ---
 
-## Development Tools
+## CI/CD & Development Tools
+
+### CloudBees
+
+Aurora integrates with [CloudBees](https://www.cloudbees.com/) to provide CI/CD deployment visibility, automated incident correlation, and root cause analysis across your entire Jenkins infrastructure.
+
+#### What You Get
+
+| Capability | Description |
+|------------|-------------|
+| **Deployment event tracking** | Build completions from any controller are correlated with alerts automatically |
+| **RCA with build context** | Auto-generated RCA includes pipeline stages, build logs, test results, and changeset |
+| **Cross-controller visibility** | Query deployments across all managed controllers via Operations Center |
+| **Feature flag correlation** | Identify if a feature flag toggle caused an incident (Feature Management) |
+| **Webhook-triggered RCA** | Automatically investigate failed deployments when they happen |
+
+#### Connection Modes
+
+Aurora supports three ways to connect CloudBees:
+
+##### Single Controller
+
+Direct connection to one CloudBees CI (Jenkins) controller. Best for teams with a single CI instance.
+
+**You'll need:**
+- Controller URL (e.g., `https://jenkins.company.com`)
+- Username with API token permissions
+- API Token (generated in your profile → Security → API Token)
+
+##### Operations Center
+
+Connect to your CloudBees Operations Center to automatically discover and manage all controllers from one connection. Best for enterprises with multiple Jenkins instances.
+
+**You'll need:**
+- Operations Center URL (e.g., `https://cjoc.company.com`)
+- Username with OC-level API token permissions
+- API Token (generated at the Operations Center level)
+
+After connecting, Aurora will discover all managed controllers and can query builds across all of them during incident investigation.
+
+##### Personal Access Token (PAT)
+
+Platform-level authentication for organizations using CloudBees Platform tokens. PAT mode supports Operations Center discovery, cross-controller builds, and Feature Management — the same capabilities as OC mode. It does not support single-controller-only workflows.
+
+**You'll need:**
+- Platform URL (e.g., `https://your-org.cloudbees.io`)
+- Personal Access Token (generated in Profile → Personal access tokens)
+
+#### Setup
+
+1. Navigate to **Connectors** in Aurora
+2. Find **CloudBees** under the CI/CD category
+3. Select your connection mode
+4. Enter your credentials
+5. Click **Connect**
+
+For Operations Center mode, Aurora will automatically discover your managed controllers after connecting.
+
+#### Webhook Setup (Deployment Tracking)
+
+To track deployments in real-time, add a webhook to your Jenkinsfile post-build step. After connecting, Aurora provides:
+
+- A unique webhook URL for your account
+- Ready-to-use Jenkinsfile snippets (Basic, OpenTelemetry, and cURL variants)
+- HMAC-SHA256 signing for webhook security
+
+Copy the webhook URL and Jenkinsfile snippet from the connected view in Aurora.
+
+#### RCA Actions
+
+During incident investigation, Aurora's AI agent can use these CloudBees-specific actions:
+
+##### Standard (all modes)
+
+- `recent_deployments` — Recent build events tracked via webhook
+- `build_detail` — Changeset, causes, and build metadata
+- `pipeline_stages` — Stage-level breakdown with durations
+- `stage_log` — Per-stage console output
+- `build_logs` — Full build console output
+- `test_results` — JUnit test report data
+- `blue_ocean_run` — Blue Ocean pipeline run data
+- `blue_ocean_steps` — Step-level pipeline data
+
+##### Enterprise (Operations Center)
+
+- `controller_list` — All managed controllers and their status
+- `cross_controller_deployments` — Recent builds across ALL controllers
+- `flag_changes` — Recent feature flag toggles (requires Feature Management)
+
+#### Feature Flag Correlation (Optional)
+
+If your organization uses CloudBees Feature Management, you can optionally provide a Feature Management API token during setup. This enables Aurora to check if a feature flag was toggled before an incident occurred — a common root cause that's otherwise hard to spot.
+
+This is configured in the "Feature flag correlation" section during Operations Center setup.
+
+#### Auto-trigger RCA
+
+When enabled (default), Aurora automatically starts an investigation when a deployment webhook reports a failure. Configure this in the CloudBees connector settings under "RCA Settings."
+
+---
 
 ### Bitbucket
 
-OAuth App authentication for Bitbucket Cloud.
+Bitbucket Cloud supports two authentication methods: **API Token** (recommended — no `.env` setup) or **OAuth** (optional — requires registering a consumer and enabling a feature flag).
 
-#### 1. Create OAuth Consumer
+:::tip Scopes need read **and** write
+Aurora's remediation features open pull requests, push branches/commits, comment on issues, and trigger pipelines. Both auth methods therefore need **write** access to repositories, pull requests, issues, and pipelines — read-only credentials will connect but block those actions.
+:::
+
+#### Option A: API Token (recommended)
+
+No environment variables are required — credentials are entered in the Aurora UI and stored in Vault.
+
+##### 1. Create a Scoped API Token
+
+Create a **scoped** API token at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Classic (unscoped) API tokens are **not** supported.
+
+Grant these scopes:
+
+- `read:user:bitbucket`
+- `read:workspace:bitbucket`
+- `read:project:bitbucket`
+- `read:repository:bitbucket`, `write:repository:bitbucket`
+- `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
+- `read:issue:bitbucket`, `write:issue:bitbucket`
+- `read:pipeline:bitbucket`, `write:pipeline:bitbucket`
+
+##### 2. Connect via Aurora UI
+
+1. Navigate to **Connectors** > **Bitbucket**
+2. Enter your Atlassian account **email** and the **API token**
+3. Click **Connect**
+
+#### Option B: OAuth (optional)
+
+Use OAuth if you prefer a per-user consent flow. This path requires both a feature flag (to show the OAuth option in the UI) and a registered OAuth consumer.
+
+##### 1. Create OAuth Consumer
 
 1. Go to **Bitbucket workspace settings** > **OAuth consumers** > **Add consumer**
    - Name: `Aurora`
    - Callback URL: `{NEXT_PUBLIC_BACKEND_URL}/bitbucket/callback` (e.g. `https://your-aurora-domain/bitbucket/callback`)
-   - Permissions: **Repositories** (Read), **Pull requests** (Read)
+   - Permissions: **Account** (Read), **Projects** (Read), **Repositories** (Read & Write), **Pull requests** (Read & Write), **Issues** (Read & Write), **Pipelines** (Read & Write)
 2. Copy the **Key** and **Secret**
 
-#### 2. Configure Environment
+##### 2. Configure Environment
 
 ```bash
+# Show the OAuth option in the Connectors UI (frontend flag, default false).
+# Without this, only the API Token form is shown.
+NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH=true
+
 BB_OAUTH_CLIENT_ID=your-bitbucket-key
 BB_OAUTH_CLIENT_SECRET=your-bitbucket-secret
 ```
+
+Restart Aurora after setting these, then connect via **Connectors** > **Bitbucket** > **OAuth**.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Authentication failed... you are using a classic API token (not supported)" | Create a **scoped** token at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens), not a classic one |
+| "Missing required scopes: ..." | Recreate the API token with all the read+write scopes listed above |
+| "Bitbucket OAuth is not available. Use an API token instead." | `BB_OAUTH_CLIENT_ID`/`BB_OAUTH_CLIENT_SECRET` are not set. Use the API token method, or configure the OAuth consumer |
+| OAuth tab not visible in the UI | `NEXT_PUBLIC_ENABLE_BITBUCKET_OAUTH` is not `true`. Set it and restart |
 
 ---
 

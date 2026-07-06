@@ -13,6 +13,7 @@ import {
   formatCompact, formatCost,
   CHART_COLORS, type Period,
 } from './charts';
+import { getEnv } from '@/lib/env';
 
 interface UsageSummary {
   total_cost: number;
@@ -306,6 +307,8 @@ function DualAxisTokenChart({ data, timeFormat }: { data: Array<{ date: string; 
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export default function UsageTab({ period }: { period: Period }) {
+  const isDev = getEnv('AURORA_ENV') === 'dev';
+
   const { data: summary, isLoading: summaryLoading } = useQuery<UsageSummary>(
     `/api/llm-usage/summary?period=${period}`,
     jsonFetcher,
@@ -395,13 +398,20 @@ export default function UsageTab({ period }: { period: Period }) {
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className={`grid gap-3 ${isDev ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3'}`}>
         {summaryLoading ? (
-          Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
+          <>
+            <StatCardSkeleton key="cost" />
+            {isDev && <StatCardSkeleton key="tokens" />}
+            <StatCardSkeleton key="requests" />
+            <StatCardSkeleton key="errors" />
+          </>
         ) : summary ? (
           <>
             <StatCard label="Total Cost" value={formatCost(summary.total_cost)} icon={DollarSign} sub={`${period} period`} />
-            <StatCard label="Total Tokens" value={formatCompact(summary.total_tokens)} icon={Hash} sub={`${formatCompact(summary.total_input_tokens)} in / ${formatCompact(summary.total_output_tokens)} out`} />
+            {isDev && (
+              <StatCard label="Total Tokens" value={formatCompact(summary.total_tokens)} icon={Hash} sub={`${formatCompact(summary.total_input_tokens)} in / ${formatCompact(summary.total_output_tokens)} out`} />
+            )}
             <StatCard label="Requests" value={formatCompact(summary.total_requests)} icon={Zap} sub={summary.avg_response_ms ? `avg ${summary.avg_response_ms}ms` : undefined} />
             <StatCard label="Error Rate" value={`${summary.error_rate}%`} icon={AlertTriangle} sub={`${summary.error_count} errors`} />
           </>
@@ -427,15 +437,17 @@ export default function UsageTab({ period }: { period: Period }) {
       </ChartPanel>
 
       {/* Token usage -- dual Y-axis so input and output are both readable */}
-      <ChartPanel title="Token Usage" subtitle={`Input vs output tokens · ${granularity === 'hour' ? 'hourly' : granularity === 'week' ? 'weekly' : 'daily'} · dual scale`} loading={costLoading}>
-        {costLoading ? (
-          <ChartSkeleton />
-        ) : !tokenChartData.length ? (
-          <EmptyState icon={Cpu} message="No token data for this period" />
-        ) : (
-          <DualAxisTokenChart data={tokenChartData} timeFormat={timeFormat} />
-        )}
-      </ChartPanel>
+      {isDev && (
+        <ChartPanel title="Token Usage" subtitle={`Input vs output tokens · ${granularity === 'hour' ? 'hourly' : granularity === 'week' ? 'weekly' : 'daily'} · dual scale`} loading={costLoading}>
+          {costLoading ? (
+            <ChartSkeleton />
+          ) : !tokenChartData.length ? (
+            <EmptyState icon={Cpu} message="No token data for this period" />
+          ) : (
+            <DualAxisTokenChart data={tokenChartData} timeFormat={timeFormat} />
+          )}
+        </ChartPanel>
+      )}
 
       {/* Model breakdown table */}
       <ChartPanel title="Model Breakdown" loading={modelsLoading}>
@@ -448,7 +460,7 @@ export default function UsageTab({ period }: { period: Period }) {
                 <tr className="border-b border-zinc-800/60 bg-zinc-900/80">
                   <th className="text-left px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Model</th>
                   <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Requests</th>
-                  <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Tokens</th>
+                  {isDev && <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Tokens</th>}
                   <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Cost</th>
                   <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Share</th>
                 </tr>
@@ -461,7 +473,7 @@ export default function UsageTab({ period }: { period: Period }) {
                     <tr key={m.model_name} className="border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors duration-150">
                       <td className="px-4 py-2.5 text-zinc-200 font-mono text-xs">{shortModelName(m.model_name)}</td>
                       <td className="px-4 py-2.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{m.usage_count.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompact(m.total_tokens)}</td>
+                      {isDev && <td className="px-4 py-2.5 text-right text-zinc-400" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompact(m.total_tokens)}</td>}
                       <td className="px-4 py-2.5 text-right text-zinc-200 font-medium" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCost(m.total_cost)}</td>
                       <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-2">

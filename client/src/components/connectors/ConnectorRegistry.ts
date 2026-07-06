@@ -1,4 +1,4 @@
-import { Github, Server } from "lucide-react";
+import { Server } from "lucide-react";
 import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
@@ -10,19 +10,6 @@ class ConnectorRegistry {
   }
 
   private registerDefaultConnectors() {
-    // Infrastructure - register onprem first
-    this.register({
-      id: "onprem",
-      name: "Instances SSH Access",
-      description: "Manage SSH keys and configure virtual machines for on-premises and cloud infrastructure access.",
-      icon: Server,
-      iconColor: "text-foreground",
-      iconBgColor: "bg-muted",
-      category: "Infrastructure",
-      path: "/vm-config",
-      storageKey: "isOnPremConnected",
-    });
-
     this.register({
       id: "grafana",
       name: "Grafana",
@@ -259,8 +246,8 @@ class ConnectorRegistry {
       id: "github",
       name: "GitHub",
       description: "Integrate with GitHub to manage repositories, track issues, and automate workflows. Connect your GitHub account to enable seamless code collaboration.",
-      icon: Github,
-      iconColor: "text-gray-800 dark:text-gray-300",
+      iconPath: "/github-mark.svg",
+      iconClassName: "dark:invert",
       iconBgColor: "bg-gray-200 dark:bg-gray-800",
       category: "Development",
       useCustomConnection: true,
@@ -402,6 +389,18 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/flyio/auth",
       storageKey: "isFlyioConnected",
+    });
+
+    this.register({
+      id: "onprem",
+      name: "Instances SSH Access",
+      description: "Manage SSH keys and configure virtual machines for on-premises and cloud infrastructure access.",
+      icon: Server,
+      iconColor: "text-foreground",
+      iconBgColor: "bg-muted",
+      category: "Infrastructure",
+      path: "/vm-config",
+      storageKey: "isOnPremConnected",
     });
 
     this.register({

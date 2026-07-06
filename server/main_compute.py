@@ -209,6 +209,7 @@ _OPEN_PREFIXES = (
     "/bitbucket/callback",
     "/slack/callback",
     "/slack/events",
+    "/slack/interactions",
     "/pagerduty/oauth/callback",
     "/google-chat/callback",
     "/google-chat/events",
@@ -225,6 +226,7 @@ _OPEN_PREFIXES = (
     "/jenkins/webhook/",
     "/cloudbees/webhook/",
     "/spinnaker/webhook/",
+    "/jira/webhook/",
     "/incidentio/alerts/webhook/",
     "/ovh_api/ovh/oauth2/callback",
     "/azure/callback",
@@ -640,6 +642,10 @@ app.register_blueprint(prediscovery_bp, url_prefix="/api/prediscovery")
 # ---- Debug Routes ----
 from routes.debug import bp as debug_bp
 app.register_blueprint(debug_bp)
+
+# --- Onboarding Routes ---
+from routes.onboarding_routes import onboarding_bp
+app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
 
 # ============================================================================
 # Global Error Handlers

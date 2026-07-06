@@ -318,7 +318,7 @@ class TestFailOpenOnDbError:
     def test_partial_db_failure_after_rule_fetch_still_returns_disabled(
         self, monkeypatch,
     ):
-        """Rule SELECT succeeds, ``get_user_preference`` raises -> still fail-open."""
+        """Rule SELECT succeeds, ``get_org_preference`` raises -> still fail-open."""
         import utils.auth.stateless_auth as sa_module
         import utils.db.connection_pool as cp_module
 
@@ -331,7 +331,7 @@ class TestFailOpenOnDbError:
         monkeypatch.setattr(cp_module, "db_pool", pool)
         monkeypatch.setattr(
             sa_module,
-            "get_user_preference",
+            "get_org_preference",
             MagicMock(side_effect=RuntimeError("preference table gone")),
         )
 
@@ -350,7 +350,7 @@ class TestFailOpenOnDbError:
         broken_pool.get_admin_connection.side_effect = RuntimeError("db down")
         monkeypatch.setattr(cp_module, "db_pool", broken_pool)
         monkeypatch.setattr(
-            sa_module, "get_user_preference", MagicMock(return_value="off"),
+            sa_module, "get_org_preference", MagicMock(return_value="off"),
         )
 
         now_ts = time.monotonic()
@@ -373,7 +373,7 @@ class TestFailOpenOnDbError:
         recovered_pool.get_admin_connection.return_value.__enter__.return_value = deny_conn
         monkeypatch.setattr(cp_module, "db_pool", recovered_pool)
         monkeypatch.setattr(
-            sa_module, "get_user_preference", MagicMock(side_effect=lambda *a, **kw: "on"),
+            sa_module, "get_org_preference", MagicMock(side_effect=lambda *a, **kw: "on"),
         )
 
         _, deny2, states2 = command_policy._get_cached("org-7")
@@ -381,6 +381,74 @@ class TestFailOpenOnDbError:
         assert states2.denylist_enabled is True
         assert len(deny2) == 1
         assert deny2[0].id == 10
+
+
+# ---------------------------------------------------------------------------
+# Org-scoped list-state read path (regression for "Missing org_id ... cannot
+# set RLS context" — see stateless_auth.set_rls_context)
+# ---------------------------------------------------------------------------
+
+
+class TestListStatesReadViaOrgPreference:
+    """``_fetch`` must read the allowlist/denylist enabled flags with
+    ``get_org_preference(org_id, ...)``.
+
+    These flags are written by ``store_org_preference`` against a synthetic
+    ``__org__<uuid>`` user id. The old code read them back with
+    ``get_user_preference("__org__<uuid>", ...)``, which routed through
+    ``set_rls_context`` -> ``get_org_id_for_user`` and tried to resolve the
+    pseudo-id against the users table. That always failed, logging
+    "Missing org_id for user __org__...; cannot set RLS context" on every
+    command evaluation and silently defaulting BOTH lists to "off" — i.e.
+    disabling the org command policy. This pins the org-scoped read so the
+    regression cannot return.
+    """
+
+    def _stub_rule_select(self, monkeypatch):
+        """Make the rule SELECT succeed with no rows so _fetch reaches the
+        preference read."""
+        import utils.db.connection_pool as cp_module
+
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cursor
+        pool = MagicMock()
+        pool.get_admin_connection.return_value.__enter__.return_value = conn
+        monkeypatch.setattr(cp_module, "db_pool", pool)
+
+    def test_fetch_reads_states_with_get_org_preference_by_org_id(
+        self, monkeypatch,
+    ):
+        import utils.auth.stateless_auth as sa_module
+
+        self._stub_rule_select(monkeypatch)
+
+        calls = []
+
+        def fake_get_org_preference(org_id, key, default=None):
+            calls.append((org_id, key))
+            return "on"
+
+        get_user_pref = MagicMock(
+            side_effect=AssertionError(
+                "command policy must not read org list-states via "
+                "get_user_preference (pseudo-user RLS lookup fails)"
+            )
+        )
+        monkeypatch.setattr(sa_module, "get_org_preference", fake_get_org_preference)
+        monkeypatch.setattr(sa_module, "get_user_preference", get_user_pref)
+
+        _, _, states = command_policy._fetch("org-42")
+
+        # Read with the real org_id, never an "__org__"-prefixed pseudo-user.
+        assert ("org-42", "command_policy_allowlist") in calls
+        assert ("org-42", "command_policy_denylist") in calls
+        assert all(not str(org).startswith("__org__") for org, _ in calls)
+        get_user_pref.assert_not_called()
+
+        assert states.allowlist_enabled is True
+        assert states.denylist_enabled is True
 
 
 # ---------------------------------------------------------------------------

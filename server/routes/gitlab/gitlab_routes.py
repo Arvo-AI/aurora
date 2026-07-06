@@ -252,6 +252,15 @@ def gitlab_connect(user_id):
         store_tokens_in_db(user_id, gitlab_token_data, "gitlab")
         logger.info("Stored GitLab credentials for user %s (org-level)", user_id)
 
+        try:
+            from utils.auth.tool_registry import seed_org_tool_permissions
+            from utils.auth.stateless_auth import get_org_id_for_user
+            org_id = get_org_id_for_user(user_id)
+            if org_id:
+                seed_org_tool_permissions(org_id, user_id)
+        except Exception:
+            logger.warning("[GITLAB-CONNECT] failed to seed tool permissions", exc_info=True)
+
         project_count, connect_warning = _auto_connect_projects(user_id, base_url, access_token)
 
         response = {

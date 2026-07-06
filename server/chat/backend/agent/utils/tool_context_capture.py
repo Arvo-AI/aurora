@@ -35,6 +35,8 @@ from ..llm import LLMManager
 from .llm_usage_tracker import LLMUsageTracker
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from chat.backend.agent.utils.tool_call_history import OUTPUT_EXCERPT_MAX_CHARS
+from utils.text.text_utils import truncate
 # Import langchain components - direct imports for LangChain 1.2.6+
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
@@ -50,18 +52,6 @@ class InternalToolMessage(ToolMessage):
         self.additional_kwargs["internal"] = True
 
 logger = logging.getLogger(__name__)
-
-# Bound tool output excerpts retained for rca_findings.tool_call_history JSONB.
-_OUTPUT_EXCERPT_MAX_CHARS = 1000
-
-
-def _build_excerpt(output: Optional[str]) -> str:
-    if not output:
-        return ""
-    s = str(output)
-    if len(s) > _OUTPUT_EXCERPT_MAX_CHARS:
-        return s[:_OUTPUT_EXCERPT_MAX_CHARS] + "...[truncated]"
-    return s
 
 # --------------------------------------------------------------------------------------
 # Token counting utility (delegates to LLMUsageTracker for context management only)
@@ -247,7 +237,7 @@ class ToolContextCapture:
             
         tool_info = self.current_tool_calls[tool_call_id]
         # Compute excerpt outside the lock — pure string processing, no shared state.
-        output_excerpt = _build_excerpt(output)
+        output_excerpt = truncate(output, OUTPUT_EXCERPT_MAX_CHARS)
         # Mirror _record_step_end's payload-shape classification so the history
         # entry (and downstream rca_findings.tool_call_history) matches the
         # execution_steps row's status.

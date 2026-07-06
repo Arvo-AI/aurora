@@ -5,8 +5,6 @@ import { ROLE_ADMIN } from "@/lib/roles"
 // Public routes that don't require authentication
 const publicRoutes = [
   "/sign-in",
-  "/sign-up",
-  "/change-password",
   "/terms",
   "/api/auth/callback",  // NextAuth callbacks
   "/api/auth/signin",     // NextAuth sign-in
@@ -16,12 +14,15 @@ const publicRoutes = [
   "/api/auth/csrf",       // NextAuth CSRF
   "/api/auth/change-password", // Password change API
   "/api/auth/setup-org",  // Org setup for org-less users
+  "/api/auth/register",   // Public registration endpoint
+  "/api/auth/verify-email", // Email verification
+  "/api/auth/resend-verification", // Resend verification code
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]
 
 // Routes that should redirect authenticated users away
-const authRoutes = ["/sign-in", "/sign-up"]
+const authRoutes = ["/sign-in"]
 
 // Strips framework/runtime fingerprint headers from every outgoing response.
 // Note: x-nextjs-* headers on cached responses are injected by Next.js after
@@ -49,18 +50,36 @@ export default auth((req) => {
   )
   const isApiRoute = nextUrl.pathname.startsWith('/api/')
   const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
-  const isChangePasswordRoute = nextUrl.pathname.startsWith('/change-password')
+  const isChangePasswordRoute = nextUrl.pathname.startsWith('/sign-in') && nextUrl.searchParams.get('mode') === 'change-password'
   const isSetupOrgRoute = nextUrl.pathname.startsWith('/setup-org')
   const isOrgSwitching = nextUrl.pathname.startsWith('/org/switching')
 
+  // Redirect /sign-up to /sign-in?mode=signup (sign-up is now handled by the sign-in page)
+  if (nextUrl.pathname.startsWith("/sign-up")) {
+    const redirectUrl = new URL("/sign-in", nextUrl)
+    nextUrl.searchParams.forEach((value, key) => redirectUrl.searchParams.set(key, value))
+    redirectUrl.searchParams.set("mode", "signup")
+    return sanitizeResponse(NextResponse.redirect(redirectUrl))
+  }
+
   // If user is logged in and tries to access auth pages, redirect to home
-  if (isAuthRoute && isLoggedIn) {
+  // (but not if they're on verify-email or change-password modes)
+  const signInMode = nextUrl.searchParams.get('mode')
+  if (isAuthRoute && isLoggedIn && signInMode !== 'verify-email' && signInMode !== 'change-password') {
     return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }
 
-  // Force password change: redirect to /change-password if flag is set
+  // Force password change: redirect to /sign-in?mode=change-password if flag is set
   if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
-    return sanitizeResponse(NextResponse.redirect(new URL("/change-password", nextUrl)))
+    return sanitizeResponse(NextResponse.redirect(new URL("/sign-in?mode=change-password", nextUrl)))
+  }
+
+  // Force email verification: redirect to /sign-in?mode=verify-email if not verified
+  const isVerifyEmailRoute = nextUrl.pathname.startsWith('/sign-in') && nextUrl.searchParams.get('mode') === 'verify-email'
+  const emailVerifiedCookie = req.cookies.get('aurora-email-verified')?.value === req.auth?.user?.id
+  if (isLoggedIn && req.auth?.user?.emailVerified === false && !emailVerifiedCookie
+      && !isVerifyEmailRoute && !isChangePasswordRoute && !isApiRoute) {
+    return sanitizeResponse(NextResponse.redirect(new URL("/sign-in?mode=verify-email", nextUrl)))
   }
 
   // Force org setup: redirect users without an org (or in Default Org) to create one

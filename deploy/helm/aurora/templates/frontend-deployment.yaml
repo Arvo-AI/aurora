@@ -26,14 +26,18 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
-      {{- if .Values.image.pullSecrets }}
+      {{- if or .Values.image.pullSecrets (and .Values.frontendImage .Values.frontendImage.pullSecrets) }}
       imagePullSecrets:
+        {{- if and .Values.frontendImage .Values.frontendImage.pullSecrets }}
+        {{- toYaml .Values.frontendImage.pullSecrets | nindent 8 }}
+        {{- else }}
         {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- include "aurora.scheduling" (dict "service" "frontend" "global" $) | nindent 6 }}
       containers:
         - name: aurora-frontend
-          image: "{{ .Values.image.registry }}/aurora-frontend:{{ .Values.image.tag }}"
+          image: "{{ if and .Values.frontendImage .Values.frontendImage.tag }}{{ .Values.frontendImage.registry }}/{{ .Values.frontendImage.repository }}:{{ .Values.frontendImage.tag }}{{ else }}{{ .Values.image.registry }}/aurora-frontend:{{ .Values.image.tag }}{{ end }}"
           imagePullPolicy: IfNotPresent
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "frontend" "global" $ "defaults" (dict)) | nindent 12 }}

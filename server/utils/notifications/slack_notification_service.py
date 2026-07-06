@@ -13,30 +13,35 @@ from utils.auth.stateless_auth import set_rls_context
 
 logger = logging.getLogger(__name__)
 
-# Slack Block Kit blocks limit per message
 SLACK_MAX_BLOCKS = 50
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-
-# Slack Block Kit blocks limit per message
-SLACK_MAX_BLOCKS = 50
+_DEFAULT_ALERT_TITLE = "Unknown Alert"
 
 
 def _get_incidents_channel_id(user_id: str, client: SlackClient) -> Optional[str]:
     """
-    Get the incidents channel ID from stored credentials.
+    Get the incidents channel ID. Checks stored credentials first,
+    falls back to org preference (which survives disconnect/reconnect).
     """
     try:
-        from utils.auth.stateless_auth import get_credentials_from_db
+        from utils.auth.stateless_auth import get_credentials_from_db, get_org_id_for_user, get_org_preference
         
         slack_creds = get_credentials_from_db(user_id, "slack")
-        if not slack_creds:
-            logger.error(f"[SlackNotification] No Slack credentials found for user {user_id}")
-            return None
+        if slack_creds and slack_creds.get("incidents_channel_id"):
+            return slack_creds["incidents_channel_id"]
         
-        return slack_creds.get("incidents_channel_id")
+        # Fallback: read from org preference
+        org_id = get_org_id_for_user(user_id)
+        if org_id:
+            channel_id = get_org_preference(org_id, 'slack_incidents_channel_id')
+            if channel_id:
+                return channel_id
         
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error getting incidents channel ID: {e}", exc_info=True)
+        logger.error(f"[SlackNotification] No Slack channel ID found for user {user_id}")
+        return None
+        
+    except Exception:
+        logger.exception("[SlackNotification] Error getting incidents channel ID")
         return None
 
 
@@ -81,7 +86,7 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
         
         # Extract incident data
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', 'Unknown Alert')
+        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
         severity = incident_data.get('severity', 'unknown')
         service = incident_data.get('service', 'unknown')
         source_type = incident_data.get('source_type', 'monitoring platform')
@@ -178,8 +183,8 @@ def send_slack_investigation_started_notification(user_id: str, incident_data: D
             logger.warning(f"[SlackNotification] Failed to send 'started' notification")
             return False
             
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending started notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending started notification")
         return False
     
 def send_slack_investigation_completed_notification(
@@ -217,13 +222,12 @@ def send_slack_investigation_completed_notification(
         
         # Extract incident data
         incident_id = incident_data.get('incident_id', 'unknown')
-        alert_title = incident_data.get('alert_title', 'Unknown Alert')
+        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
         severity = incident_data.get('severity', 'unknown')
         service = incident_data.get('service', 'unknown')
         started_at = incident_data.get('started_at')
         analyzed_at = incident_data.get('analyzed_at')
         aurora_summary = incident_data.get('aurora_summary') or 'Analysis in progress...'
-        slack_message_ts = incident_data.get('slack_message_ts')
         
         # Format data
         incident_url = _get_incident_url(incident_id)
@@ -238,11 +242,23 @@ def send_slack_investigation_completed_notification(
         summary_only = extract_summary_section(aurora_summary)
         summary_for_slack = format_response_for_slack(summary_only)
         
-        # Ensure summary is not empty and under Slack's 3000 char limit for section text
+        # Show the root cause conclusion paragraph (typically the 2nd paragraph)
+        # rather than the "what happened" intro paragraph
         if not summary_for_slack:
             summary_for_slack = "Analysis completed. View full report for details."
-        elif len(summary_for_slack) > 2900:
-            summary_for_slack = summary_for_slack[:2900] + "...\n\n(See full report for complete analysis)"
+        else:
+            paragraphs = [p.strip() for p in summary_for_slack.split('\n\n') if p.strip()]
+            if len(paragraphs) >= 2:
+                # Use the 2nd paragraph (root cause conclusion) as it's the most valuable
+                summary_for_slack = paragraphs[1]
+            elif paragraphs:
+                summary_for_slack = paragraphs[0]
+            # Truncate if still too long
+            if len(summary_for_slack) > 600:
+                truncation_point = summary_for_slack.rfind(' ', 0, 600)
+                if truncation_point < 200:
+                    truncation_point = 600
+                summary_for_slack = summary_for_slack[:truncation_point] + "..."
         
         # Get owner information
         owner_name = "user"
@@ -307,18 +323,16 @@ def send_slack_investigation_completed_notification(
             }
         ]
         
-        # Add suggestion buttons if available
+        # Add the top suggestion (most valuable next step — fixes prioritized)
         try:
             suggestions = get_incident_suggestions(incident_id)
             if suggestions:
-                logger.info(f"[SlackNotification] Found {len(suggestions)} suggestions for incident {incident_id}")
-                suggestion_blocks = build_suggestions_blocks(incident_id, suggestions, max_suggestions=5)
+                suggestion_blocks = build_suggestions_blocks(incident_id, [suggestions[0]], max_suggestions=1)
                 if suggestion_blocks:
                     blocks.extend(suggestion_blocks)
-                    logger.info(f"[SlackNotification] Added {len(suggestion_blocks)} suggestion blocks")
+                    logger.info(f"[SlackNotification] Added top suggestion block for incident {incident_id}")
         except Exception as e:
-            logger.warning(f"[SlackNotification] Failed to add suggestion blocks: {e}", exc_info=True)
-            # Continue without suggestions if they fail
+            logger.warning(f"[SlackNotification] Failed to add suggestion block: {e}", exc_info=True)
         
         # Log the blocks for debugging
         logger.debug(f"[SlackNotification] Sending {len(blocks)} blocks to Slack")
@@ -340,26 +354,9 @@ def send_slack_investigation_completed_notification(
             )
             return result is not None
         
-        # Update existing message if timestamp exists, otherwise send new message
-        if slack_message_ts:
-            try:
-                result = client.update_message(
-                    channel=channel_id,
-                    ts=slack_message_ts,
-                    text=f"Analysis Complete: {alert_title}",  # Fallback text
-                    blocks=blocks
-                )
-                if result and result.get('ok', False):
-                    return True
-                else:
-                    logger.warning(f"[SlackNotification] Failed to update message, falling back to new message")
-            except Exception as e:
-                logger.warning(f"[SlackNotification] Error updating message, falling back to new message: {e}", exc_info=True)
-        
-        # Fallback: send new message if update failed or no timestamp exists
         result = client.send_message(
             channel=channel_id,
-            text=f"Analysis Complete: {alert_title}",  # Fallback text
+            text=f"Analysis Complete: {alert_title}",
             blocks=blocks
         )
         
@@ -368,9 +365,276 @@ def send_slack_investigation_completed_notification(
         else:
             return False
             
-    except Exception as e:
-        logger.error(f"[SlackNotification] Error sending completed notification: {e}", exc_info=True)
+    except Exception:
+        logger.exception("[SlackNotification] Error sending completed notification")
         return False
 
 
+def send_slack_investigation_failed_notification(
+    user_id: str,
+    incident_data: Dict[str, Any],
+    error_message: Optional[str] = None,
+) -> bool:
+    """
+    Send Slack notification when RCA investigation fails.
 
+    Args:
+        user_id: User ID
+        incident_data: Dictionary containing incident details
+        error_message: Optional error description
+
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return False
+
+        channel_id = _get_incidents_channel_id(user_id, client)
+        if not channel_id:
+            return False
+
+        incident_id = incident_data.get('incident_id', 'unknown')
+        alert_title = incident_data.get('alert_title', _DEFAULT_ALERT_TITLE)
+        severity = incident_data.get('severity', 'unknown')
+        service = incident_data.get('service', 'unknown')
+
+        incident_url = _get_incident_url(incident_id)
+
+        error_text = error_message or "The investigation encountered an error and could not complete."
+        if len(error_text) > 300:
+            error_text = error_text[:300] + "..."
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Investigation Failed"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "_Aurora could not complete this investigation_"
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "View Incident"
+                    },
+                    "url": incident_url,
+                    "style": "primary"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Alert:* {alert_title}\n*Severity:* {severity.title()}\n*Service:* {service}"
+                }
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":x: *Error:* {error_text}"
+                }
+            }
+        ]
+
+        from routes.slack.slack_events_helpers import validate_slack_blocks
+        if not validate_slack_blocks(blocks):
+            simple_text = f"*Investigation Failed*\n\n{alert_title}\n\nError: {error_text}\n\nView incident: {incident_url}"
+            result = client.send_message(channel=channel_id, text=simple_text)
+            return result is not None
+
+        result = client.send_message(
+            channel=channel_id,
+            text=f"Investigation Failed: {alert_title}",
+            blocks=blocks
+        )
+
+        if result:
+            logger.info(f"[SlackNotification] Sent 'failed' notification for incident {incident_id}")
+            return True
+        return False
+
+    except Exception:
+        logger.exception("[SlackNotification] Error sending failed notification")
+        return False
+
+
+def send_slack_action_started_notification(user_id: str, action_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """
+    Send Slack notification when an action starts running.
+
+    Args:
+        user_id: User ID
+        action_data: Dictionary with action_name, run_id, session_id, started_at
+
+    Returns:
+        Dict with 'ts' and 'channel_id' if sent successfully, None otherwise
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return None
+
+        channel_id = _get_incidents_channel_id(user_id, client)
+        if not channel_id:
+            return None
+
+        action_name = action_data.get('action_name', 'Unknown Action')
+
+        detail_text = f"*Action:* {action_name}\n*Status:* Running"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Action Started"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": detail_text
+                }
+            }
+        ]
+
+        from routes.slack.slack_events_helpers import validate_slack_blocks
+        if not validate_slack_blocks(blocks):
+            simple_text = f"*Action Started:* {action_name}"
+            result = client.send_message(channel=channel_id, text=simple_text)
+            if result and result.get('ts'):
+                return {'ts': result['ts'], 'channel_id': channel_id}
+            return None
+
+        result = client.send_message(
+            channel=channel_id,
+            text=f"Action Started: {action_name}",
+            blocks=blocks
+        )
+
+        if result and result.get('ts'):
+            logger.info(f"[SlackNotification] Sent action started notification for '{action_name}'")
+            return {'ts': result['ts'], 'channel_id': channel_id}
+        return None
+
+    except Exception:
+        logger.exception("[SlackNotification] Error sending action started notification")
+        return None
+
+
+def _delete_start_message(client: SlackClient, action_data: Dict[str, Any], fallback_channel: str) -> None:
+    """Delete the 'Action Started' message if its ts was stored."""
+    start_msg_ts = action_data.get('start_message_ts')
+    if not start_msg_ts:
+        return
+    channel = action_data.get('start_message_channel') or fallback_channel
+    try:
+        client.delete_message(channel=channel, ts=start_msg_ts)
+        logger.info(f"[SlackNotification] Deleted action started message {start_msg_ts}")
+    except Exception as e:
+        logger.warning(f"[SlackNotification] Failed to delete started message: {e}")
+
+
+def send_slack_action_completed_notification(user_id: str, action_data: Dict[str, Any]) -> bool:
+    """
+    Send Slack notification when an action completes (success or error).
+    Deletes the "Action Started" message if one was stored.
+
+    Args:
+        user_id: User ID
+        action_data: Dictionary with action_name, run_id, status, error, session_id, completed_at
+
+    Returns:
+        True if message sent successfully, False otherwise
+    """
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return False
+
+        channel_id = _get_incidents_channel_id(user_id, client)
+        if not channel_id:
+            return False
+
+        action_name = action_data.get('action_name', 'Unknown Action')
+        status = action_data.get('status', 'unknown')
+        error_message = action_data.get('error')
+        result_summary = action_data.get('result_summary')
+        session_id = action_data.get('session_id', '')
+        session_url = f"{FRONTEND_URL}/chat?sessionId={session_id}" if session_id else None
+
+        status_emoji = ":white_check_mark:" if status == 'success' else ":x:"
+        status_text = "Completed Successfully" if status == 'success' else "Failed"
+
+        detail_text = f"*Action:* {action_name}\n*Status:* {status_emoji} {status_text}"
+        if result_summary:
+            detail_text += f"\n*Result:* {result_summary}"
+        if error_message:
+            truncated_error = error_message[:200] + "..." if len(error_message) > 200 else error_message
+            detail_text += f"\n*Error:* {truncated_error}"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Action Complete"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": detail_text
+                }
+            }
+        ]
+
+        if session_url:
+            blocks[1]["accessory"] = {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "View Session"
+                },
+                "url": session_url,
+            }
+
+        from routes.slack.slack_events_helpers import validate_slack_blocks
+        if not validate_slack_blocks(blocks):
+            simple_text = f"*Action Complete:* {action_name} — {status_text}"
+            result = client.send_message(channel=channel_id, text=simple_text)
+            if result is not None:
+                _delete_start_message(client, action_data, channel_id)
+                return True
+            return False
+
+        result = client.send_message(
+            channel=channel_id,
+            text=f"Action Complete: {action_name} — {status_text}",
+            blocks=blocks
+        )
+
+        if result:
+            _delete_start_message(client, action_data, channel_id)
+            logger.info(f"[SlackNotification] Sent action completed notification for '{action_name}' ({status})")
+            return True
+        return False
+
+    except Exception:
+        logger.exception("[SlackNotification] Error sending action completed notification")
+        return False

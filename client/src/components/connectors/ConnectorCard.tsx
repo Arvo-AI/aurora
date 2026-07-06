@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
-import { slackService } from "@/lib/services/slack";
 import { googleChatService } from "@/lib/services/google-chat";
 import { useConnectorOAuth } from "@/hooks/use-connector-oauth";
 import { ConnectorDialogs } from "./ConnectorDialogs";
@@ -89,32 +88,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
 
   const handleDisconnect = async () => {
-    if (connector.id === "slack") {
-      setIsConnectingOAuth(true);
-      try {
-        await slackService.disconnect();
-        setIsConnected(false);
-        if (typeof window !== "undefined") {
-          localStorage.removeItem('isSlackConnected');
-          window.dispatchEvent(new CustomEvent("providerStateChanged"));
-        }
-        toast({
-          title: "Success",
-          description: "Slack disconnected successfully",
-        });
-      } catch (error: any) {
-        console.error("Slack disconnect error:", error);
-        toast({
-          title: "Disconnect Failed",
-          description: error.message || "Failed to disconnect Slack",
-          variant: "destructive",
-        });
-      } finally {
-        setIsConnectingOAuth(false);
-        setShowDisconnectDialog(false);
-      }
-    }
-
     if (connector.id === "google_chat") {
       setIsConnectingOAuth(true);
       try {
@@ -162,7 +135,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       if (!isConnected) {
         await handleSlackOAuth();
       } else {
-        setShowDisconnectDialog(true);
+        router.push("/slack/manage");
       }
       return;
     }
@@ -412,12 +385,12 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         {isConnecting ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            {connector.id === "slack" && isConnected ? "Disconnecting..." : connector.id === "google_chat" && isConnected ? "Disconnecting..." : "Connecting..."}
+                            {connector.id === "google_chat" && isConnected ? "Disconnecting..." : "Connecting..."}
                           </>
                         ) : connector.id === "slack" && isConnected ? (
                           <>
-                            <LogOut className="h-4 w-4 mr-2" />
-                            Disconnect
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                            Manage
                           </>
                         ) : connector.id === "google_chat" && isConnected ? (
                           <>

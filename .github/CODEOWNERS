@@ -9,6 +9,11 @@
 #   - Keep this file ordered general -> specific.
 #   - Add a comment above any new rule explaining why it is security-sensitive.
 
+# Baseline: every change to main requires a security-reviewer approval.
+# More-specific rules below still apply (last match wins); this catch-all
+# only governs paths no other rule covers (e.g. docs, website, configs).
+*                                                   @Arvo-AI/security-reviewers
+
 # Agent execution surface
 /server/chat/backend/agent/**                       @Arvo-AI/security-reviewers
 

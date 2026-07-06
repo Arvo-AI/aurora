@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth-helper';
+import { isAdmin } from '@/lib/roles';
 
 const API_BASE_URL = process.env.BACKEND_URL;
 
@@ -12,7 +13,8 @@ export async function GET(request: NextRequest) {
       return authResult;
     }
 
-    const { userId, headers: authHeaders } = authResult;
+    const { headers: authHeaders, role } = authResult;
+    if (!isAdmin(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
     const response = await fetch(`${API_BASE_URL}/api/llm-usage/models`, {
       method: 'GET',

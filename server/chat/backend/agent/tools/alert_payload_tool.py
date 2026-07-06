@@ -80,31 +80,11 @@ def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Option
     source_type, source_alert_id, incident_created_at = row[0], row[1], row[2]
     table = _SOURCE_TABLE_MAP.get(source_type)
     if not table:
-        return None, f"Error: Unknown source type '{source_type}'. Cannot look up payload."
+        return _fetch_from_alert_metadata(cursor, incident_id, source_type)
 
-    # Primary: direct ID lookup
-    cursor.execute(
-        f"SELECT payload FROM {table} WHERE id = %s",
-        (source_alert_id,),
+    payload_row = _lookup_payload_row(
+        cursor, table, source_alert_id, user_id, incident_created_at
     )
-    payload_row = cursor.fetchone()
-
-    # Fallback: time-window constrained lookup (fail-closed if ambiguous)
-    if not payload_row or not payload_row[0]:
-        if incident_created_at:
-            window_start = incident_created_at - _PAYLOAD_LOOKUP_WINDOW
-            window_end = incident_created_at + _PAYLOAD_LOOKUP_WINDOW
-            cursor.execute(
-                f"SELECT payload FROM {table} "
-                f"WHERE user_id = %s AND received_at BETWEEN %s AND %s",
-                (user_id, window_start, window_end),
-            )
-            rows = cursor.fetchall()
-            if len(rows) == 1:
-                payload_row = rows[0]
-            else:
-                payload_row = None
-
     if not payload_row or not payload_row[0]:
         return None, f"Error: No payload found in {table} for source_alert_id {source_alert_id}."
 
@@ -113,6 +93,36 @@ def _fetch_payload(cursor, conn, incident_id: str, user_id: str) -> Tuple[Option
         payload = json.loads(payload)
 
     return payload, None
+
+
+def _fetch_from_alert_metadata(
+    cursor, incident_id: str, source_type: str
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Fallback for sources with no dedicated events table: read alert_metadata."""
+    cursor.execute("SELECT alert_metadata FROM incidents WHERE id = %s", (incident_id,))
+    meta_row = cursor.fetchone()
+    if meta_row and meta_row[0]:
+        payload = meta_row[0] if isinstance(meta_row[0], dict) else json.loads(meta_row[0])
+        return payload, None
+    return None, f"Error: No alert data found for source type '{source_type}'."
+
+
+def _lookup_payload_row(cursor, table: str, source_alert_id, user_id: str, incident_created_at):
+    """Find the payload row by direct id, falling back to a time-window lookup
+    (fail-closed when the window is ambiguous)."""
+    cursor.execute(f"SELECT payload FROM {table} WHERE id = %s", (source_alert_id,))
+    payload_row = cursor.fetchone()
+    if (payload_row and payload_row[0]) or not incident_created_at:
+        return payload_row
+
+    window_start = incident_created_at - _PAYLOAD_LOOKUP_WINDOW
+    window_end = incident_created_at + _PAYLOAD_LOOKUP_WINDOW
+    cursor.execute(
+        f"SELECT payload FROM {table} WHERE user_id = %s AND received_at BETWEEN %s AND %s",
+        (user_id, window_start, window_end),
+    )
+    rows = cursor.fetchall()
+    return rows[0] if len(rows) == 1 else None
 
 
 def _traverse_path(payload: Any, json_path: str) -> Tuple[Optional[Any], Optional[str]]:

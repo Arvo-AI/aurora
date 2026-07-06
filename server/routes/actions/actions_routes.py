@@ -1,23 +1,16 @@
 """CRUD + trigger routes for Aurora Actions."""
 import json
 import logging
-import re
 from datetime import datetime, timezone
 
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
+from utils.validation import is_valid_uuid
 from services.actions.system_actions import seed_system_actions, SYSTEM_ACTIONS
 
-_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
-
 _ERR_INTERNAL = "Internal server error"
-
-
-def _validate_uuid(value: str) -> bool:
-    return bool(_UUID_RE.match(value))
-
 
 _ERR_NOT_FOUND = "Action not found"
 
@@ -260,7 +253,7 @@ def create_action(user_id):
 @actions_bp.route("/<action_id>", methods=["GET"])
 @require_permission("actions", "read")
 def get_action(user_id, action_id):
-    if not _validate_uuid(action_id):
+    if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     return _get_action_response(action_id)
 
@@ -318,7 +311,7 @@ def _get_action_response(action_id):
 @actions_bp.route("/<action_id>", methods=["PUT"])
 @require_permission("actions", "write")
 def update_action(user_id, action_id):
-    if not _validate_uuid(action_id):
+    if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     body = request.get_json(silent=True) or {}
 
@@ -353,7 +346,7 @@ def update_action(user_id, action_id):
 @actions_bp.route("/<action_id>", methods=["DELETE"])
 @require_permission("actions", "write")
 def delete_action(user_id, action_id):
-    if not _validate_uuid(action_id):
+    if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     try:
         with db_pool.get_connection() as conn:
@@ -376,7 +369,7 @@ def delete_action(user_id, action_id):
 @require_permission("actions", "write")
 def restore_default(user_id, action_id):
     """Restore a system action's instructions to the built-in default."""
-    if not _validate_uuid(action_id):
+    if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     try:
         with db_pool.get_connection() as conn:
@@ -404,12 +397,12 @@ def restore_default(user_id, action_id):
 @actions_bp.route("/<action_id>/trigger", methods=["POST"])
 @require_permission("actions", "write")
 def trigger_action(user_id, action_id):
-    if not _validate_uuid(action_id):
+    if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     body = request.get_json(silent=True) or {}
     trigger_context = {}
     if body.get("incident_id"):
-        if not _validate_uuid(body["incident_id"]):
+        if not is_valid_uuid(body["incident_id"]):
             return jsonify({"error": "Invalid incident_id format"}), 400
         trigger_context["incident_id"] = body["incident_id"]
     if body.get("trigger_label"):
@@ -448,7 +441,7 @@ def trigger_action(user_id, action_id):
 @actions_bp.route("/<action_id>/runs", methods=["GET"])
 @require_permission("actions", "read")
 def list_runs(user_id, action_id):
-    if not _validate_uuid(action_id):
+    if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
     try:
         limit = max(min(int(request.args.get("limit", 50)), 200), 1)

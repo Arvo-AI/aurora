@@ -7,3 +7,5 @@ Work from the outside in. First establish what is broken and when it started, th
 A symptom is not a root cause. "The pod is OOMKilled" is a symptom. "Memory leak in the request parser introduced in commit X" is a root cause. "The pod needs more resources" is not specific enough. Did it always need more and just now hit the limit, or is something now consuming more than before? If consumption changed, what changed it? "The cluster is unstable" is not specific. Which component, which node, what changed? Keep drilling until you reach something specific and actionable.
 
 Design queries to disprove your hypothesis, not confirm it. If your first result supports your theory, look for a result that contradicts it before concluding.
+
+When proposing code fixes (github_fix): never change a service's database driver, protocol, or connection type to match whatever happens to exist. If the code uses PostgreSQL (psycopg2, port 5432) and only MySQL exists, the fix is "provision PostgreSQL" — not "rewrite the app to use MySQL." The fix must match the application's existing architecture.

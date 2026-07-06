@@ -1,10 +1,9 @@
 """
 Trigger RCA Tool
 
-LLM-callable tool that bridges interactive chat with the background RCA pipeline.
-When the user describes an operational incident in chat, the LLM calls this tool
-to create an incident and dispatch a full automated RCA investigation using all
-connected integrations.
+LLM-callable tool that creates an incident and dispatches a full automated RCA
+investigation using all connected integrations. Can be invoked from any agent
+session (interactive chat, Slack, MCP, etc.).
 """
 
 import json
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class TriggerRCAArgs(BaseModel):
-    """Arguments for triggering an RCA investigation from chat."""
+    """Arguments for triggering an RCA investigation."""
 
     issue_description: str = Field(
         description="What the user described — the operational issue or symptoms they're seeing"
@@ -46,7 +45,7 @@ def trigger_rca(
     **kwargs,
 ) -> str:
     """
-    Trigger a full background RCA investigation from an interactive chat session.
+    Trigger a full background RCA investigation.
 
     Creates an incident, broadcasts an SSE update, and dispatches the background
     RCA pipeline (same one used by webhook-triggered alerts) with all connected
@@ -73,10 +72,16 @@ def trigger_rca(
     try:
         from chat.backend.agent.tools.cloud_tools import get_state_context
         state = get_state_context()
-        if state and getattr(state, "is_background", False):
+        # Block nested RCA only — background Slack/Celery sessions without an
+        # active incident investigation may still trigger a new RCA.
+        if (
+            state
+            and getattr(state, "is_background", False)
+            and getattr(state, "incident_id", None)
+        ):
             return json.dumps({
                 "error": "Cannot trigger RCA from within a background RCA session. "
-                "This tool is only available in interactive chat."
+                "Nested RCA is not supported — finish the current investigation first."
             })
     except Exception as e:
         logger.warning(f"[TriggerRCA] Could not check background state, allowing: {e}")
