@@ -281,7 +281,7 @@ def _reserve_postmortem_artifact(user_id: str, incident_id: str, session_id: str
                             incident_id, generation_session_id, last_edited_by, updated_at)
                        VALUES (%s, %s, %s, NULL, 'postmortem',
                                %s, %s, 'agent', CURRENT_TIMESTAMP)
-                       ON CONFLICT (org_id, category, title)
+                       ON CONFLICT (incident_id) WHERE incident_id IS NOT NULL
                        DO UPDATE SET content = NULL,
                                      generation_session_id = EXCLUDED.generation_session_id,
                                      last_edited_by = 'agent',

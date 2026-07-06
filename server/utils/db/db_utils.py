@@ -3036,7 +3036,7 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
-                    CREATE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
                 """)
                 # Drop FK constraint on postmortem_exports so it can reference artifact IDs
                 cursor.execute("""
@@ -3099,7 +3099,6 @@ def initialize_tables():
                     logging.info(f"Migrated {migrated_count} postmortems into artifacts table.")
             except Exception as e:
                 logging.warning(f"Error migrating postmortems to artifacts: {e}")
-                conn.rollback()
                 conn.rollback()
 
             # Auto-trigger memory migration if old KB tables still have data

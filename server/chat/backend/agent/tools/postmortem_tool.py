@@ -147,8 +147,10 @@ def save_postmortem(
                             incident_id, generation_session_id, last_edited_by, updated_at)
                        VALUES (%s, %s, %s, %s, 'postmortem', %s,
                                %s, %s, 'agent', CURRENT_TIMESTAMP)
-                       ON CONFLICT (org_id, category, title)
+                       ON CONFLICT (incident_id) WHERE incident_id IS NOT NULL
                        DO UPDATE SET content = EXCLUDED.content,
+                                     title = EXCLUDED.title,
+                                     description = EXCLUDED.description,
                                      generation_session_id = EXCLUDED.generation_session_id,
                                      last_edited_by = 'agent',
                                      updated_at = CURRENT_TIMESTAMP
