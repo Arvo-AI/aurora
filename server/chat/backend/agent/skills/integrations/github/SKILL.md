@@ -44,10 +44,12 @@ Connected account: {username}
    - Pass `incident_time` (ISO 8601) for automatic time window correlation
 3. `github_fix(file_path=..., edits=[{old_string, new_string, replace_all?}, ...], fix_description=..., root_cause_summary=...)` — Suggest a code fix via anchored search-and-replace edits (stored for user review, not auto-applied). First call `get_file_contents` to read the current file so you can copy the exact `old_string` (with enough surrounding context to be unique).
 4. `github_apply_fix(suggestion_id=...)` — Create a PR from an approved fix (only after user reviews)
-5. `github_commit(repo=..., commit_message=...)` — Push Terraform files to GitHub
+5. `github_commit(repo=..., commit_message=...)` — Push generated Terraform (.tf) files from the IaC workflow to GitHub. This is NOT a general-purpose commit tool — it only pushes .tf files from the terraform working directory.
 
 ### MCP Tools (for direct GitHub API operations beyond RCA)
 - Files: `get_file_contents`, `create_or_update_file`, `push_files`, `get_repository_tree`
+- **Size limit:** `create_or_update_file` and `push_files` enforce a 50 KB per-file cap. Files exceeding this limit will be rejected. Do NOT attempt to work around this via terminal commands or other tools — the limit is intentional.
+- **Updates:** When updating an existing file, the new content must be at least 50% of the original file size (for files over 10 KB). This prevents accidental truncation.
 - Branches: `create_branch`, `list_branches`, `list_commits`, `get_commit`
 - PRs: `create_pull_request`, `list_pull_requests`, `merge_pull_request`, `get_pull_request_files`
 - Issues: `create_issue`, `list_issues`, `search_issues`, `add_issue_comment`
