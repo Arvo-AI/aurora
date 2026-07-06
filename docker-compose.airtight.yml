@@ -109,6 +109,7 @@ x-common-env: &common-env
   VISION_MODEL: ${VISION_MODEL}
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
@@ -449,14 +450,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-  t2v-transformers:
-    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
-    pull_policy: never
-    logging: *default-logging
-    environment:
-      ENABLE_CUDA: '0'
-    restart: unless-stopped
 
   frontend:
     image: aurora_frontend:latest

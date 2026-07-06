@@ -64,6 +64,7 @@ x-common-env: &common-env
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
   GEMINI_DISABLE_THINKING: ${GEMINI_DISABLE_THINKING}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
   # GitHub auth — every Aurora service that talks to GitHub (server,
   # celery_worker, chatbot) needs the auth mode + App credentials to mint
@@ -487,12 +488,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-  t2v-transformers:
-    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
-    logging: *default-logging
-    environment:
-      ENABLE_CUDA: '0'
 
   frontend:
     build:

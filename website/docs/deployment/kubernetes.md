@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `cr.weaviate.io/semitechnologies/weaviate:1.27.6`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`, `cr.weaviate.io/semitechnologies/transformers-inference:*`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `cr.weaviate.io/semitechnologies/weaviate:1.27.6`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
 :::
 
 ### Required tools
