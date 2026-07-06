@@ -1465,9 +1465,12 @@ async def _execute_background_chat(
         if trigger_metadata:
             wf._trigger_metadata = trigger_metadata
             wf._ui_state["triggerMetadata"] = trigger_metadata
-        
+
+        # Determine early so it can gate the incident_id passed to process_workflow_async.
+        is_action_source = (trigger_metadata or {}).get('source') == 'action'
+
         # Run the workflow - this is the same function used by regular chats
-        await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
+        await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
         
         # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
         # The workflow stream might complete, but tool calls could still be running
@@ -1518,7 +1521,6 @@ async def _execute_background_chat(
 
         # Also finalize the incident and enqueue post-RCA tasks here (inside the
         # async function) because asyncio.run() may never return to the caller.
-        is_action_source = (trigger_metadata or {}).get('source') == 'action'
         if incident_id and not is_action_source:
             try:
                 with db_pool.get_admin_connection() as conn:
