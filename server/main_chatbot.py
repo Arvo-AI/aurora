@@ -331,7 +331,6 @@ def create_websocket_sender(websocket, user_id, session_id):
 
 
 async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
-    incident_id = incident_id or getattr(state, "incident_id", None)
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True

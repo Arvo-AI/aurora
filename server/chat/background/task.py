@@ -1467,7 +1467,7 @@ async def _execute_background_chat(
             wf._ui_state["triggerMetadata"] = trigger_metadata
         
         # Run the workflow - this is the same function used by regular chats
-        await process_workflow_async(wf, state, background_ws, user_id, incident_id=incident_id)
+        await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
         
         # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
         # The workflow stream might complete, but tool calls could still be running
