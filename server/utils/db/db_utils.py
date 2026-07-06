@@ -3048,30 +3048,58 @@ def initialize_tables():
                 conn.rollback()
 
             # Migrate postmortem data into artifacts (idempotent)
+            # Temporarily relax RLS on source tables so the migration works on managed Postgres
+            # (where the app user doesn't have BYPASSRLS)
             try:
+                cursor.execute("ALTER TABLE postmortems DISABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents DISABLE ROW LEVEL SECURITY")
+                conn.commit()
+
                 cursor.execute("""
-                    INSERT INTO artifacts (org_id, user_id, title, content, category, description,
-                                          incident_id, generation_session_id, last_edited_by,
-                                          created_at, updated_at)
-                    SELECT COALESCE(p.org_id, i.org_id), p.user_id,
-                           COALESCE('Postmortem: ' || i.alert_title || ' [' || LEFT(p.incident_id::text, 8) || ']',
-                                    'Postmortem (' || p.incident_id || ')'),
-                           p.content, 'postmortem',
-                           'Generated postmortem for incident: ' || COALESCE(i.alert_title, p.incident_id::text),
-                           p.incident_id, p.generation_session_id, 'system',
-                           p.generated_at, p.updated_at
+                    SELECT DISTINCT COALESCE(p.org_id, i.org_id) as org_id
                     FROM postmortems p
                     JOIN incidents i ON i.id = p.incident_id
                     WHERE p.content IS NOT NULL
                       AND COALESCE(p.org_id, i.org_id) IS NOT NULL
-                    ON CONFLICT (org_id, category, title) DO NOTHING
                 """)
-                migrated_count = cursor.rowcount
+                pm_orgs = [row[0] for row in cursor.fetchall()]
+                conn.commit()
+
+                migrated_count = 0
+                for pm_org_id in pm_orgs:
+                    cursor.execute("SET myapp.current_org_id = %s", (pm_org_id,))
+                    cursor.execute("""
+                        INSERT INTO artifacts (org_id, user_id, title, content, category, description,
+                                              incident_id, generation_session_id, last_edited_by,
+                                              created_at, updated_at)
+                        SELECT COALESCE(p.org_id, i.org_id), p.user_id,
+                               COALESCE('Postmortem: ' || i.alert_title || ' [' || LEFT(p.incident_id::text, 8) || ']',
+                                        'Postmortem (' || p.incident_id || ')'),
+                               p.content, 'postmortem',
+                               'Generated postmortem for incident: ' || COALESCE(i.alert_title, p.incident_id::text),
+                               p.incident_id, p.generation_session_id, 'system',
+                               p.generated_at, p.updated_at
+                        FROM postmortems p
+                        JOIN incidents i ON i.id = p.incident_id
+                        WHERE p.content IS NOT NULL
+                          AND COALESCE(p.org_id, i.org_id) = %s
+                        ON CONFLICT (org_id, category, title) DO NOTHING
+                    """, (pm_org_id,))
+                    migrated_count += cursor.rowcount
+                    conn.commit()
+
+                cursor.execute("RESET myapp.current_org_id")
+                # Re-enable RLS (will be re-forced by the RLS setup if it runs again)
+                cursor.execute("ALTER TABLE postmortems ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE postmortems FORCE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents FORCE ROW LEVEL SECURITY")
+                conn.commit()
                 if migrated_count > 0:
                     logging.info(f"Migrated {migrated_count} postmortems into artifacts table.")
-                conn.commit()
             except Exception as e:
                 logging.warning(f"Error migrating postmortems to artifacts: {e}")
+                conn.rollback()
                 conn.rollback()
 
             # Auto-trigger memory migration if old KB tables still have data
