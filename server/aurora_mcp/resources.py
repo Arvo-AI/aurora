@@ -199,5 +199,5 @@ def register_resources(
 
     @mcp.resource("aurora://health")
     async def health() -> Dict[str, Any]:
-        """Aurora system health: database, Redis, Weaviate, Celery status."""
+        """Aurora system health: database, Redis, Celery status."""
         return await _do_health(api_call)
