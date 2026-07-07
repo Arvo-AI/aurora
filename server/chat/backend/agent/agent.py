@@ -344,6 +344,24 @@ class Agent:
                 getattr(state, 'attachments', []),
             )
 
+            # Fire async memory prefetch — runs in parallel with prompt building and tool setup.
+            _memory_prefetch = None
+            if state.user_id and state.session_id:
+                try:
+                    from services.memory.injector import start_memory_prefetch
+                    _last_msg_content = ""
+                    if state.messages:
+                        _lm = state.messages[-1]
+                        _last_msg_content = _lm.content if isinstance(getattr(_lm, 'content', ''), str) else str(getattr(_lm, 'content', ''))
+                    if _last_msg_content:
+                        _memory_prefetch = start_memory_prefetch(
+                            user_id=state.user_id,
+                            session_id=state.session_id,
+                            user_message=_last_msg_content,
+                        )
+                except Exception as _mpe:
+                    logging.debug("Failed to start memory prefetch: %s", _mpe)
+
             # Build prompt segments in background while getting tools on main thread
             # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
             from concurrent.futures import ThreadPoolExecutor as _TPE
@@ -357,6 +375,16 @@ class Agent:
                 )
                 tools = get_cloud_tools()
                 segments = _prompt_future.result()
+
+            # Collect prefetch result and append injected memories to the prompt
+            if _memory_prefetch:
+                try:
+                    injected = _memory_prefetch.get_result(timeout=6.0)
+                    if injected:
+                        memory_index = segments.knowledge_base_memory or ""
+                        segments.knowledge_base_memory = (memory_index + "\n\n" + injected) if memory_index else injected
+                except Exception:
+                    logging.debug("Memory prefetch result unavailable")
 
             system_prompt_text = assemble_system_prompt(segments)
             if system_prompt_override is not None:

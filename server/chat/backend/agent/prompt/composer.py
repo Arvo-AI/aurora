@@ -124,7 +124,8 @@ def build_prompt_segments(
         except Exception as e:
             logging.warning(f"Failed to build skills index: {e}")
 
-    # Build memory index for authenticated users
+    # Build memory index for authenticated users (static TOC of title + description).
+    # The injector's full-content memories are appended in agent.py after this returns.
     memory_context = ""
     user_id = getattr(state, "user_id", None) if state else None
     if user_id:

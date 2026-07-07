@@ -5,15 +5,11 @@ Generates the memory index for injection into the agent's system prompt.
 Lists all memory entries with title + description so the agent knows what
 org knowledge exists and can call read_memory() to load specific topics.
 
-Future: A relevance-ranking agent will decide which memories to load fully
-into the prompt based on the current conversation context.
-
-SCALING: Truncation is a non-critical safeguard. The relevance-ranking agent
-reads all entries and selects the top N, and the consolidation mechanism keeps
-memory lean. Long-term, we can move to a directory-style index.
+Also provides shared data-access functions used by the injector.
 """
 
 import logging
+from typing import Dict, List, Optional
 
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
@@ -26,6 +22,82 @@ MAX_INDEX_LINES = 200
 MAX_INDEX_BYTES = 25000
 
 
+# ---------------------------------------------------------------------------
+# Shared data access — used by both the index builder and the injector
+# ---------------------------------------------------------------------------
+
+
+def get_memory_entries(user_id: str, limit: int = 200) -> List[Dict]:
+    """Fetch memory entry metadata (no content) for the user's org.
+
+    Returns a list of dicts with: category, title, description, updated_at.
+    Ordered by most recently updated first.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[MemoryIndex]")
+                if not org_id:
+                    return []
+
+                cursor.execute(
+                    """SELECT category, title, description, updated_at
+                       FROM artifacts
+                       WHERE org_id = %s AND category = ANY(%s)
+                       ORDER BY updated_at DESC
+                       LIMIT %s""",
+                    (org_id, list(MEMORY_CATEGORIES), limit),
+                )
+                return [
+                    {"category": r[0], "title": r[1], "description": r[2] or "", "updated_at": r[3]}
+                    for r in cursor.fetchall()
+                ]
+    except Exception as e:
+        logger.warning("[MemoryIndex] Failed to fetch entries for user %s: %s", user_id, e)
+        return []
+
+
+def fetch_memory_content(user_id: str, entries: List[Dict]) -> List[Dict]:
+    """Fetch full content for a list of memory entries.
+
+    Takes entries (with category + title) and returns them enriched with content.
+    """
+    if not entries:
+        return []
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[MemoryIndex:fetch]")
+                if not org_id:
+                    return []
+
+                results = []
+                for entry in entries:
+                    cursor.execute(
+                        """SELECT content, updated_at FROM artifacts
+                           WHERE org_id = %s AND category = %s AND title = %s""",
+                        (org_id, entry["category"], entry["title"]),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        results.append({
+                            "category": entry["category"],
+                            "title": entry["title"],
+                            "content": row[0] or "",
+                            "updated_at": row[1],
+                        })
+                return results
+    except Exception:
+        logger.exception("[MemoryIndex] Failed to fetch memory content")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Index formatting (used by composer.py for the static TOC)
+# ---------------------------------------------------------------------------
+
+
 def build_memory_index(user_id: str) -> str:
     """Build a table-of-contents index of all org memory entries.
 
@@ -33,76 +105,50 @@ def build_memory_index(user_id: str) -> str:
     description. The agent uses this to discover what knowledge exists and
     calls read_memory() to load full content on demand.
     """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                resolved_org_id = set_rls_context(
-                    cursor, conn, user_id, log_prefix="[MemoryIndex]"
-                )
-                if not resolved_org_id:
-                    return ""
+    entries = get_memory_entries(user_id)
+    if not entries:
+        return ""
 
-                # Fetch all memory entries for this org (title + description only, no content)
-                cursor.execute(
-                    """SELECT category, title, description, updated_at
-                       FROM artifacts
-                       WHERE org_id = %s AND category = ANY(%s)
-                       ORDER BY category, updated_at DESC""",
-                    (resolved_org_id, list(MEMORY_CATEGORIES)),
-                )
-                rows = cursor.fetchall()
+    # Regroup by category (entries come sorted by updated_at, need category grouping)
+    from itertools import groupby
+    sorted_entries = sorted(entries, key=lambda e: e["category"])
 
-        if not rows:
-            return ""
+    lines = ["ORG MEMORY INDEX — use read_memory(category, title) for full content:\n"]
 
-        # Format as a grouped list: entries under category headers
-        lines = ["ORG MEMORY INDEX — use read_memory(category, title) for full content:\n"]
+    def _prompt_label(value: object, max_chars: int = 500) -> str:
+        return " ".join(str(value or "").split())[:max_chars]
 
-        def _prompt_label(value: object, max_chars: int = 500) -> str:
-            return " ".join(str(value or "").split())[:max_chars]
+    for category, group in groupby(sorted_entries, key=lambda e: e["category"]):
+        group_list = list(group)
+        lines.append(f"## {category} ({len(group_list)})")
 
-        current_category = None
-        for category, title, description, updated_at in rows:
-            # Print a category header when we enter a new group
-            if category != current_category:
-                count = sum(1 for r in rows if r[0] == category)
-                lines.append(f"## {category} ({count})")
-                current_category = category
-
-            # Each entry: path-style identifier + description as inline comment
-            safe_title = _prompt_label(title)
-            safe_desc = _prompt_label(description)
+        for entry in group_list:
+            safe_title = _prompt_label(entry["title"])
+            safe_desc = _prompt_label(entry["description"])
             desc_suffix = f"  # {safe_desc}" if safe_desc else ""
             lines.append(f"- {category}/{safe_title}{desc_suffix}")
 
-        result = "\n".join(lines)
+    result = "\n".join(lines)
 
-        # Enforce line budget — prevent the index from consuming too much prompt space
-        truncated = False
-        result_lines = result.split("\n")
-        if len(result_lines) > MAX_INDEX_LINES:
-            result = "\n".join(result_lines[:MAX_INDEX_LINES])
-            result += "\n... (index truncated — use list_memories() to see all)"
-            truncated = True
+    # Enforce line budget
+    truncated = False
+    result_lines = result.split("\n")
+    if len(result_lines) > MAX_INDEX_LINES:
+        result = "\n".join(result_lines[:MAX_INDEX_LINES])
+        result += "\n... (index truncated — use list_memories() to see all)"
+        truncated = True
 
-        # Enforce byte budget — safety net for orgs with many long titles/descriptions
-        if len(result.encode("utf-8")) > MAX_INDEX_BYTES:
-            while len(result.encode("utf-8")) > MAX_INDEX_BYTES and "\n" in result:
-                result = result.rsplit("\n", 1)[0]
-            result += "\n... (index truncated)"
-            truncated = True
+    # Enforce byte budget
+    if len(result.encode("utf-8")) > MAX_INDEX_BYTES:
+        while len(result.encode("utf-8")) > MAX_INDEX_BYTES and "\n" in result:
+            result = result.rsplit("\n", 1)[0]
+        result += "\n... (index truncated)"
+        truncated = True
 
-        if truncated:
-            logger.warning(
-                "[MemoryIndex] Index truncated for org %s: %d entries",
-                resolved_org_id, len(rows),
-            )
+    if truncated:
+        logger.warning("[MemoryIndex] Index truncated: %d entries", len(entries))
 
-        # LangChain interprets {text} as template variables — escape them
-        result = result.replace("{", "{{").replace("}", "}}")
+    # LangChain interprets {text} as template variables — escape them
+    result = result.replace("{", "{{").replace("}", "}}")
 
-        return result
-
-    except Exception as e:
-        logger.warning(f"[MemoryIndex] Error building index for user {user_id}: {e}")
-        return ""
+    return result
