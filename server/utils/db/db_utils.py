@@ -1668,6 +1668,20 @@ def initialize_tables():
                 conn.rollback()
                 logging.warning(f"Migration for actions system columns: {e}")
 
+            # Migration: add plan_tier to organizations.
+            # Inert in OSS — defaults to 'free' and is only enforced when a
+            # deployment activates a paywall (see AURORA_HOOKS_MODULE / the
+            # before_add_member hook). Plain OSS never enforces on this column.
+            try:
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_tier VARCHAR(20) DEFAULT 'free';"
+                )
+                conn.commit()
+                logging.info("Ensured plan_tier column exists on organizations table.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for organizations.plan_tier: {e}")
+
             # Migration: ensure incident_alerts.user_id exists and is backfilled
             try:
                 cursor.execute(
