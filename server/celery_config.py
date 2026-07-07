@@ -98,6 +98,8 @@ celery_app.conf.update(
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
         'services.memory.migration_task',
+        'services.memory.collector',
+        'services.memory.consolidation',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
@@ -136,6 +138,10 @@ celery_app.conf.update(
         'run-scheduled-actions': {
             'task': 'services.actions.scheduler.run_scheduled_actions',
             'schedule': 60.0,  # Check every minute
+        },
+        'memory-dream-consolidation': {
+            'task': 'services.memory.consolidation.schedule_memory_consolidation',
+            'schedule': float(os.getenv('MEMORY_DREAM_INTERVAL_HOURS', '24')) * 3600,
         },
     },
     beat_schedule_filename='celerybeat-schedule',

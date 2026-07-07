@@ -1349,6 +1349,16 @@ class Workflow:
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
 
+                # Save durable learnings from this conversation to org memory (non-blocking)
+                try:
+                    from services.memory.collector import extract_memories_from_session
+                    extract_memories_from_session.delay(
+                        session_id=session_id,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logger.debug("[WORKFLOW FINAL] Memory save enqueue failed")
+
                 # Append only this turn's new messages to the UI column so RCA
                 # compression (or any future state rewrite) can't truncate the
                 # persisted chat history.
