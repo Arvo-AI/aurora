@@ -3115,6 +3115,17 @@ def initialize_tables():
                 logging.warning(f"Error de-duplicating organization names: {e}")
                 conn.rollback()
 
+            # Add plan_tier to organizations for org tier paywall
+            try:
+                cursor.execute("SAVEPOINT sp_plan_tier")
+                cursor.execute(
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_tier VARCHAR(20) DEFAULT 'free';"
+                )
+                cursor.execute("RELEASE SAVEPOINT sp_plan_tier")
+            except Exception as e:
+                logging.warning(f"Error adding plan_tier to organizations: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_plan_tier")
+
             conn.commit()
             logging.info("Database tables initialized successfully.")
             cursor.close()

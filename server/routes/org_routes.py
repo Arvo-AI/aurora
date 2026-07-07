@@ -1,6 +1,7 @@
 """Organization management routes."""
 
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from routes.audit_routes import record_audit_event
 logger = logging.getLogger(__name__)
 
 INVITATION_TTL_DAYS = 7
+_ORG_NOT_FOUND = "Organization not found"
 
 org_bp = Blueprint("org", __name__, url_prefix="/api/orgs")
 
@@ -258,12 +260,12 @@ def get_current_org(user_id):
             with conn.cursor() as cursor:
                 # No RLS needed — organizations, users not RLS-protected
                 cursor.execute(
-                    "SELECT id, name, slug, created_by, created_at FROM organizations WHERE id = %s",
+                    "SELECT id, name, slug, created_by, created_at, plan_tier FROM organizations WHERE id = %s",
                     (org_id,),
                 )
                 org = cursor.fetchone()
                 if not org:
-                    return jsonify({"error": "Organization not found"}), 404
+                    return jsonify({"error": _ORG_NOT_FOUND}), 404
 
                 cursor.execute(
                     "SELECT id, email, name, role, created_at FROM users WHERE org_id = %s ORDER BY created_at",
@@ -280,12 +282,15 @@ def get_current_org(user_id):
                     for row in cursor.fetchall()
                 ]
 
+                plan_tier = "enterprise" if os.getenv("AURORA_ENV", "production") == "dev" else (org[5] or "free")
+
                 return jsonify({
                     "id": org[0],
                     "name": org[1],
                     "slug": org[2],
                     "createdBy": org[3],
                     "createdAt": org[4].isoformat() if org[4] else None,
+                    "planTier": plan_tier,
                     "members": members,
                 })
     except Exception as e:
@@ -354,7 +359,7 @@ def update_org(user_id):
                 conn.commit()
 
                 if not row:
-                    return jsonify({"error": "Organization not found"}), 404
+                    return jsonify({"error": _ORG_NOT_FOUND}), 404
 
                 record_audit_event(org_id, user_id, "update_org", "organization", org_id,
                                    {"name": name, "slug": slug}, request)
@@ -654,6 +659,16 @@ def _list_invitations(org_id: str):
                          AND expires_at IS NOT NULL AND expires_at <= NOW()""",
                     (org_id,),
                 )
+
+                if os.getenv("AURORA_ENV", "production") != "dev":
+                    cursor.execute(
+                        """UPDATE org_invitations i SET status = 'expired'
+                           FROM organizations o
+                           WHERE i.org_id = %s AND i.status = 'pending'
+                             AND o.id = i.org_id AND COALESCE(o.plan_tier, 'free') = 'free'""",
+                        (org_id,),
+                    )
+
                 conn.commit()
 
                 cursor.execute(
@@ -730,7 +745,7 @@ def _create_invitation(org_id: str, user_id: str):
 
                 cursor.execute(
                     """DELETE FROM org_invitations
-                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired', 'accepted')""",
                     (org_id, email),
                 )
 
@@ -1156,3 +1171,116 @@ def update_org_preferences(user_id):
     except Exception as e:
         logger.error("Error updating org preferences: %s", e)
         return jsonify({"error": "Failed to update preferences"}), 500
+
+
+def _downgrade_to_free(cursor, org_id: str, creator_id: str) -> list:
+    """Remove all non-creator members and expire invitations for a downgrade."""
+    cursor.execute(
+        """UPDATE org_invitations SET status = 'expired'
+           WHERE org_id = %s AND status = 'pending'""",
+        (org_id,),
+    )
+    cursor.execute(
+        "SELECT id FROM users WHERE org_id = %s AND id != %s",
+        (org_id, creator_id),
+    )
+    removed_user_ids = [r[0] for r in cursor.fetchall()]
+    for uid in removed_user_ids:
+        _purge_vault_secrets(cursor, user_id=uid, org_id=org_id)
+    cursor.execute(
+        "DELETE FROM user_tokens WHERE org_id = %s AND user_id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "DELETE FROM user_connections WHERE org_id = %s AND user_id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "DELETE FROM user_manual_vms WHERE org_id = %s AND user_id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "UPDATE users SET org_id = NULL WHERE org_id = %s AND id != %s",
+        (org_id, creator_id),
+    )
+    cursor.execute(
+        "UPDATE users SET role = 'admin' WHERE id = %s",
+        (creator_id,),
+    )
+    return removed_user_ids
+
+
+@org_bp.route("/plan", methods=["PATCH"])
+@require_permission("org", "manage")
+def update_plan(user_id):
+    """Update org plan tier. Handles downgrade cleanup (admin only)."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    data = request.get_json() or {}
+    new_tier = data.get("plan_tier")
+    if new_tier not in ("free", "enterprise"):
+        return jsonify({"error": "plan_tier must be 'free' or 'enterprise'"}), 400
+
+    try:
+        removed_user_ids = []
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT plan_tier, created_by FROM organizations WHERE id = %s",
+                    (org_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": _ORG_NOT_FOUND}), 404
+
+                old_tier, creator_id = row[0] or "free", row[1] or user_id
+
+                if old_tier == new_tier:
+                    return jsonify({"planTier": new_tier})
+
+                if old_tier == "free" and new_tier == "enterprise":
+                    return jsonify({"error": "Enterprise upgrades must be completed through billing"}), 403
+
+                if old_tier == "enterprise" and new_tier == "free":
+                    removed_user_ids = _downgrade_to_free(cursor, org_id, creator_id)
+
+                cursor.execute(
+                    "UPDATE organizations SET plan_tier = %s WHERE id = %s",
+                    (new_tier, org_id),
+                )
+                conn.commit()
+
+        for uid in removed_user_ids:
+            try:
+                for r in get_user_roles_in_org(uid, org_id):
+                    remove_role_from_user(uid, r, org_id)
+            except Exception as e:
+                logger.warning("Failed to clean Casbin roles for user %s: %s", uid, e)
+
+        record_audit_event(org_id, user_id, "update_plan", "organization", org_id,
+                           {"old_tier": old_tier, "new_tier": new_tier,
+                            "removed_user_ids": removed_user_ids,
+                            "removed_user_count": len(removed_user_ids)}, request)
+
+        return jsonify({"planTier": new_tier})
+    except Exception as e:
+        logger.exception("Error updating plan: %s", e)
+        return jsonify({"error": "Failed to update plan"}), 500
+
+
+@org_bp.route("/track", methods=["POST"])
+@require_auth_only
+def track_event(user_id):
+    """Record a lightweight frontend event in the audit log."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization found"}), 404
+
+    event = (request.get_json() or {}).get("event")
+    if event not in {"upgrade_prompt_viewed"}:
+        return jsonify({"error": "Unknown event"}), 400
+
+    record_audit_event(org_id, user_id, event, "organization", org_id, None, request)
+    return jsonify({"ok": True})
