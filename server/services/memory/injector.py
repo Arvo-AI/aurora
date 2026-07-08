@@ -104,7 +104,52 @@ class MemoryPrefetch:
 
     def _execute(self) -> str:
         try:
-            return _run_prefetch(self.user_id, self.session_id, self.user_message)
+            # Not enough context to select meaningfully
+            if len(self.user_message.strip()) < MIN_QUERY_LENGTH:
+                return ""
+
+            # Session budget exhausted — memories already saturate context
+            budget_used = _get_session_budget(self.session_id)
+            if budget_used >= MAX_SESSION_BYTES:
+                return ""
+
+            already_surfaced = _get_surfaced_set(self.session_id)
+
+            # Scan index (titles + descriptions, no content)
+            entries = get_memory_entries(self.user_id, limit=MAX_INDEX_ENTRIES)
+            if not entries:
+                return ""
+
+            # Remove already-surfaced entries (don't waste selection slots)
+            available = [e for e in entries if _entry_key(e) not in already_surfaced]
+            if not available:
+                return ""
+
+            # Single LLM pass: select up to 5
+            selected = _select_relevant_memories(self.user_message, available)
+            if not selected:
+                return ""
+
+            # Fetch content of the selected entries
+            memories = fetch_memory_content(self.user_id, selected)
+            if not memories:
+                return ""
+
+            # Format and inject (with staleness headers + budget enforcement)
+            remaining_budget = MAX_SESSION_BYTES - budget_used
+            injection_text, bytes_used, surfaced_keys = _format_for_injection(memories, remaining_budget)
+            if not injection_text:
+                return ""
+
+            _update_session_budget(self.session_id, budget_used + bytes_used)
+            _mark_surfaced(self.session_id, surfaced_keys)
+
+            logger.info(
+                "[MemoryInjector] Injected %d memories (%d bytes) for session %s",
+                len(surfaced_keys), bytes_used, self.session_id,
+            )
+            return injection_text
+
         except Exception:
             logger.exception("[MemoryInjector] Unhandled error in prefetch")
             return ""
@@ -119,60 +164,6 @@ def start_memory_prefetch(
     prefetch = MemoryPrefetch(user_id, session_id, user_message)
     prefetch.start()
     return prefetch
-
-
-# ---------------------------------------------------------------------------
-# Pipeline: scan → select (1 LLM call) → fetch content → format → inject
-# ---------------------------------------------------------------------------
-
-
-def _run_prefetch(user_id: str, session_id: str, user_message: str) -> str:
-    # Not enough context to select meaningfully
-    if len(user_message.strip()) < MIN_QUERY_LENGTH:
-        return ""
-
-    # Session budget exhausted — memories already saturate context
-    budget_used = _get_session_budget(session_id)
-    if budget_used >= MAX_SESSION_BYTES:
-        return ""
-
-    already_surfaced = _get_surfaced_set(session_id)
-
-    # Scan index (titles + descriptions, no content)
-    entries = get_memory_entries(user_id, limit=MAX_INDEX_ENTRIES)
-    if not entries:
-        return ""
-
-    # Remove already-surfaced entries (don't waste selection slots)
-    available = [e for e in entries if _entry_key(e) not in already_surfaced]
-    if not available:
-        return ""
-
-    # Single LLM pass: select up to 5
-    selected = _select_relevant_memories(user_message, available)
-    if not selected:
-        return ""
-
-    # Fetch content of the selected entries
-    memories = fetch_memory_content(user_id, selected)
-    if not memories:
-        return ""
-
-    # Format and inject (with staleness headers + budget enforcement)
-    remaining_budget = MAX_SESSION_BYTES - budget_used
-    injection_text, bytes_used, surfaced_keys = _format_for_injection(memories, remaining_budget)
-    if not injection_text:
-        return ""
-
-    _update_session_budget(session_id, budget_used + bytes_used)
-    _mark_surfaced(session_id, surfaced_keys)
-
-    elapsed = (time.perf_counter() - time.perf_counter())  # logged by caller
-    logger.info(
-        "[MemoryInjector] Injected %d memories (%d bytes) for session %s",
-        len(surfaced_keys), bytes_used, session_id,
-    )
-    return injection_text
 
 
 # ---------------------------------------------------------------------------
