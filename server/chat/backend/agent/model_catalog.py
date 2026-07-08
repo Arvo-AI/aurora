@@ -227,27 +227,51 @@ def _canonical_id(model_id: str) -> str:
     return model_id
 
 
-def _discovered_model_ids() -> List[str]:
-    """Live model ids from every configured & available provider.
+# Providers whose models are "featured" (shown in the default view, not just on
+# search). These are direct backends where the model list is short and high-intent
+# — Ollama surfaces exactly the models you pulled, the direct API providers their
+# mapped set. OpenRouter is deliberately excluded: it serves hundreds of models, so
+# its long tail is search-only to keep the default view tidy.
+_FEATURED_PROVIDERS = {"anthropic", "openai", "google", "vertex", "ollama", "bedrock"}
+
+
+def _featured_model_ids() -> Optional[set]:
+    """Optional ``FEATURED_MODELS`` env override for the default-view set.
+
+    Same shape as ``ENABLED_MODELS``. When set, exactly these ids are featured
+    (everything else is search-only), letting ops re-curate the default view per
+    deployment without a code change. ``None`` = use the built-in rule.
+    """
+    raw = os.getenv("FEATURED_MODELS", "").strip()
+    if not raw:
+        return None
+    ids = {entry.strip() for entry in raw.split(",") if entry.strip()}
+    return ids or None
+
+
+def _discovered_models() -> List[tuple]:
+    """Live ``(model_id, provider_name)`` pairs from every available provider.
 
     Availability is credential-gated (``provider.is_available()``), so this only
     returns models the deployment can actually run. Ollama reports pulled models
     live; other providers report their mapped set. Failures in one provider don't
-    sink the rest.
+    sink the rest. The provider name is retained so the caller can decide which
+    models are featured (see ``_FEATURED_PROVIDERS``).
     """
-    ids: List[str] = []
+    pairs: List[tuple] = []
     try:
         from chat.backend.agent.providers import get_registry
 
         registry = get_registry()
         for name, provider in registry.get_available_providers().items():
             try:
-                ids.extend(provider.get_supported_models() or [])
+                for model_id in provider.get_supported_models() or []:
+                    pairs.append((model_id, name))
             except Exception as e:  # a flaky provider must not break the list
                 logger.warning("get_supported_models failed for %s: %s", name, e)
     except Exception as e:
         logger.warning("provider discovery unavailable: %s", e)
-    return ids
+    return pairs
 
 
 def get_enabled_models() -> List[Dict]:
@@ -257,24 +281,45 @@ def get_enabled_models() -> List[Dict]:
     live-discovered models not already covered (Ollama, OpenRouter long tail, …)
     with derived metadata. The union is de-duplicated by id and, when
     ``ENABLED_MODELS`` is set, filtered to that allowlist.
+
+    Each entry carries ``featured``: True for models shown in the selector's
+    default view (curated catalog + direct-provider models like Ollama pulls),
+    False for search-only models (the OpenRouter long tail). ``FEATURED_MODELS``
+    overrides which ids are featured.
     """
+    featured_override = _featured_model_ids()
+
+    def _mark_featured(entry: Dict, is_featured: bool) -> Dict:
+        out = dict(entry)
+        out["featured"] = (
+            entry["id"] in featured_override
+            if featured_override is not None
+            else is_featured
+        )
+        return out
+
     seen = set()
     models: List[Dict] = []
 
     # 1. Curated catalog first — preserves the flagship ordering and rich metadata.
+    #    Always featured (unless a FEATURED_MODELS override says otherwise).
     for entry in MODEL_CATALOG:
         key = _canonical_id(entry["id"])
         if key not in seen:
             seen.add(key)
-            models.append(entry)
+            models.append(_mark_featured(entry, True))
 
     # 2. Live discovery — everything this deployment can actually run. De-dupe by
     #    canonical id so dash/dot aliases of an already-listed model don't repeat.
-    for model_id in _discovered_model_ids():
+    #    Featured only when the source provider is a direct backend (not OpenRouter),
+    #    so Ollama/direct models join the default view but the OpenRouter tail is
+    #    search-only.
+    for model_id, provider_name in _discovered_models():
         key = _canonical_id(model_id)
         if key not in seen:
             seen.add(key)
-            models.append(_CATALOG_BY_ID.get(model_id) or _derive_metadata(model_id))
+            base = _CATALOG_BY_ID.get(model_id) or _derive_metadata(model_id)
+            models.append(_mark_featured(base, provider_name in _FEATURED_PROVIDERS))
 
     allowed = _enabled_model_ids()
     if allowed is None:

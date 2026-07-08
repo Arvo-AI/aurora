@@ -29,6 +29,7 @@ interface ModelOption {
   hasReasoning: boolean;
   isSlow?: boolean;
   pricing?: string;
+  featured?: boolean;
 }
 
 interface ModelSelectorProps {
@@ -113,11 +114,19 @@ export default function ModelSelector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [models]);
 
-  // Group models by provider, preserving order within each group.
+  // Default view shows only featured models (curated flagships + direct-provider
+  // models like Ollama pulls). As soon as the user types, search spans the full
+  // catalog — cmdk filters on each item's `value`, so we just widen the source.
+  const hasQuery = query.trim().length > 0;
+  const featuredModels = useMemo(() => models.filter((m) => m.featured !== false), [models]);
+  const hiddenCount = models.length - featuredModels.length;
+
+  // Group the visible set by provider, preserving order within each group.
   const grouped = useMemo(() => {
+    const source = hasQuery ? models : featuredModels;
     const order: string[] = [];
     const byProvider = new Map<string, ModelOption[]>();
-    for (const model of models) {
+    for (const model of source) {
       const key = providerLabel(model.provider);
       if (!byProvider.has(key)) {
         byProvider.set(key, []);
@@ -126,7 +135,7 @@ export default function ModelSelector({
       byProvider.get(key)!.push(model);
     }
     return order.map((label) => ({ label, provider: byProvider.get(label)![0].provider, items: byProvider.get(label)! }));
-  }, [models]);
+  }, [models, featuredModels, hasQuery]);
 
   const handleSelect = (modelId: string) => {
     onModelChange(modelId);
@@ -230,6 +239,12 @@ export default function ModelSelector({
                   })}
                 </CommandGroup>
               ))}
+
+              {!hasQuery && hiddenCount > 0 && (
+                <div className="border-t px-3 py-2 text-center text-[11px] text-muted-foreground">
+                  Search to browse {hiddenCount} more models
+                </div>
+              )}
             </CommandList>
           </Command>
         </motion.div>
