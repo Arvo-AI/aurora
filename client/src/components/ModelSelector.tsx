@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Check, Zap, Gauge } from 'lucide-react';
+import { ChevronDown, Check } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,12 +51,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   google: 'Google',
   vertex: 'Google',
-};
-
-const TIER_STYLES: Record<ModelOption['tier'], string> = {
-  free: 'text-emerald-500',
-  pro: 'text-sky-500',
-  premium: 'text-amber-500',
 };
 
 export default function ModelSelector({
@@ -136,12 +130,12 @@ export default function ModelSelector({
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            className={`h-7 px-2 justify-between min-w-[140px] max-w-[200px] text-xs font-medium text-foreground hover:bg-muted/60 transition-colors ${className}`}
+            className={`h-8 px-2.5 justify-between min-w-[150px] max-w-[210px] text-sm font-medium text-foreground hover:bg-accent transition-colors ${className}`}
             disabled={disabled}
           >
-            <div className="flex items-center min-w-0 flex-1 gap-1.5">
+            <div className="flex items-center min-w-0 flex-1 gap-2">
               {selectedModelData && (
-                <ProviderIcon provider={selectedModelData.provider} size={14} className="flex-shrink-0" />
+                <ProviderIcon provider={selectedModelData.provider} size={16} className="flex-shrink-0" />
               )}
               <span className="truncate flex-1 text-left">
                 {selectedModelData?.displayName ?? 'Select model'}
@@ -169,9 +163,9 @@ export default function ModelSelector({
             transition={{ type: 'spring', stiffness: 500, damping: 32 }}
           >
                 {grouped.map((group, groupIdx) => (
-                  <div key={group.label} className={groupIdx > 0 ? 'mt-1' : ''}>
-                    <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                      <ProviderIcon provider={group.items[0].provider} size={12} />
+                  <div key={group.label} className={groupIdx > 0 ? 'mt-1.5' : ''}>
+                    <div className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                      <ProviderIcon provider={group.items[0].provider} size={13} />
                       {group.label}
                     </div>
 
@@ -186,14 +180,27 @@ export default function ModelSelector({
                               initial={{ opacity: 0, x: -8 }}
                               animate={{ opacity: 1, x: 0 }}
                               transition={{ delay: 0.02 * idx, duration: 0.18 }}
-                              whileHover={{ x: 2 }}
-                              className={`group relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                                isSelected ? 'bg-muted/70' : 'hover:bg-muted/50'
+                              className={`group relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left outline-none transition-colors focus-visible:bg-accent hover:bg-accent ${
+                                isSelected ? 'bg-accent/60' : ''
                               }`}
                             >
+                              <ProviderIcon
+                                provider={model.provider}
+                                size={17}
+                                className="flex-shrink-0 opacity-80 transition-opacity group-hover:opacity-100"
+                              />
+
+                              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                                {model.displayName}
+                              </span>
+
+                              <span className="flex-shrink-0 font-mono text-[11px] text-muted-foreground">
+                                {model.contextLength}
+                              </span>
+
                               <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
-                                <AnimatePresence mode="wait">
-                                  {isSelected ? (
+                                <AnimatePresence>
+                                  {isSelected && (
                                     <motion.span
                                       key="check"
                                       initial={{ scale: 0, opacity: 0 }}
@@ -201,41 +208,16 @@ export default function ModelSelector({
                                       exit={{ scale: 0, opacity: 0 }}
                                       transition={{ type: 'spring', stiffness: 500, damping: 20 }}
                                     >
-                                      <Check className="h-3.5 w-3.5 text-primary" />
+                                      <Check className="h-4 w-4 text-primary" />
                                     </motion.span>
-                                  ) : (
-                                    <ProviderIcon
-                                      key="logo"
-                                      provider={model.provider}
-                                      size={15}
-                                      className="opacity-70 transition-opacity group-hover:opacity-100"
-                                    />
                                   )}
                                 </AnimatePresence>
                               </span>
-
-                              <div className="flex min-w-0 flex-1 flex-col">
-                                <span className="truncate text-xs font-medium">{model.displayName}</span>
-                              </div>
-
-                              <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-                                {model.isSlow ? (
-                                  <Gauge className="h-3 w-3 text-orange-400" aria-label="Heavy reasoning" />
-                                ) : model.hasReasoning ? (
-                                  <Zap className={`h-3 w-3 ${TIER_STYLES[model.tier]}`} aria-label="Reasoning" />
-                                ) : null}
-                                <span className="font-mono">{model.contextLength}</span>
-                              </div>
                             </motion.button>
                           </TooltipTrigger>
-                          {(model.pricing || model.isSlow) && (
+                          {model.pricing && (
                             <TooltipContent side="left" sideOffset={8} className="text-xs">
-                              {model.pricing && <p className="font-medium">{model.pricing}</p>}
-                              {model.isSlow && (
-                                <p className="text-orange-400">
-                                  {model.pricing ? '• ' : ''}Heavy slow reasoning
-                                </p>
-                              )}
+                              <p className="font-medium">{model.pricing}</p>
                             </TooltipContent>
                           )}
                         </Tooltip>
