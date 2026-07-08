@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { Check } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -15,21 +14,10 @@ const features = [
   "Multiple members per organization",
   "Dedicated engineering support",
   "Continuous feature development",
-  "10x usage limits",
 ];
 
 export default function UpgradeModal({ open, onOpenChange }: Readonly<UpgradeModalProps>) {
   const bookingUrl = getEnv("NEXT_PUBLIC_UPGRADE_BOOKING_URL");
-
-  useEffect(() => {
-    if (open) {
-      fetch("/api/orgs/track", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "upgrade_prompt_viewed" }),
-      }).catch(() => {});
-    }
-  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
