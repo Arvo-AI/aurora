@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 from utils.cache.redis_client import get_redis_client
-from services.memory.index_builder import get_memory_entries, fetch_memory_content
+from services.memory.queries import get_memory_entries, fetch_memory_content
 
 logger = logging.getLogger(__name__)
 
