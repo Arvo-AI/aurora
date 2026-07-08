@@ -249,6 +249,42 @@ def _featured_model_ids() -> Optional[set]:
     return ids or None
 
 
+def _routable_filter():
+    """Return a predicate ``(model_id) -> bool`` for the current provider mode.
+
+    "What you see is what you can use": a model only belongs in the selector if a
+    real request for it would find a provider. We ask the *same* router the agent
+    uses (``get_provider_for_model`` under the env ``LLM_PROVIDER_MODE``), so the
+    list matches actual routing in every mode:
+
+    - ``openrouter`` mode: everything routes through OpenRouter → all pass.
+    - ``direct``/``auto``: only ids whose prefix maps to a configured provider.
+    - a forced provider (``bedrock``/``vertex``/…): what that provider serves,
+      plus the direct-routing fallback for models it can't (e.g. Gemini under
+      bedrock → Vertex).
+
+    On any failure resolving the router we fail *open* (allow the model) rather
+    than hide everything — a broken filter shouldn't empty the selector.
+    """
+    try:
+        from chat.backend.agent.providers import get_registry
+
+        registry = get_registry()
+        mode = os.getenv("LLM_PROVIDER_MODE") or "direct"
+
+        def _routable(model_id: str) -> bool:
+            try:
+                registry.get_provider_for_model(model_id, mode=mode)
+                return True
+            except Exception:
+                return False
+
+        return _routable
+    except Exception as e:
+        logger.warning("routability filter unavailable (%s); allowing all models", e)
+        return lambda _model_id: True
+
+
 def _discovered_models() -> List[tuple]:
     """Live ``(model_id, provider_name)`` pairs from every available provider.
 
@@ -298,6 +334,11 @@ def get_enabled_models() -> List[Dict]:
         )
         return out
 
+    # Only offer models the current LLM_PROVIDER_MODE can actually route — so the
+    # selector never shows something that would error on use (e.g. an OpenRouter
+    # model while in bedrock mode, or an ollama id while in openrouter mode).
+    is_routable = _routable_filter()
+
     seen = set()
     models: List[Dict] = []
 
@@ -305,7 +346,7 @@ def get_enabled_models() -> List[Dict]:
     #    Always featured (unless a FEATURED_MODELS override says otherwise).
     for entry in MODEL_CATALOG:
         key = _canonical_id(entry["id"])
-        if key not in seen:
+        if key not in seen and is_routable(entry["id"]):
             seen.add(key)
             models.append(_mark_featured(entry, True))
 
@@ -316,7 +357,7 @@ def get_enabled_models() -> List[Dict]:
     #    search-only.
     for model_id, provider_name in _discovered_models():
         key = _canonical_id(model_id)
-        if key not in seen:
+        if key not in seen and is_routable(model_id):
             seen.add(key)
             base = _CATALOG_BY_ID.get(model_id) or _derive_metadata(model_id)
             models.append(_mark_featured(base, provider_name in _FEATURED_PROVIDERS))
