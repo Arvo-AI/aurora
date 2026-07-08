@@ -4,7 +4,7 @@ Memory Injector — Async Prefetch + Single-Pass LLM Selection
 Runs as a non-blocking prefetch in parallel with prompt building.
 One fast LLM call selects up to 5 relevant memories from the index
 (title + description). Whatever it selects gets injected into the system prompt. 
-- Hard caps: 5 entries max, 4KB per entry, 60KB per session.
+- Hard caps: 5 entries max, 4KB per entry.
 - Dedup: never re-surface a memory already shown this session.
 """
 
@@ -17,6 +17,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from utils.cache.redis_client import get_redis_client
 from services.memory.queries import get_memory_entries, fetch_memory_content
+from chat.backend.agent.providers import create_chat_model
+from langchain_core.messages import SystemMessage, HumanMessage
+from chat.backend.agent.llm import ModelConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +30,12 @@ logger = logging.getLogger(__name__)
 
 MAX_SELECTED = 5
 MAX_MEMORY_BYTES_PER_ENTRY = 4096
-MAX_SESSION_BYTES = 60_000
-MAX_INDEX_ENTRIES = 200
-MIN_QUERY_LENGTH = 8  # Single words don't provide enough selection context
 STALENESS_DAYS = 2
-
-from chat.backend.agent.llm import ModelConfig
 
 SELECTOR_MODEL = ModelConfig.RCA_MODEL
 SELECTOR_TIMEOUT = 5.0
 
-_SESSION_BUDGET_TTL = 86400
+_SURFACED_SET_TTL = 86400
 _prefetch_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mem-inject")
 
 # ---------------------------------------------------------------------------
@@ -104,19 +103,10 @@ class MemoryPrefetch:
 
     def _execute(self) -> str:
         try:
-            # Not enough context to select meaningfully
-            if len(self.user_message.strip()) < MIN_QUERY_LENGTH:
-                return ""
-
-            # Session budget exhausted — memories already saturate context
-            budget_used = _get_session_budget(self.session_id)
-            if budget_used >= MAX_SESSION_BYTES:
-                return ""
-
             already_surfaced = _get_surfaced_set(self.session_id)
 
             # Scan index (titles + descriptions, no content)
-            entries = get_memory_entries(self.user_id, limit=MAX_INDEX_ENTRIES)
+            entries = get_memory_entries(self.user_id)
             if not entries:
                 return ""
 
@@ -135,35 +125,22 @@ class MemoryPrefetch:
             if not memories:
                 return ""
 
-            # Format and inject (with staleness headers + budget enforcement)
-            remaining_budget = MAX_SESSION_BYTES - budget_used
-            injection_text, bytes_used, surfaced_keys = _format_for_injection(memories, remaining_budget)
+            # Format and inject (with staleness headers + per-entry cap)
+            injection_text, surfaced_keys = _format_for_injection(memories)
             if not injection_text:
                 return ""
 
-            _update_session_budget(self.session_id, budget_used + bytes_used)
             _mark_surfaced(self.session_id, surfaced_keys)
 
             logger.info(
-                "[MemoryInjector] Injected %d memories (%d bytes) for session %s",
-                len(surfaced_keys), bytes_used, self.session_id,
+                "[MemoryInjector] Injected %d memories for session %s",
+                len(surfaced_keys), self.session_id,
             )
             return injection_text
 
         except Exception:
             logger.exception("[MemoryInjector] Unhandled error in prefetch")
             return ""
-
-
-def start_memory_prefetch(
-    user_id: str,
-    session_id: str,
-    user_message: str,
-) -> MemoryPrefetch:
-    """Fire a non-blocking memory prefetch. Returns a handle to collect results."""
-    prefetch = MemoryPrefetch(user_id, session_id, user_message)
-    prefetch.start()
-    return prefetch
 
 
 # ---------------------------------------------------------------------------
@@ -173,8 +150,6 @@ def start_memory_prefetch(
 
 def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Dict]:
     """One strict LLM call: select up to 5 from the index."""
-    from chat.backend.agent.providers import create_chat_model
-    from langchain_core.messages import SystemMessage, HumanMessage
 
     manifest_lines = []
     for entry in entries:
@@ -229,21 +204,13 @@ def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Di
 # ---------------------------------------------------------------------------
 
 
-def _format_for_injection(
-    memories: List[Dict], remaining_budget: int
-) -> Tuple[str, int, Set[str]]:
-    """Format memories with staleness headers, respecting per-entry and budget caps."""
+def _format_for_injection(memories: List[Dict]) -> Tuple[str, Set[str]]:
+    """Format memories with staleness headers and per-entry cap."""
     now = datetime.now(timezone.utc)
     parts = []
-    total_bytes = 0
     surfaced: Set[str] = set()
 
-    header = "RELEVANT MEMORIES (auto-loaded — verify stale data before acting):\n"
-    header_bytes = len(header.encode("utf-8"))
-    if header_bytes > remaining_budget:
-        return "", 0, set()
-    total_bytes += header_bytes
-    parts.append(header)
+    parts.append("RELEVANT MEMORIES (auto-loaded — verify stale data before acting):\n")
 
     for mem in memories:
         key = _entry_key(mem)
@@ -261,49 +228,24 @@ def _format_for_injection(
             if age > timedelta(days=STALENESS_DAYS):
                 staleness = f" ⚠️ Last updated {age.days}d ago — verify before acting"
 
-        entry_text = f"\n--- {mem['category']}/{mem['title']}{staleness} ---\n{content}\n"
-        entry_bytes = len(entry_text.encode("utf-8"))
-
-        # Budget check
-        if total_bytes + entry_bytes > remaining_budget:
-            break
-
-        parts.append(entry_text)
-        total_bytes += entry_bytes
+        parts.append(f"\n--- {mem['category']}/{mem['title']}{staleness} ---\n{content}\n")
         surfaced.add(key)
 
     if not surfaced:
-        return "", 0, set()
+        return "", set()
 
     result = "".join(parts)
     result = result.replace("{", "{{").replace("}", "}}")
-    return result, total_bytes, surfaced
+    return result, surfaced
 
 
 # ---------------------------------------------------------------------------
-# Session tracking (Redis)
+# Session dedup (Redis)
 # ---------------------------------------------------------------------------
 
 
 def _entry_key(entry: Dict) -> str:
     return f"{entry.get('category', '')}/{entry.get('title', '')}"
-
-
-def _get_session_budget(session_id: str) -> int:
-    try:
-        r = get_redis_client()
-        val = r.get(f"mem:inject:budget:{session_id}")
-        return int(val) if val else 0
-    except Exception:
-        return 0
-
-
-def _update_session_budget(session_id: str, new_total: int):
-    try:
-        r = get_redis_client()
-        r.setex(f"mem:inject:budget:{session_id}", _SESSION_BUDGET_TTL, str(new_total))
-    except Exception:
-        pass
 
 
 def _get_surfaced_set(session_id: str) -> Set[str]:
@@ -322,7 +264,7 @@ def _mark_surfaced(session_id: str, keys: Set[str]):
         r = get_redis_client()
         pipe = r.pipeline()
         pipe.sadd(f"mem:inject:surfaced:{session_id}", *keys)
-        pipe.expire(f"mem:inject:surfaced:{session_id}", _SESSION_BUDGET_TTL)
+        pipe.expire(f"mem:inject:surfaced:{session_id}", _SURFACED_SET_TTL)
         pipe.execute()
     except Exception:
         pass

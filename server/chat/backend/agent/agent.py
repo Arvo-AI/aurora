@@ -13,6 +13,7 @@ from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
 from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
+from services.memory.injector import MemoryPrefetch
 import time
 import asyncio
 from datetime import datetime, timezone
@@ -348,17 +349,17 @@ class Agent:
             _memory_prefetch = None
             if state.user_id and state.session_id:
                 try:
-                    from services.memory.injector import start_memory_prefetch
                     _last_msg_content = ""
                     if state.messages:
                         _lm = state.messages[-1]
                         _last_msg_content = _lm.content if isinstance(getattr(_lm, 'content', ''), str) else str(getattr(_lm, 'content', ''))
                     if _last_msg_content:
-                        _memory_prefetch = start_memory_prefetch(
+                        _memory_prefetch = MemoryPrefetch(
                             user_id=state.user_id,
                             session_id=state.session_id,
                             user_message=_last_msg_content,
                         )
+                        _memory_prefetch.start()
                 except Exception as _mpe:
                     logging.debug("Failed to start memory prefetch: %s", _mpe)
 
