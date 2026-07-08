@@ -10,15 +10,39 @@ import os
 
 from flask import Blueprint, jsonify, request
 
+from chat.backend.agent.model_catalog import get_enabled_models
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import get_available_providers, get_registry
-from utils.auth.rbac_decorators import require_permission
+from utils.auth.rbac_decorators import require_auth_only, require_permission
 
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAMES = ["openrouter", "openai", "anthropic", "google", "vertex", "ollama", "bedrock"]
 
 llm_config_bp = Blueprint("llm_config", __name__, url_prefix="/api/llm-config")
+
+
+@llm_config_bp.route("/models", methods=["GET"])
+@require_auth_only
+def get_models(user_id):
+    """
+    Get the list of user-selectable models with display metadata.
+
+    Unlike ``/supported-models`` (admin-only, returns bare model IDs), this is
+    available to any authenticated user because the model selector renders for
+    everyone. The result honors the ``ENABLED_MODELS`` allowlist, so a
+    deployment can restrict which models appear without any code change.
+
+    Returns:
+        JSON with a `models` array, each entry carrying id, displayName,
+        provider, tier, contextLength, hasReasoning, isSlow, and pricing.
+    """
+    try:
+        models = get_enabled_models()
+        return jsonify({"success": True, "models": models, "count": len(models)}), 200
+    except Exception as e:
+        logger.error(f"Error getting model catalog: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to get models"}), 500
 
 
 @llm_config_bp.route("/available-providers", methods=["GET"])

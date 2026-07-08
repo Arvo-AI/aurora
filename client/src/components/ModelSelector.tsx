@@ -1,14 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from "@/components/ui/button";
-import { Brain, ChevronDown } from 'lucide-react';
+import { ChevronDown, Check, Zap, Gauge } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -17,6 +15,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ProviderIcon } from "@/components/icons/provider-icons";
 
 interface ModelOption {
   id: string;
@@ -27,6 +26,7 @@ interface ModelOption {
   contextLength: string;
   hasReasoning: boolean;
   isSlow?: boolean;
+  pricing?: string;
 }
 
 interface ModelSelectorProps {
@@ -36,108 +36,91 @@ interface ModelSelectorProps {
   disabled?: boolean;
 }
 
-// Pricing information mapping (input/output per 1M tokens)
-const modelPricing: Record<string, string> = {
-  'openai/gpt-5.5': 'Premium Cost ($5/$30 per 1M)',
-  'anthropic/claude-sonnet-4.6': 'Medium Cost ($3/$15 per 1M)',
-  'anthropic/claude-opus-4.7': 'High Cost ($5/$25 per 1M)',
-  'google/gemini-3.5-flash': 'Low Cost ($0.50/$3 per 1M)',
-  'google/gemini-3.1-pro-preview': 'Medium Cost ($2/$12 per 1M)',
-  'google/gemini-2.5-pro': 'Medium Cost ($1.25/$10 per 1M)',
-  'google/gemini-2.5-flash': 'Low Cost ($0.30/$2.50 per 1M)',
-};
-
-const modelOptions: ModelOption[] = [
-  {
-    id: 'openai/gpt-5.5',
-    name: 'gpt-5.5',
-    displayName: 'GPT-5.5',
-    provider: 'OpenAI',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'anthropic/claude-sonnet-4.6',
-    name: 'claude-sonnet-4.6',
-    displayName: 'Claude Sonnet 4.6',
-    provider: 'Anthropic',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'anthropic/claude-opus-4.7',
-    name: 'claude-opus-4.7',
-    displayName: 'Claude Opus 4.7',
-    provider: 'Anthropic',
-    tier: 'premium',
-    contextLength: '1M',
-    hasReasoning: true,
-    isSlow: true
-  },
-  {
-    id: 'google/gemini-3.5-flash',
-    name: 'gemini-3.5-flash',
-    displayName: 'Gemini 3.5 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-3.1-pro-preview',
-    name: 'gemini-3.1-pro-preview',
-    displayName: 'Gemini 3.1 Pro',
-    provider: 'Google',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-2.5-pro',
-    name: 'gemini-2.5-pro',
-    displayName: 'Gemini 2.5 Pro',
-    provider: 'Google',
-    tier: 'pro',
-    contextLength: '1M',
-    hasReasoning: true
-  },
-  {
-    id: 'google/gemini-2.5-flash',
-    name: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash',
-    provider: 'Google',
-    tier: 'free',
-    contextLength: '1M',
-    hasReasoning: true
-  },
+// Static fallback used before the catalog loads, or if the fetch fails. Kept in
+// sync with the backend model_catalog so the selector is never empty. The live
+// catalog (which honors the ENABLED_MODELS allowlist) replaces this on mount.
+const FALLBACK_MODELS: ModelOption[] = [
+  { id: 'anthropic/claude-opus-4-8', name: 'claude-opus-4-8', displayName: 'Claude Opus 4.8', provider: 'anthropic', tier: 'premium', contextLength: '1M', hasReasoning: true, isSlow: true, pricing: 'High Cost ($5/$25 per 1M)' },
+  { id: 'anthropic/claude-sonnet-5', name: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', provider: 'anthropic', tier: 'pro', contextLength: '1M', hasReasoning: true, pricing: 'Medium Cost ($3/$15 per 1M)' },
+  { id: 'anthropic/claude-fable-5', name: 'claude-fable-5', displayName: 'Claude Fable 5', provider: 'anthropic', tier: 'premium', contextLength: '1M', hasReasoning: true, isSlow: true, pricing: 'Premium Cost ($10/$50 per 1M)' },
+  { id: 'anthropic/claude-haiku-4.5', name: 'claude-haiku-4.5', displayName: 'Claude Haiku 4.5', provider: 'anthropic', tier: 'free', contextLength: '200K', hasReasoning: true, pricing: 'Low Cost ($1/$5 per 1M)' },
 ];
 
-export default function ModelSelector({ 
-  selectedModel, 
-  onModelChange, 
-  className = "", 
-  disabled = false 
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  vertex: 'Google',
+};
+
+const TIER_STYLES: Record<ModelOption['tier'], string> = {
+  free: 'text-emerald-500',
+  pro: 'text-sky-500',
+  premium: 'text-amber-500',
+};
+
+export default function ModelSelector({
+  selectedModel,
+  onModelChange,
+  className = "",
+  disabled = false,
 }: ModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
-  
-  // Load saved model from localStorage on mount
-  useEffect(() => {
-    const savedModel = localStorage.getItem('selectedModel');
-    if (!savedModel) return;
+  const [models, setModels] = useState<ModelOption[]>(FALLBACK_MODELS);
 
-    const isValidModel = modelOptions.some((model) => model.id === savedModel);
-    if (isValidModel && savedModel !== selectedModel) {
-      onModelChange(savedModel);
-    } else if (!isValidModel) {
-      localStorage.removeItem('selectedModel');
-      const currentIsValid = modelOptions.some((model) => model.id === selectedModel);
-      if (!currentIsValid) {
-        onModelChange(modelOptions[0].id);
-      }
-    }
+  // Load the live catalog (honors the backend ENABLED_MODELS allowlist). On
+  // failure we keep the static fallback so the selector still works offline.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/llm-models')
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => {
+        if (cancelled || !Array.isArray(data?.models) || data.models.length === 0) return;
+        setModels(data.models as ModelOption[]);
+      })
+      .catch(() => {
+        /* keep FALLBACK_MODELS */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // Reconcile the persisted / current selection against the loaded catalog.
+  useEffect(() => {
+    if (models.length === 0) return;
+    const isValid = (id: string) => models.some((m) => m.id === id);
+
+    const savedModel = localStorage.getItem('selectedModel');
+    if (savedModel && isValid(savedModel)) {
+      if (savedModel !== selectedModel) onModelChange(savedModel);
+      return;
+    }
+    if (savedModel && !isValid(savedModel)) {
+      localStorage.removeItem('selectedModel');
+    }
+    // If the current selection isn't offered (e.g. removed by the allowlist),
+    // fall back to the first (newest/most capable) catalogued model.
+    if (!isValid(selectedModel)) {
+      onModelChange(models[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models]);
+
+  // Group models by provider, preserving catalog order within each group.
+  const grouped = useMemo(() => {
+    const order: string[] = [];
+    const byProvider = new Map<string, ModelOption[]>();
+    for (const model of models) {
+      const key = PROVIDER_LABELS[model.provider] ?? model.provider;
+      if (!byProvider.has(key)) {
+        byProvider.set(key, []);
+        order.push(key);
+      }
+      byProvider.get(key)!.push(model);
+    }
+    return order.map((label) => ({ label, items: byProvider.get(label)! }));
+  }, [models]);
 
   const handleModelSelect = (modelId: string) => {
     onModelChange(modelId);
@@ -145,77 +128,124 @@ export default function ModelSelector({
     setIsOpen(false);
   };
 
-  const selectedModelData = modelOptions.find(model => model.id === selectedModel) || modelOptions[0];
+  const selectedModelData = models.find((m) => m.id === selectedModel) || models[0];
 
   return (
-    <TooltipProvider>
+    <TooltipProvider delayDuration={150}>
       <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
         <DropdownMenuTrigger asChild>
-          <Button 
-            variant="ghost" 
-            className={`h-6 px-2 justify-between min-w-[120px] max-w-[180px] text-xs font-medium text-foreground hover:bg-muted/50 ${className}`}
+          <Button
+            variant="ghost"
+            className={`h-7 px-2 justify-between min-w-[140px] max-w-[200px] text-xs font-medium text-foreground hover:bg-muted/60 transition-colors ${className}`}
             disabled={disabled}
           >
-            <div className="flex items-center min-w-0 flex-1">
-              {selectedModelData.hasReasoning && (
-                <Brain className="w-1 h-1 mr-1" />
+            <div className="flex items-center min-w-0 flex-1 gap-1.5">
+              {selectedModelData && (
+                <ProviderIcon provider={selectedModelData.provider} size={14} className="flex-shrink-0" />
               )}
-              <span className="truncate flex-1">{selectedModelData.displayName}</span>
+              <span className="truncate flex-1 text-left">
+                {selectedModelData?.displayName ?? 'Select model'}
+              </span>
             </div>
-            <ChevronDown className="h-2.5 w-2.5 ml-1 flex-shrink-0" />
+            <motion.span
+              animate={{ rotate: isOpen ? 180 : 0 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+              className="ml-1 flex-shrink-0"
+            >
+              <ChevronDown className="h-3 w-3" />
+            </motion.span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent className="w-[280px] max-h-[300px] overflow-y-auto" align="end">
-          <DropdownMenuLabel className="flex items-center gap-2 text-xs">
-            <Brain className="w-4 h-4" />
-            Choose Model
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          
-          {modelOptions.map((model) => {
-            const pricingInfo = modelPricing[model.id];
-            return (
-              <Tooltip key={model.id}>
-                <TooltipTrigger asChild>
-                  <DropdownMenuItem
-                    onClick={() => handleModelSelect(model.id)}
-                    className="p-2 cursor-pointer focus:bg-muted/50 hover:bg-muted/70 transition-colors duration-200"
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <div className="flex items-center min-w-0 flex-1">
-                        {model.hasReasoning && (
-                          <Brain className="w-1 h-1 flex-shrink-0 mr-1.5" />
-                        )}
-                        <div className="min-w-0 flex-1">
-                        <span className="font-medium text-xs truncate">{model.displayName}</span>
-                      </div>
+
+        <DropdownMenuContent
+          asChild
+          align="end"
+          sideOffset={6}
+          className="w-[300px] max-h-[380px] overflow-y-auto p-1.5"
+        >
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+          >
+                {grouped.map((group, groupIdx) => (
+                  <div key={group.label} className={groupIdx > 0 ? 'mt-1' : ''}>
+                    <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                      <ProviderIcon provider={group.items[0].provider} size={12} />
+                      {group.label}
                     </div>
-                    <div className="flex flex-col items-end text-xs text-muted-foreground flex-shrink-0 ml-2">
-                      <span className="font-mono">{model.contextLength}</span>
-                    </div>
+
+                    {group.items.map((model, idx) => {
+                      const isSelected = model.id === selectedModel;
+                      return (
+                        <Tooltip key={model.id}>
+                          <TooltipTrigger asChild>
+                            <motion.button
+                              type="button"
+                              onClick={() => handleModelSelect(model.id)}
+                              initial={{ opacity: 0, x: -8 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: 0.02 * idx, duration: 0.18 }}
+                              whileHover={{ x: 2 }}
+                              className={`group relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                                isSelected ? 'bg-muted/70' : 'hover:bg-muted/50'
+                              }`}
+                            >
+                              <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                                <AnimatePresence mode="wait">
+                                  {isSelected ? (
+                                    <motion.span
+                                      key="check"
+                                      initial={{ scale: 0, opacity: 0 }}
+                                      animate={{ scale: 1, opacity: 1 }}
+                                      exit={{ scale: 0, opacity: 0 }}
+                                      transition={{ type: 'spring', stiffness: 500, damping: 20 }}
+                                    >
+                                      <Check className="h-3.5 w-3.5 text-primary" />
+                                    </motion.span>
+                                  ) : (
+                                    <ProviderIcon
+                                      key="logo"
+                                      provider={model.provider}
+                                      size={15}
+                                      className="opacity-70 transition-opacity group-hover:opacity-100"
+                                    />
+                                  )}
+                                </AnimatePresence>
+                              </span>
+
+                              <div className="flex min-w-0 flex-1 flex-col">
+                                <span className="truncate text-xs font-medium">{model.displayName}</span>
+                              </div>
+
+                              <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                                {model.isSlow ? (
+                                  <Gauge className="h-3 w-3 text-orange-400" aria-label="Heavy reasoning" />
+                                ) : model.hasReasoning ? (
+                                  <Zap className={`h-3 w-3 ${TIER_STYLES[model.tier]}`} aria-label="Reasoning" />
+                                ) : null}
+                                <span className="font-mono">{model.contextLength}</span>
+                              </div>
+                            </motion.button>
+                          </TooltipTrigger>
+                          {(model.pricing || model.isSlow) && (
+                            <TooltipContent side="left" sideOffset={8} className="text-xs">
+                              {model.pricing && <p className="font-medium">{model.pricing}</p>}
+                              {model.isSlow && (
+                                <p className="text-orange-400">
+                                  {model.pricing ? '• ' : ''}Heavy slow reasoning
+                                </p>
+                              )}
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      );
+                    })}
                   </div>
-                  </DropdownMenuItem>
-                </TooltipTrigger>
-                {(pricingInfo || model.isSlow) && (
-                  <TooltipContent 
-                    className="bg-black text-yellow-400 border-gray-600 text-xs" 
-                    side="left"
-                    sideOffset={5}
-                  >
-                    {pricingInfo && <p className="font-medium">{pricingInfo}</p>}
-                    {model.isSlow && <p className="font-medium text-orange-400">{pricingInfo ? '• ' : ''}Heavy slow reasoning</p>}
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            );
-          })}
-          
-          <DropdownMenuSeparator />
-          <div className="p-1.5 text-xs text-muted-foreground text-center">
-            AI Model Selection
-          </div>
-        </DropdownMenuContent>
+                ))}
+              </motion.div>
+            </DropdownMenuContent>
       </DropdownMenu>
     </TooltipProvider>
   );
-} 
+}
