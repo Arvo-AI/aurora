@@ -10,7 +10,6 @@ One fast LLM call selects up to 5 relevant memories from the index
 
 import json
 import logging
-import os
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
@@ -32,8 +31,10 @@ MAX_INDEX_ENTRIES = 200
 MIN_QUERY_LENGTH = 8  # Single words don't provide enough selection context
 STALENESS_DAYS = 2
 
-SELECTOR_MODEL = os.getenv("MEMORY_SELECTOR_MODEL", "anthropic/claude-haiku-4.5")
-SELECTOR_TIMEOUT = float(os.getenv("MEMORY_SELECTOR_TIMEOUT", "5.0"))
+from chat.backend.agent.llm import ModelConfig
+
+SELECTOR_MODEL = ModelConfig.RCA_MODEL
+SELECTOR_TIMEOUT = 5.0
 
 _SESSION_BUDGET_TTL = 86400
 _prefetch_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mem-inject")
@@ -67,17 +68,6 @@ Select 0-5 memories. Only include those you are certain will help. JSON only."""
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-
-def start_memory_prefetch(
-    user_id: str,
-    session_id: str,
-    user_message: str,
-) -> "MemoryPrefetch":
-    """Fire a non-blocking memory prefetch. Returns a handle to collect results."""
-    prefetch = MemoryPrefetch(user_id, session_id, user_message)
-    prefetch.start()
-    return prefetch
 
 
 class MemoryPrefetch:
@@ -118,6 +108,17 @@ class MemoryPrefetch:
         except Exception:
             logger.exception("[MemoryInjector] Unhandled error in prefetch")
             return ""
+
+
+def start_memory_prefetch(
+    user_id: str,
+    session_id: str,
+    user_message: str,
+) -> MemoryPrefetch:
+    """Fire a non-blocking memory prefetch. Returns a handle to collect results."""
+    prefetch = MemoryPrefetch(user_id, session_id, user_message)
+    prefetch.start()
+    return prefetch
 
 
 # ---------------------------------------------------------------------------
