@@ -40,8 +40,8 @@ def get_models(user_id):
     try:
         models = get_enabled_models()
         return jsonify({"success": True, "models": models, "count": len(models)}), 200
-    except Exception as e:
-        logger.error(f"Error getting model catalog: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error getting model catalog")
         return jsonify({"success": False, "error": "Failed to get models"}), 500
 
 
