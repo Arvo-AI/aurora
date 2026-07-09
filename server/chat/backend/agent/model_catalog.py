@@ -222,8 +222,9 @@ def _canonical_id(model_id: str) -> str:
         entry = MODEL_MAPPINGS.get(model_id)
         if entry and entry.get("openrouter"):
             return entry["openrouter"]
-    except Exception:
-        pass
+    except Exception as exc:
+        # Non-fatal: fall back to the raw id (it just won't collapse aliases).
+        logger.debug("canonicalization skipped for %r: %s", model_id, exc)
     return model_id
 
 

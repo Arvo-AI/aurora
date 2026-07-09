@@ -30,6 +30,8 @@ class OpenRouterProvider(BaseLLMProvider):
         # the selector endpoint doesn't hit the network on every request.
         self._models_cache: list[str] | None = None
         self._models_cache_time: float = 0.0
+        # TTL of the current cache entry: long on success, short on failure fallback.
+        self._cache_ttl: float = 600.0
 
     def get_chat_model(
         self, model: str, temperature: float = 0.4, **kwargs
@@ -111,12 +113,20 @@ class OpenRouterProvider(BaseLLMProvider):
         the selector always has something to show.
         """
         now = time.time()
-        if self._models_cache is not None and (now - self._models_cache_time) < 600:
+        # Success is cached 10 min; a failure fallback is cached briefly (below)
+        # so a down/slow /models doesn't re-incur the 5s timeout on every request.
+        if self._models_cache is not None and (now - self._models_cache_time) < self._cache_ttl:
             return self._models_cache
 
         mapped = ModelMapper.get_supported_models_for_provider("openrouter")
         if not self.api_key:
             return mapped
+
+        def _cache(models: list[str], ttl: float) -> list[str]:
+            self._models_cache = models
+            self._models_cache_time = now
+            self._cache_ttl = ttl
+            return models
 
         try:
             resp = requests.get(
@@ -129,12 +139,12 @@ class OpenRouterProvider(BaseLLMProvider):
                 # OpenRouter ids are already in "provider/model" form.
                 live = [m["id"] for m in data if m.get("id")]
                 if live:
-                    self._models_cache = live
-                    self._models_cache_time = now
-                    return live
+                    return _cache(live, 600)  # 10 min on success
             else:
                 logger.warning("OpenRouter /models returned %s", resp.status_code)
         except Exception as e:
             logger.warning("Failed to fetch OpenRouter models: %s", e)
 
-        return mapped
+        # Cache the fallback for 60s so repeated selector loads during an
+        # OpenRouter outage don't each block on the timeout; retried after.
+        return _cache(mapped, 60)
