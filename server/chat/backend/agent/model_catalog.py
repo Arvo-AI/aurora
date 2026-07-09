@@ -236,20 +236,6 @@ def _canonical_id(model_id: str) -> str:
 _FEATURED_PROVIDERS = {"anthropic", "openai", "google", "vertex", "ollama", "bedrock"}
 
 
-def _featured_model_ids() -> Optional[set]:
-    """Optional ``FEATURED_MODELS`` env override for the default-view set.
-
-    Same shape as ``ENABLED_MODELS``. When set, exactly these ids are featured
-    (everything else is search-only), letting ops re-curate the default view per
-    deployment without a code change. ``None`` = use the built-in rule.
-    """
-    raw = os.getenv("FEATURED_MODELS", "").strip()
-    if not raw:
-        return None
-    ids = {entry.strip() for entry in raw.split(",") if entry.strip()}
-    return ids or None
-
-
 def _routable_filter():
     """Return a predicate ``(model_id) -> bool`` for the current provider mode.
 
@@ -321,18 +307,11 @@ def get_enabled_models() -> List[Dict]:
 
     Each entry carries ``featured``: True for models shown in the selector's
     default view (curated catalog + direct-provider models like Ollama pulls),
-    False for search-only models (the OpenRouter long tail). ``FEATURED_MODELS``
-    overrides which ids are featured.
+    False for search-only models (the OpenRouter long tail).
     """
-    featured_override = _featured_model_ids()
-
     def _mark_featured(entry: Dict, is_featured: bool) -> Dict:
         out = dict(entry)
-        out["featured"] = (
-            entry["id"] in featured_override
-            if featured_override is not None
-            else is_featured
-        )
+        out["featured"] = is_featured
         return out
 
     # Only offer models the current LLM_PROVIDER_MODE can actually route — so the
@@ -343,8 +322,8 @@ def get_enabled_models() -> List[Dict]:
     seen = set()
     models: List[Dict] = []
 
-    # 1. Curated catalog first — preserves the flagship ordering and rich metadata.
-    #    Always featured (unless a FEATURED_MODELS override says otherwise).
+    # 1. Curated catalog first — preserves the flagship ordering and rich
+    #    metadata. Always featured (shown in the default view).
     for entry in MODEL_CATALOG:
         key = _canonical_id(entry["id"])
         if key not in seen and is_routable(entry["id"]):
@@ -367,7 +346,11 @@ def get_enabled_models() -> List[Dict]:
     if allowed is None:
         return models
 
-    filtered = [m for m in models if m["id"] in allowed]
+    # Match on canonical id so a dot/dash alias in the allowlist (e.g.
+    # "claude-opus-4.8" vs the catalog's "claude-opus-4-8") still resolves —
+    # otherwise a valid-looking entry would silently drop the model.
+    allowed_canonical = {_canonical_id(a) for a in allowed}
+    filtered = [m for m in models if _canonical_id(m["id"]) in allowed_canonical]
     if not filtered:
         # An allowlist that matches nothing is almost certainly a config error
         # (typo in a model ID). Log loudly and fall back to the full list so the
