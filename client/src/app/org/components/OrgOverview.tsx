@@ -1,7 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery, jsonFetcher } from "@/lib/query";
+import { getEnv } from "@/lib/env";
+import { Button } from "@/components/ui/button";
 import type { OrgMember } from "@/components/OrgSettings";
+import UpgradeModal from "./UpgradeModal";
 
 interface OrgOverviewProps {
   org: {
@@ -13,14 +17,20 @@ interface OrgOverviewProps {
     members: OrgMember[];
   };
   isAdmin: boolean;
+  planTier?: string;
 }
 
-export default function OrgOverview({ org }: OrgOverviewProps) {
+export default function OrgOverview({ org, planTier }: Readonly<OrgOverviewProps>) {
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const { data: stats } = useQuery<{
     members: number;
     incidents: number;
     chatSessions: number;
   }>('/api/orgs/stats', jsonFetcher, { staleTime: 60_000 });
+
+  // Paywall is opt-in: only shown when a deployment sets NEXT_PUBLIC_ENABLE_PAYWALL.
+  const isFree = (planTier ?? "free") === "free";
+  const showPaywall = getEnv("NEXT_PUBLIC_ENABLE_PAYWALL") === "true";
 
   const roleCounts = org.members.reduce(
     (acc, m) => {
@@ -86,6 +96,24 @@ export default function OrgOverview({ org }: OrgOverviewProps) {
           })}
         </div>
       </section>
+
+      {/* Plan — only shown when a paywall is active for this deployment */}
+      {showPaywall && (
+        <section>
+          <h3 className="text-sm font-medium mb-2">Plan</h3>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground capitalize">{planTier || "free"}</span>
+            {isFree && (
+              <>
+                <Button size="sm" variant="outline" className="text-xs" onClick={() => setUpgradeOpen(true)}>
+                  Upgrade to Enterprise
+                </Button>
+                <UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} />
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
     </div>
   );
