@@ -155,7 +155,7 @@ def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Di
     for entry in entries:
         ts = entry["updated_at"].isoformat() if entry["updated_at"] else "unknown"
         desc = entry["description"][:150] if entry["description"] else "(no description)"
-        manifest_lines.append(f"- [{entry['category']}] {entry['title']} ({ts}): {desc}")
+        manifest_lines.append(f"- [{entry['category']}] \"{entry['title']}\" | updated: {ts} | {desc}")
 
     prompt = _SELECTOR_USER.format(
         user_message=user_message[:2000],
@@ -184,7 +184,8 @@ def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Di
         entry_lookup = {_entry_key(e): e for e in entries}
         validated = []
         for sel in selected_raw[:MAX_SELECTED]:
-            key = f"{sel.get('category', '')}/{sel.get('title', '')}"
+            title = sel.get("title", "").strip().strip('"')
+            key = f"{sel.get('category', '')}/{title}"
             if key in entry_lookup:
                 validated.append(entry_lookup[key])
 
@@ -206,11 +207,11 @@ def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Di
 
 def _format_for_injection(memories: List[Dict]) -> Tuple[str, Set[str]]:
     """Format memories with staleness headers and per-entry cap."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     parts = []
     surfaced: Set[str] = set()
 
-    parts.append("RELEVANT MEMORIES (auto-loaded — verify stale data before acting):\n")
+    parts.append("RELEVANT MEMORIES (pre-loaded — only call read_memory() if content below is marked truncated):\n")
 
     for mem in memories:
         key = _entry_key(mem)
