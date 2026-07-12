@@ -79,16 +79,50 @@ class SlackClient:
         
         raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
     
-    def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None, 
+    def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None,
                      blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
-        """Send a message to a Slack channel."""
-        data = {"channel": channel, "text": text}
+        """
+        Send a message to a Slack channel.
+
+        If the bot is not a member of the channel (not_in_channel error), it will
+        attempt to rejoin the channel via conversations.join and retry once.
+        This self-heals the common case where the bot is removed from the incidents
+        channel (e.g. by a workspace admin or after an OAuth reinstall).
+
+        For private channels where the bot cannot self-join, a clear ERROR is logged
+        so the failure is visible in GCP logs and can be alerted on.
+        """
+        data: Dict[str, Any] = {"channel": channel, "text": text}
         if thread_ts:
             data["thread_ts"] = thread_ts
         if blocks:
             data["blocks"] = blocks
-        result = self._make_request("POST", "chat.postMessage", data)
-        return result
+        try:
+            result = self._make_request("POST", "chat.postMessage", data)
+            return result
+        except ValueError as exc:
+            if "not_in_channel" in str(exc):
+                logger.warning(
+                    "[SlackClient] Bot is not a member of channel %s — attempting to rejoin via conversations.join",
+                    channel,
+                )
+                rejoined = self.join_channel(channel)
+                if rejoined:
+                    logger.info(
+                        "[SlackClient] Successfully rejoined channel %s, retrying send_message",
+                        channel,
+                    )
+                    # Retry the original message now that we have rejoined
+                    result = self._make_request("POST", "chat.postMessage", data)
+                    return result
+                else:
+                    logger.error(
+                        "[SlackClient] Could not rejoin channel %s (private channel or bot lacks "
+                        "conversations:join scope). A workspace admin must re-invite the Aurora bot "
+                        "to this channel manually.",
+                        channel,
+                    )
+            raise
     
     def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
         """Update an existing message in a Slack channel."""
