@@ -616,3 +616,150 @@ def grep_memories(
     except Exception:
         logger.exception("[MemoryTool] Failed to grep memories")
         return json.dumps({"error": "Failed to search memories."})
+
+
+# ---------------------------------------------------------------------------
+# delete_memory
+# ---------------------------------------------------------------------------
+
+
+class DeleteMemoryArgs(BaseModel):
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
+    title: str = Field(description="The exact title of the memory entry to delete")
+
+
+def delete_memory(
+    category: str,
+    title: str,
+    user_id: str | None = None,
+    **kwargs,
+) -> str:
+    """Permanently delete a memory entry."""
+    if err := _validate_category(category):
+        return err
+    if err := _validate_title(title):
+        return err
+
+    try:
+        with _memory_connection(user_id, "delete") as (cursor, conn, org_id):
+            cursor.execute(
+                """DELETE FROM artifacts
+                   WHERE org_id = %s AND category = %s AND title = %s
+                   RETURNING id""",
+                (org_id, category, title.strip()),
+            )
+            deleted = cursor.fetchone()
+            conn.commit()
+
+        if not deleted:
+            return json.dumps({
+                "status": "not_found",
+                "message": f"No memory entry '{title}' in category '{category}'.",
+            })
+
+        logger.info(f"[MemoryTool] Deleted '{category}/{title.strip()}' for org")
+        return json.dumps({
+            "status": "ok",
+            "message": f"Deleted {category}/{title.strip()}.",
+        })
+
+    except ValueError as e:
+        return _error_response(e)
+    except Exception:
+        logger.exception("[MemoryTool] Failed to delete memory")
+        return json.dumps({"error": "Failed to delete memory."})
+
+
+# ---------------------------------------------------------------------------
+# Shared tool builder — used by Celery background agents (collector, consolidation)
+# ---------------------------------------------------------------------------
+
+
+def build_memory_tools(
+    user_id: str,
+    session_id: str | None = None,
+    include_delete: bool = False,
+    include_edit: bool = False,
+    include_append: bool = True,
+) -> list:
+    """Build LangChain StructuredTools scoped to a user for background agents.
+
+    Binds user_id/session_id via closures since there's no Flask request context
+    in Celery. Callers choose which tools to include for their use case.
+    """
+    from langchain_core.tools import StructuredTool
+
+    def _list(category: str = "") -> str:
+        return list_memories(category=category, user_id=user_id)
+
+    def _read(category: str, title: str, offset: int = 0, limit: int = 50000) -> str:
+        return read_memory(category=category, title=title, offset=offset, limit=limit, user_id=user_id)
+
+    def _write(category: str, title: str, content: str, description: str = "", overwrite: bool = False) -> str:
+        return write_memory(
+            category=category, title=title, content=content,
+            description=description, overwrite=overwrite,
+            user_id=user_id, session_id=session_id,
+        )
+
+    def _append(category: str, title: str, content: str) -> str:
+        return append_to_memory(
+            category=category, title=title, content=content,
+            user_id=user_id, session_id=session_id,
+        )
+
+    def _edit(category: str, title: str, old_text: str, new_text: str) -> str:
+        return edit_memory(
+            category=category, title=title, old_text=old_text, new_text=new_text,
+            user_id=user_id, session_id=session_id,
+        )
+
+    def _delete(category: str, title: str) -> str:
+        return delete_memory(category=category, title=title, user_id=user_id)
+
+    tools = [
+        StructuredTool.from_function(
+            func=_list,
+            name="list_memories",
+            description="List org memory entries, optionally filtered by category.",
+            args_schema=ListMemoriesArgs,
+        ),
+        StructuredTool.from_function(
+            func=_read,
+            name="read_memory",
+            description="Read the full content of a specific memory entry by category and title.",
+            args_schema=ReadMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            func=_write,
+            name="write_memory",
+            description="Create or overwrite a memory entry. Use overwrite=true for rewrites and merge targets.",
+            args_schema=WriteMemoryArgs,
+        ),
+    ]
+
+    if include_append:
+        tools.append(StructuredTool.from_function(
+            func=_append,
+            name="append_to_memory",
+            description="Append content to an existing memory entry. Creates it if it doesn't exist.",
+            args_schema=AppendToMemoryArgs,
+        ))
+
+    if include_edit:
+        tools.append(StructuredTool.from_function(
+            func=_edit,
+            name="edit_memory",
+            description="Find-and-replace within a memory entry. Use for surgical fixes without rewriting the whole entry.",
+            args_schema=EditMemoryArgs,
+        ))
+
+    if include_delete:
+        tools.append(StructuredTool.from_function(
+            func=_delete,
+            name="delete_memory",
+            description="Permanently delete a memory entry. Use after merging (delete the source) or for stale entries.",
+            args_schema=DeleteMemoryArgs,
+        ))
+
+    return tools

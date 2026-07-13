@@ -22,22 +22,12 @@ import time
 from typing import List
 
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import StructuredTool
 from langchain.agents import create_agent
 
 from celery_config import celery_app
 from chat.backend.agent.llm import ModelConfig
 from chat.backend.agent.providers import create_chat_model
-from chat.backend.agent.tools.memory_tool import (
-    list_memories,
-    read_memory,
-    write_memory,
-    append_to_memory,
-    ListMemoriesArgs,
-    ReadMemoryArgs,
-    WriteMemoryArgs,
-    AppendToMemoryArgs,
-)
+from chat.backend.agent.tools.memory_tool import build_memory_tools
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
 from services.memory.index_builder import build_memory_index
@@ -148,7 +138,7 @@ def _run_extraction_agent(
     log_prefix: str,
 ):
     """Multi-turn agent loop: browses existing memories, writes new ones."""
-    tools = _build_extraction_tools(user_id, session_id)
+    tools = build_memory_tools(user_id, session_id=session_id, include_append=True)
 
     llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
 
@@ -172,61 +162,3 @@ def _run_extraction_agent(
         config={"recursion_limit": MAX_AGENT_TURNS * 2 + 2},
     )
 
-
-# ---------------------------------------------------------------------------
-# Tool setup
-# ---------------------------------------------------------------------------
-
-
-def _build_extraction_tools(user_id: str, session_id: str) -> List:
-    """Build LangChain tools scoped to this user for the extraction agent.
-
-    Reuses the same Args schemas and functions from memory_tool.py, just
-    binds user_id/session_id since there's no Flask request context in Celery.
-    """
-
-    def _list(category: str = "") -> str:
-        return list_memories(category=category, user_id=user_id)
-
-    def _read(category: str, title: str, offset: int = 0, limit: int = 5000) -> str:
-        return read_memory(category=category, title=title, offset=offset, limit=limit, user_id=user_id)
-
-    def _write(category: str, title: str, content: str, description: str = "", overwrite: bool = False) -> str:
-        return write_memory(
-            category=category, title=title, content=content,
-            description=description, overwrite=overwrite,
-            user_id=user_id, session_id=session_id,
-        )
-
-    def _append(category: str, title: str, content: str) -> str:
-        return append_to_memory(
-            category=category, title=title, content=content,
-            user_id=user_id, session_id=session_id,
-        )
-
-    return [
-        StructuredTool.from_function(
-            func=_list,
-            name="list_memories",
-            description="List org memory entries, optionally filtered by category.",
-            args_schema=ListMemoriesArgs,
-        ),
-        StructuredTool.from_function(
-            func=_read,
-            name="read_memory",
-            description="Read the full content of a specific memory entry by category and title.",
-            args_schema=ReadMemoryArgs,
-        ),
-        StructuredTool.from_function(
-            func=_write,
-            name="write_memory",
-            description="Create a new memory entry. Fails if title already exists unless overwrite=true.",
-            args_schema=WriteMemoryArgs,
-        ),
-        StructuredTool.from_function(
-            func=_append,
-            name="append_to_memory",
-            description="Append content to an existing memory entry. Creates it if it doesn't exist.",
-            args_schema=AppendToMemoryArgs,
-        ),
-    ]
