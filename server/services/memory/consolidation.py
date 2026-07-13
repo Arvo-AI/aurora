@@ -25,8 +25,6 @@ from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.tools.memory_tool import build_memory_tools
 from services.memory import MEMORY_CATEGORIES
 from utils.db.connection_pool import db_pool
-from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
-from utils.cache.redis_client import get_redis_client
 from utils.hooks import get_hook
 
 logger = logging.getLogger(__name__)
@@ -35,10 +33,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_AGENT_TURNS = 10
-MIN_ENTRIES_TO_CONSOLIDATE = 3
-_REDIS_LAST_RUN_KEY = "mem:dream:last_run:{org_id}"
-_MIN_HOURS_BETWEEN_RUNS = 24
+MAX_AGENT_TURNS = 30
+MIN_ENTRIES_TO_CONSOLIDATE = 5
 
 # ---------------------------------------------------------------------------
 # Agent system prompt
@@ -65,12 +61,8 @@ RULES:
 - ALWAYS prefer merging over deleting
 - Preserve all factual content during merges — don't lose information
 - If unsure, leave the entry alone
-
-TURN BUDGET: You have {max_turns} turns. Be efficient:
-- Turn 1: Call list_memories to survey what exists.
-- Turn 2-3: Call read_memory on entries that look like duplicates or are potentially stale.
-- Remaining turns: Execute changes (write_memory, edit_memory, delete_memory).
-- Final turn: Respond with "DONE: <summary of what you changed>".
+- Use the updated_at timestamps from list_memories to judge staleness — bias toward keeping recently modified entries over older conflicting ones
+- NEVER merge or delete postmortem entries — each one documents a unique incident. Only fix formatting within them.
 
 If the memory bank looks clean, just respond "DONE: no changes needed" without making any modifications.
 
@@ -101,19 +93,11 @@ def run_memory_consolidation(self, org_id: str, user_id: str):
             logger.info("%s Hook blocked: %s", log_prefix, hook_message)
             return {"status": "hook_blocked"}
 
-        # Quick check: does this org have enough memories to bother?
-        entry_count = _count_memories(org_id, user_id)
-        if entry_count < MIN_ENTRIES_TO_CONSOLIDATE:
-            logger.info("%s Only %d entries — skipping", log_prefix, entry_count)
-            _mark_completed(org_id)
-            return {"status": "skipped", "reason": "too_few_entries"}
-
         # Run the consolidation agent
         start_time = time.time()
         _run_consolidation_agent(user_id, log_prefix)
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        _mark_completed(org_id)
         logger.info("%s Consolidation completed in %dms", log_prefix, elapsed_ms)
         return {"status": "ok", "elapsed_ms": elapsed_ms}
 
@@ -157,10 +141,8 @@ def schedule_memory_consolidation():
 
         scheduled = 0
         for org_id, uid in org_map.items():
-            # Time gate — don't re-run if we already ran recently
-            if _should_run(org_id):
-                run_memory_consolidation.delay(org_id=org_id, user_id=uid)
-                scheduled += 1
+            run_memory_consolidation.delay(org_id=org_id, user_id=uid)
+            scheduled += 1
 
         logger.info("%s Scheduled %d/%d orgs for consolidation", log_prefix, scheduled, len(org_map))
         return {"status": "ok", "orgs_scheduled": scheduled}
@@ -177,12 +159,7 @@ def schedule_memory_consolidation():
 
 def _run_consolidation_agent(user_id: str, log_prefix: str):
     """Multi-turn agent that reviews and cleans up org memory."""
-    tools = build_memory_tools(
-        user_id,
-        include_append=False,
-        include_edit=True,
-        include_delete=True,
-    )
+    tools = build_memory_tools(user_id)
 
     llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.1, streaming=False)
 
@@ -199,48 +176,3 @@ def _run_consolidation_agent(user_id: str, log_prefix: str):
         {"messages": [HumanMessage(content="Review and consolidate the org memory bank.")]},
         config={"recursion_limit": MAX_AGENT_TURNS * 2 + 2},
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _count_memories(org_id: str, user_id: str) -> int:
-    """Quick count of memory entries for this org."""
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[MemoryDream:count]")
-                cursor.execute(
-                    """SELECT COUNT(*) FROM artifacts
-                       WHERE org_id = %s AND category = ANY(%s)""",
-                    (org_id, list(MEMORY_CATEGORIES)),
-                )
-                return cursor.fetchone()[0]
-    except Exception:
-        return 0
-
-
-def _should_run(org_id: str) -> bool:
-    """Check if enough time has elapsed since the last consolidation."""
-    try:
-        r = get_redis_client()
-        key = _REDIS_LAST_RUN_KEY.format(org_id=org_id)
-        last_run = r.get(key)
-        if not last_run:
-            return True
-        hours_elapsed = (time.time() - int(last_run)) / 3600
-        return hours_elapsed >= _MIN_HOURS_BETWEEN_RUNS
-    except Exception:
-        return True
-
-
-def _mark_completed(org_id: str):
-    """Record that consolidation ran for this org."""
-    try:
-        r = get_redis_client()
-        key = _REDIS_LAST_RUN_KEY.format(org_id=org_id)
-        r.setex(key, _MIN_HOURS_BETWEEN_RUNS * 3600 * 2, str(int(time.time())))
-    except Exception:
-        pass

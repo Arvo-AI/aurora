@@ -675,17 +675,11 @@ def delete_memory(
 # ---------------------------------------------------------------------------
 
 
-def build_memory_tools(
-    user_id: str,
-    session_id: str | None = None,
-    include_delete: bool = False,
-    include_edit: bool = False,
-    include_append: bool = True,
-) -> list:
+def build_memory_tools(user_id: str, session_id: str | None = None) -> list:
     """Build LangChain StructuredTools scoped to a user for background agents.
 
     Binds user_id/session_id via closures since there's no Flask request context
-    in Celery. Callers choose which tools to include for their use case.
+    in Celery. Returns all memory tools — the prompt guides which ones the agent uses.
     """
     from langchain_core.tools import StructuredTool
 
@@ -717,7 +711,7 @@ def build_memory_tools(
     def _delete(category: str, title: str) -> str:
         return delete_memory(category=category, title=title, user_id=user_id)
 
-    tools = [
+    return [
         StructuredTool.from_function(
             func=_list,
             name="list_memories",
@@ -736,30 +730,22 @@ def build_memory_tools(
             description="Create or overwrite a memory entry. Use overwrite=true for rewrites and merge targets.",
             args_schema=WriteMemoryArgs,
         ),
-    ]
-
-    if include_append:
-        tools.append(StructuredTool.from_function(
+        StructuredTool.from_function(
             func=_append,
             name="append_to_memory",
             description="Append content to an existing memory entry. Creates it if it doesn't exist.",
             args_schema=AppendToMemoryArgs,
-        ))
-
-    if include_edit:
-        tools.append(StructuredTool.from_function(
+        ),
+        StructuredTool.from_function(
             func=_edit,
             name="edit_memory",
             description="Find-and-replace within a memory entry. Use for surgical fixes without rewriting the whole entry.",
             args_schema=EditMemoryArgs,
-        ))
-
-    if include_delete:
-        tools.append(StructuredTool.from_function(
+        ),
+        StructuredTool.from_function(
             func=_delete,
             name="delete_memory",
             description="Permanently delete a memory entry. Use after merging (delete the source) or for stale entries.",
             args_schema=DeleteMemoryArgs,
-        ))
-
-    return tools
+        ),
+    ]

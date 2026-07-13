@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_AGENT_TURNS = 5
+MAX_AGENT_TURNS = 30
 
 # ---------------------------------------------------------------------------
 # Agent system prompt
@@ -66,11 +66,6 @@ RULES:
 3. DO NOT save obvious/generic knowledge
 4. Prefer appending to existing entries over creating new ones
 5. If nothing is worth remembering, just respond "DONE: nothing to extract"
-
-TURN BUDGET: You have {max_turns} turns. Be efficient:
-- Turn 1: Review the memory index provided above. If entries might overlap with the conversation, call read_memory to inspect their content before deciding.
-- Turns 2-4: Call write_memory or append_to_memory for genuinely new learnings.
-- Final turn: Respond with "DONE: <summary>".
 
 If the conversation has nothing worth saving (most conversations won't), just respond "DONE: nothing to extract" immediately without using any tools."""
 
@@ -138,7 +133,7 @@ def _run_extraction_agent(
     log_prefix: str,
 ):
     """Multi-turn agent loop: browses existing memories, writes new ones."""
-    tools = build_memory_tools(user_id, session_id=session_id, include_append=True)
+    tools = build_memory_tools(user_id, session_id=session_id)
 
     llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
 
