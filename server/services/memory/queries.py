@@ -61,22 +61,18 @@ def fetch_memory_content(user_id: str, entries: List[Dict]) -> List[Dict]:
                 if not org_id:
                     return []
 
-                results = []
-                for entry in entries:
-                    cursor.execute(
-                        """SELECT content, updated_at FROM artifacts
-                           WHERE org_id = %s AND category = %s AND title = %s""",
-                        (org_id, entry["category"], entry["title"]),
-                    )
-                    row = cursor.fetchone()
-                    if row:
-                        results.append({
-                            "category": entry["category"],
-                            "title": entry["title"],
-                            "content": row[0] or "",
-                            "updated_at": row[1],
-                        })
-                return results
+                # Batch fetch all entries in a single query
+                pairs = [(entry["category"], entry["title"]) for entry in entries]
+                cursor.execute(
+                    """SELECT category, title, content, updated_at FROM artifacts
+                       WHERE org_id = %s AND (category, title) IN %s""",
+                    (org_id, tuple(pairs)),
+                )
+                rows = cursor.fetchall()
+                return [
+                    {"category": row[0], "title": row[1], "content": row[2] or "", "updated_at": row[3]}
+                    for row in rows
+                ]
     except Exception:
         logger.exception("[MemoryQueries] Failed to fetch memory content")
         return []

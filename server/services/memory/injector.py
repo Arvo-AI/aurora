@@ -163,7 +163,7 @@ def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Di
     )
 
     try:
-        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256)
+        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256, timeout=SELECTOR_TIMEOUT)
         response = llm.invoke([
             SystemMessage(content=_SELECTOR_SYSTEM),
             HumanMessage(content=prompt),
