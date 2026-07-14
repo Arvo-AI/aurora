@@ -75,8 +75,10 @@ RULES:
 1. Only save facts useful in FUTURE conversations
 2. DO NOT save debugging artifacts (specific log lines, one-off metric values, transient error messages)
 3. DO NOT save obvious/generic knowledge the assistant generated (only save facts the USER provided)
-4. Prefer appending to existing entries over creating new ones
-5. PAY SPECIAL ATTENTION to facts the user casually mentions (e.g. "our VP is X", "we have a release Friday", "we use Y for Z") — these are often the most valuable even if the conversation itself is trivial
+4. Create a NEW entry when the fact is a distinct topic (e.g. a release schedule, a new team member). Append to an existing entry only when the new fact genuinely extends that entry's topic.
+5. Use clear, specific titles that make entries easy to find (e.g. "Release Schedule" not "Misc Notes")
+6. When appending, update the description to reflect the new content so the memory index stays accurate
+7. PAY SPECIAL ATTENTION to facts the user casually mentions (e.g. "our VP is X", "we have a release Friday", "we use Y for Z") — these are often the most valuable even if the conversation itself is trivial
 
 You MUST save at least one fact if the user mentioned anything concrete about their organization, timeline, or decisions. Only respond "DONE: nothing to extract" if the conversation is purely generic Q&A with zero org-specific information."""
 
