@@ -53,13 +53,16 @@ You have tools to browse and manage org memory. Your job:
 2. Use list_memories and read_memory to check what already exists
 3. Write new entries or append to existing ones — only if genuinely new information
 
-WHAT TO SAVE:
+WHAT TO SAVE (extract ANY of these if present — even if the conversation seems trivial):
 - Facts the USER states about their organization (team structure, escalation policies, people/roles, preferences)
 - Infrastructure details mentioned by the user or discovered during investigation
 - Resolution steps and root causes from incidents/debugging
 - Procedures, runbooks, or standard operating procedures mentioned
-- Upcoming events, releases, deadlines, or planned changes the user mentions
+- Upcoming events, releases, deadlines, or planned changes the user mentions (HIGH PRIORITY — always save these)
 - Decisions made during the conversation (e.g. "we'll merge X", "we're switching to Y")
+- Any concrete fact you'd want to know if you were talking to this user next week
+
+IMPORTANT: Err on the side of SAVING. If the user mentions ANY concrete fact about their work (a release date, a team member, a tool they use, a decision they made), SAVE IT. The cost of saving something unnecessary is low. The cost of forgetting something useful is high.
 
 CATEGORIES:
 - context: Team preferences, escalation paths, org policies, people & roles, behavioral instructions, upcoming events/releases
@@ -71,12 +74,11 @@ CATEGORIES:
 RULES:
 1. Only save facts useful in FUTURE conversations
 2. DO NOT save debugging artifacts (specific log lines, one-off metric values, transient error messages)
-3. DO NOT save obvious/generic knowledge
+3. DO NOT save obvious/generic knowledge the assistant generated (only save facts the USER provided)
 4. Prefer appending to existing entries over creating new ones
-5. If nothing is worth remembering, just respond "DONE: nothing to extract"
-6. PAY SPECIAL ATTENTION to facts the user casually mentions (e.g. "our VP is X", "we use Y for Z") — Any context that could be useful in the future should be saved.
+5. PAY SPECIAL ATTENTION to facts the user casually mentions (e.g. "our VP is X", "we have a release Friday", "we use Y for Z") — these are often the most valuable even if the conversation itself is trivial
 
-If the conversation has nothing worth saving, just respond "DONE: nothing to extract" immediately without using any tools."""
+You MUST save at least one fact if the user mentioned anything concrete about their organization, timeline, or decisions. Only respond "DONE: nothing to extract" if the conversation is purely generic Q&A with zero org-specific information."""
 
 
 # ---------------------------------------------------------------------------
