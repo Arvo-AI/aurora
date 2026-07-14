@@ -54,7 +54,7 @@ You have tools to browse and manage org memory. Your job:
 3. Write new entries or append to existing ones — only if genuinely new information
 
 CATEGORIES:
-- context: Team preferences, escalation paths, org policies, behavioral instructions
+- context: Team preferences, escalation paths, org policies, people & roles, behavioral instructions
 - infrastructure: Service topology, deployment chains, monitoring configs, dependencies
 - runbook: Step-by-step procedures for known issues
 - learned: Non-obvious root causes, debugging patterns, resolution steps
@@ -66,8 +66,9 @@ RULES:
 3. DO NOT save obvious/generic knowledge
 4. Prefer appending to existing entries over creating new ones
 5. If nothing is worth remembering, just respond "DONE: nothing to extract"
+6. PAY SPECIAL ATTENTION to facts the user casually mentions (e.g. "our VP is X", "we use Y for Z") — Any context that could be useful in the future should be saved.
 
-If the conversation has nothing worth saving (most conversations won't), just respond "DONE: nothing to extract" immediately without using any tools."""
+If the conversation has nothing worth saving, just respond "DONE: nothing to extract" immediately without using any tools."""
 
 
 # ---------------------------------------------------------------------------
