@@ -1538,6 +1538,16 @@ async def _execute_background_chat(
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
 
+            # Save durable learnings from this RCA to org memory
+            try:
+                from services.memory.collector import extract_memories_from_session
+                extract_memories_from_session.delay(
+                    session_id=session_id,
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.debug("[BackgroundChat] Memory save enqueue failed")
+
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
         llm_context = _ensure_llm_context_history(session_id, user_id)
         tool_calls = _extract_tool_calls_for_viz(session_id, user_id, llm_context)

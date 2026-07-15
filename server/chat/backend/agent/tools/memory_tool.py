@@ -313,12 +313,17 @@ class AppendToMemoryArgs(BaseModel):
     category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
     title: str = Field(description="The exact title of the memory entry to append to")
     content: str = Field(description="Content to append at the end of the existing entry")
+    description: str = Field(
+        default="",
+        description="Updated one-line summary for the memory index. If provided, replaces the existing description to reflect the new content.",
+    )
 
 
 def append_to_memory(
     category: str,
     title: str,
     content: str,
+    description: str = "",
     user_id: str | None = None,
     session_id: str | None = None,
     **kwargs,
@@ -355,14 +360,22 @@ def append_to_memory(
                 return json.dumps({"error": "Resulting content would exceed 500KB limit."})
 
             if artifact_id:
-                cursor.execute(
-                    """UPDATE artifacts
-                       SET content = %s, last_edited_by = 'agent', updated_at = CURRENT_TIMESTAMP
-                       WHERE id = %s""",
-                    (new_content, artifact_id),
-                )
+                # Update content and optionally the description
+                if description and description.strip():
+                    cursor.execute(
+                        """UPDATE artifacts
+                           SET content = %s, description = %s, last_edited_by = 'agent', updated_at = CURRENT_TIMESTAMP
+                           WHERE id = %s""",
+                        (new_content, description.strip(), artifact_id),
+                    )
+                else:
+                    cursor.execute(
+                        """UPDATE artifacts
+                           SET content = %s, last_edited_by = 'agent', updated_at = CURRENT_TIMESTAMP
+                           WHERE id = %s""",
+                        (new_content, artifact_id),
+                    )
             else:
-                # Include a default description so the entry is discoverable in the index
                 cursor.execute(
                     """INSERT INTO artifacts
                            (org_id, user_id, title, content, category, description,
@@ -370,7 +383,7 @@ def append_to_memory(
                        VALUES (%s, %s, %s, %s, %s, %s, 'agent', CURRENT_TIMESTAMP)
                        RETURNING id""",
                     (org_id, user_id, title.strip(), new_content, category,
-                     new_content[:150].strip()),
+                     (description.strip() if description else new_content[:150].strip())),
                 )
                 artifact_id = str(cursor.fetchone()[0])
 
@@ -616,3 +629,220 @@ def grep_memories(
     except Exception:
         logger.exception("[MemoryTool] Failed to grep memories")
         return json.dumps({"error": "Failed to search memories."})
+
+
+# ---------------------------------------------------------------------------
+# rename_memory
+# ---------------------------------------------------------------------------
+
+
+class RenameMemoryArgs(BaseModel):
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
+    title: str = Field(description="The current exact title of the memory entry")
+    new_title: str = Field(default="", description="New title for the entry (leave empty to keep current title)")
+    new_description: str = Field(default="", description="New one-line summary for the memory index (leave empty to keep current)")
+
+
+def rename_memory(
+    category: str,
+    title: str,
+    new_title: str = "",
+    new_description: str = "",
+    user_id: str | None = None,
+    **kwargs,
+) -> str:
+    """Rename a memory entry's title and/or update its description without touching content."""
+    if err := _validate_category(category):
+        return err
+    if err := _validate_title(title):
+        return err
+    if new_title and (err := _validate_title(new_title)):
+        return err
+    if not new_title and not new_description:
+        return json.dumps({"error": "Provide at least one of new_title or new_description."})
+
+    try:
+        with _memory_connection(user_id, "rename") as (cursor, conn, org_id):
+            sets, vals = [], []
+            if new_title and new_title.strip():
+                sets.append("title = %s")
+                vals.append(new_title.strip())
+            if new_description and new_description.strip():
+                sets.append("description = %s")
+                vals.append(new_description.strip())
+            sets.append("updated_at = CURRENT_TIMESTAMP")
+
+            vals.extend([org_id, category, title.strip()])
+            cursor.execute(
+                f"""UPDATE artifacts SET {', '.join(sets)}
+                    WHERE org_id = %s AND category = %s AND title = %s
+                    RETURNING id""",
+                vals,
+            )
+            row = cursor.fetchone()
+            conn.commit()
+
+        if not row:
+            return json.dumps({
+                "status": "not_found",
+                "message": f"No memory entry '{title}' in category '{category}'.",
+            })
+
+        final_title = new_title.strip() if new_title else title.strip()
+        logger.info(f"[MemoryTool] Renamed '{category}/{title.strip()}' → '{final_title}'")
+        return json.dumps({
+            "status": "ok",
+            "message": f"Renamed to {category}/{final_title}.",
+        })
+
+    except ValueError as e:
+        return _error_response(e)
+    except Exception:
+        logger.exception("[MemoryTool] Failed to rename memory")
+        return json.dumps({"error": "Failed to rename memory."})
+
+
+# ---------------------------------------------------------------------------
+# delete_memory
+# ---------------------------------------------------------------------------
+
+
+class DeleteMemoryArgs(BaseModel):
+    category: str = Field(description=f"The memory category ({_CATEGORY_HELP})")
+    title: str = Field(description="The exact title of the memory entry to delete")
+
+
+def delete_memory(
+    category: str,
+    title: str,
+    user_id: str | None = None,
+    **kwargs,
+) -> str:
+    """Permanently delete a memory entry."""
+    if err := _validate_category(category):
+        return err
+    if err := _validate_title(title):
+        return err
+
+    try:
+        with _memory_connection(user_id, "delete") as (cursor, conn, org_id):
+            cursor.execute(
+                """DELETE FROM artifacts
+                   WHERE org_id = %s AND category = %s AND title = %s
+                   RETURNING id""",
+                (org_id, category, title.strip()),
+            )
+            deleted = cursor.fetchone()
+            conn.commit()
+
+        if not deleted:
+            return json.dumps({
+                "status": "not_found",
+                "message": f"No memory entry '{title}' in category '{category}'.",
+            })
+
+        logger.info(f"[MemoryTool] Deleted '{category}/{title.strip()}' for org")
+        return json.dumps({
+            "status": "ok",
+            "message": f"Deleted {category}/{title.strip()}.",
+        })
+
+    except ValueError as e:
+        return _error_response(e)
+    except Exception:
+        logger.exception("[MemoryTool] Failed to delete memory")
+        return json.dumps({"error": "Failed to delete memory."})
+
+
+# ---------------------------------------------------------------------------
+# Shared tool builder — used by Celery background agents (collector, consolidation)
+# ---------------------------------------------------------------------------
+
+
+def build_memory_tools(user_id: str, session_id: str | None = None) -> list:
+    """Build LangChain StructuredTools scoped to a user for background agents.
+
+    Binds user_id/session_id via closures since there's no Flask request context
+    in Celery. Returns all memory tools — the prompt guides which ones the agent uses.
+    """
+    from langchain_core.tools import StructuredTool
+
+    def _list(category: str = "") -> str:
+        return list_memories(category=category, user_id=user_id)
+
+    def _read(category: str, title: str, offset: int = 0, limit: int = 50000) -> str:
+        return read_memory(category=category, title=title, offset=offset, limit=limit, user_id=user_id)
+
+    def _write(category: str, title: str, content: str, description: str = "", overwrite: bool = False) -> str:
+        return write_memory(
+            category=category, title=title, content=content,
+            description=description, overwrite=overwrite,
+            user_id=user_id, session_id=session_id,
+        )
+
+    def _append(category: str, title: str, content: str, description: str = "") -> str:
+        return append_to_memory(
+            category=category, title=title, content=content,
+            description=description,
+            user_id=user_id, session_id=session_id,
+        )
+
+    def _edit(category: str, title: str, old_text: str, new_text: str) -> str:
+        return edit_memory(
+            category=category, title=title, old_text=old_text, new_text=new_text,
+            user_id=user_id, session_id=session_id,
+        )
+
+    def _delete(category: str, title: str) -> str:
+        return delete_memory(category=category, title=title, user_id=user_id)
+
+    def _rename(category: str, title: str, new_title: str = "", new_description: str = "") -> str:
+        return rename_memory(
+            category=category, title=title, new_title=new_title, new_description=new_description,
+            user_id=user_id,
+        )
+
+    return [
+        StructuredTool.from_function(
+            func=_list,
+            name="list_memories",
+            description="List org memory entries, optionally filtered by category.",
+            args_schema=ListMemoriesArgs,
+        ),
+        StructuredTool.from_function(
+            func=_read,
+            name="read_memory",
+            description="Read the full content of a specific memory entry by category and title.",
+            args_schema=ReadMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            func=_write,
+            name="write_memory",
+            description="Create or overwrite a memory entry. Use overwrite=true for rewrites and merge targets.",
+            args_schema=WriteMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            func=_append,
+            name="append_to_memory",
+            description="Append content to an existing memory entry. Creates it if it doesn't exist. Pass description to update the index summary.",
+            args_schema=AppendToMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            func=_edit,
+            name="edit_memory",
+            description="Find-and-replace within a memory entry. Use for surgical fixes without rewriting the whole entry.",
+            args_schema=EditMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            func=_rename,
+            name="rename_memory",
+            description="Rename a memory entry's title and/or update its index description without touching content.",
+            args_schema=RenameMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            func=_delete,
+            name="delete_memory",
+            description="Permanently delete a memory entry. Use after merging (delete the source) or for stale entries.",
+            args_schema=DeleteMemoryArgs,
+        ),
+    ]

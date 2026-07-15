@@ -98,6 +98,7 @@ celery_app.conf.update(
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
         'services.memory.migration_task',
+        'services.memory.collector',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
