@@ -8,7 +8,7 @@ extraction agent:
 - Fires post-turn (non-blocking, via Celery)
 - Full agentic loop: the LLM can browse, read, write, and append memories
 - Dedup is natural: the agent reads existing content before deciding to act
-- DB-level safety: FOR UPDATE on appends, ON CONFLICT on writes — no app-level lock needed
+- DB-level safety: FOR UPDATE on appends, ON CONFLICT on writes
 - Limited turn budget with efficiency instructions
 
 Key differences from Claude Code:
@@ -150,12 +150,10 @@ def _run_extraction_agent(
 
     llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
 
-    system_prompt = _AGENT_SYSTEM.format(max_turns=MAX_AGENT_TURNS)
-
     agent = create_agent(
         model=llm,
         tools=tools,
-        system_prompt=system_prompt,
+        system_prompt=_AGENT_SYSTEM,
     )
 
     # Format the conversation for context
