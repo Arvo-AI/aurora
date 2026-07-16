@@ -268,4 +268,4 @@ def _mark_surfaced(session_id: str, keys: Set[str]):
         pipe.expire(f"mem:inject:surfaced:{session_id}", _SURFACED_SET_TTL)
         pipe.execute()
     except Exception:
-        pass
+        logger.warning("Failed to mark surfaced memory keys for session %s", session_id, exc_info=True)
