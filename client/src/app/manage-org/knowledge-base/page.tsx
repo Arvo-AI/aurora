@@ -1,11 +1,12 @@
 "use client";
 
-import { KnowledgeBaseSettings } from "@/components/KnowledgeBaseSettings";
+import { MemorySettings } from "@/components/MemorySettings";
 
-export default function KnowledgeBasePage() {
+// Legacy route — Knowledge Base was replaced by Memory (Settings → Memory tab).
+export default function LegacyKnowledgeBasePage() {
   return (
     <div className="container mx-auto max-w-4xl py-8 px-6">
-      <KnowledgeBaseSettings />
+      <MemorySettings />
     </div>
   );
 }

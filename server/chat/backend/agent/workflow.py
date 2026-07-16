@@ -1115,6 +1115,13 @@ class Workflow:
                 if _event_count <= 5:
                     logger.info(f"[WORKFLOW STREAM] Event #{_event_count}: type={event_type}, name={event_name}")
                 
+                # Internal utility LLM calls (memory selector, etc.) run inside the
+                # graph's async context but must never stream tokens to the user.
+                if event_type in ("on_chat_model_start", "on_chat_model_stream", "on_chat_model_end"):
+                    _ev_run_name = (event.get("metadata") or {}).get("run_name") or event.get("name", "")
+                    if _ev_run_name == "memory_selector":
+                        continue
+
                 # Reset per-turn token counter when a new model call starts
                 if event_type == "on_chat_model_start":
                     _model_turn_tokens = 0
@@ -1348,6 +1355,16 @@ class Workflow:
                     logger.debug(f"[WORKFLOW FINAL] Successfully saved final context for session {session_id} ({len(messages_for_context)} messages)")
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
+
+                # Save durable learnings from this conversation to org memory (non-blocking)
+                try:
+                    from services.memory.collector import extract_memories_from_session
+                    extract_memories_from_session.delay(
+                        session_id=session_id,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logger.debug("[WORKFLOW FINAL] Memory save enqueue failed")
 
                 # Append only this turn's new messages to the UI column so RCA
                 # compression (or any future state rewrite) can't truncate the

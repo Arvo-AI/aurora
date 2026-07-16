@@ -564,20 +564,6 @@ SMTP_FROM_NAME=Aurora
 | `USE_UNTRUSTED_NODES` | - | Allow untrusted nodes |
 | `NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL` | - | Helm chart URL for kubectl agent |
 
-## Weaviate (Vector Database)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WEAVIATE_HOST` | `weaviate` | Weaviate server host |
-| `WEAVIATE_PORT` | `8080` | Weaviate HTTP port |
-| `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port |
-
-```bash
-WEAVIATE_HOST=weaviate
-WEAVIATE_PORT=8080
-WEAVIATE_GRPC_PORT=50051
-```
-
 ## MCP Server
 
 | Variable | Default | Description |

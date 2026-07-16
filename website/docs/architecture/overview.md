@@ -30,10 +30,10 @@ Aurora is a containerized application consisting of multiple services orchestrat
                                    │
         ┌─────────────┬────────────┼────────────┬─────────────┐
         ▼             ▼            ▼            ▼             ▼
-┌─────────────┐ ┌─────────┐ ┌──────────┐ ┌─────────┐ ┌───────────┐
-│  PostgreSQL │ │  Redis  │ │ Weaviate │ │  Vault  │ │ SeaweedFS │
-│    :5432    │ │  :6379  │ │   :8080  │ │  :8200  │ │   :8333   │
-└─────────────┘ └─────────┘ └──────────┘ └─────────┘ └───────────┘
+┌─────────────┐ ┌─────────┐ ┌─────────┐ ┌───────────┐ ┌───────────┐
+│  PostgreSQL │ │  Redis  │ │  Vault  │ │ SeaweedFS │ │ Memgraph  │
+│    :5432    │ │  :6379  │ │  :8200  │ │   :8333   │ │   :7687   │
+└─────────────┘ └─────────┘ └─────────┘ └───────────┘ └───────────┘
 ```
 
 ## Core Components
@@ -77,11 +77,6 @@ Aurora is a containerized application consisting of multiple services orchestrat
 
 - **Port**: 6379
 - **Purpose**: Celery task queue, session cache, real-time subscriptions
-
-### Weaviate
-
-- **Port**: 8080
-- **Purpose**: Vector database for semantic search over logs and documents
 
 ### HashiCorp Vault
 

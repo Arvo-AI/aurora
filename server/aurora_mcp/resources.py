@@ -122,7 +122,7 @@ async def _do_incidents_recent(api_call: ApiCall) -> Dict[str, Any]:
 
 async def _do_runbooks_index(api_call: ApiCall) -> Dict[str, Any]:
     sources = (
-        ("knowledge_base", "/api/knowledge-base/documents"),
+        ("memory", "/api/memory/entries?category=runbook"),
         ("sharepoint", "/sharepoint/sites"),
     )
     results = await asyncio.gather(
@@ -199,5 +199,5 @@ def register_resources(
 
     @mcp.resource("aurora://health")
     async def health() -> Dict[str, Any]:
-        """Aurora system health: database, Redis, Weaviate, Celery status."""
+        """Aurora system health: database, Redis, Celery status."""
         return await _do_health(api_call)

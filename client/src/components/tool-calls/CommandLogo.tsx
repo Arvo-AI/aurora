@@ -412,8 +412,9 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'web'
   }
 
-  // Knowledge base tool
-  if (tool === 'knowledge_base_search') {
+  // Memory tools
+  if (tool === 'list_memories' || tool === 'read_memory' || tool === 'write_memory'
+      || tool === 'append_to_memory' || tool === 'edit_memory' || tool === 'grep_memories') {
     return 'knowledgeBase'
   }
 

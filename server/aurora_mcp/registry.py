@@ -577,16 +577,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         enabling_skills=(),
     ),
     DispatchEntry(
-        name="incident_submit_feedback",
-        description="Submit feedback on the RCA/postmortem of an incident.",
-        category="incidents",
-        method="POST",
-        path="/api/incidents/{incident_id}/feedback",
-        enabling_skills=(),
-        path_args=("incident_id",),
-        body_keys=("rating", "comment", "category"),
-    ),
-    DispatchEntry(
         name="incident_merge_alert",
         description="Merge an alert into an existing incident.",
         category="incidents",
@@ -615,24 +605,6 @@ DISPATCH_ALLOWLIST: Tuple[DispatchEntry, ...] = (
         path="/api/incidents/suggestions/{suggestion_id}/mark-executed",
         enabling_skills=(),
         path_args=("suggestion_id",),
-    ),
-    # ----- Knowledge base reads -----
-    DispatchEntry(
-        name="kb_get_memory",
-        description="Read the org's persistent memory / context content.",
-        category="docs",
-        method="GET",
-        path="/api/knowledge-base/memory",
-        enabling_skills=(),
-    ),
-    DispatchEntry(
-        name="kb_get_document",
-        description="Fetch a knowledge-base document's metadata and status.",
-        category="docs",
-        method="GET",
-        path="/api/knowledge-base/documents/{doc_id}",
-        enabling_skills=(),
-        path_args=("doc_id",),
     ),
     # ----- Splunk async search workflow -----
     DispatchEntry(

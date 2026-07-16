@@ -15,7 +15,7 @@ class PromptSegments:
     failure_recovery: str
     manual_vm_access: str = ""  # Manual VM access hints with managed keys
     background_mode: str = ""  # Background chat autonomous operation instructions
-    knowledge_base_memory: str = ""  # User's knowledge base memory context
+    knowledge_base_memory: str = ""  # Org memory index (context, runbooks, infra, learnings)
     integration_index: str = ""  # Skills-based: compact index of connected integrations
     security_policy: str = ""  # Org-level command allow/deny policy
     is_rca_background: bool = False  # True when prompt is for a background RCA (not action)

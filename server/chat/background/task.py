@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Per-worker Agent singleton: avoids recreating PostgreSQLClient, WeaviateClient,
+# Per-worker Agent singleton: avoids recreating PostgreSQLClient
 # and LLMManager on every background chat task (~2s cold-start savings).
 # ---------------------------------------------------------------------------
 _worker_agent = None
@@ -46,12 +46,9 @@ def _get_worker_agent():
             if _worker_agent is None:
                 from chat.backend.agent.agent import Agent
                 from chat.backend.agent.db import PostgreSQLClient
-                from chat.backend.agent.weaviate_client import WeaviateClient
 
                 pg = PostgreSQLClient()
-                wv = WeaviateClient(pg)
                 _worker_agent = Agent(
-                    weaviate_client=wv,
                     postgres_client=pg,
                     websocket_sender=None,
                     event_loop=None,
@@ -1331,14 +1328,13 @@ async def _execute_background_chat(
     from chat.backend.agent.db import PostgreSQLClient
     from chat.backend.agent.utils.state import State
     from chat.backend.agent.workflow import Workflow
-    from chat.backend.agent.weaviate_client import WeaviateClient
     from chat.backend.agent.tools.cloud_tools import set_user_context
     from chat.background.background_websocket import BackgroundWebSocket
     from main_chatbot import process_workflow_async
     
     try:
         
-        # Reuse a per-worker Agent to avoid recreating PostgreSQLClient, WeaviateClient,
+        # Reuse a per-worker Agent to avoid recreating PostgreSQLClient
         # and LLMManager on every task (~2s cold-start savings).
         agent = _get_worker_agent()
         
@@ -1546,6 +1542,16 @@ async def _execute_background_chat(
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
+
+            # Save durable learnings from this RCA to org memory
+            try:
+                from services.memory.collector import extract_memories_from_session
+                extract_memories_from_session.delay(
+                    session_id=session_id,
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.debug("[BackgroundChat] Memory save enqueue failed")
 
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
         llm_context = _ensure_llm_context_history(session_id, user_id)

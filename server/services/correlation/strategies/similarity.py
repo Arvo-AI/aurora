@@ -2,8 +2,8 @@
 Text-similarity correlation strategy.
 
 Scores an alert against an incident using cosine similarity on
-dense vector embeddings from the t2v-transformers service, with
-Jaccard fallback when embeddings are unavailable.
+dense vector embeddings (when EMBEDDING_MODEL is configured), with
+Jaccard token-similarity fallback when embeddings are unavailable.
 """
 
 import logging
@@ -21,7 +21,7 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class SimilarityStrategy(CorrelationStrategy):
-    """Vector-based similarity scoring for titles, with service-name overlap."""
+    """Vector-based similarity scoring for titles, with Jaccard fallback."""
 
     TITLE_WEIGHT = 0.7
     SERVICE_WEIGHT = 0.3
@@ -33,10 +33,10 @@ class SimilarityStrategy(CorrelationStrategy):
         incident_title: str,
         incident_services: List[str],
     ) -> float:
-        """Score based on semantic similarity between alert and incident.
+        """Score based on similarity between alert and incident.
 
-        Uses cosine similarity on embeddings from t2v-transformers, falling
-        back to Jaccard token similarity if embeddings unavailable.
+        Uses cosine similarity on embeddings when EMBEDDING_MODEL is configured,
+        falling back to Jaccard token similarity otherwise.
 
         Args:
             alert_title: Title / summary of the alert.
@@ -56,6 +56,7 @@ class SimilarityStrategy(CorrelationStrategy):
             return 0.0
 
         title_sim = self._vector_similarity(alert_title, incident_title)
+        # Embedding unavailable or unconfigured — fall back to token overlap
         if title_sim is None:
             title_sim = self._jaccard_similarity(alert_title, incident_title)
 
@@ -66,10 +67,13 @@ class SimilarityStrategy(CorrelationStrategy):
     def _vector_similarity(self, text_a: str, text_b: str) -> Optional[float]:
         """Compute cosine similarity using embeddings.
 
-        Returns None if embeddings couldn't be retrieved.
+        Returns None if embeddings aren't configured or couldn't be retrieved.
         """
+        client = get_embedding_client()
+        if not client.is_configured:
+            return None
+
         try:
-            client = get_embedding_client()
             vec_a = client.embed(text_a)
             vec_b = client.embed(text_b)
 
@@ -98,7 +102,7 @@ class SimilarityStrategy(CorrelationStrategy):
         return max(0.0, min(1.0, similarity))
 
     def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
-        """Fallback: Jaccard token similarity."""
+        """Jaccard token similarity between two texts."""
         tokens_a = self._tokenize(text_a)
         tokens_b = self._tokenize(text_b)
         return self._jaccard(tokens_a, tokens_b)
@@ -132,6 +136,7 @@ class SimilarityStrategy(CorrelationStrategy):
             )
             return 0.0
 
+        # Exact match — no fuzzy comparison needed
         if alert_service in incident_services:
             return 1.0
 
