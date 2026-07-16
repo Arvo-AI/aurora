@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 from flask import jsonify, request
 from utils.db.connection_pool import db_pool
+from utils.db.org_scope import resolve_org
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import set_rls_context
 from utils.validation import is_valid_uuid
 from services.actions.system_actions import seed_system_actions, SYSTEM_ACTIONS
 
@@ -144,21 +144,22 @@ def list_actions(user_id):
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                org_id = resolve_org(user_id)
+                if not org_id:
+                    return jsonify({"actions": []})
+
                 # Ensure system actions exist for this org
-                cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-                org_row = cur.fetchone()
-                if org_row and org_row[0]:
-                    expected_keys = [a["system_key"] for a in SYSTEM_ACTIONS]
-                    cur.execute(
-                        "SELECT system_key FROM actions WHERE org_id = %s AND is_system = true AND system_key = ANY(%s)",
-                        (org_row[0], expected_keys),
-                    )
-                    existing_keys = {row[0] for row in cur.fetchall()}
-                    if len(existing_keys) < len(expected_keys):
-                        try:
-                            seed_system_actions(org_row[0], user_id)
-                        except Exception:
-                            logger.debug("Failed to lazy-seed system actions")
+                expected_keys = [a["system_key"] for a in SYSTEM_ACTIONS]
+                cur.execute(
+                    "SELECT system_key FROM actions WHERE org_id = %s AND is_system = true AND system_key = ANY(%s)",
+                    (org_id, expected_keys),
+                )
+                existing_keys = {row[0] for row in cur.fetchall()}
+                if len(existing_keys) < len(expected_keys):
+                    try:
+                        seed_system_actions(org_id, user_id)
+                    except Exception:
+                        logger.debug("Failed to lazy-seed system actions")
 
                 cur.execute("""
                     SELECT a.id, a.name, a.description, a.instructions, a.trigger_type,
@@ -170,9 +171,10 @@ def list_actions(user_id):
                             WHERE r2.action_id = a.id ORDER BY r2.started_at DESC LIMIT 1) AS last_run_status
                     FROM actions a
                     LEFT JOIN action_runs r ON r.action_id = a.id
+                    WHERE a.org_id = %s
                     GROUP BY a.id
                     ORDER BY a.is_system DESC, a.created_at DESC
-                """)
+                """, (org_id,))
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -220,10 +222,7 @@ def create_action(user_id):
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-            row = cur.fetchone()
-            org_id = row[0] if row else None
-
+            org_id = resolve_org(user_id)
             if not org_id:
                 return jsonify({"error": "User has no organization"}), 400
 
@@ -255,10 +254,13 @@ def create_action(user_id):
 def get_action(user_id, action_id):
     if not is_valid_uuid(action_id):
         return jsonify({"error": _ERR_NOT_FOUND}), 404
-    return _get_action_response(action_id)
+    org_id = resolve_org(user_id)
+    if not org_id:
+        return jsonify({"error": _ERR_NOT_FOUND}), 404
+    return _get_action_response(action_id, org_id)
 
 
-def _get_action_response(action_id):
+def _get_action_response(action_id, org_id):
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -266,8 +268,8 @@ def _get_action_response(action_id):
                           trigger_type, trigger_config, mode, enabled,
                           is_system, system_key, default_instructions,
                           created_at, updated_at
-                   FROM actions WHERE id = %s""",
-                (action_id,),
+                   FROM actions WHERE id = %s AND org_id = %s""",
+                (action_id, org_id),
             )
             cols = [d[0] for d in cur.description]
             row = cur.fetchone()
@@ -278,9 +280,9 @@ def _get_action_response(action_id):
             cur.execute(
                 """SELECT id, status, incident_id, chat_session_id, trigger_context,
                           started_at, completed_at, error
-                   FROM action_runs WHERE action_id = %s
+                   FROM action_runs WHERE action_id = %s AND org_id = %s
                    ORDER BY started_at DESC LIMIT 20""",
-                (action_id,),
+                (action_id, org_id),
             )
             run_cols = [d[0] for d in cur.description]
             runs = [dict(zip(run_cols, r)) for r in cur.fetchall()]
@@ -322,16 +324,21 @@ def update_action(user_id, action_id):
     if not columns:
         return jsonify({"error": "no fields to update"}), 400
 
-    columns.append("updated_at")
-    vals.append(datetime.now(timezone.utc))
-    vals.append(action_id)
-
-    set_parts = [_COL_FRAGMENTS[col] for col in columns]
-    sql = "UPDATE actions SET " + ", ".join(set_parts) + " WHERE id = %s RETURNING id"
-
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                org_id = resolve_org(user_id)
+                if not org_id:
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+
+                columns.append("updated_at")
+                vals.append(datetime.now(timezone.utc))
+                vals.append(action_id)
+                vals.append(org_id)
+
+                set_parts = [_COL_FRAGMENTS[col] for col in columns]
+                sql = "UPDATE actions SET " + ", ".join(set_parts) + " WHERE id = %s AND org_id = %s RETURNING id"
+
                 cur.execute(sql, vals)
                 if not cur.fetchone():
                     return jsonify({"error": _ERR_NOT_FOUND}), 404
@@ -340,7 +347,7 @@ def update_action(user_id, action_id):
         logger.exception("Failed to update action")
         return jsonify({"error": _ERR_INTERNAL}), 500
 
-    return _get_action_response(action_id)
+    return _get_action_response(action_id, org_id)
 
 
 @actions_bp.route("/<action_id>", methods=["DELETE"])
@@ -351,13 +358,18 @@ def delete_action(user_id, action_id):
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT is_system FROM actions WHERE id = %s", (action_id,))
+                org_id = resolve_org(user_id)
+                if not org_id:
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+
+                cur.execute("SELECT is_system FROM actions WHERE id = %s AND org_id = %s", (action_id, org_id))
                 row = cur.fetchone()
                 if not row:
                     return jsonify({"error": _ERR_NOT_FOUND}), 404
+                # System actions can only be disabled, not deleted
                 if row[0]:
                     return jsonify({"error": "System actions cannot be deleted. You can disable them instead."}), 403
-                cur.execute("DELETE FROM actions WHERE id = %s", (action_id,))
+                cur.execute("DELETE FROM actions WHERE id = %s AND org_id = %s", (action_id, org_id))
                 conn.commit()
     except Exception:
         logger.exception("Failed to delete action")
@@ -374,24 +386,29 @@ def restore_default(user_id, action_id):
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                org_id = resolve_org(user_id)
+                if not org_id:
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+
                 cur.execute(
-                    "SELECT is_system, default_instructions FROM actions WHERE id = %s",
-                    (action_id,),
+                    "SELECT is_system, default_instructions FROM actions WHERE id = %s AND org_id = %s",
+                    (action_id, org_id),
                 )
                 row = cur.fetchone()
                 if not row:
                     return jsonify({"error": _ERR_NOT_FOUND}), 404
+                # Only system actions have a default to restore
                 if not row[0]:
                     return jsonify({"error": "Only system actions can be restored to default"}), 400
                 cur.execute(
-                    "UPDATE actions SET instructions = %s, updated_at = %s WHERE id = %s",
-                    (row[1], datetime.now(timezone.utc), action_id),
+                    "UPDATE actions SET instructions = %s, updated_at = %s WHERE id = %s AND org_id = %s",
+                    (row[1], datetime.now(timezone.utc), action_id, org_id),
                 )
                 conn.commit()
     except Exception:
         logger.exception("Failed to restore default instructions")
         return jsonify({"error": _ERR_INTERNAL}), 500
-    return _get_action_response(action_id)
+    return _get_action_response(action_id, org_id)
 
 
 @actions_bp.route("/<action_id>/trigger", methods=["POST"])
@@ -408,17 +425,23 @@ def trigger_action(user_id, action_id):
     if body.get("trigger_label"):
         trigger_context["trigger_label"] = body["trigger_label"]
 
-    # on_incident actions (like postmortem) require an incident_id
+    # Verify the action belongs to the user's org and check preconditions
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[Actions:trigger]")
+                org_id = resolve_org(user_id)
+                if not org_id:
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+
                 cur.execute(
-                    "SELECT trigger_type FROM actions WHERE id = %s",
-                    (action_id,),
+                    "SELECT trigger_type FROM actions WHERE id = %s AND org_id = %s",
+                    (action_id, org_id),
                 )
                 row = cur.fetchone()
-                if row and row[0] == "on_incident" and not trigger_context.get("incident_id"):
+                if not row:
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+                # on_incident actions require an incident context to run
+                if row[0] == "on_incident" and not trigger_context.get("incident_id"):
                     return jsonify({"error": "This action requires an incident. Trigger it from an incident page instead."}), 400
     except Exception:
         logger.exception("Failed to verify on_incident precondition")
@@ -452,12 +475,21 @@ def list_runs(user_id, action_id):
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
+                org_id = resolve_org(user_id)
+                if not org_id:
+                    return jsonify({"runs": []})
+
+                # Verify action belongs to this org before listing its runs
+                cur.execute("SELECT 1 FROM actions WHERE id = %s AND org_id = %s", (action_id, org_id))
+                if not cur.fetchone():
+                    return jsonify({"error": _ERR_NOT_FOUND}), 404
+
                 cur.execute(
                     """SELECT id, status, incident_id, chat_session_id, trigger_context,
                               started_at, completed_at, error
-                       FROM action_runs WHERE action_id = %s
+                       FROM action_runs WHERE action_id = %s AND org_id = %s
                        ORDER BY started_at DESC LIMIT %s OFFSET %s""",
-                    (action_id, limit, offset),
+                    (action_id, org_id, limit, offset),
                 )
                 cols = [d[0] for d in cur.description]
                 runs = [dict(zip(cols, r)) for r in cur.fetchall()]
