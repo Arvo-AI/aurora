@@ -84,13 +84,30 @@ export default function ModelSelector({
   const [models, setModels] = useState<ModelOption[]>(FALLBACK_MODELS);
 
   // Load the live catalog. On failure, keep the static fallback.
+  // Cached in sessionStorage so we don't refetch on every chat-page open —
+  // the catalog only changes when the deployment's model config changes.
   useEffect(() => {
     let cancelled = false;
+
+    const cached = sessionStorage.getItem('llmModelCatalog');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setModels(parsed as ModelOption[]);
+          return;
+        }
+      } catch {
+        /* corrupt cache — fall through to fetch */
+      }
+    }
+
     fetch('/api/llm-models')
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data) => {
         if (cancelled || !Array.isArray(data?.models) || data.models.length === 0) return;
         setModels(data.models as ModelOption[]);
+        sessionStorage.setItem('llmModelCatalog', JSON.stringify(data.models));
       })
       .catch(() => {
         /* keep FALLBACK_MODELS */
