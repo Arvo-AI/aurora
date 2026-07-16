@@ -168,10 +168,13 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
 
     try:
         llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256)
-        response = await llm.ainvoke([
-            SystemMessage(content=_SELECTOR_SYSTEM),
-            HumanMessage(content=prompt),
-        ])
+        response = await llm.ainvoke(
+            [
+                SystemMessage(content=_SELECTOR_SYSTEM),
+                HumanMessage(content=prompt),
+            ],
+            config={"run_name": "memory_selector"},
+        )
 
         content = response.content if hasattr(response, "content") else str(response)
         json_str = content.strip()

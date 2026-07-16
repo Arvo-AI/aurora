@@ -1115,6 +1115,13 @@ class Workflow:
                 if _event_count <= 5:
                     logger.info(f"[WORKFLOW STREAM] Event #{_event_count}: type={event_type}, name={event_name}")
                 
+                # Internal utility LLM calls (memory selector, etc.) run inside the
+                # graph's async context but must never stream tokens to the user.
+                if event_type in ("on_chat_model_start", "on_chat_model_stream", "on_chat_model_end"):
+                    _ev_run_name = (event.get("metadata") or {}).get("run_name") or event.get("name", "")
+                    if _ev_run_name == "memory_selector":
+                        continue
+
                 # Reset per-turn token counter when a new model call starts
                 if event_type == "on_chat_model_start":
                     _model_turn_tokens = 0
