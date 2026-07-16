@@ -167,7 +167,7 @@ async def _select_relevant_memories_async(user_message: str, entries: List[Dict]
     )
 
     try:
-        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256, timeout=SELECTOR_TIMEOUT)
+        llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256)
         response = await llm.ainvoke([
             SystemMessage(content=_SELECTOR_SYSTEM),
             HumanMessage(content=prompt),
