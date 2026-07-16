@@ -3009,11 +3009,15 @@ def initialize_tables():
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS category VARCHAR(50);
                     ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS description TEXT;
                 """)
+                # Set default before NOT NULL so new rows inserted mid-migration are safe
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET DEFAULT 'context';
+                """)
                 # Back-fill any rows missing a category
                 cursor.execute("""
-                    UPDATE artifacts SET category = 'artifact' WHERE category IS NULL OR category = '';
+                    UPDATE artifacts SET category = 'context' WHERE category IS NULL OR category = '';
                 """)
-                # Now enforce NOT NULL
+                # Now enforce NOT NULL — all existing rows guaranteed non-null
                 cursor.execute("""
                     ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
                 """)
