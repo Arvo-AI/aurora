@@ -3013,10 +3013,16 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE artifacts ALTER COLUMN category SET DEFAULT 'context';
                 """)
-                # Back-fill any rows missing a category
-                cursor.execute("""
-                    UPDATE artifacts SET category = 'context' WHERE category IS NULL OR category = '';
-                """)
+                # Backfill per-org to satisfy RLS (FORCE is already active)
+                cursor.execute("SELECT DISTINCT org_id FROM artifacts WHERE category IS NULL OR category = ''")
+                backfill_orgs = [row[0] for row in cursor.fetchall()]
+                for bf_org_id in backfill_orgs:
+                    cursor.execute("SET myapp.current_org_id = %s", (bf_org_id,))
+                    cursor.execute("""
+                        UPDATE artifacts SET category = 'context'
+                        WHERE org_id = %s AND (category IS NULL OR category = '')
+                    """, (bf_org_id,))
+                cursor.execute("RESET myapp.current_org_id")
                 # Now enforce NOT NULL — all existing rows guaranteed non-null
                 cursor.execute("""
                     ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
