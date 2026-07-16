@@ -380,7 +380,7 @@ class Agent:
             # Collect prefetch result and append injected memories to the prompt
             if _memory_prefetch:
                 try:
-                    injected = _memory_prefetch.get_result(timeout=6.0)
+                    injected = await _memory_prefetch.get_result_async(timeout=6.0)
                     if injected:
                         memory_index = segments.knowledge_base_memory or ""
                         segments.knowledge_base_memory = (memory_index + "\n\n" + injected) if memory_index else injected

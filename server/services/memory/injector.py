@@ -8,10 +8,10 @@ One fast LLM call selects up to 5 relevant memories from the index
 - Dedup: never re-surface a memory already shown this session.
 """
 
+import asyncio
 import json
 import logging
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -36,7 +36,6 @@ SELECTOR_MODEL = ModelConfig.RCA_MODEL
 SELECTOR_TIMEOUT = 5.0
 
 _SURFACED_SET_TTL = 86400
-_prefetch_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mem-inject")
 
 # ---------------------------------------------------------------------------
 # Selector prompt — strict, single-pass
@@ -76,24 +75,30 @@ class MemoryPrefetch:
         self.user_id = user_id
         self.session_id = session_id
         self.user_message = user_message
-        self._future: Optional[Future] = None
+        self._task: Optional[asyncio.Task] = None
         self._result: Optional[str] = None
         self._started_at: float = 0
 
     def start(self):
+        """Launch the prefetch as an asyncio task (must be called from async context)."""
         self._started_at = time.perf_counter()
-        self._future = _prefetch_pool.submit(self._execute)
+        self._task = asyncio.create_task(self._execute())
 
-    def get_result(self, timeout: float = SELECTOR_TIMEOUT + 2.0) -> str:
-        """Block until prefetch settles. Returns injection text or empty string."""
+    async def get_result_async(self, timeout: float = SELECTOR_TIMEOUT + 2.0) -> str:
+        """Await prefetch result without blocking the event loop."""
         if self._result is not None:
             return self._result
 
-        if self._future is None:
+        if self._task is None:
             return ""
 
         try:
-            self._result = self._future.result(timeout=timeout)
+            self._result = await asyncio.wait_for(self._task, timeout=timeout)
+        except asyncio.TimeoutError:
+            elapsed = (time.perf_counter() - self._started_at) * 1000
+            logger.warning("[MemoryInjector] Prefetch timed out after %.0fms", elapsed)
+            self._task.cancel()
+            self._result = ""
         except Exception as e:
             elapsed = (time.perf_counter() - self._started_at) * 1000
             logger.warning("[MemoryInjector] Prefetch failed after %.0fms: %s", elapsed, e)
@@ -101,12 +106,11 @@ class MemoryPrefetch:
 
         return self._result
 
-    def _execute(self) -> str:
+    async def _execute(self) -> str:
         try:
-            already_surfaced = _get_surfaced_set(self.session_id)
+            already_surfaced = await asyncio.to_thread(_get_surfaced_set, self.session_id)
 
-            # Scan index (titles + descriptions, no content)
-            entries = get_memory_entries(self.user_id)
+            entries = await asyncio.to_thread(get_memory_entries, self.user_id)
             if not entries:
                 return ""
 
@@ -115,13 +119,13 @@ class MemoryPrefetch:
             if not available:
                 return ""
 
-            # Single LLM pass: select up to 5
-            selected = _select_relevant_memories(self.user_message, available)
+            # Single async LLM pass: select up to 5
+            selected = await _select_relevant_memories_async(self.user_message, available)
             if not selected:
                 return ""
 
             # Fetch content of the selected entries
-            memories = fetch_memory_content(self.user_id, selected)
+            memories = await asyncio.to_thread(fetch_memory_content, self.user_id, selected)
             if not memories:
                 return ""
 
@@ -130,7 +134,7 @@ class MemoryPrefetch:
             if not injection_text:
                 return ""
 
-            _mark_surfaced(self.session_id, surfaced_keys)
+            await asyncio.to_thread(_mark_surfaced, self.session_id, surfaced_keys)
 
             logger.info(
                 "[MemoryInjector] Injected %d memories for session %s",
@@ -144,12 +148,12 @@ class MemoryPrefetch:
 
 
 # ---------------------------------------------------------------------------
-# Select (single LLM call)
+# Select (single async LLM call)
 # ---------------------------------------------------------------------------
 
 
-def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Dict]:
-    """One strict LLM call: select up to 5 from the index."""
+async def _select_relevant_memories_async(user_message: str, entries: List[Dict]) -> List[Dict]:
+    """One strict async LLM call: select up to 5 from the index."""
 
     manifest_lines = []
     for entry in entries:
@@ -164,7 +168,7 @@ def _select_relevant_memories(user_message: str, entries: List[Dict]) -> List[Di
 
     try:
         llm = create_chat_model(SELECTOR_MODEL, temperature=0.0, streaming=False, max_tokens=256, timeout=SELECTOR_TIMEOUT)
-        response = llm.invoke([
+        response = await llm.ainvoke([
             SystemMessage(content=_SELECTOR_SYSTEM),
             HumanMessage(content=prompt),
         ])
